@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown } from 'lucide-react';
 import { getRhymeSuggestions } from './services/gemini';
@@ -16,7 +16,7 @@ export default function App() {
   const [isContextExpanded, setIsContextExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const rhymeOptions = ['Perfect Rhyme', 'Near Rhyme', 'Slant Rhyme'];
+  const rhymeOptions = useMemo(() => ['Perfect Rhyme', 'Near Rhyme', 'Slant Rhyme'], []);
 
   // Save to local storage
   useEffect(() => {
@@ -24,7 +24,7 @@ export default function App() {
     localStorage.setItem('lyricist-lyrics', lyrics);
   }, [title, lyrics]);
 
-  const adjustTextareaHeight = () => {
+  const adjustTextareaHeight = useCallback(() => {
     if (textareaRef.current) {
       const scrollContainer = textareaRef.current.closest('.overflow-y-auto');
       const currentScrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
@@ -36,12 +36,15 @@ export default function App() {
         scrollContainer.scrollTop = currentScrollTop;
       }
     }
-  };
+  }, []);
 
-  // Auto-resize textarea
+  // Auto-resize textarea on lyrics change
   useEffect(() => {
     adjustTextareaHeight();
-    
+  }, [lyrics, adjustTextareaHeight]);
+
+  // Attach event listeners for resize
+  useEffect(() => {
     window.addEventListener('resize', adjustTextareaHeight);
     if (document.fonts) {
       document.fonts.ready.then(adjustTextareaHeight);
@@ -50,10 +53,10 @@ export default function App() {
     return () => {
       window.removeEventListener('resize', adjustTextareaHeight);
     };
-  }, [lyrics]);
+  }, [adjustTextareaHeight]);
 
   // Extract the current line based on cursor position
-  const getCurrentLine = () => {
+  const getCurrentLine = useCallback(() => {
     if (!lyrics) return '';
     const textBeforeCursor = lyrics.substring(0, cursorPosition);
     const linesBefore = textBeforeCursor.split('\n');
@@ -66,9 +69,9 @@ export default function App() {
       targetLine = allLines[currentLineIndex - 1].trim();
     }
     return targetLine;
-  };
+  }, [lyrics, cursorPosition]);
 
-  const handleGetSuggestions = async () => {
+  const handleGetSuggestions = useCallback(async () => {
     const currentLine = getCurrentLine();
     if (!currentLine) return;
 
@@ -81,9 +84,9 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [getCurrentLine, theme, lyrics, rhymeType]);
 
-  const insertSuggestion = (suggestion: string) => {
+  const insertSuggestion = useCallback((suggestion: string) => {
     if (!textareaRef.current) return;
     
     const textBeforeCursor = lyrics.substring(0, cursorPosition);
@@ -96,8 +99,10 @@ export default function App() {
     const newLyrics = textBeforeCursor + insertText + textAfterCursor;
     setLyrics(newLyrics);
     
-    // Update cursor position
+    // Update cursor position state
     const newPosition = cursorPosition + insertText.length;
+    setCursorPosition(newPosition);
+
     setTimeout(() => {
       if (textareaRef.current) {
         textareaRef.current.selectionStart = newPosition;
@@ -107,35 +112,36 @@ export default function App() {
     }, 0);
     
     setSuggestions([]);
-  };
+  }, [lyrics, cursorPosition]);
 
-  const handleKeyUp = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     setCursorPosition(e.currentTarget.selectionStart);
-  };
+  }, []);
 
-  const handleClick = (e: React.MouseEvent<HTMLTextAreaElement>) => {
+  const handleClick = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
     setCursorPosition(e.currentTarget.selectionStart);
-  };
+  }, []);
 
-  const renderSuggestionWithRhymeHighlight = (suggestion: string) => {
+  const renderSuggestionWithRhymeHighlight = useCallback((suggestion: string) => {
     // Match everything up to the last word, the last word itself, and any trailing punctuation
     const match = suggestion.match(/(.*?)(\b\w+\b)([^\w]*)$/);
     if (match) {
       const [_, prefix, word, suffix] = match;
       return (
-        <>
+        <React.Fragment key={suggestion}>
           {prefix}
           <span className="text-indigo-200 font-medium underline decoration-indigo-400/60 underline-offset-4 drop-shadow-[0_0_8px_rgba(129,140,248,0.5)]">
             {word}
           </span>
           {suffix}
-        </>
+        </React.Fragment>
       );
     }
     return suggestion;
-  };
+  }, []);
 
-  const currentLineDisplay = getCurrentLine();
+  const currentLineDisplay = useMemo(() => getCurrentLine(), [getCurrentLine]);
+  const wordCount = useMemo(() => lyrics.split(/\s+/).filter(w => w.length > 0).length, [lyrics]);
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white overflow-hidden relative flex flex-col md:flex-row">
@@ -152,7 +158,7 @@ export default function App() {
             <h1 className="font-medium tracking-wide">Lyricist AI</h1>
           </div>
           <div className="flex items-center gap-4 text-sm text-white/50">
-            <span>{lyrics.split(/\s+/).filter(w => w.length > 0).length} words</span>
+            <span>{wordCount} words</span>
           </div>
         </motion.header>
 
