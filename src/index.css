@@ -27,10 +27,41 @@ body {
   background: transparent;
   width: 100%;
   height: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+}
+
+.lyrics-backdrop {
+  color: rgba(255, 255, 255, 0.2);
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 0;
+}
+
+.lyrics-textarea {
+  color: transparent !important;
+  caret-color: white;
+  position: relative;
+  z-index: 10;
+  background: transparent;
+}
+
+.lyrics-textarea::selection {
+  background: rgba(255, 255, 255, 0.2);
+  color: transparent;
 }
 
 .lyrics-editor::placeholder {
   color: rgba(255, 255, 255, 0.2);
+}
+
+.lyrics-textarea::placeholder {
+  color: transparent;
 }
 
 /* Custom scrollbar */

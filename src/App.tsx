@@ -1,7 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown } from 'lucide-react';
+import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, FolderOpen, Save, Plus, Trash2, X } from 'lucide-react';
 import { getRhymeSuggestions } from './services/gemini';
+import { syllable } from 'syllable';
+
+interface SongProject {
+  id: string;
+  title: string;
+  lyrics: string;
+  theme: string;
+  updatedAt: number;
+}
 
 export default function App() {
   const [theme, setTheme] = useState('');
@@ -14,6 +23,16 @@ export default function App() {
   const [scrollY, setScrollY] = useState(0);
   const [rhymeType, setRhymeType] = useState('Perfect Rhyme');
   const [isContextExpanded, setIsContextExpanded] = useState(false);
+  const [isHighlightEnabled, setIsHighlightEnabled] = useState(true);
+  const [isSyllableColoringEnabled, setIsSyllableColoringEnabled] = useState(true);
+  const [rhymeScheme, setRhymeScheme] = useState('AABB');
+  const [customRhymeScheme, setCustomRhymeScheme] = useState('');
+  const [projects, setProjects] = useState<SongProject[]>(() => {
+    const saved = localStorage.getItem('lyricist-projects');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => localStorage.getItem('lyricist-current-project') || null);
+  const [isProjectsModalOpen, setIsProjectsModalOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const rhymeOptions = ['Perfect Rhyme', 'Near Rhyme', 'Slant Rhyme'];
@@ -23,6 +42,67 @@ export default function App() {
     localStorage.setItem('lyricist-title', title);
     localStorage.setItem('lyricist-lyrics', lyrics);
   }, [title, lyrics]);
+
+  useEffect(() => {
+    localStorage.setItem('lyricist-projects', JSON.stringify(projects));
+  }, [projects]);
+
+  useEffect(() => {
+    if (currentProjectId) {
+      localStorage.setItem('lyricist-current-project', currentProjectId);
+    } else {
+      localStorage.removeItem('lyricist-current-project');
+    }
+  }, [currentProjectId]);
+
+  // Auto-save current project
+  useEffect(() => {
+    if (currentProjectId) {
+      setProjects(prev => prev.map(p => 
+        p.id === currentProjectId 
+          ? { ...p, title, lyrics, theme, updatedAt: Date.now() }
+          : p
+      ));
+    }
+  }, [title, lyrics, theme, currentProjectId]);
+
+  const handleSaveProject = () => {
+    if (!currentProjectId) {
+      const newProject: SongProject = {
+        id: crypto.randomUUID(),
+        title: title || 'Untitled Song',
+        lyrics,
+        theme,
+        updatedAt: Date.now()
+      };
+      setProjects(prev => [newProject, ...prev]);
+      setCurrentProjectId(newProject.id);
+    }
+  };
+
+  const handleNewProject = () => {
+    setTitle('');
+    setLyrics('');
+    setTheme('');
+    setCurrentProjectId(null);
+    setIsProjectsModalOpen(false);
+  };
+
+  const handleLoadProject = (project: SongProject) => {
+    setTitle(project.title);
+    setLyrics(project.lyrics);
+    setTheme(project.theme);
+    setCurrentProjectId(project.id);
+    setIsProjectsModalOpen(false);
+  };
+
+  const handleDeleteProject = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setProjects(prev => prev.filter(p => p.id !== id));
+    if (currentProjectId === id) {
+      setCurrentProjectId(null);
+    }
+  };
 
   const adjustTextareaHeight = () => {
     if (textareaRef.current) {
@@ -52,29 +132,60 @@ export default function App() {
     };
   }, [lyrics]);
 
-  // Extract the current line based on cursor position
-  const getCurrentLine = () => {
-    if (!lyrics) return '';
-    const textBeforeCursor = lyrics.substring(0, cursorPosition);
-    const linesBefore = textBeforeCursor.split('\n');
-    const currentLineIndex = linesBefore.length - 1;
+  const activeRhymeScheme = rhymeScheme === 'Custom' ? (customRhymeScheme || 'AABB') : rhymeScheme;
+
+  // Extract the current line and stanza based on cursor position
+  const getRhymeContext = () => {
+    if (!lyrics) return { targetLine: null, currentLetter: activeRhymeScheme[0] || 'A', stanzaLines: [], currentLineIndex: 0 };
     
-    const allLines = lyrics.split('\n');
-    // If the current line is empty, maybe look at the previous line
-    let targetLine = allLines[currentLineIndex].trim();
-    if (!targetLine && currentLineIndex > 0) {
-      targetLine = allLines[currentLineIndex - 1].trim();
+    const textBeforeCursor = lyrics.substring(0, cursorPosition);
+    const textAfterCursor = lyrics.substring(cursorPosition);
+    
+    // Find stanza boundaries
+    const lastDoubleNewline = textBeforeCursor.lastIndexOf('\n\n');
+    const stanzaStart = lastDoubleNewline === -1 ? 0 : lastDoubleNewline + 2;
+    
+    const nextDoubleNewline = textAfterCursor.indexOf('\n\n');
+    const stanzaEnd = nextDoubleNewline === -1 ? lyrics.length : cursorPosition + nextDoubleNewline;
+    
+    const currentStanza = lyrics.substring(stanzaStart, stanzaEnd);
+    const stanzaLines = currentStanza.split('\n');
+    
+    // Calculate which line index we are currently on within the stanza
+    const stanzaTextBeforeCursor = textBeforeCursor.substring(stanzaStart);
+    const currentLineIndex = stanzaTextBeforeCursor.split('\n').length - 1;
+    
+    const schemeLetters = activeRhymeScheme.split('');
+    if (schemeLetters.length === 0) return { targetLine: null, currentLetter: 'A', stanzaLines, currentLineIndex };
+    
+    const currentLetter = schemeLetters[currentLineIndex % schemeLetters.length];
+    
+    // Find the previous line in this stanza that has the same letter
+    let targetLine = null;
+    for (let i = currentLineIndex - 1; i >= 0; i--) {
+      if (schemeLetters[i % schemeLetters.length] === currentLetter) {
+        targetLine = stanzaLines[i].trim();
+        if (targetLine) break; // found a non-empty line to rhyme with
+      }
     }
-    return targetLine;
+    
+    return { targetLine, currentLetter, stanzaLines, currentLineIndex };
   };
 
   const handleGetSuggestions = async () => {
-    const currentLine = getCurrentLine();
-    if (!currentLine) return;
+    const context = getRhymeContext();
+    if (!lyrics) return;
 
     setIsLoading(true);
     try {
-      const results = await getRhymeSuggestions(theme, lyrics, currentLine, rhymeType);
+      const results = await getRhymeSuggestions(
+        theme, 
+        lyrics, 
+        context.targetLine, 
+        rhymeType, 
+        activeRhymeScheme, 
+        context.currentLetter
+      );
       setSuggestions(results);
     } catch (error) {
       console.error(error);
@@ -117,7 +228,33 @@ export default function App() {
     setCursorPosition(e.currentTarget.selectionStart);
   };
 
+  const renderColoredLyrics = (text: string) => {
+    if (!text) return null;
+    
+    // Split by words and non-words to preserve spacing and punctuation
+    const parts = text.split(/([a-zA-Z0-9']+)/g);
+    
+    return parts.map((part, i) => {
+      if (/[a-zA-Z0-9']+/.test(part)) {
+        const count = syllable(part);
+        let colorClass = 'text-white/90'; // default
+        
+        if (isSyllableColoringEnabled) {
+          if (count === 1) colorClass = 'text-emerald-300';
+          else if (count === 2) colorClass = 'text-blue-300';
+          else if (count === 3) colorClass = 'text-purple-300';
+          else if (count >= 4) colorClass = 'text-rose-300';
+        }
+        
+        return <span key={i} className={colorClass}>{part}</span>;
+      }
+      return <span key={i} className="text-white/90">{part}</span>;
+    });
+  };
+
   const renderSuggestionWithRhymeHighlight = (suggestion: string) => {
+    if (!isHighlightEnabled) return suggestion;
+    
     // Match everything up to the last word, the last word itself, and any trailing punctuation
     const match = suggestion.match(/(.*?)(\b\w+\b)([^\w]*)$/);
     if (match) {
@@ -135,7 +272,7 @@ export default function App() {
     return suggestion;
   };
 
-  const currentLineDisplay = getCurrentLine();
+  const rhymeContext = getRhymeContext();
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white overflow-hidden relative flex flex-col md:flex-row">
@@ -150,9 +287,33 @@ export default function App() {
           <div className="flex items-center gap-2 text-white/80">
             <Music className="w-5 h-5 text-indigo-400" />
             <h1 className="font-medium tracking-wide">Lyricist AI</h1>
+            <div className="h-4 w-px bg-white/20 mx-2" />
+            <button 
+              onClick={() => setIsProjectsModalOpen(true)}
+              className="text-xs font-medium text-white/60 hover:text-white flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-white/10 transition-colors cursor-pointer"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              Projects
+            </button>
+            {!currentProjectId && (
+              <button 
+                onClick={handleSaveProject}
+                className="text-xs font-medium text-indigo-300 hover:text-indigo-200 flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-indigo-500/20 transition-colors cursor-pointer"
+              >
+                <Save className="w-3.5 h-3.5" />
+                Save
+              </button>
+            )}
+            {currentProjectId && (
+              <span className="text-xs font-medium text-emerald-400/80 flex items-center gap-1.5 px-2 py-1">
+                <Save className="w-3.5 h-3.5" />
+                Saved
+              </span>
+            )}
           </div>
-          <div className="flex items-center gap-4 text-sm text-white/50">
+          <div className="flex flex-col items-end text-xs text-white/50">
             <span>{lyrics.split(/\s+/).filter(w => w.length > 0).length} words</span>
+            <span>{syllable(lyrics)} syllables</span>
           </div>
         </motion.header>
 
@@ -191,20 +352,31 @@ export default function App() {
 
               {/* Lyrics Textarea */}
               <div className="px-8 md:px-12 pb-[50vh] md:pb-32 flex-1 flex flex-col">
-                <textarea
-                  ref={textareaRef}
-                  value={lyrics}
-                  onChange={(e) => {
-                    setLyrics(e.target.value);
-                    setCursorPosition(e.target.selectionStart);
-                  }}
-                  onKeyUp={handleKeyUp}
-                  onClick={handleClick}
-                  onFocus={() => setIsFocused(true)}
-                  placeholder="Start writing your lyrics here..."
-                  className="lyrics-editor w-full overflow-hidden min-h-[50vh]"
-                  spellCheck={false}
-                />
+                <div className="relative w-full flex-1">
+                  <div 
+                    className={`lyrics-editor lyrics-backdrop w-full min-h-[50vh] ${!isSyllableColoringEnabled ? 'opacity-0' : ''}`}
+                    aria-hidden="true"
+                  >
+                    {!lyrics && <span className="text-white/20">Start writing your lyrics here...</span>}
+                    {renderColoredLyrics(lyrics)}
+                    {/* Add a trailing newline space if the text ends with a newline to ensure the cursor can go to the next line visually */}
+                    {lyrics.endsWith('\n') && <br />}
+                  </div>
+                  <textarea
+                    ref={textareaRef}
+                    value={lyrics}
+                    onChange={(e) => {
+                      setLyrics(e.target.value);
+                      setCursorPosition(e.target.selectionStart);
+                    }}
+                    onKeyUp={handleKeyUp}
+                    onClick={handleClick}
+                    onFocus={() => setIsFocused(true)}
+                    placeholder="Start writing your lyrics here..."
+                    className={`lyrics-editor w-full overflow-hidden min-h-[50vh] ${isSyllableColoringEnabled ? 'lyrics-textarea' : ''}`}
+                    spellCheck={false}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -262,13 +434,65 @@ export default function App() {
                 <AlignLeft className="w-4 h-4" />
                 Target Line
               </h3>
+              {rhymeContext.targetLine && (
+                <span className="text-xs font-mono bg-white/10 px-2 py-1 rounded-md text-white/60">
+                  {syllable(rhymeContext.targetLine)} syllables
+                </span>
+              )}
             </div>
             
             <div className="bg-white/5 rounded-lg p-4 border border-white/5 min-h-[3rem] flex items-center">
-              {currentLineDisplay ? (
-                <p className="font-serif italic text-white/90">"{currentLineDisplay}"</p>
+              {rhymeContext.targetLine ? (
+                <p className="font-serif italic text-white/90">"{rhymeContext.targetLine}"</p>
               ) : (
-                <p className="text-sm text-white/30 italic">Place your cursor on a line to get suggestions.</p>
+                <p className="text-sm text-white/30 italic">New rhyme sound (or place cursor on a line)</p>
+              )}
+            </div>
+
+            <div className="space-y-2 pt-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-medium text-white/70">Rhyme Scheme</h3>
+                <select 
+                  value={rhymeScheme} 
+                  onChange={(e) => setRhymeScheme(e.target.value)}
+                  className="bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-white outline-none cursor-pointer"
+                >
+                  <option value="AABB">AABB</option>
+                  <option value="ABAB">ABAB</option>
+                  <option value="ABCB">ABCB</option>
+                  <option value="AAAA">AAAA</option>
+                  <option value="Custom">Custom...</option>
+                </select>
+              </div>
+              {rhymeScheme === 'Custom' && (
+                <input
+                  type="text"
+                  value={customRhymeScheme}
+                  onChange={(e) => setCustomRhymeScheme(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                  placeholder="e.g. AABBCC"
+                  className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors"
+                />
+              )}
+              
+              {/* Visual Display of Current Stanza */}
+              {lyrics && (
+                <div className="mt-2 bg-black/40 rounded-xl border border-white/10 p-3 font-mono text-xs max-h-40 overflow-y-auto">
+                  {rhymeContext.stanzaLines.map((line, i) => {
+                    const schemeLetters = activeRhymeScheme.split('');
+                    const letter = schemeLetters.length > 0 ? schemeLetters[i % schemeLetters.length] : '-';
+                    const isCurrent = i === rhymeContext.currentLineIndex;
+                    return (
+                      <div key={i} className={`flex gap-3 mb-1 ${isCurrent ? 'opacity-100' : 'opacity-50'}`}>
+                        <span className={`font-bold w-4 shrink-0 ${isCurrent ? 'text-indigo-400' : 'text-white/40'}`}>
+                          {letter}
+                        </span>
+                        <span className="truncate text-white/80">
+                          {line || (isCurrent ? <span className="text-white/30 italic">Typing here...</span> : '')}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
 
@@ -291,9 +515,41 @@ export default function App() {
               </div>
             </div>
 
+            <div className="flex items-center justify-between pt-2">
+              <h3 className="text-sm font-medium text-white/70">Highlight Rhymes</h3>
+              <button
+                onClick={() => setIsHighlightEnabled(!isHighlightEnabled)}
+                className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${
+                  isHighlightEnabled ? 'bg-indigo-600' : 'bg-white/10'
+                }`}
+              >
+                <motion.div
+                  className="w-4 h-4 bg-white rounded-full absolute top-0.5"
+                  animate={{ left: isHighlightEnabled ? '1.25rem' : '0.125rem' }}
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
+              <h3 className="text-sm font-medium text-white/70">Color Syllables</h3>
+              <button
+                onClick={() => setIsSyllableColoringEnabled(!isSyllableColoringEnabled)}
+                className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${
+                  isSyllableColoringEnabled ? 'bg-indigo-600' : 'bg-white/10'
+                }`}
+              >
+                <motion.div
+                  className="w-4 h-4 bg-white rounded-full absolute top-0.5"
+                  animate={{ left: isSyllableColoringEnabled ? '1.25rem' : '0.125rem' }}
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                />
+              </button>
+            </div>
+
             <button
               onClick={handleGetSuggestions}
-              disabled={!currentLineDisplay || isLoading}
+              disabled={!lyrics || isLoading}
               className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/30 text-white rounded-xl font-medium transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 disabled:shadow-none cursor-pointer"
             >
               {isLoading ? (
@@ -339,7 +595,12 @@ export default function App() {
                       <span className="font-serif text-white/90 leading-relaxed">
                         {renderSuggestionWithRhymeHighlight(suggestion)}
                       </span>
-                      <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-indigo-400 shrink-0 mt-1 transition-all group-hover:translate-x-1" />
+                      <div className="flex items-center gap-3 shrink-0 mt-1">
+                        <span className="text-xs font-mono text-white/40 bg-white/5 px-2 py-1 rounded-md">
+                          {syllable(suggestion)}
+                        </span>
+                        <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-indigo-400 transition-all group-hover:translate-x-1" />
+                      </div>
                     </motion.button>
                   ))}
                 </div>
@@ -362,6 +623,87 @@ export default function App() {
             <Wand2 className="w-4 h-4" />
             <span className="font-medium">Show Assistant</span>
           </motion.button>
+        )}
+      </AnimatePresence>
+
+      {/* Projects Modal */}
+      <AnimatePresence>
+        {isProjectsModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsProjectsModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-2xl bg-[#111] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+            >
+              <div className="p-6 border-b border-white/10 flex items-center justify-between shrink-0">
+                <h2 className="text-xl font-medium flex items-center gap-2">
+                  <FolderOpen className="w-5 h-5 text-indigo-400" />
+                  Song Projects
+                </h2>
+                <button 
+                  onClick={() => setIsProjectsModalOpen(false)}
+                  className="p-2 hover:bg-white/10 rounded-full transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5 text-white/50 hover:text-white" />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto flex-1">
+                <button
+                  onClick={handleNewProject}
+                  className="w-full mb-6 py-4 border-2 border-dashed border-white/20 hover:border-indigo-500/50 hover:bg-indigo-500/5 rounded-xl flex items-center justify-center gap-2 text-white/70 hover:text-white transition-all cursor-pointer"
+                >
+                  <Plus className="w-5 h-5" />
+                  Create New Song
+                </button>
+
+                {projects.length === 0 ? (
+                  <div className="text-center py-12 text-white/30">
+                    <Music className="w-12 h-12 mx-auto mb-4 opacity-20" />
+                    <p>No saved songs yet.</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-4">
+                    {projects.sort((a, b) => b.updatedAt - a.updatedAt).map(project => (
+                      <div 
+                        key={project.id}
+                        onClick={() => handleLoadProject(project)}
+                        className={`p-4 rounded-xl border transition-all cursor-pointer group flex items-center justify-between ${
+                          currentProjectId === project.id 
+                            ? 'bg-indigo-600/10 border-indigo-500/50' 
+                            : 'bg-white/5 border-white/5 hover:border-white/20 hover:bg-white/10'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1 pr-4">
+                          <h3 className="font-medium text-white truncate">
+                            {project.title || 'Untitled Song'}
+                          </h3>
+                          <p className="text-sm text-white/40 truncate mt-1">
+                            {new Date(project.updatedAt).toLocaleDateString()} • {project.lyrics.split(/\s+/).filter(w => w.length > 0).length} words
+                          </p>
+                        </div>
+                        <button
+                          onClick={(e) => handleDeleteProject(e, project.id)}
+                          className="p-2 text-white/20 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+                          title="Delete Project"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>
