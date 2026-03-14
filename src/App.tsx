@@ -258,7 +258,7 @@ export default function App() {
     // Match everything up to the last word, the last word itself, and any trailing punctuation
     const match = suggestion.match(/(.*?)(\b\w+\b)([^\w]*)$/);
     if (match) {
-      const [_, prefix, word, suffix] = match;
+      const [, prefix, word, suffix] = match;
       return (
         <>
           {prefix}
