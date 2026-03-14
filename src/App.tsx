@@ -4,6 +4,8 @@ import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, 
 import { getRhymeSuggestions } from './services/gemini';
 import { syllable } from 'syllable';
 
+const RHYME_HIGHLIGHT_REGEX = /(.*?)(\b\w+\b)([^\w]*)$/;
+
 interface SongProject {
   id: string;
   title: string;
@@ -256,7 +258,7 @@ export default function App() {
     if (!isHighlightEnabled) return suggestion;
     
     // Match everything up to the last word, the last word itself, and any trailing punctuation
-    const match = suggestion.match(/(.*?)(\b\w+\b)([^\w]*)$/);
+    const match = suggestion.match(RHYME_HIGHLIGHT_REGEX);
     if (match) {
       const [_, prefix, word, suffix] = match;
       return (
