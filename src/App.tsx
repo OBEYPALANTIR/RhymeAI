@@ -118,10 +118,13 @@ export default function App() {
     }
   };
 
-  // Auto-resize textarea
+  // Auto-resize textarea when lyrics change
   useEffect(() => {
     adjustTextareaHeight();
-    
+  }, [lyrics]);
+
+  // Set up resize and font load listeners once
+  useEffect(() => {
     window.addEventListener('resize', adjustTextareaHeight);
     if (document.fonts) {
       document.fonts.ready.then(adjustTextareaHeight);
@@ -130,7 +133,7 @@ export default function App() {
     return () => {
       window.removeEventListener('resize', adjustTextareaHeight);
     };
-  }, [lyrics]);
+  }, []);
 
   const activeRhymeScheme = rhymeScheme === 'Custom' ? (customRhymeScheme || 'AABB') : rhymeScheme;
 
