@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, FolderOpen, Save, Plus, Trash2, X } from 'lucide-react';
 import { getRhymeSuggestions } from './services/gemini';
@@ -36,6 +36,10 @@ export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const rhymeOptions = ['Perfect Rhyme', 'Near Rhyme', 'Slant Rhyme'];
+
+  const wordCount = useMemo(() => {
+    return lyrics.match(/\S+/g)?.length || 0;
+  }, [lyrics]);
 
   // Save to local storage
   useEffect(() => {
@@ -312,7 +316,7 @@ export default function App() {
             )}
           </div>
           <div className="flex flex-col items-end text-xs text-white/50">
-            <span>{lyrics.split(/\s+/).filter(w => w.length > 0).length} words</span>
+            <span>{wordCount} words</span>
             <span>{syllable(lyrics)} syllables</span>
           </div>
         </motion.header>
@@ -687,7 +691,7 @@ export default function App() {
                             {project.title || 'Untitled Song'}
                           </h3>
                           <p className="text-sm text-white/40 truncate mt-1">
-                            {new Date(project.updatedAt).toLocaleDateString()} • {project.lyrics.split(/\s+/).filter(w => w.length > 0).length} words
+                            {new Date(project.updatedAt).toLocaleDateString()} • {project.lyrics.match(/\S+/g)?.length || 0} words
                           </p>
                         </div>
                         <button
