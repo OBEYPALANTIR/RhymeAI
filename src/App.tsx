@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, FolderOpen, Save, Plus, Trash2, X } from 'lucide-react';
+import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, FolderOpen, Save, Plus, Trash2, X, Check, LayoutTemplate } from 'lucide-react';
 import { getRhymeSuggestions } from './services/gemini';
 import { syllable } from 'syllable';
 
@@ -11,6 +11,29 @@ interface SongProject {
   theme: string;
   updatedAt: number;
 }
+
+const SONG_TEMPLATES = [
+  {
+    name: 'Pop Song',
+    theme: 'Upbeat, catchy, relatable',
+    lyrics: '[Verse 1]\n\n\n[Pre-Chorus]\n\n\n[Chorus]\n\n\n[Verse 2]\n\n\n[Pre-Chorus]\n\n\n[Chorus]\n\n\n[Bridge]\n\n\n[Chorus]\n\n\n[Outro]\n'
+  },
+  {
+    name: 'Rap / Hip-Hop',
+    theme: 'Storytelling, rhythm, flow',
+    lyrics: '[Intro]\n\n\n[Verse 1]\n\n\n[Hook]\n\n\n[Verse 2]\n\n\n[Hook]\n\n\n[Bridge]\n\n\n[Hook]\n\n\n[Outro]\n'
+  },
+  {
+    name: 'Country',
+    theme: 'Storytelling, acoustic, heartfelt',
+    lyrics: '[Verse 1]\n\n\n[Chorus]\n\n\n[Verse 2]\n\n\n[Chorus]\n\n\n[Bridge]\n\n\n[Chorus]\n\n\n[Outro]\n'
+  },
+  {
+    name: 'Haiku',
+    theme: 'Nature, concise, 5-7-5 syllables',
+    lyrics: 'Line 1 (5 syllables):\n\nLine 2 (7 syllables):\n\nLine 3 (5 syllables):\n'
+  }
+];
 
 export default function App() {
   const [theme, setTheme] = useState('');
@@ -33,6 +56,14 @@ export default function App() {
   });
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => localStorage.getItem('lyricist-current-project') || null);
   const [isProjectsModalOpen, setIsProjectsModalOpen] = useState(false);
+  const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false);
+  const [isStartMenuOpen, setIsStartMenuOpen] = useState(() => {
+    const hasProject = localStorage.getItem('lyricist-current-project');
+    const hasTitle = localStorage.getItem('lyricist-title');
+    const hasLyrics = localStorage.getItem('lyricist-lyrics');
+    return !hasProject && !hasTitle && !hasLyrics;
+  });
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const rhymeOptions = ['Perfect Rhyme', 'Near Rhyme', 'Slant Rhyme'];
@@ -57,28 +88,38 @@ export default function App() {
 
   // Auto-save current project
   useEffect(() => {
-    if (currentProjectId) {
-      setProjects(prev => prev.map(p => 
-        p.id === currentProjectId 
-          ? { ...p, title, lyrics, theme, updatedAt: Date.now() }
-          : p
-      ));
+    if (!title && !lyrics && !theme) {
+      setSaveStatus('idle');
+      return;
     }
-  }, [title, lyrics, theme, currentProjectId]);
 
-  const handleSaveProject = () => {
+    setSaveStatus('saving');
+    
     if (!currentProjectId) {
+      const newId = crypto.randomUUID();
       const newProject: SongProject = {
-        id: crypto.randomUUID(),
+        id: newId,
         title: title || 'Untitled Song',
         lyrics,
         theme,
         updatedAt: Date.now()
       };
       setProjects(prev => [newProject, ...prev]);
-      setCurrentProjectId(newProject.id);
+      setCurrentProjectId(newId);
+    } else {
+      setProjects(prev => prev.map(p => 
+        p.id === currentProjectId 
+          ? { ...p, title: title || 'Untitled Song', lyrics, theme, updatedAt: Date.now() }
+          : p
+      ));
     }
-  };
+
+    const timeout = setTimeout(() => {
+      setSaveStatus('saved');
+    }, 1000);
+
+    return () => clearTimeout(timeout);
+  }, [title, lyrics, theme, currentProjectId]);
 
   const handleNewProject = () => {
     setTitle('');
@@ -86,6 +127,7 @@ export default function App() {
     setTheme('');
     setCurrentProjectId(null);
     setIsProjectsModalOpen(false);
+    setIsStartMenuOpen(false);
   };
 
   const handleLoadProject = (project: SongProject) => {
@@ -94,6 +136,7 @@ export default function App() {
     setTheme(project.theme);
     setCurrentProjectId(project.id);
     setIsProjectsModalOpen(false);
+    setIsStartMenuOpen(false);
   };
 
   const handleDeleteProject = (e: React.MouseEvent, id: string) => {
@@ -295,18 +338,15 @@ export default function App() {
               <FolderOpen className="w-3.5 h-3.5" />
               Projects
             </button>
-            {!currentProjectId && (
-              <button 
-                onClick={handleSaveProject}
-                className="text-xs font-medium text-indigo-300 hover:text-indigo-200 flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-indigo-500/20 transition-colors cursor-pointer"
-              >
-                <Save className="w-3.5 h-3.5" />
-                Save
-              </button>
+            {saveStatus === 'saving' && (
+              <span className="text-xs font-medium text-white/50 flex items-center gap-1.5 px-2 py-1">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Saving...
+              </span>
             )}
-            {currentProjectId && (
+            {saveStatus === 'saved' && (
               <span className="text-xs font-medium text-emerald-400/80 flex items-center gap-1.5 px-2 py-1">
-                <Save className="w-3.5 h-3.5" />
+                <Check className="w-3.5 h-3.5" />
                 Saved
               </span>
             )}
@@ -629,7 +669,7 @@ export default function App() {
       {/* Projects Modal */}
       <AnimatePresence>
         {isProjectsModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -701,6 +741,133 @@ export default function App() {
                     ))}
                   </div>
                 )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Templates Modal */}
+      <AnimatePresence>
+        {isTemplatesModalOpen && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsTemplatesModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-2xl bg-[#111] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+            >
+              <div className="p-6 border-b border-white/10 flex items-center justify-between shrink-0">
+                <h2 className="text-xl font-medium flex items-center gap-2">
+                  <LayoutTemplate className="w-5 h-5 text-indigo-400" />
+                  Choose a Template
+                </h2>
+                <button 
+                  onClick={() => setIsTemplatesModalOpen(false)}
+                  className="p-2 hover:bg-white/10 rounded-full transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5 text-white/50 hover:text-white" />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto flex-1">
+                <div className="grid gap-4 md:grid-cols-2">
+                  {SONG_TEMPLATES.map((template, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        setTitle(`Untitled ${template.name}`);
+                        setTheme(template.theme);
+                        setLyrics(template.lyrics);
+                        setCurrentProjectId(null);
+                        setIsTemplatesModalOpen(false);
+                        setIsStartMenuOpen(false);
+                      }}
+                      className="text-left p-6 rounded-xl border bg-white/5 border-white/5 hover:border-indigo-500/50 hover:bg-white/10 transition-all cursor-pointer group"
+                    >
+                      <h3 className="font-medium text-lg text-white mb-2 group-hover:text-indigo-300 transition-colors">
+                        {template.name}
+                      </h3>
+                      <p className="text-sm text-white/40">
+                        {template.theme}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Start Menu */}
+      <AnimatePresence>
+        {isStartMenuOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-[#0a0a0a]">
+            {/* Background effects */}
+            <div className="absolute inset-0 pointer-events-none bg-gradient-to-b from-indigo-500/10 to-transparent opacity-50" />
+            
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="relative w-full max-w-4xl flex flex-col items-center text-center"
+            >
+              <div className="w-20 h-20 bg-indigo-500/20 rounded-full flex items-center justify-center mb-8 border border-indigo-500/30 shadow-[0_0_40px_rgba(99,102,241,0.2)]">
+                <Music className="w-10 h-10 text-indigo-400" />
+              </div>
+              
+              <h1 className="text-4xl md:text-6xl font-serif font-bold mb-4 tracking-tight">
+                Welcome to <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Lyricist AI</span>
+              </h1>
+              <p className="text-lg text-white/50 mb-12 max-w-xl">
+                Your intelligent songwriting companion. Start from scratch, load an existing masterpiece, or kickstart your creativity with a template.
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full">
+                <button
+                  onClick={() => {
+                    setIsStartMenuOpen(false);
+                    handleNewProject();
+                  }}
+                  className="group relative p-8 rounded-2xl bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-all cursor-pointer flex flex-col items-center text-center overflow-hidden"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:to-transparent transition-all" />
+                  <Plus className="w-8 h-8 text-white/70 group-hover:text-indigo-400 mb-4 transition-colors" />
+                  <h3 className="text-xl font-medium mb-2">New Song</h3>
+                  <p className="text-sm text-white/40">Start with a blank canvas</p>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsProjectsModalOpen(true);
+                  }}
+                  className="group relative p-8 rounded-2xl bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-all cursor-pointer flex flex-col items-center text-center overflow-hidden"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:to-transparent transition-all" />
+                  <FolderOpen className="w-8 h-8 text-white/70 group-hover:text-indigo-400 mb-4 transition-colors" />
+                  <h3 className="text-xl font-medium mb-2">Load Song</h3>
+                  <p className="text-sm text-white/40">Continue where you left off</p>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsTemplatesModalOpen(true);
+                  }}
+                  className="group relative p-8 rounded-2xl bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-all cursor-pointer flex flex-col items-center text-center overflow-hidden"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:to-transparent transition-all" />
+                  <LayoutTemplate className="w-8 h-8 text-white/70 group-hover:text-indigo-400 mb-4 transition-colors" />
+                  <h3 className="text-xl font-medium mb-2">Song Templates</h3>
+                  <p className="text-sm text-white/40">Start with a structured layout</p>
+                </button>
               </div>
             </motion.div>
           </div>
