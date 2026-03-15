@@ -28,26 +28,25 @@ Provide 5 creative, poetic, and contextually relevant suggestions for the next l
 Make sure the rhythm and meter match the style of the current lyrics${targetRhymeLine ? `, and strictly adhere to the requested rhyme type (${rhymeType})` : ''}.
 `;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
-    contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.STRING,
-        },
-        description: 'An array of 5 suggested lines.',
-      },
-    },
-  });
-
   try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-pro-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.STRING,
+          },
+          description: 'An array of 5 suggested lines.',
+        },
+      },
+    });
+
     const jsonStr = response.text?.trim() || '[]';
     return JSON.parse(jsonStr);
   } catch (e) {
-    console.error('Failed to parse suggestions', e);
-    return [];
+    throw new Error('Unable to generate suggestions. Check your connection and API key.');
   }
 }

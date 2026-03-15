@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, FolderOpen, Save, Plus, Trash2, X } from 'lucide-react';
 import { getRhymeSuggestions } from './services/gemini';
@@ -29,11 +29,19 @@ export default function App() {
   const [customRhymeScheme, setCustomRhymeScheme] = useState('');
   const [projects, setProjects] = useState<SongProject[]>(() => {
     const saved = localStorage.getItem('lyricist-projects');
-    return saved ? JSON.parse(saved) : [];
+    if (!saved) return [];
+    try {
+      return JSON.parse(saved);
+    } catch {
+      localStorage.removeItem('lyricist-projects');
+      return [];
+    }
   });
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => localStorage.getItem('lyricist-current-project') || null);
   const [isProjectsModalOpen, setIsProjectsModalOpen] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const pendingCursorRef = useRef<number | null>(null);
 
   const rhymeOptions = ['Perfect Rhyme', 'Near Rhyme', 'Slant Rhyme'];
 
@@ -118,48 +126,60 @@ export default function App() {
     }
   };
 
-  // Auto-resize textarea
+  // Resize textarea when lyrics change
   useEffect(() => {
     adjustTextareaHeight();
-    
+  }, [lyrics]);
+
+  // Attach resize listener and font-ready handler once
+  useEffect(() => {
     window.addEventListener('resize', adjustTextareaHeight);
     if (document.fonts) {
-      document.fonts.ready.then(adjustTextareaHeight);
+      document.fonts.ready.then(adjustTextareaHeight).catch(() => {});
     }
-    
     return () => {
       window.removeEventListener('resize', adjustTextareaHeight);
     };
+  }, []);
+
+  // Apply pending cursor position after lyrics state update
+  useEffect(() => {
+    if (pendingCursorRef.current !== null && textareaRef.current) {
+      textareaRef.current.selectionStart = pendingCursorRef.current;
+      textareaRef.current.selectionEnd = pendingCursorRef.current;
+      textareaRef.current.focus();
+      pendingCursorRef.current = null;
+    }
   }, [lyrics]);
 
   const activeRhymeScheme = rhymeScheme === 'Custom' ? (customRhymeScheme || 'AABB') : rhymeScheme;
 
   // Extract the current line and stanza based on cursor position
-  const getRhymeContext = () => {
-    if (!lyrics) return { targetLine: null, currentLetter: activeRhymeScheme[0] || 'A', stanzaLines: [], currentLineIndex: 0 };
-    
+  const getRhymeContext = useCallback(() => {
+    if (!lyrics) return { targetLine: null, currentLetter: activeRhymeScheme[0] || 'A', stanzaLines: [] as string[], currentLineIndex: 0 };
+
     const textBeforeCursor = lyrics.substring(0, cursorPosition);
     const textAfterCursor = lyrics.substring(cursorPosition);
-    
+
     // Find stanza boundaries
     const lastDoubleNewline = textBeforeCursor.lastIndexOf('\n\n');
     const stanzaStart = lastDoubleNewline === -1 ? 0 : lastDoubleNewline + 2;
-    
+
     const nextDoubleNewline = textAfterCursor.indexOf('\n\n');
     const stanzaEnd = nextDoubleNewline === -1 ? lyrics.length : cursorPosition + nextDoubleNewline;
-    
+
     const currentStanza = lyrics.substring(stanzaStart, stanzaEnd);
     const stanzaLines = currentStanza.split('\n');
-    
+
     // Calculate which line index we are currently on within the stanza
     const stanzaTextBeforeCursor = textBeforeCursor.substring(stanzaStart);
     const currentLineIndex = stanzaTextBeforeCursor.split('\n').length - 1;
-    
+
     const schemeLetters = activeRhymeScheme.split('');
     if (schemeLetters.length === 0) return { targetLine: null, currentLetter: 'A', stanzaLines, currentLineIndex };
-    
+
     const currentLetter = schemeLetters[currentLineIndex % schemeLetters.length];
-    
+
     // Find the previous line in this stanza that has the same letter
     let targetLine = null;
     for (let i = currentLineIndex - 1; i >= 0; i--) {
@@ -168,27 +188,28 @@ export default function App() {
         if (targetLine) break; // found a non-empty line to rhyme with
       }
     }
-    
+
     return { targetLine, currentLetter, stanzaLines, currentLineIndex };
-  };
+  }, [lyrics, cursorPosition, activeRhymeScheme]);
 
   const handleGetSuggestions = async () => {
     const context = getRhymeContext();
     if (!lyrics) return;
 
     setIsLoading(true);
+    setApiError(null);
     try {
       const results = await getRhymeSuggestions(
-        theme, 
-        lyrics, 
-        context.targetLine, 
-        rhymeType, 
-        activeRhymeScheme, 
+        theme,
+        lyrics,
+        context.targetLine,
+        rhymeType,
+        activeRhymeScheme,
         context.currentLetter
       );
       setSuggestions(results);
     } catch (error) {
-      console.error(error);
+      setApiError(error instanceof Error ? error.message : 'Failed to get suggestions. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -206,17 +227,10 @@ export default function App() {
     
     const newLyrics = textBeforeCursor + insertText + textAfterCursor;
     setLyrics(newLyrics);
-    
-    // Update cursor position
-    const newPosition = cursorPosition + insertText.length;
-    setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.selectionStart = newPosition;
-        textareaRef.current.selectionEnd = newPosition;
-        textareaRef.current.focus();
-      }
-    }, 0);
-    
+
+    // Update cursor position after React commits the new lyrics
+    pendingCursorRef.current = cursorPosition + insertText.length;
+
     setSuggestions([]);
   };
 
@@ -228,29 +242,28 @@ export default function App() {
     setCursorPosition(e.currentTarget.selectionStart);
   };
 
-  const renderColoredLyrics = (text: string) => {
-    if (!text) return null;
-    
-    // Split by words and non-words to preserve spacing and punctuation
-    const parts = text.split(/([a-zA-Z0-9']+)/g);
-    
+  const coloredLyrics = useMemo(() => {
+    if (!lyrics) return null;
+
+    const parts = lyrics.split(/([a-zA-Z0-9']+)/g);
+
     return parts.map((part, i) => {
       if (/[a-zA-Z0-9']+/.test(part)) {
         const count = syllable(part);
-        let colorClass = 'text-white/90'; // default
-        
+        let colorClass = 'text-white/90';
+
         if (isSyllableColoringEnabled) {
           if (count === 1) colorClass = 'text-emerald-300';
           else if (count === 2) colorClass = 'text-blue-300';
           else if (count === 3) colorClass = 'text-purple-300';
           else if (count >= 4) colorClass = 'text-rose-300';
         }
-        
+
         return <span key={i} className={colorClass}>{part}</span>;
       }
       return <span key={i} className="text-white/90">{part}</span>;
     });
-  };
+  }, [lyrics, isSyllableColoringEnabled]);
 
   const renderSuggestionWithRhymeHighlight = (suggestion: string) => {
     if (!isHighlightEnabled) return suggestion;
@@ -272,7 +285,14 @@ export default function App() {
     return suggestion;
   };
 
-  const rhymeContext = getRhymeContext();
+  const rhymeContext = useMemo(() => getRhymeContext(), [getRhymeContext]);
+
+  const totalSyllables = useMemo(() => syllable(lyrics), [lyrics]);
+
+  const sortedProjects = useMemo(
+    () => [...projects].sort((a, b) => b.updatedAt - a.updatedAt),
+    [projects]
+  );
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white overflow-hidden relative flex flex-col md:flex-row">
@@ -313,7 +333,7 @@ export default function App() {
           </div>
           <div className="flex flex-col items-end text-xs text-white/50">
             <span>{lyrics.split(/\s+/).filter(w => w.length > 0).length} words</span>
-            <span>{syllable(lyrics)} syllables</span>
+            <span>{totalSyllables} syllables</span>
           </div>
         </motion.header>
 
@@ -358,7 +378,7 @@ export default function App() {
                     aria-hidden="true"
                   >
                     {!lyrics && <span className="text-white/20">Start writing your lyrics here...</span>}
-                    {renderColoredLyrics(lyrics)}
+                    {coloredLyrics}
                     {/* Add a trailing newline space if the text ends with a newline to ensure the cursor can go to the next line visually */}
                     {lyrics.endsWith('\n') && <br />}
                   </div>
@@ -564,6 +584,9 @@ export default function App() {
                 </>
               )}
             </button>
+            {apiError && (
+              <p className="text-sm text-red-400 text-center mt-2">{apiError}</p>
+            )}
           </div>
 
           <AnimatePresence mode="popLayout">
@@ -672,7 +695,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="grid gap-4">
-                    {projects.sort((a, b) => b.updatedAt - a.updatedAt).map(project => (
+                    {sortedProjects.map(project => (
                       <div 
                         key={project.id}
                         onClick={() => handleLoadProject(project)}
