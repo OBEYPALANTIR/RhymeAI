@@ -1,8 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-export async function getRhymeSuggestions(
+export async function getRhymeSuggestionsGemini(
+  apiKey: string,
   theme: string,
   lyrics: string,
   targetRhymeLine: string | null,
@@ -10,6 +9,8 @@ export async function getRhymeSuggestions(
   rhymeScheme: string,
   currentLetter: string
 ): Promise<string[]> {
+  const ai = new GoogleGenAI({ apiKey });
+
   const prompt = `
 You are an expert songwriter and lyricist.
 The user is writing a song with the following theme/context: "${theme || 'No specific theme provided'}".
@@ -20,8 +21,8 @@ ${lyrics}
 
 The user needs a line that follows the current lyrics.
 The current stanza follows a "${rhymeScheme}" rhyme scheme, and the next line corresponds to the letter "${currentLetter}".
-${targetRhymeLine 
-  ? `Crucially, the new line MUST end with a **${rhymeType}** to this specific line: "${targetRhymeLine}".` 
+${targetRhymeLine
+  ? `Crucially, the new line MUST end with a **${rhymeType}** to this specific line: "${targetRhymeLine}".`
   : `Since this is a new rhyme sound ("${currentLetter}"), the new line should introduce a new end-rhyme that fits the meter and theme.`}
 
 Provide 5 creative, poetic, and contextually relevant suggestions for the next line.

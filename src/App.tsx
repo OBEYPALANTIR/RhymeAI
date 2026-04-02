@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, FolderOpen, Save, Plus, Trash2, X, Check, LayoutTemplate } from 'lucide-react';
-import { getRhymeSuggestions } from './services/gemini';
+import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, FolderOpen, Save, Plus, Trash2, X, Check, LayoutTemplate, Settings } from 'lucide-react';
+import { getRhymeSuggestions, getStoredProvider, setStoredProvider, getStoredApiKey, setStoredApiKey, PROVIDER_LABELS, type AIProvider } from './services/ai-provider';
 import { syllable } from 'syllable';
 
 interface SongProject {
@@ -64,6 +64,10 @@ export default function App() {
     return !hasProject && !hasTitle && !hasLyrics;
   });
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsProvider, setSettingsProvider] = useState<AIProvider>(getStoredProvider());
+  const [settingsApiKey, setSettingsApiKey] = useState(getStoredApiKey(getStoredProvider()));
+  const [errorMessage, setErrorMessage] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const rhymeOptions = ['Perfect Rhyme', 'Near Rhyme', 'Slant Rhyme'];
@@ -220,18 +224,20 @@ export default function App() {
     if (!lyrics) return;
 
     setIsLoading(true);
+    setErrorMessage('');
     try {
       const results = await getRhymeSuggestions(
-        theme, 
-        lyrics, 
-        context.targetLine, 
-        rhymeType, 
-        activeRhymeScheme, 
+        theme,
+        lyrics,
+        context.targetLine,
+        rhymeType,
+        activeRhymeScheme,
         context.currentLetter
       );
       setSuggestions(results);
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      setErrorMessage(error?.message || 'Failed to get suggestions. Check your API key and try again.');
     } finally {
       setIsLoading(false);
     }
@@ -331,12 +337,23 @@ export default function App() {
             <Music className="w-5 h-5 text-indigo-400" />
             <h1 className="font-medium tracking-wide">Lyricist AI</h1>
             <div className="h-4 w-px bg-white/20 mx-2" />
-            <button 
+            <button
               onClick={() => setIsProjectsModalOpen(true)}
               className="text-xs font-medium text-white/60 hover:text-white flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-white/10 transition-colors cursor-pointer"
             >
               <FolderOpen className="w-3.5 h-3.5" />
               Projects
+            </button>
+            <button
+              onClick={() => {
+                setSettingsProvider(getStoredProvider());
+                setSettingsApiKey(getStoredApiKey(getStoredProvider()));
+                setIsSettingsOpen(true);
+              }}
+              className="text-xs font-medium text-white/60 hover:text-white flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-white/10 transition-colors cursor-pointer"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              AI Settings
             </button>
             {saveStatus === 'saving' && (
               <span className="text-xs font-medium text-white/50 flex items-center gap-1.5 px-2 py-1">
@@ -606,6 +623,19 @@ export default function App() {
             </button>
           </div>
 
+          <AnimatePresence>
+            {errorMessage && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-sm text-red-300"
+              >
+                {errorMessage}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <AnimatePresence mode="popLayout">
             {suggestions.length > 0 && (
               <motion.div
@@ -801,6 +831,88 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsSettingsOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md bg-[#111] border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-white/10 flex items-center justify-between">
+                <h2 className="text-xl font-medium flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-indigo-400" />
+                  AI Settings
+                </h2>
+                <button
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="p-2 hover:bg-white/10 rounded-full transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5 text-white/50 hover:text-white" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-5">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-white/70">AI Provider</label>
+                  <select
+                    value={settingsProvider}
+                    onChange={(e) => {
+                      const p = e.target.value as AIProvider;
+                      setSettingsProvider(p);
+                      setSettingsApiKey(getStoredApiKey(p));
+                    }}
+                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors cursor-pointer"
+                  >
+                    {(Object.keys(PROVIDER_LABELS) as AIProvider[]).map((key) => (
+                      <option key={key} value={key}>{PROVIDER_LABELS[key]}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-white/70">
+                    API Key for {PROVIDER_LABELS[settingsProvider]}
+                  </label>
+                  <input
+                    type="password"
+                    value={settingsApiKey}
+                    onChange={(e) => setSettingsApiKey(e.target.value)}
+                    placeholder="Paste your API key here..."
+                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors placeholder:text-white/30"
+                  />
+                  <p className="text-xs text-white/30">
+                    Your key is stored locally on this device only.
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setStoredProvider(settingsProvider);
+                    setStoredApiKey(settingsProvider, settingsApiKey);
+                    setErrorMessage('');
+                    setIsSettingsOpen(false);
+                  }}
+                  className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  Save Settings
+                </button>
               </div>
             </motion.div>
           </div>
