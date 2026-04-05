@@ -6,3 +6,15 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Android
+android/build/
+android/app/build/
+android/local.properties
+android/.gradle/
+
+# IDE
+.idea/
+
+# Claude
+.claude/
