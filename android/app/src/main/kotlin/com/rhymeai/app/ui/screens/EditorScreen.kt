@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,7 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -79,31 +80,25 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             .imePadding()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top bar
-            AnimatedVisibility(
-                visible = !viewModel.isFocusMode,
-                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
-            ) {
+            // Top bar — always visible
+            run {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(colorScheme.surface)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.weight(1f, fill = false)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { onNavigateToStart() }
-                        ) {
-                            Icon(Icons.Default.MusicNote, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("WritersBLOK", fontWeight = FontWeight.Medium, color = colorScheme.onSurface)
+                        TextButton(onClick = { onNavigateToStart() }) {
+                            Icon(Icons.Default.Menu, null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Menu", color = colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
                         }
 
                         Box(Modifier.width(1.dp).height(16.dp).background(colorScheme.outlineVariant))
@@ -113,7 +108,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
                         TextButton(onClick = { viewModel.showProjectsDialog = true }) {
                             Icon(Icons.Default.FolderOpen, null, tint = projectsColor, modifier = Modifier.size(14.dp))
-                            Text("  Projects", color = projectsColor, fontSize = 12.sp)
+                            Text(" Projects", color = projectsColor, fontSize = 11.sp)
                         }
 
                         TextButton(onClick = { viewModel.showSettingsDialog = true }) {
@@ -124,12 +119,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
                             "${SyllableCounter.wordCount(viewModel.lyrics)} words",
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             color = colorScheme.onSurfaceVariant
                         )
                         Text(
                             "${SyllableCounter.countText(viewModel.lyrics)} syllables",
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             color = colorScheme.onSurfaceVariant
                         )
                     }
@@ -137,9 +132,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
 
             // Divider
-            if (!viewModel.isFocusMode) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(colorScheme.outlineVariant))
-            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(colorScheme.outlineVariant))
 
             // Editor
             val scrollState = rememberScrollState()
@@ -150,7 +143,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     .verticalScroll(scrollState)
                     .padding(horizontal = 24.dp)
             ) {
-                Spacer(Modifier.height(if (viewModel.isFocusMode) 24.dp else 16.dp))
+                Spacer(Modifier.height(16.dp))
 
                 // Title field
                 BasicTextField(
@@ -165,7 +158,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     cursorBrush = SolidColor(colorScheme.primary),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .onFocusChanged { if (it.isFocused) viewModel.isFocusMode = true },
+,
                     decorationBox = { innerTextField ->
                         Box {
                             if (viewModel.title.isEmpty()) {
@@ -215,7 +208,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         cursorBrush = SolidColor(colorScheme.primary),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .onFocusChanged { if (it.isFocused) viewModel.isFocusMode = true },
+    ,
                         decorationBox = { innerTextField ->
                             Box {
                                 if (viewModel.lyrics.isEmpty()) {
@@ -237,33 +230,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
 
-        // FAB to show assistant (visible in focus mode)
+        // UnBlock FAB — always visible when sheet is closed
         AnimatedVisibility(
-            visible = viewModel.isFocusMode,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .navigationBarsPadding()
-                .padding(24.dp)
-        ) {
-            ExtendedFloatingActionButton(
-                onClick = {
-                    viewModel.isFocusMode = false
-                    showBottomSheet = true
-                },
-                containerColor = colorScheme.primary,
-                contentColor = colorScheme.onPrimary,
-                shape = RoundedCornerShape(28.dp)
-            ) {
-                Icon(Icons.Default.AutoFixHigh, null, modifier = Modifier.size(18.dp))
-                Text("  Show Assistant", fontWeight = FontWeight.Medium)
-            }
-        }
-
-        // Show assistant button when NOT in focus mode (bottom bar)
-        AnimatedVisibility(
-            visible = !viewModel.isFocusMode && !showBottomSheet,
+            visible = !showBottomSheet,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
             exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
             modifier = Modifier
@@ -278,7 +247,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 shape = RoundedCornerShape(28.dp)
             ) {
                 Icon(Icons.Default.AutoFixHigh, null, modifier = Modifier.size(18.dp))
-                Text("  AI Assistant", fontWeight = FontWeight.Medium)
+                Text("  UnBlock", fontWeight = FontWeight.Medium)
             }
         }
 

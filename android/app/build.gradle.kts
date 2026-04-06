@@ -17,7 +17,7 @@ fun loadLocalProperty(key: String): String {
 
 android {
     namespace = "com.rhymeai.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.rhymeai.app"
@@ -71,6 +71,9 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
+
+    // On-device LLM inference (GGUF support via llama.cpp)
+    implementation("io.github.ljcamargo:llamacpp-kotlin:0.2.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

@@ -5,21 +5,27 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -47,13 +53,18 @@ fun WelcomeScreen(
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background)
-            .statusBarsPadding(),
-        contentAlignment = Alignment.Center
+            .statusBarsPadding()
+            .navigationBarsPadding()
     ) {
+        val isCompact = maxHeight < 600.dp
+        val iconSize = if (isCompact) 56.dp else 80.dp
+        val titleSize = if (isCompact) 24.sp else 32.sp
+        val verticalSpacing = if (isCompact) 16.dp else 32.dp
+
         // Gradient overlay
         Box(
             modifier = Modifier
@@ -70,45 +81,44 @@ fun WelcomeScreen(
 
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = verticalSpacing),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
             // Icon
             Box(
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(iconSize)
                     .background(colorScheme.primary.copy(alpha = 0.2f), CircleShape)
                     .border(1.dp, colorScheme.primary.copy(alpha = 0.3f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Default.MusicNote,
+                    Icons.Default.Keyboard,
                     contentDescription = null,
                     tint = colorScheme.primary,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(iconSize / 2)
                 )
             }
 
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(verticalSpacing))
 
             // Title
             Text(
                 text = buildAnnotatedString {
-                    withStyle(SpanStyle(color = colorScheme.onBackground)) {
-                        append("Welcome to ")
-                    }
                     withStyle(SpanStyle(
                         brush = Brush.horizontalGradient(listOf(colorScheme.primary, colorScheme.secondary))
                     )) {
-                        append("WritersBLOK")
+                        append("Writers Block")
                     }
                 },
                 fontFamily = FontFamily.Serif,
                 fontWeight = FontWeight.Bold,
-                fontSize = 32.sp,
+                fontSize = titleSize,
                 textAlign = TextAlign.Center,
-                lineHeight = 40.sp
+                lineHeight = titleSize * 1.25
             )
 
             Spacer(Modifier.height(12.dp))
@@ -116,17 +126,17 @@ fun WelcomeScreen(
             Text(
                 "Your intelligent songwriting companion. Start from scratch, load an existing project, or kickstart your creativity with a template.",
                 color = colorScheme.onSurfaceVariant,
-                fontSize = 15.sp,
+                fontSize = 14.sp,
                 textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
+                lineHeight = 20.sp,
                 modifier = Modifier.padding(horizontal = 8.dp)
             )
 
-            Spacer(Modifier.height(48.dp))
+            Spacer(Modifier.height(verticalSpacing))
 
             // Cards
             Column(
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 WelcomeCard(
@@ -161,33 +171,34 @@ private fun WelcomeCard(
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
             .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             icon,
             contentDescription = null,
             tint = colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(32.dp)
+            modifier = Modifier.size(28.dp)
         )
-        Spacer(Modifier.height(12.dp))
-        Text(
-            title,
-            fontWeight = FontWeight.Medium,
-            fontSize = 18.sp,
-            color = colorScheme.onSurface
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            subtitle,
-            fontSize = 13.sp,
-            color = colorScheme.onSurfaceVariant
-        )
+        Spacer(Modifier.width(16.dp))
+        Column {
+            Text(
+                title,
+                fontWeight = FontWeight.Medium,
+                fontSize = 16.sp,
+                color = colorScheme.onSurface
+            )
+            Text(
+                subtitle,
+                fontSize = 13.sp,
+                color = colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

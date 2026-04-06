@@ -68,10 +68,18 @@ class MainActivity : ComponentActivity() {
 
                 if (viewModel.showSettingsDialog) {
                     SettingsDialog(
-                        currentApiKey = viewModel.apiKey,
+                        apiKeys = viewModel.apiKeys,
+                        currentProvider = viewModel.selectedProvider,
                         currentModel = viewModel.selectedModel,
-                        onSaveApiKey = { viewModel.saveApiKey(it) },
+                        localModelLoading = viewModel.localModelLoading,
+                        localModelLoaded = viewModel.localModelLoaded,
+                        localModelPath = viewModel.localModelPath,
+                        localModelError = viewModel.localModelError,
+                        onSaveApiKey = { provider, key -> viewModel.saveApiKey(provider, key) },
+                        onSaveProvider = { viewModel.saveProvider(it) },
                         onSaveModel = { viewModel.saveModel(it) },
+                        onLoadLocalModel = { viewModel.loadLocalModel(it) },
+                        onUnloadLocalModel = { viewModel.unloadLocalModel() },
                         onDismiss = { viewModel.showSettingsDialog = false }
                     )
                 }
