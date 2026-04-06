@@ -23,6 +23,9 @@ class ProjectRepository(private val context: Context) {
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
         private val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
+        private val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
+        private val CLAUDE_API_KEY = stringPreferencesKey("claude_api_key")
+        private val SELECTED_PROVIDER_KEY = stringPreferencesKey("selected_provider")
         private val GEMINI_MODEL_KEY = stringPreferencesKey("gemini_model_id")
     }
 
@@ -78,13 +81,32 @@ class ProjectRepository(private val context: Context) {
         )
     }
 
-    val apiKeyFlow: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[GEMINI_API_KEY] ?: ""
+    fun apiKeyFlow(provider: String): Flow<String> = context.dataStore.data.map { prefs ->
+        when (provider) {
+            "GEMINI" -> prefs[GEMINI_API_KEY] ?: ""
+            "OPENAI" -> prefs[OPENAI_API_KEY] ?: ""
+            "CLAUDE" -> prefs[CLAUDE_API_KEY] ?: ""
+            else -> ""
+        }
     }
 
-    suspend fun saveApiKey(key: String) {
+    suspend fun saveApiKey(provider: String, key: String) {
         context.dataStore.edit { prefs ->
-            prefs[GEMINI_API_KEY] = key
+            when (provider) {
+                "GEMINI" -> prefs[GEMINI_API_KEY] = key
+                "OPENAI" -> prefs[OPENAI_API_KEY] = key
+                "CLAUDE" -> prefs[CLAUDE_API_KEY] = key
+            }
+        }
+    }
+
+    val selectedProviderFlow: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[SELECTED_PROVIDER_KEY] ?: "GEMINI"
+    }
+
+    suspend fun saveSelectedProvider(provider: String) {
+        context.dataStore.edit { prefs ->
+            prefs[SELECTED_PROVIDER_KEY] = provider
         }
     }
 
@@ -96,5 +118,13 @@ class ProjectRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[GEMINI_MODEL_KEY] = id
         }
+    }
+
+    fun allApiKeysFlow(): Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
+        mapOf(
+            "GEMINI" to (prefs[GEMINI_API_KEY] ?: ""),
+            "OPENAI" to (prefs[OPENAI_API_KEY] ?: ""),
+            "CLAUDE" to (prefs[CLAUDE_API_KEY] ?: "")
+        )
     }
 }

@@ -9,12 +9,15 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.repository.ProjectRepository
-import com.rhymeai.app.service.GeminiModel
-import com.rhymeai.app.service.GeminiService
+import com.rhymeai.app.service.AIModel
+import com.rhymeai.app.service.AIProvider
+import com.rhymeai.app.service.AIService
+import com.rhymeai.app.service.LocalModelService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -31,7 +34,10 @@ data class RhymeContext(
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = ProjectRepository(application)
-    private val geminiService = GeminiService()
+    private val localModelService = LocalModelService().also {
+        it.initialize(application)
+    }
+    private val aiService = AIService().also { it.localModelService = localModelService }
 
     // Editor state
     var title by mutableStateOf("")
@@ -47,6 +53,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var rhymeType by mutableStateOf(RhymeType.PERFECT)
     var rhymeScheme by mutableStateOf(RhymeScheme.AABB)
     var customRhymeScheme by mutableStateOf("")
+    var rhymeComplexity by mutableStateOf(RhymeComplexity.MODERATE)
     var isHighlightEnabled by mutableStateOf(true)
     var isSyllableColoringEnabled by mutableStateOf(true)
     var isFocusMode by mutableStateOf(false)
@@ -61,9 +68,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var showStartMenu by mutableStateOf(true)
 
     // Settings
-    var apiKey by mutableStateOf("")
-    var selectedModel by mutableStateOf(GeminiModel.DEFAULT)
+    var selectedProvider by mutableStateOf(AIProvider.GEMINI)
+    var apiKeys by mutableStateOf(mapOf<String, String>())
+    var selectedModel by mutableStateOf(AIModel.DEFAULT)
     var showSettingsDialog by mutableStateOf(false)
+
+    val currentApiKey: String get() = apiKeys[selectedProvider.name] ?: ""
+
+    // Local model state
+    var localModelPath by mutableStateOf<String?>(null)
+    var localModelLoading by mutableStateOf(false)
+    var localModelLoaded by mutableStateOf(false)
+    var localModelError by mutableStateOf<String?>(null)
 
     // Error state
     var errorMessage by mutableStateOf<String?>(null)
@@ -81,10 +97,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             projects = repo.projectsFlow.first()
             currentProjectId = repo.currentProjectIdFlow.first()
 
-            // Load API key and model
-            apiKey = repo.apiKeyFlow.first()
+            // Load API keys, provider, and model
+            apiKeys = repo.allApiKeysFlow().first()
+            val savedProvider = repo.selectedProviderFlow.first()
+            selectedProvider = AIProvider.fromName(savedProvider)
             val savedModelId = repo.modelIdFlow.first()
-            if (savedModelId.isNotEmpty()) selectedModel = GeminiModel.fromId(savedModelId)
+            if (savedModelId.isNotEmpty()) selectedModel = AIModel.fromId(savedModelId)
 
             // Load editor state
             val (savedTitle, savedLyrics, savedTheme) = repo.editorStateFlow().first()
@@ -171,9 +189,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         errorMessage = null
         viewModelScope.launch {
             try {
-                val results = geminiService.getRhymeSuggestions(
-                    apiKey, selectedModel.id, theme, lyrics, context.targetLine,
-                    rhymeType, activeRhymeScheme, context.currentLetter
+                val results = aiService.getSuggestions(
+                    selectedProvider, currentApiKey, selectedModel.id, theme, lyrics, context.targetLine,
+                    rhymeType, activeRhymeScheme, context.currentLetter, rhymeComplexity
                 )
                 suggestions = results
             } catch (e: Exception) {
@@ -306,17 +324,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         showStartMenu = true
     }
 
-    fun saveApiKey(key: String) {
-        apiKey = key
+    fun saveApiKey(provider: AIProvider, key: String) {
+        apiKeys = apiKeys + (provider.name to key)
         viewModelScope.launch {
-            repo.saveApiKey(key)
+            repo.saveApiKey(provider.name, key)
         }
     }
 
-    fun saveModel(model: GeminiModel) {
+    fun saveProvider(provider: AIProvider) {
+        selectedProvider = provider
+        // Auto-select first model for this provider
+        val models = AIModel.modelsForProvider(provider)
+        if (selectedModel.provider != provider && models.isNotEmpty()) {
+            selectedModel = models.first()
+        }
+        viewModelScope.launch {
+            repo.saveSelectedProvider(provider.name)
+            repo.saveModelId(selectedModel.id)
+        }
+    }
+
+    fun saveModel(model: AIModel) {
         selectedModel = model
         viewModelScope.launch {
             repo.saveModelId(model.id)
         }
+    }
+
+    fun loadLocalModel(path: String) {
+        localModelPath = path
+        localModelLoading = true
+        localModelError = null
+        localModelLoaded = false
+        viewModelScope.launch {
+            try {
+                localModelService.loadModel(path)
+                localModelLoaded = true
+            } catch (e: Exception) {
+                localModelError = e.message ?: "Failed to load model"
+                localModelLoaded = false
+            } finally {
+                localModelLoading = false
+            }
+        }
+    }
+
+    fun unloadLocalModel() {
+        localModelService.unload()
+        localModelLoaded = false
+        localModelPath = null
     }
 }

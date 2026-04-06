@@ -41,9 +41,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -63,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.RhymeContext
+import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.util.SyllableCounter
@@ -288,28 +288,52 @@ fun AssistantPanel(
                 }
             }
 
-            // Rhyme Density
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Rhyme Density", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.7f))
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    RhymeType.entries.forEachIndexed { index, type ->
-                        SegmentedButton(
-                            selected = viewModel.rhymeType == type,
-                            onClick = { viewModel.rhymeType = type },
-                            shape = SegmentedButtonDefaults.itemShape(index, RhymeType.entries.size),
-                            colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = colorScheme.primary,
-                                activeContentColor = Color.White,
-                                inactiveContainerColor = Color.Black.copy(alpha = 0.4f),
-                                inactiveContentColor = Color.White.copy(alpha = 0.5f),
-                                activeBorderColor = colorScheme.primary,
-                                inactiveBorderColor = Color.White.copy(alpha = 0.1f)
-                            )
-                        ) {
-                            Text(type.displayName.split(" ")[0], fontSize = 12.sp)
-                        }
-                    }
+            // Rhyme Complexity Slider
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Complexity", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                    Text(
+                        viewModel.rhymeComplexity.label,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colorScheme.primary
+                    )
                 }
+
+                Slider(
+                    value = viewModel.rhymeComplexity.level.toFloat(),
+                    onValueChange = { value ->
+                        viewModel.rhymeComplexity = RhymeComplexity.entries.first { it.level == value.toInt() }
+                    },
+                    valueRange = 0f..2f,
+                    steps = 1,
+                    colors = SliderDefaults.colors(
+                        thumbColor = colorScheme.primary,
+                        activeTrackColor = colorScheme.primary,
+                        inactiveTrackColor = colorScheme.outlineVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Simple", fontSize = 11.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                    Text("Moderate", fontSize = 11.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                    Text("Complex", fontSize = 11.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                }
+
+                Text(
+                    viewModel.rhymeComplexity.description,
+                    fontSize = 11.sp,
+                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
             }
 
             // Toggles
