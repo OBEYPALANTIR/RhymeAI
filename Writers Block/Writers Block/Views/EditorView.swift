@@ -78,7 +78,7 @@ struct EditorView: View {
         }
         .sheet(isPresented: $viewModel.showAssistantSheet) {
             AssistantPanelView()
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
     }

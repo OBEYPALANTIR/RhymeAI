@@ -55,6 +55,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
@@ -81,7 +82,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val colorScheme = MaterialTheme.colorScheme
+    val configuration = LocalConfiguration.current
     val density = LocalDensity.current
+    val fullSheetHeight = configuration.screenHeightDp.dp
 
     Box(
         modifier = Modifier
@@ -333,6 +336,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             ModalBottomSheet(
                 onDismissRequest = { showBottomSheet = false },
                 sheetState = sheetState,
+                modifier = Modifier.fillMaxSize(),
+                shape = RoundedCornerShape(topStart = 0.dp, topEnd = 0.dp),
                 containerColor = colorScheme.surfaceContainerLow,
                 contentColor = colorScheme.onSurface,
                 contentWindowInsets = { WindowInsets.statusBars },
@@ -346,11 +351,20 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     )
                 }
             ) {
-                AssistantPanel(
-                    viewModel = viewModel,
-                    rhymeContext = rhymeContext,
-                    modifier = Modifier.padding(bottom = 32.dp)
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(fullSheetHeight)
+                ) {
+                    AssistantPanel(
+                        viewModel = viewModel,
+                        rhymeContext = rhymeContext,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .navigationBarsPadding()
+                            .padding(bottom = 16.dp)
+                    )
+                }
             }
         }
     }
