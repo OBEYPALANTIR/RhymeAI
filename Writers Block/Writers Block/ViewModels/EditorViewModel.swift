@@ -28,6 +28,7 @@ final class EditorViewModel: ObservableObject {
     @Published var rhymeScheme: RhymeScheme = .aabb
     @Published var customRhymeScheme: String = ""
     @Published var rhymeComplexity: RhymeComplexity = .moderate
+    @Published var useWholeSongContext: Bool = false
     @Published var isHighlightEnabled: Bool = true
     @Published var isSyllableColoringEnabled: Bool = true
     @Published var isContextExpanded: Bool = false
@@ -181,7 +182,8 @@ final class EditorViewModel: ObservableObject {
                     rhymeType: rhymeType,
                     rhymeScheme: activeRhymeScheme,
                     currentLetter: context.currentLetter,
-                    complexity: rhymeComplexity
+                    complexity: rhymeComplexity,
+                    useWholeSongContext: useWholeSongContext
                 )
                 self.suggestions = results
             } catch {

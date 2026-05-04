@@ -33,7 +33,8 @@ struct AIService {
         rhymeType: RhymeType,
         rhymeScheme: String,
         currentLetter: String,
-        complexity: RhymeComplexity
+        complexity: RhymeComplexity,
+        useWholeSongContext: Bool
     ) async throws -> [String] {
         guard !apiKey.isEmpty else {
             throw AIServiceError.noApiKey(provider: provider.displayName)
@@ -46,7 +47,8 @@ struct AIService {
             rhymeType: rhymeType,
             rhymeScheme: rhymeScheme,
             currentLetter: currentLetter,
-            complexity: complexity
+            complexity: complexity,
+            useWholeSongContext: useWholeSongContext
         )
 
         switch provider {
@@ -68,7 +70,8 @@ struct AIService {
         rhymeType: RhymeType,
         rhymeScheme: String,
         currentLetter: String,
-        complexity: RhymeComplexity
+        complexity: RhymeComplexity,
+        useWholeSongContext: Bool
     ) -> String {
         let effectiveTheme = theme.isEmpty ? "No specific theme provided" : theme
 
@@ -86,6 +89,9 @@ struct AIService {
         let rhymeAdherence = targetRhymeLine != nil
             ? ", and strictly adhere to the requested rhyme type (\(rhymeType.displayName))"
             : ""
+        let songContextInstruction = useWholeSongContext
+            ? "Analyze the whole song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary. Make each suggestion feel connected to the entire song while still fitting the immediate target line and rhyme scheme."
+            : "Prioritize the immediate writing context, current stanza, target line, rhyme scheme, and provided theme/context."
 
         return """
         You are an expert songwriter and lyricist.
@@ -98,6 +104,7 @@ struct AIService {
         The user needs a line that follows the current lyrics.
         The current stanza follows a "\(rhymeScheme)" rhyme scheme, and the next line corresponds to the letter "\(currentLetter)".
         \(rhymeInstruction)
+        \(songContextInstruction)
 
         Complexity level: \(complexity.label). \(complexity.promptHint)
 
