@@ -31,7 +31,6 @@ final class EditorViewModel: ObservableObject {
     @Published var useWholeSongContext: Bool = false
     @Published var isHighlightEnabled: Bool = true
     @Published var isSyllableColoringEnabled: Bool = true
-    @Published var isContextExpanded: Bool = false
 
     // MARK: - Navigation
 

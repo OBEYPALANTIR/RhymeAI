@@ -49,22 +49,13 @@ struct AssistantPanelView: View {
 
                     // MARK: - Context & Theme
                     VStack(alignment: .leading, spacing: 8) {
-                        DisclosureGroup(isExpanded: $viewModel.isContextExpanded) {
-                            TextField("What is this song about?", text: $viewModel.theme, axis: .vertical)
-                                .lineLimit(3...6)
-                                .textFieldStyle(.roundedBorder)
-                                .padding(.top, 4)
-                        } label: {
-                            Label("Context & Theme", systemImage: "wand.and.stars")
-                                .font(.headline)
-                        }
+                        Label("Context & Theme", systemImage: "wand.and.stars")
+                            .font(.headline)
 
-                        if !viewModel.isContextExpanded && !viewModel.theme.isEmpty {
-                            Text(viewModel.theme)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                        TextField("What is this song about?", text: $viewModel.theme, axis: .vertical)
+                            .lineLimit(3...6)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(viewModel.useWholeSongContext)
                     }
 
                     Divider()

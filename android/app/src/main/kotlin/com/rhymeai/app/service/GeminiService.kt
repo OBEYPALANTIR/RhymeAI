@@ -93,9 +93,15 @@ class AIService {
             "Prioritize the immediate writing context, current stanza, target line, rhyme scheme, and provided theme/context."
         }
 
+        val effectiveTheme = if (useWholeSongContext) {
+            "Whole song context enabled; infer the theme from the full lyrics."
+        } else {
+            theme.ifEmpty { "No specific theme provided" }
+        }
+
         return """
 You are an expert songwriter and lyricist.
-The user is writing a song with the following theme/context: "${theme.ifEmpty { "No specific theme provided" }}".
+The user is writing a song with the following theme/context: "$effectiveTheme".
 Here are the current lyrics:
 ${"\"\"\""}
 $lyrics
@@ -239,8 +245,9 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         } else {
             "Use the immediate stanza, rhyme target, and theme first."
         }
+        val themeClause = if (!useWholeSongContext && theme.isNotEmpty()) " about $theme" else ""
         return """
-Write $SUGGESTION_COUNT next lines for this song${if (theme.isNotEmpty()) " about $theme" else ""}.
+Write $SUGGESTION_COUNT next lines for this song$themeClause.
 $rhymeHint
 $songContextInstruction
 

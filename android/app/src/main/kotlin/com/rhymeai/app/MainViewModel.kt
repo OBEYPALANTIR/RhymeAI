@@ -57,7 +57,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var useWholeSongContext by mutableStateOf(false)
     var isHighlightEnabled by mutableStateOf(true)
     var isSyllableColoringEnabled by mutableStateOf(true)
-    var isContextExpanded by mutableStateOf(false)
 
     // Project management
     var projects by mutableStateOf<List<SongProject>>(emptyList())

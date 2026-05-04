@@ -73,7 +73,9 @@ struct AIService {
         complexity: RhymeComplexity,
         useWholeSongContext: Bool
     ) -> String {
-        let effectiveTheme = theme.isEmpty ? "No specific theme provided" : theme
+        let effectiveTheme = useWholeSongContext
+            ? "Whole song context enabled; infer the theme from the full lyrics."
+            : (theme.isEmpty ? "No specific theme provided" : theme)
 
         let rhymeInstruction: String
         if let target = targetRhymeLine {
