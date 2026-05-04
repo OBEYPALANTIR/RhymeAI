@@ -69,9 +69,8 @@ struct EditorView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 14)
-                        .background(Color.indigo)
-                        .clipShape(Capsule())
-                        .shadow(color: .indigo.opacity(0.3), radius: 12, y: 4)
+                        .liquidGlassSurface(cornerRadius: 28, tint: .indigo, interactive: true, fallbackOpacity: 0.35)
+                        .shadow(color: .indigo.opacity(0.26), radius: 12, y: 4)
                     }
                     .padding(.trailing, 20)
                     .padding(.bottom, 20)
@@ -222,7 +221,7 @@ struct EditorView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(Color.black.opacity(0.9))
+        .liquidGlassSurface(cornerRadius: 0, fallbackOpacity: 0.02)
         .overlay(
             Divider(), alignment: .bottom
         )

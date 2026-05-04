@@ -41,7 +41,9 @@ struct ProjectsView: View {
                     }
                 }
                 .padding(.vertical, 6)
-                .listRowBackground(Color.white.opacity(0.06))
+                .padding(.horizontal, 10)
+                .liquidGlassSurface(cornerRadius: 12, interactive: true)
+                .listRowBackground(Color.clear)
 
                 // New Song button
                 Button {
@@ -56,8 +58,9 @@ struct ProjectsView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
+                    .liquidGlassSurface(cornerRadius: 14, tint: .indigo.opacity(0.10), interactive: true)
                 }
-                .listRowBackground(Color.indigo.opacity(0.1))
+                .listRowBackground(Color.clear)
 
                 if projects.isEmpty {
                     ContentUnavailableView {
