@@ -61,33 +61,12 @@ class ProjectRepository(private val context: Context) {
         }
     }
 
-    suspend fun loadEditorState(): Triple<String, String, String> {
-        var title = ""
-        var lyrics = ""
-        var theme = ""
-        context.dataStore.data.collect { prefs ->
-            title = prefs[CURRENT_TITLE_KEY] ?: ""
-            lyrics = prefs[CURRENT_LYRICS_KEY] ?: ""
-            theme = prefs[CURRENT_THEME_KEY] ?: ""
-        }
-        return Triple(title, lyrics, theme)
-    }
-
     fun editorStateFlow(): Flow<Triple<String, String, String>> = context.dataStore.data.map { prefs ->
         Triple(
             prefs[CURRENT_TITLE_KEY] ?: "",
             prefs[CURRENT_LYRICS_KEY] ?: "",
             prefs[CURRENT_THEME_KEY] ?: ""
         )
-    }
-
-    fun apiKeyFlow(provider: String): Flow<String> = context.dataStore.data.map { prefs ->
-        when (provider) {
-            "GEMINI" -> prefs[GEMINI_API_KEY] ?: ""
-            "OPENAI" -> prefs[OPENAI_API_KEY] ?: ""
-            "CLAUDE" -> prefs[CLAUDE_API_KEY] ?: ""
-            else -> ""
-        }
     }
 
     suspend fun saveApiKey(provider: String, key: String) {

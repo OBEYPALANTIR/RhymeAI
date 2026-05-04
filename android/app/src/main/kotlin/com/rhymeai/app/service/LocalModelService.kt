@@ -28,7 +28,6 @@ class LocalModelService {
     private var appContext: Context? = null
 
     val isLoaded: Boolean get() = _loadedModelPath != null
-    val currentModelPath: String? get() = _loadedModelPath
 
     fun initialize(context: Context) {
         appContext = context

@@ -24,10 +24,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -176,7 +175,7 @@ fun AssistantPanel(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.Notes, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+                        Icon(Icons.AutoMirrored.Filled.Notes, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
                         Text("Target Line", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.7f))
                     }
                     if (rhymeContext.targetLine != null) {
