@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -84,7 +85,26 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val colorScheme = MaterialTheme.colorScheme
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
     val fullSheetHeight = configuration.screenHeightDp.dp
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    var pendingAssistantSheet by remember { mutableStateOf(false) }
+
+    LaunchedEffect(pendingAssistantSheet, keyboardVisible) {
+        if (pendingAssistantSheet && !keyboardVisible) {
+            showBottomSheet = true
+            pendingAssistantSheet = false
+        }
+    }
+
+    fun openAssistantSheet() {
+        if (keyboardVisible) {
+            focusManager.clearFocus(force = true)
+            pendingAssistantSheet = true
+        } else {
+            showBottomSheet = true
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -155,7 +175,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
                 val trailingScrollSpace = if (keyboardVisible) {
                     72.dp
                 } else {
@@ -312,7 +331,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
         // UnBlock FAB — always visible when sheet is closed
         AnimatedVisibility(
-            visible = !showBottomSheet,
+            visible = !showBottomSheet && !pendingAssistantSheet,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
             exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
             modifier = Modifier
@@ -321,7 +340,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 .padding(24.dp)
         ) {
             ExtendedFloatingActionButton(
-                onClick = { showBottomSheet = true },
+                onClick = { openAssistantSheet() },
                 containerColor = colorScheme.primary,
                 contentColor = colorScheme.onPrimary,
                 shape = RoundedCornerShape(28.dp)

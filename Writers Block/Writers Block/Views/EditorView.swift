@@ -1,10 +1,12 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct EditorView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var keyboardIsVisible = false
 
     var body: some View {
         Group {
@@ -56,7 +58,7 @@ struct EditorView: View {
                 HStack {
                     Spacer()
                     Button {
-                        viewModel.showAssistantSheet = true
+                        presentAssistantSheet()
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "wand.and.stars")
@@ -80,6 +82,24 @@ struct EditorView: View {
             AssistantPanelView()
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardIsVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardIsVisible = false
+        }
+    }
+
+    private func presentAssistantSheet() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+
+        if keyboardIsVisible {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                viewModel.showAssistantSheet = true
+            }
+        } else {
+            viewModel.showAssistantSheet = true
         }
     }
 
