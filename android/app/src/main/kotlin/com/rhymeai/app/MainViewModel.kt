@@ -54,6 +54,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var rhymeScheme by mutableStateOf(RhymeScheme.AABB)
     var customRhymeScheme by mutableStateOf("")
     var rhymeComplexity by mutableStateOf(RhymeComplexity.MODERATE)
+    var useWholeSongContext by mutableStateOf(false)
     var isHighlightEnabled by mutableStateOf(true)
     var isSyllableColoringEnabled by mutableStateOf(true)
     var isContextExpanded by mutableStateOf(false)
@@ -186,7 +187,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val results = aiService.getSuggestions(
                     selectedProvider, currentApiKey, selectedModel.id, theme, lyrics, context.targetLine,
-                    rhymeType, activeRhymeScheme, context.currentLetter, rhymeComplexity
+                    rhymeType, activeRhymeScheme, context.currentLetter, rhymeComplexity, useWholeSongContext
                 )
                 suggestions = results
             } catch (e: Exception) {

@@ -79,12 +79,18 @@ class AIService {
         rhymeType: RhymeType,
         rhymeScheme: String,
         currentLetter: String,
-        complexity: RhymeComplexity
+        complexity: RhymeComplexity,
+        useWholeSongContext: Boolean
     ): String {
         val rhymeInstruction = if (targetRhymeLine != null) {
             "Crucially, the new line MUST end with a **${rhymeType.displayName}** to this specific line: \"$targetRhymeLine\"."
         } else {
             "Since this is a new rhyme sound (\"$currentLetter\"), the new line should introduce a new end-rhyme that fits the meter and theme."
+        }
+        val songContextInstruction = if (useWholeSongContext) {
+            "Analyze the whole song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary. Make each suggestion feel connected to the entire song while still fitting the immediate target line and rhyme scheme."
+        } else {
+            "Prioritize the immediate writing context, current stanza, target line, rhyme scheme, and provided theme/context."
         }
 
         return """
@@ -98,6 +104,7 @@ ${"\"\"\""}
 The user needs a line that follows the current lyrics.
 The current stanza follows a "$rhymeScheme" rhyme scheme, and the next line corresponds to the letter "$currentLetter".
 $rhymeInstruction
+$songContextInstruction
 
 Complexity level: ${complexity.label}. ${complexity.promptHint}
 
@@ -120,17 +127,18 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         rhymeType: RhymeType,
         rhymeScheme: String,
         currentLetter: String,
-        complexity: RhymeComplexity = RhymeComplexity.MODERATE
+        complexity: RhymeComplexity = RhymeComplexity.MODERATE,
+        useWholeSongContext: Boolean = false
     ): List<String> {
         if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
         return if (provider == AIProvider.LOCAL) {
-            val localPrompt = buildLocalPrompt(theme, lyrics, targetRhymeLine, rhymeType, currentLetter)
+            val localPrompt = buildLocalPrompt(theme, lyrics, targetRhymeLine, rhymeType, currentLetter, useWholeSongContext)
             callLocal(localPrompt)
         } else {
-            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity)
+            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
             when (provider) {
                 AIProvider.GEMINI -> callGemini(apiKey, modelId, prompt)
                 AIProvider.OPENAI -> callOpenAI(apiKey, modelId, prompt)
@@ -218,16 +226,23 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         lyrics: String,
         targetRhymeLine: String?,
         rhymeType: RhymeType,
-        currentLetter: String
+        currentLetter: String,
+        useWholeSongContext: Boolean
     ): String {
         val rhymeHint = if (targetRhymeLine != null) {
             "Each line must rhyme (${rhymeType.displayName}) with: \"$targetRhymeLine\""
         } else {
             "Start a new rhyme sound for letter \"$currentLetter\"."
         }
+        val songContextInstruction = if (useWholeSongContext) {
+            "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
+        } else {
+            "Use the immediate stanza, rhyme target, and theme first."
+        }
         return """
 Write $SUGGESTION_COUNT next lines for this song${if (theme.isNotEmpty()) " about $theme" else ""}.
 $rhymeHint
+$songContextInstruction
 
 Lyrics so far:
 $lyrics

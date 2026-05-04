@@ -185,6 +185,10 @@ struct AssistantPanelView: View {
                     }
 
                     // MARK: - Toggles
+                    Toggle("Whole Song Context", isOn: $viewModel.useWholeSongContext)
+                        .font(.subheadline)
+                        .tint(.indigo)
+
                     Toggle("Highlight Rhymes", isOn: $viewModel.isHighlightEnabled)
                         .font(.subheadline)
                         .tint(.indigo)
