@@ -66,6 +66,10 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
 }
 
 class AIService {
+    private companion object {
+        const val SUGGESTION_COUNT = 6
+    }
+
     private val json = Json { ignoreUnknownKeys = true }
 
     fun buildPrompt(
@@ -97,10 +101,10 @@ $rhymeInstruction
 
 Complexity level: ${complexity.label}. ${complexity.promptHint}
 
-Provide 5 creative, poetic, and contextually relevant suggestions for the next line.
+Provide $SUGGESTION_COUNT creative, poetic, and contextually relevant suggestions for the next line.
 Make sure the rhythm and meter match the style of the current lyrics${if (targetRhymeLine != null) ", and strictly adhere to the requested rhyme type (${rhymeType.displayName})" else ""}.
 
-Respond ONLY with a JSON array of 5 strings. No markdown, no code fences, just the raw JSON array.
+Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no code fences, just the raw JSON array.
 """.trimIndent()
     }
 
@@ -222,13 +226,13 @@ Respond ONLY with a JSON array of 5 strings. No markdown, no code fences, just t
             "Start a new rhyme sound for letter \"$currentLetter\"."
         }
         return """
-Write 5 next lines for this song${if (theme.isNotEmpty()) " about $theme" else ""}.
+Write $SUGGESTION_COUNT next lines for this song${if (theme.isNotEmpty()) " about $theme" else ""}.
 $rhymeHint
 
 Lyrics so far:
 $lyrics
 
-Reply with exactly 5 lines, one per line, no numbering, no extra text.
+Reply with exactly $SUGGESTION_COUNT lines, one per line, no numbering, no extra text.
 """.trimIndent()
     }
 
@@ -252,7 +256,7 @@ Reply with exactly 5 lines, one per line, no numbering, no extra text.
         return text.lines()
             .map { it.replace(numberedPrefix, "").trim().removeSurrounding("\"") }
             .filter { it.isNotBlank() && it.length > 3 }
-            .take(5)
+            .take(SUGGESTION_COUNT)
     }
 
     private suspend fun httpPost(url: String, headers: Map<String, String>, body: String): String =
@@ -287,7 +291,7 @@ Reply with exactly 5 lines, one per line, no numbering, no extra text.
             .removeSuffix("```")
             .trim()
         return try {
-            json.decodeFromString<List<String>>(cleaned)
+            json.decodeFromString<List<String>>(cleaned).take(SUGGESTION_COUNT)
         } catch (_: Exception) {
             emptyList()
         }
