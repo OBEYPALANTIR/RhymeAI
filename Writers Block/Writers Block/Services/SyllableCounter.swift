@@ -39,10 +39,11 @@ enum SyllableCounter {
         return max(count, 1)
     }
 
+    private static let wordPattern = try! NSRegularExpression(pattern: "[a-zA-Z']+")
+
     static func countText(_ text: String) -> Int {
-        let pattern = try! NSRegularExpression(pattern: "[a-zA-Z']+")
         let nsText = text as NSString
-        let matches = pattern.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        let matches = wordPattern.matches(in: text, range: NSRange(location: 0, length: nsText.length))
         return matches.reduce(0) { total, match in
             let word = nsText.substring(with: match.range)
             return total + count(word)

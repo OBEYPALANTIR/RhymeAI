@@ -1,6 +1,9 @@
 package com.rhymeai.app.util
 
 object SyllableCounter {
+    private val wordSplitPattern = Regex("[^a-zA-Z']+")
+    private val whitespaceSplitPattern = Regex("\\s+")
+
     fun count(word: String): Int {
         val w = word.lowercase().trim()
         if (w.isEmpty()) return 0
@@ -27,12 +30,12 @@ object SyllableCounter {
     }
 
     fun countText(text: String): Int {
-        return text.split(Regex("[^a-zA-Z']+"))
+        return text.split(wordSplitPattern)
             .filter { it.isNotBlank() }
             .sumOf { count(it) }
     }
 
     fun wordCount(text: String): Int {
-        return text.split(Regex("\\s+")).count { it.isNotBlank() }
+        return text.split(whitespaceSplitPattern).count { it.isNotBlank() }
     }
 }

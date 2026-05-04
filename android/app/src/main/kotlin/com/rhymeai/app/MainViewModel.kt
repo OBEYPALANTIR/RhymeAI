@@ -33,6 +33,10 @@ data class RhymeContext(
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private companion object {
+        val sectionHeaderRegex = Regex("^\\s*\\[.*]\\s*$")
+    }
+
     private val repo = ProjectRepository(application)
     private val localModelService = LocalModelService().also {
         it.initialize(application)
@@ -143,8 +147,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Determine which raw line the cursor is on
         val stanzaTextBefore = textBefore.substring(stanzaStart)
         val rawCursorLineIndex = stanzaTextBefore.split("\n").size - 1
-
-        val sectionHeaderRegex = Regex("^\\s*\\[.*]\\s*$")
 
         // Find the lyric-line position of the cursor line
         // Count how many non-header lines are at or before the cursor

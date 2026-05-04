@@ -273,10 +273,11 @@ Reply with exactly $SUGGESTION_COUNT lines, one per line, no numbering, no extra
         return results
     }
 
+    private val numberedPrefixPattern = Regex("^\\s*\\d+[.)\\-]\\s*")
+
     private fun parseLines(text: String): List<String> {
-        val numberedPrefix = Regex("^\\s*\\d+[.)\\-]\\s*")
         return text.lines()
-            .map { it.replace(numberedPrefix, "").trim().removeSurrounding("\"") }
+            .map { it.replace(numberedPrefixPattern, "").trim().removeSurrounding("\"") }
             .filter { it.isNotBlank() && it.length > 3 }
             .take(SUGGESTION_COUNT)
     }

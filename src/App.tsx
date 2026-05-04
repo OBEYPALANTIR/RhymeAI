@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, FolderOpen, Save, Plus, Trash2, X, Check, LayoutTemplate } from 'lucide-react';
 import { getRhymeSuggestions } from './services/gemini';
@@ -86,7 +86,7 @@ export default function App() {
     }
   }, [currentProjectId]);
 
-  // Auto-save current project
+  // Auto-save current project (debounced)
   useEffect(() => {
     if (!title && !lyrics && !theme) {
       setSaveStatus('idle');
@@ -94,31 +94,31 @@ export default function App() {
     }
 
     setSaveStatus('saving');
-    
-    if (!currentProjectId) {
-      const newId = crypto.randomUUID();
-      const newProject: SongProject = {
-        id: newId,
-        title: title || 'Untitled Song',
-        lyrics,
-        theme,
-        updatedAt: Date.now()
-      };
-      setProjects(prev => [newProject, ...prev]);
-      setCurrentProjectId(newId);
-    } else {
-      setProjects(prev => prev.map(p => 
-        p.id === currentProjectId 
-          ? { ...p, title: title || 'Untitled Song', lyrics, theme, updatedAt: Date.now() }
-          : p
-      ));
-    }
 
-    const timeout = setTimeout(() => {
+    const saveTimeout = setTimeout(() => {
+      if (!currentProjectId) {
+        const newId = crypto.randomUUID();
+        const newProject: SongProject = {
+          id: newId,
+          title: title || 'Untitled Song',
+          lyrics,
+          theme,
+          updatedAt: Date.now()
+        };
+        setProjects(prev => [newProject, ...prev]);
+        setCurrentProjectId(newId);
+      } else {
+        setProjects(prev => prev.map(p =>
+          p.id === currentProjectId
+            ? { ...p, title: title || 'Untitled Song', lyrics, theme, updatedAt: Date.now() }
+            : p
+        ));
+      }
+
       setSaveStatus('saved');
     }, 1000);
 
-    return () => clearTimeout(timeout);
+    return () => clearTimeout(saveTimeout);
   }, [title, lyrics, theme, currentProjectId]);
 
   const handleNewProject = () => {
@@ -147,33 +147,35 @@ export default function App() {
     }
   };
 
-  const adjustTextareaHeight = () => {
+  const adjustTextareaHeight = useCallback(() => {
     if (textareaRef.current) {
       const scrollContainer = textareaRef.current.closest('.overflow-y-auto');
       const currentScrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
-      
+
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
-      
+
       if (scrollContainer) {
         scrollContainer.scrollTop = currentScrollTop;
       }
     }
-  };
+  }, []);
 
-  // Auto-resize textarea
+  // Resize listener — mount once
   useEffect(() => {
-    adjustTextareaHeight();
-    
     window.addEventListener('resize', adjustTextareaHeight);
     if (document.fonts) {
       document.fonts.ready.then(adjustTextareaHeight);
     }
-    
     return () => {
       window.removeEventListener('resize', adjustTextareaHeight);
     };
-  }, [lyrics]);
+  }, [adjustTextareaHeight]);
+
+  // Auto-resize textarea on lyrics change
+  useEffect(() => {
+    adjustTextareaHeight();
+  }, [lyrics, adjustTextareaHeight]);
 
   const activeRhymeScheme = rhymeScheme === 'Custom' ? (customRhymeScheme || 'AABB') : rhymeScheme;
 
@@ -315,7 +317,12 @@ export default function App() {
     return suggestion;
   };
 
-  const rhymeContext = getRhymeContext();
+  const rhymeContext = useMemo(() => getRhymeContext(), [lyrics, cursorPosition, activeRhymeScheme]);
+
+  const wordCount = useMemo(() => lyrics.split(/\s+/).filter(w => w.length > 0).length, [lyrics]);
+  const totalSyllables = useMemo(() => syllable(lyrics), [lyrics]);
+
+  const coloredLyricsOverlay = useMemo(() => renderColoredLyrics(lyrics), [lyrics, isSyllableColoringEnabled]);
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white overflow-hidden relative flex flex-col md:flex-row">
@@ -352,8 +359,8 @@ export default function App() {
             )}
           </div>
           <div className="flex flex-col items-end text-xs text-white/50">
-            <span>{lyrics.split(/\s+/).filter(w => w.length > 0).length} words</span>
-            <span>{syllable(lyrics)} syllables</span>
+            <span>{wordCount} words</span>
+            <span>{totalSyllables} syllables</span>
           </div>
         </motion.header>
 
@@ -398,7 +405,7 @@ export default function App() {
                     aria-hidden="true"
                   >
                     {!lyrics && <span className="text-white/20">Start writing your lyrics here...</span>}
-                    {renderColoredLyrics(lyrics)}
+                    {coloredLyricsOverlay}
                     {/* Add a trailing newline space if the text ends with a newline to ensure the cursor can go to the next line visually */}
                     {lyrics.endsWith('\n') && <br />}
                   </div>
