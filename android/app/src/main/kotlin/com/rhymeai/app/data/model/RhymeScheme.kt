@@ -5,12 +5,7 @@ enum class RhymeScheme(val label: String, val pattern: String) {
     ABAB("ABAB", "ABAB"),
     ABCB("ABCB", "ABCB"),
     AAAA("AAAA", "AAAA"),
-    CUSTOM("Custom...", "");
-
-    companion object {
-        fun fromLabel(label: String): RhymeScheme =
-            entries.find { it.label == label } ?: AABB
-    }
+    CUSTOM("Custom...", "")
 }
 
 enum class RhymeType(val displayName: String) {

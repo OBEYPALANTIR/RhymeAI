@@ -56,7 +56,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var rhymeComplexity by mutableStateOf(RhymeComplexity.MODERATE)
     var isHighlightEnabled by mutableStateOf(true)
     var isSyllableColoringEnabled by mutableStateOf(true)
-    var isFocusMode by mutableStateOf(false)
     var isContextExpanded by mutableStateOf(false)
 
     // Project management
@@ -145,11 +144,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val stanzaTextBefore = textBefore.substring(stanzaStart)
         val rawCursorLineIndex = stanzaTextBefore.split("\n").size - 1
 
-        // Build a mapping of only lyric lines (skip section headers like [Verse 1])
         val sectionHeaderRegex = Regex("^\\s*\\[.*]\\s*$")
-        val lyricLineIndices = stanzaLines.indices.filter { i ->
-            !sectionHeaderRegex.matches(stanzaLines[i]) && stanzaLines[i].isNotBlank()
-        }
 
         // Find the lyric-line position of the cursor line
         // Count how many non-header lines are at or before the cursor
