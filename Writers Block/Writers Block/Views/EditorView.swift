@@ -7,6 +7,7 @@ struct EditorView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var keyboardIsVisible = false
+    @State private var assistantSheetDragOffset: CGFloat = 0
 
     var body: some View {
         Group {
@@ -76,17 +77,81 @@ struct EditorView: View {
                     .padding(.bottom, 20)
                 }
             }
+
+            assistantSheetOverlay
         }
-        .sheet(isPresented: $viewModel.showAssistantSheet) {
-            AssistantPanelView()
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-        }
+        .animation(.spring(response: 0.34, dampingFraction: 0.88), value: viewModel.showAssistantSheet)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             keyboardIsVisible = true
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardIsVisible = false
+        }
+        .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
+            if isPresented {
+                assistantSheetDragOffset = 0
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var assistantSheetOverlay: some View {
+        GeometryReader { proxy in
+            if viewModel.showAssistantSheet {
+                VStack(spacing: 0) {
+                    assistantSheetDragHandle(sheetHeight: proxy.size.height)
+                        .padding(.top, proxy.safeAreaInsets.top + 8)
+
+                    AssistantPanelView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                .background(Color(UIColor.systemBackground))
+                .offset(y: assistantSheetDragOffset)
+                .transition(.move(edge: .bottom))
+                .ignoresSafeArea()
+            }
+        }
+    }
+
+    private func assistantSheetDragHandle(sheetHeight: CGFloat) -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(height: 36)
+            .overlay {
+                Capsule()
+                    .fill(.secondary.opacity(0.45))
+                    .frame(width: 42, height: 5)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        assistantSheetDragOffset = max(0, value.translation.height)
+                    }
+                    .onEnded { value in
+                        settleAssistantSheetDrag(translation: value.translation.height, sheetHeight: sheetHeight)
+                    }
+            )
+            .accessibilityLabel("Dismiss Assistant")
+    }
+
+    private func settleAssistantSheetDrag(translation: CGFloat, sheetHeight: CGFloat) {
+        let dragDistance = max(0, translation)
+        let closeThreshold = sheetHeight * 0.5
+
+        if dragDistance >= closeThreshold {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                assistantSheetDragOffset = sheetHeight
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                viewModel.showAssistantSheet = false
+                assistantSheetDragOffset = 0
+            }
+        } else {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+                assistantSheetDragOffset = 0
+            }
         }
     }
 
