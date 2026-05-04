@@ -15,6 +15,9 @@ android/.gradle/
 
 # IDE
 .idea/
+**/*.xcodeproj/xcuserdata/
+**/*.xcworkspace/xcuserdata/
+DerivedData/
 
 # Claude
 .claude/
