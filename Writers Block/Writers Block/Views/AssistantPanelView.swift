@@ -34,7 +34,7 @@ struct AssistantPanelView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
-            .background(Color.black.opacity(0.9))
+            .liquidGlassSurface(cornerRadius: 0, fallbackOpacity: 0.02)
             .overlay(Divider(), alignment: .bottom)
 
             panelScrollView(rhymeContext: rhymeContext)
@@ -192,6 +192,7 @@ struct AssistantPanelView: View {
                     Button {
                         viewModel.getSuggestions()
                     } label: {
+                        let isDisabled = viewModel.lyrics.isEmpty || viewModel.isLoading
                         HStack {
                             if viewModel.isLoading {
                                 ProgressView()
@@ -206,8 +207,12 @@ struct AssistantPanelView: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(viewModel.lyrics.isEmpty || viewModel.isLoading ? Color.gray.opacity(0.3) : Color.indigo)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .liquidGlassSurface(
+                            cornerRadius: 14,
+                            tint: isDisabled ? .gray.opacity(0.2) : .indigo,
+                            interactive: !isDisabled,
+                            fallbackOpacity: isDisabled ? 0.12 : 0.32
+                        )
                     }
                     .disabled(viewModel.lyrics.isEmpty || viewModel.isLoading)
 

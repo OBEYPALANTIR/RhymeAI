@@ -172,12 +172,7 @@ private struct WelcomeCard: View {
                     .padding(16)
                 }
             }
-            .background(Color.white.opacity(0.05))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-            )
+            .liquidGlassSurface(cornerRadius: 16, tint: .indigo.opacity(0.08), interactive: true)
         }
         .buttonStyle(.plain)
     }
