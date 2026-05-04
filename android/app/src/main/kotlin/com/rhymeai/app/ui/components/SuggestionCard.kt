@@ -28,6 +28,8 @@ import androidx.compose.ui.unit.sp
 import com.rhymeai.app.ui.theme.Indigo400
 import com.rhymeai.app.util.SyllableCounter
 
+private val lastWordPattern = Regex("(.*?)(\\b\\w+\\b)([^\\w]*)\$")
+
 @Composable
 fun SuggestionCard(
     suggestion: String,
@@ -47,7 +49,7 @@ fun SuggestionCard(
     ) {
         // Suggestion text with optional rhyme highlight
         val annotated = if (highlightRhyme) {
-            val match = Regex("(.*?)(\\b\\w+\\b)([^\\w]*)\$").find(suggestion)
+            val match = lastWordPattern.find(suggestion)
             if (match != null) {
                 buildAnnotatedString {
                     withStyle(SpanStyle(color = Color.White.copy(alpha = 0.9f))) {

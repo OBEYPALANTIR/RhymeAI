@@ -14,6 +14,8 @@ import com.rhymeai.app.ui.theme.SyllablePurple
 import com.rhymeai.app.ui.theme.SyllableRose
 import com.rhymeai.app.util.SyllableCounter
 
+private val wordPattern = Regex("[a-zA-Z0-9']+")
+
 fun syllableColor(count: Int): Color = when (count) {
     1 -> SyllableEmerald
     2 -> SyllableBlue
@@ -39,9 +41,8 @@ fun SyllableColoredText(
     }
 
     val annotated = buildAnnotatedString {
-        val regex = Regex("([a-zA-Z0-9']+)")
         var lastIndex = 0
-        regex.findAll(text).forEach { match ->
+        wordPattern.findAll(text).forEach { match ->
             // Append non-word text before this match
             if (match.range.first > lastIndex) {
                 withStyle(SpanStyle(color = Color.White.copy(alpha = 0.9f))) {

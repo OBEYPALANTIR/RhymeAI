@@ -75,7 +75,9 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
-    val rhymeContext = viewModel.computeRhymeContext()
+    val rhymeContext = remember(viewModel.lyrics, viewModel.cursorPosition, viewModel.activeRhymeScheme) {
+        viewModel.computeRhymeContext()
+    }
     var showBottomSheet by remember { mutableStateOf(false) }
     var lyricsFocused by remember { mutableStateOf(false) }
     var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -150,14 +152,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
                     }
 
+                    val wordCount = remember(viewModel.lyrics) { SyllableCounter.wordCount(viewModel.lyrics) }
+                    val syllableCount = remember(viewModel.lyrics) { SyllableCounter.countText(viewModel.lyrics) }
+
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            "${SyllableCounter.wordCount(viewModel.lyrics)} words",
+                            "$wordCount words",
                             fontSize = 10.sp,
                             color = colorScheme.onSurfaceVariant
                         )
                         Text(
-                            "${SyllableCounter.countText(viewModel.lyrics)} syllables",
+                            "$syllableCount syllables",
                             fontSize = 10.sp,
                             color = colorScheme.onSurfaceVariant
                         )
