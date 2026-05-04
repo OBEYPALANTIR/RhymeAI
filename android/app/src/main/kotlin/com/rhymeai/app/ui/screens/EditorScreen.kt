@@ -8,12 +8,14 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -48,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +70,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val colorScheme = MaterialTheme.colorScheme
+    val density = LocalDensity.current
 
     Box(
         modifier = Modifier
@@ -132,86 +136,46 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
             // Editor
             val scrollState = rememberScrollState()
-            Column(
+            BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(scrollState)
-                    .padding(horizontal = 24.dp)
             ) {
-                Spacer(Modifier.height(16.dp))
+                val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+                val trailingScrollSpace = if (keyboardVisible) {
+                    minOf(300.dp, maxHeight * 0.42f)
+                } else {
+                    300.dp
+                }
 
-                // Title field
-                BasicTextField(
-                    value = viewModel.title,
-                    onValueChange = { viewModel.onTitleChanged(it) },
-                    textStyle = TextStyle(
-                        fontFamily = FontFamily.Serif,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 32.sp,
-                        color = colorScheme.onBackground
-                    ),
-                    cursorBrush = SolidColor(colorScheme.primary),
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-,
-                    decorationBox = { innerTextField ->
-                        Box {
-                            if (viewModel.title.isEmpty()) {
-                                Text(
-                                    "Song Title...",
-                                    fontFamily = FontFamily.Serif,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 32.sp,
-                                    color = colorScheme.onBackground.copy(alpha = 0.2f)
-                                )
-                            }
-                            innerTextField()
-                        }
-                    }
-                )
+                        .fillMaxSize()
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 24.dp)
+                ) {
+                    Spacer(Modifier.height(16.dp))
 
-                Spacer(Modifier.height(24.dp))
-
-                // Lyrics editor with syllable coloring overlay
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    // Colored overlay (behind)
-                    if (viewModel.isSyllableColoringEnabled && viewModel.lyrics.isNotEmpty()) {
-                        SyllableColoredText(
-                            text = viewModel.lyrics,
-                            enabled = true,
-                            style = TextStyle(
-                                fontSize = 16.sp,
-                                lineHeight = 28.sp,
-                                fontFamily = FontFamily.Default
-                            )
-                        )
-                    }
-
-                    // Actual text field (on top, transparent if coloring is on)
+                    // Title field
                     BasicTextField(
-                        value = viewModel.lyricsFieldValue,
-                        onValueChange = { viewModel.onLyricsChanged(it) },
+                        value = viewModel.title,
+                        onValueChange = { viewModel.onTitleChanged(it) },
                         textStyle = TextStyle(
-                            fontSize = 16.sp,
-                            lineHeight = 28.sp,
-                            fontFamily = FontFamily.Default,
-                            color = if (viewModel.isSyllableColoringEnabled)
-                                Color.Transparent
-                            else
-                                colorScheme.onBackground.copy(alpha = 0.9f)
+                            fontFamily = FontFamily.Serif,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 32.sp,
+                            color = colorScheme.onBackground
                         ),
                         cursorBrush = SolidColor(colorScheme.primary),
-                        modifier = Modifier
-                            .fillMaxWidth()
-    ,
+                        modifier = Modifier.fillMaxWidth(),
                         decorationBox = { innerTextField ->
                             Box {
-                                if (viewModel.lyrics.isEmpty()) {
+                                if (viewModel.title.isEmpty()) {
                                     Text(
-                                        "Start writing your lyrics here...",
-                                        fontSize = 16.sp,
-                                        lineHeight = 28.sp,
+                                        "Song Title...",
+                                        fontFamily = FontFamily.Serif,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 32.sp,
                                         color = colorScheme.onBackground.copy(alpha = 0.2f)
                                     )
                                 }
@@ -219,10 +183,58 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             }
                         }
                     )
-                }
 
-                // Extra space at bottom for scrolling past keyboard
-                Spacer(Modifier.height(300.dp))
+                    Spacer(Modifier.height(24.dp))
+
+                    // Lyrics editor with syllable coloring overlay
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        // Colored overlay (behind)
+                        if (viewModel.isSyllableColoringEnabled && viewModel.lyrics.isNotEmpty()) {
+                            SyllableColoredText(
+                                text = viewModel.lyrics,
+                                enabled = true,
+                                style = TextStyle(
+                                    fontSize = 16.sp,
+                                    lineHeight = 28.sp,
+                                    fontFamily = FontFamily.Default
+                                )
+                            )
+                        }
+
+                        // Actual text field (on top, transparent if coloring is on)
+                        BasicTextField(
+                            value = viewModel.lyricsFieldValue,
+                            onValueChange = { viewModel.onLyricsChanged(it) },
+                            textStyle = TextStyle(
+                                fontSize = 16.sp,
+                                lineHeight = 28.sp,
+                                fontFamily = FontFamily.Default,
+                                color = if (viewModel.isSyllableColoringEnabled)
+                                    Color.Transparent
+                                else
+                                    colorScheme.onBackground.copy(alpha = 0.9f)
+                            ),
+                            cursorBrush = SolidColor(colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth(),
+                            decorationBox = { innerTextField ->
+                                Box {
+                                    if (viewModel.lyrics.isEmpty()) {
+                                        Text(
+                                            "Start writing your lyrics here...",
+                                            fontSize = 16.sp,
+                                            lineHeight = 28.sp,
+                                            color = colorScheme.onBackground.copy(alpha = 0.2f)
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            }
+                        )
+                    }
+
+                    // Extra space lets the last line settle around the same point while typing.
+                    Spacer(Modifier.height(trailingScrollSpace))
+                }
             }
         }
 
