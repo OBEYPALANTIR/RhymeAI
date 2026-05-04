@@ -21,6 +21,7 @@ enum AIServiceError: LocalizedError {
 }
 
 struct AIService {
+    private static let suggestionCount = 6
 
     func getSuggestions(
         provider: AIProvider,
@@ -100,10 +101,10 @@ struct AIService {
 
         Complexity level: \(complexity.label). \(complexity.promptHint)
 
-        Provide 5 creative, poetic, and contextually relevant suggestions for the next line.
+        Provide \(Self.suggestionCount) creative, poetic, and contextually relevant suggestions for the next line.
         Make sure the rhythm and meter match the style of the current lyrics\(rhymeAdherence).
 
-        Respond ONLY with a JSON array of 5 strings. No markdown, no code fences, just the raw JSON array.
+        Respond ONLY with a JSON array of \(Self.suggestionCount) strings. No markdown, no code fences, just the raw JSON array.
         """
     }
 
@@ -244,7 +245,7 @@ struct AIService {
         // Try parsing as a direct JSON array
         if let data = cleaned.data(using: .utf8),
            let array = try? JSONSerialization.jsonObject(with: data) as? [String] {
-            return Array(array.prefix(5))
+            return Array(array.prefix(Self.suggestionCount))
         }
 
         // Try parsing as a JSON object containing an array
@@ -252,7 +253,7 @@ struct AIService {
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             for value in obj.values {
                 if let array = value as? [String] {
-                    return Array(array.prefix(5))
+                    return Array(array.prefix(Self.suggestionCount))
                 }
             }
         }
@@ -276,6 +277,6 @@ struct AIService {
             }
             .filter { !$0.isEmpty }
 
-        return Array(lines.prefix(5))
+        return Array(lines.prefix(Self.suggestionCount))
     }
 }
