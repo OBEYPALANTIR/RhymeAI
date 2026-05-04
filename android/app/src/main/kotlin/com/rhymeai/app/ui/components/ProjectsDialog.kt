@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,10 +24,17 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -52,6 +60,24 @@ fun ProjectsDialog(
     onDeleteProject: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var searchQuery by remember { mutableStateOf("") }
+    val sortedProjects = projects.sortedByDescending { it.updatedAt }
+    val filteredProjects = searchProjects(sortedProjects, searchQuery)
+    val isSearching = searchQuery.isNotBlank()
+    val textFieldColors = OutlinedTextFieldDefaults.colors(
+        unfocusedBorderColor = Color.White.copy(alpha = 0.14f),
+        focusedBorderColor = Indigo400.copy(alpha = 0.7f),
+        unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
+        focusedContainerColor = Color.White.copy(alpha = 0.06f),
+        cursorColor = Indigo400,
+        unfocusedTextColor = Color.White,
+        focusedTextColor = Color.White,
+        unfocusedPlaceholderColor = Color.White.copy(alpha = 0.35f),
+        focusedPlaceholderColor = Color.White.copy(alpha = 0.35f),
+        unfocusedLeadingIconColor = Color.White.copy(alpha = 0.35f),
+        focusedLeadingIconColor = Indigo400
+    )
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -59,6 +85,7 @@ fun ProjectsDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .imePadding()
                 .padding(24.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -96,6 +123,36 @@ fun ProjectsDialog(
                         .padding(bottom = 20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    item {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Clear search",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            placeholder = { Text("Search songs", fontSize = 14.sp) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = textFieldColors,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
+
                     // New song button
                     item {
                         Row(
@@ -116,8 +173,7 @@ fun ProjectsDialog(
                         }
                     }
 
-                    val sorted = projects.sortedByDescending { it.updatedAt }
-                    if (sorted.isEmpty()) {
+                    if (projects.isEmpty()) {
                         item {
                             Column(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
@@ -128,8 +184,22 @@ fun ProjectsDialog(
                                 Text("No saved songs yet.", color = Color.White.copy(alpha = 0.3f))
                             }
                         }
+                    } else if (filteredProjects.isEmpty()) {
+                        item {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(Icons.Default.Search, null, tint = Color.White.copy(alpha = 0.2f), modifier = Modifier.size(48.dp))
+                                Spacer(Modifier.height(16.dp))
+                                Text(
+                                    if (isSearching) "No songs match your search." else "No saved songs yet.",
+                                    color = Color.White.copy(alpha = 0.3f)
+                                )
+                            }
+                        }
                     } else {
-                        items(sorted, key = { it.id }) { project ->
+                        items(filteredProjects, key = { it.id }) { project ->
                             val isActive = project.id == currentProjectId
                             val dateStr = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
                                 .format(Date(project.updatedAt))
@@ -186,5 +256,17 @@ fun ProjectsDialog(
                 }
             }
         }
+    }
+}
+
+private fun searchProjects(projects: List<SongProject>, query: String): List<SongProject> {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isEmpty()) return projects
+
+    return projects.filter { project ->
+        val title = project.title.ifEmpty { "Untitled Song" }
+        title.contains(normalizedQuery, ignoreCase = true) ||
+            project.lyrics.contains(normalizedQuery, ignoreCase = true) ||
+            project.theme.contains(normalizedQuery, ignoreCase = true)
     }
 }
