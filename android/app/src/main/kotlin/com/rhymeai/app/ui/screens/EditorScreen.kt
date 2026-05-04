@@ -42,15 +42,21 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -61,12 +67,17 @@ import com.rhymeai.app.SaveStatus
 import com.rhymeai.app.ui.components.AssistantPanel
 import com.rhymeai.app.ui.components.SyllableColoredText
 import com.rhymeai.app.util.SyllableCounter
+import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val rhymeContext = viewModel.computeRhymeContext()
     var showBottomSheet by remember { mutableStateOf(false) }
+    var lyricsFocused by remember { mutableStateOf(false) }
+    var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var titleHeightPx by remember { mutableIntStateOf(0) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val colorScheme = MaterialTheme.colorScheme
@@ -143,9 +154,62 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             ) {
                 val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
                 val trailingScrollSpace = if (keyboardVisible) {
-                    minOf(300.dp, maxHeight * 0.42f)
+                    72.dp
                 } else {
                     300.dp
+                }
+                val viewportHeightPx = with(density) { maxHeight.roundToPx() }
+                val editorWidthPx = with(density) { (maxWidth - 48.dp).roundToPx() }
+                val estimatedCharsPerLine = (editorWidthPx / with(density) { 8.5.dp.roundToPx() })
+                    .coerceAtLeast(1)
+                val cursorVisualLine = remember(
+                    viewModel.lyrics,
+                    viewModel.cursorPosition,
+                    estimatedCharsPerLine
+                ) {
+                    estimateCursorVisualLine(
+                        text = viewModel.lyrics,
+                        cursor = viewModel.cursorPosition,
+                        charsPerLine = estimatedCharsPerLine
+                    )
+                }
+                val lyricsTopPx = with(density) { (16.dp + 24.dp).roundToPx() } + titleHeightPx
+                val lineHeightPx = with(density) { 28.dp.roundToPx() }
+                val cursorOffset = viewModel.cursorPosition.coerceIn(0, viewModel.lyrics.length)
+                val cursorTopInLyricsPx = lyricsTextLayout
+                    ?.takeIf { it.layoutInput.text.text == viewModel.lyrics }
+                    ?.getCursorRect(cursorOffset)
+                    ?.top
+                    ?.roundToInt()
+                    ?: cursorVisualLine * lineHeightPx
+                val cursorContentY = lyricsTopPx + cursorTopInLyricsPx
+                val minCursorTopPx = with(density) { 64.dp.roundToPx() }
+                val maxCursorTopPx = (viewportHeightPx * 0.45f)
+                    .roundToInt()
+                    .coerceAtLeast(minCursorTopPx + lineHeightPx)
+
+                LaunchedEffect(
+                    keyboardVisible,
+                    lyricsFocused,
+                    cursorContentY,
+                    viewportHeightPx,
+                    maxCursorTopPx
+                ) {
+                    if (!keyboardVisible || !lyricsFocused) return@LaunchedEffect
+
+                    val minScroll = (cursorContentY - maxCursorTopPx).coerceAtLeast(0)
+                    val maxScroll = (cursorContentY - minCursorTopPx).coerceAtLeast(0)
+                    val initialClampedScroll = scrollState.value.coerceIn(minScroll, maxScroll)
+                    if (initialClampedScroll != scrollState.value) {
+                        scrollState.scrollTo(initialClampedScroll)
+                    }
+
+                    snapshotFlow { scrollState.value }.collect { currentScroll ->
+                        val clampedScroll = currentScroll.coerceIn(minScroll, maxScroll)
+                        if (clampedScroll != currentScroll) {
+                            scrollState.scrollTo(clampedScroll)
+                        }
+                    }
                 }
 
                 Column(
@@ -167,7 +231,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             color = colorScheme.onBackground
                         ),
                         cursorBrush = SolidColor(colorScheme.primary),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onSizeChanged { titleHeightPx = it.height },
                         decorationBox = { innerTextField ->
                             Box {
                                 if (viewModel.title.isEmpty()) {
@@ -205,6 +271,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         BasicTextField(
                             value = viewModel.lyricsFieldValue,
                             onValueChange = { viewModel.onLyricsChanged(it) },
+                            onTextLayout = { lyricsTextLayout = it },
                             textStyle = TextStyle(
                                 fontSize = 16.sp,
                                 lineHeight = 28.sp,
@@ -215,7 +282,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     colorScheme.onBackground.copy(alpha = 0.9f)
                             ),
                             cursorBrush = SolidColor(colorScheme.primary),
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { lyricsFocused = it.isFocused },
                             decorationBox = { innerTextField ->
                                 Box {
                                     if (viewModel.lyrics.isEmpty()) {
@@ -285,4 +354,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
     }
+}
+
+private fun estimateCursorVisualLine(text: String, cursor: Int, charsPerLine: Int): Int {
+    val beforeCursor = text.take(cursor.coerceIn(0, text.length))
+    val lines = beforeCursor.split('\n')
+
+    val completedLines = lines.dropLast(1).sumOf { line ->
+        ceil(line.length.coerceAtLeast(1) / charsPerLine.toFloat()).toInt()
+    }
+    val currentLineOffset = (lines.lastOrNull()?.length ?: 0) / charsPerLine
+
+    return completedLines + currentLineOffset
 }
