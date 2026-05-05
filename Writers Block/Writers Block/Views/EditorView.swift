@@ -117,7 +117,7 @@ struct EditorView: View {
     private func assistantSheetDragHandle(sheetHeight: CGFloat) -> some View {
         Rectangle()
             .fill(Color.clear)
-            .frame(height: 36)
+            .frame(height: 64)
             .overlay {
                 Capsule()
                     .fill(.secondary.opacity(0.45))
@@ -138,7 +138,7 @@ struct EditorView: View {
 
     private func settleAssistantSheetDrag(translation: CGFloat, sheetHeight: CGFloat) {
         let dragDistance = max(0, translation)
-        let closeThreshold = sheetHeight * 0.5
+        let closeThreshold = max(0, sheetHeight - 64) * 0.5
 
         if dragDistance >= closeThreshold {
             withAnimation(.easeInOut(duration: 0.18)) {
@@ -160,9 +160,16 @@ struct EditorView: View {
 
         if keyboardIsVisible {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                viewModel.showAssistantSheet = true
+                showAssistantSheetWithAnimation()
             }
         } else {
+            showAssistantSheetWithAnimation()
+        }
+    }
+
+    private func showAssistantSheetWithAnimation() {
+        assistantSheetDragOffset = 0
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
             viewModel.showAssistantSheet = true
         }
     }

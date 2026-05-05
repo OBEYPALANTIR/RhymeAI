@@ -10,9 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -29,7 +27,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -41,15 +38,11 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -85,7 +79,6 @@ import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val rhymeContext = remember(viewModel.lyrics, viewModel.cursorPosition, viewModel.activeRhymeScheme) {
@@ -95,35 +88,45 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     var lyricsFocused by remember { mutableStateOf(false) }
     var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var titleHeightPx by remember { mutableIntStateOf(0) }
-    val sheetState = rememberModalBottomSheetState(
-        skipPartiallyExpanded = true,
-        confirmValueChange = { target -> target != SheetValue.Hidden }
-    )
 
     val colorScheme = MaterialTheme.colorScheme
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
-    val fullSheetHeight = configuration.screenHeightDp.dp
-    val fullSheetHeightPx = with(density) { fullSheetHeight.toPx() }
-    val assistantSheetCloseThresholdPx = fullSheetHeightPx * 0.5f
+    val fullSheetHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+    val assistantSheetHandleHeightPx = with(density) { 64.dp.toPx() }
+    val assistantSheetCloseThresholdPx =
+        ((fullSheetHeightPx - assistantSheetHandleHeightPx).coerceAtLeast(0f)) * 0.5f
     var assistantSheetDragOffsetPx by remember { mutableFloatStateOf(0f) }
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
     var pendingAssistantSheet by remember { mutableStateOf(false) }
-    val assistantSheetDragState = rememberDraggableState { delta ->
-        assistantSheetDragOffsetPx = (assistantSheetDragOffsetPx + delta).coerceAtLeast(0f)
+
+    fun beginAssistantSheetPresentation() {
+        assistantSheetDragOffsetPx = fullSheetHeightPx
+        showBottomSheet = true
     }
 
     LaunchedEffect(pendingAssistantSheet, keyboardVisible) {
         if (pendingAssistantSheet && !keyboardVisible) {
-            showBottomSheet = true
+            beginAssistantSheetPresentation()
             pendingAssistantSheet = false
         }
     }
 
-    LaunchedEffect(showBottomSheet) {
-        if (showBottomSheet) assistantSheetDragOffsetPx = 0f
+    LaunchedEffect(showBottomSheet, fullSheetHeightPx) {
+        if (!showBottomSheet) return@LaunchedEffect
+
+        val startOffset = assistantSheetDragOffsetPx
+            .takeIf { it > 0f }
+            ?: fullSheetHeightPx
+        val animation = Animatable(startOffset)
+        animation.animateTo(
+            targetValue = 0f,
+            animationSpec = tween(durationMillis = 260)
+        ) {
+            assistantSheetDragOffsetPx = value
+        }
     }
 
     fun settleAssistantSheetDrag() {
@@ -160,7 +163,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             focusManager.clearFocus(force = true)
             pendingAssistantSheet = true
         } else {
-            showBottomSheet = true
+            beginAssistantSheetPresentation()
         }
     }
 
@@ -413,51 +416,48 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
         // Bottom sheet for assistant
         if (showBottomSheet) {
-            ModalBottomSheet(
-                onDismissRequest = {},
-                sheetState = sheetState,
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .offset { IntOffset(x = 0, y = assistantSheetDragOffsetPx.roundToInt()) },
-                shape = RoundedCornerShape(topStart = 0.dp, topEnd = 0.dp),
-                containerColor = colorScheme.surfaceContainerLow,
-                contentColor = colorScheme.onSurface,
-                contentWindowInsets = { WindowInsets.statusBars },
-                dragHandle = {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(32.dp)
-                            .draggable(
-                                state = assistantSheetDragState,
-                                orientation = Orientation.Vertical,
-                                onDragStopped = { settleAssistantSheetDrag() }
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(40.dp)
-                                .height(4.dp)
-                                .background(colorScheme.outlineVariant, RoundedCornerShape(2.dp))
-                        )
-                    }
-                }
+                    .offset { IntOffset(x = 0, y = assistantSheetDragOffsetPx.roundToInt()) }
+                    .background(colorScheme.surfaceContainerLow)
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(fullSheetHeight)
+                        .statusBarsPadding()
+                        .height(64.dp)
+                        .pointerInput(showBottomSheet, fullSheetHeightPx) {
+                            detectVerticalDragGestures(
+                                onVerticalDrag = { change, dragAmount ->
+                                    change.consume()
+                                    assistantSheetDragOffsetPx =
+                                        (assistantSheetDragOffsetPx + dragAmount)
+                                            .coerceIn(0f, fullSheetHeightPx)
+                                },
+                                onDragEnd = { settleAssistantSheetDrag() },
+                                onDragCancel = { settleAssistantSheetDrag() }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
                 ) {
-                    AssistantPanel(
-                        viewModel = viewModel,
-                        rhymeContext = rhymeContext,
+                    Box(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .navigationBarsPadding()
-                            .padding(bottom = 16.dp)
+                            .width(44.dp)
+                            .height(5.dp)
+                            .background(colorScheme.outlineVariant, RoundedCornerShape(2.5.dp))
                     )
                 }
+
+                AssistantPanel(
+                    viewModel = viewModel,
+                    rhymeContext = rhymeContext,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .navigationBarsPadding()
+                        .padding(bottom = 16.dp)
+                )
             }
         }
     }
