@@ -141,7 +141,7 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         }
 
         return if (provider == AIProvider.LOCAL) {
-            val localPrompt = buildLocalPrompt(theme, lyrics, targetRhymeLine, rhymeType, currentLetter, useWholeSongContext)
+            val localPrompt = buildLocalPrompt(theme, lyrics, targetRhymeLine, rhymeType, currentLetter, complexity, useWholeSongContext)
             callLocal(localPrompt)
         } else {
             val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
@@ -233,28 +233,55 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         currentLetter: String,
+        complexity: RhymeComplexity,
         useWholeSongContext: Boolean
     ): String {
+        // Small on-device models need (a) a persona, (b) a one-shot example
+        // showing the exact desired output format, and (c) an unambiguous
+        // output contract. Without all three, Gemma-class 2-4B models tend to
+        // emit preamble ("Here are six lines:"), markdown code fences, or
+        // trail off mid-line. The "Output:" suffix nudges the model to start
+        // generating the JSON immediately.
         val rhymeHint = if (targetRhymeLine != null) {
-            "Each line must rhyme (${rhymeType.displayName}) with: \"$targetRhymeLine\""
+            """MUST rhyme (${rhymeType.displayName.lowercase()}) with: "$targetRhymeLine""""
         } else {
-            "Start a new rhyme sound for letter \"$currentLetter\"."
+            """Open new rhyme sound for letter "$currentLetter""""
         }
-        val songContextInstruction = if (useWholeSongContext) {
-            "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
+        val effectiveTheme = if (useWholeSongContext) {
+            "infer from the full lyrics"
         } else {
-            "Use the immediate stanza, rhyme target, and theme first."
+            theme.ifEmpty { "(no theme — match the existing tone)" }
         }
-        val themeClause = if (!useWholeSongContext && theme.isNotEmpty()) " about $theme" else ""
+        val contextStrategy = if (useWholeSongContext) {
+            "Reflect the whole song's arc and imagery."
+        } else {
+            "Match the current stanza's rhythm and tone."
+        }
+
         return """
-Write $SUGGESTION_COUNT next lines for this song$themeClause.
-$rhymeHint
-$songContextInstruction
+You write song lyrics. Reply with ONLY a JSON array of $SUGGESTION_COUNT short lyric lines. No commentary. No numbering. No markdown.
 
+EXAMPLE
+Theme: long road home
 Lyrics so far:
-$lyrics
+"I drive these miles 'til they run out
+Past the town I used to doubt"
+Next line: MUST rhyme (perfect) with: "doubt"
+Style: ${RhymeComplexity.MODERATE.label} — ${RhymeComplexity.MODERATE.promptHint}
+Match the current stanza's rhythm and tone.
 
-Reply with exactly $SUGGESTION_COUNT lines, one per line, no numbering, no extra text.
+Output:
+["Holding everything I'm without","Watching dreams begin to sprout","Wondering what life's about","Breaking through the silent shout","Searching for a different route","Finally figuring it out"]
+
+NOW YOU
+Theme: $effectiveTheme
+Lyrics so far:
+"$lyrics"
+Next line: $rhymeHint
+Style: ${complexity.label} — ${complexity.promptHint}
+$contextStrategy
+
+Output:
 """.trimIndent()
     }
 
@@ -313,10 +340,41 @@ Reply with exactly $SUGGESTION_COUNT lines, one per line, no numbering, no extra
             .removePrefix("```")
             .removeSuffix("```")
             .trim()
-        return try {
-            json.decodeFromString<List<String>>(cleaned).take(SUGGESTION_COUNT)
-        } catch (_: Exception) {
-            emptyList()
+        // First try the cleaned text as-is; cloud responses are usually pristine.
+        runCatching {
+            return json.decodeFromString<List<String>>(cleaned).take(SUGGESTION_COUNT)
         }
+        // Local models often wrap the array in preamble ("Sure! Here you go:")
+        // or trail off after the closing bracket. Find the first balanced
+        // top-level array substring and try parsing that.
+        extractFirstJsonArray(cleaned)?.let { extracted ->
+            runCatching {
+                return json.decodeFromString<List<String>>(extracted).take(SUGGESTION_COUNT)
+            }
+        }
+        return emptyList()
+    }
+
+    private fun extractFirstJsonArray(text: String): String? {
+        val start = text.indexOf('[')
+        if (start < 0) return null
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in start until text.length) {
+            val c = text[i]
+            if (escaped) { escaped = false; continue }
+            if (c == '\\' && inString) { escaped = true; continue }
+            if (c == '"') { inString = !inString; continue }
+            if (inString) continue
+            when (c) {
+                '[' -> depth++
+                ']' -> {
+                    depth--
+                    if (depth == 0) return text.substring(start, i + 1)
+                }
+            }
+        }
+        return null
     }
 }
