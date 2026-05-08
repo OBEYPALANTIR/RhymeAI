@@ -50,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,29 +67,38 @@ import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+private const val DOWNLOAD_BUFFER_BYTES = 8 * 1024 * 1024
+private const val MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES = 750L * 1024L * 1024L
 
 private data class GemmaDownload(
     val label: String,
     val description: String,
     val fileName: String,
-    val url: String
+    val url: String,
+    val expectedBytes: Long
 )
 
 private val GEMMA_DOWNLOADS = listOf(
     GemmaDownload(
         label = "Gemma 4 E2B",
-        description = "Smaller phone-first model, about 3.17 GB.",
+        description = "Best default for phones, 3.18 GB.",
         fileName = "gemma-4-E2B-it-UD-Q4_K_XL.gguf",
-        url = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf?download=true"
+        url = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf?download=true",
+        expectedBytes = 3_184_494_720L
     ),
     GemmaDownload(
         label = "Gemma 4 E4B",
-        description = "Higher quality local model, about 5.1 GB.",
+        description = "Higher quality, slower, 5.13 GB.",
         fileName = "gemma-4-E4B-it-UD-Q4_K_XL.gguf",
-        url = "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf?download=true"
+        url = "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf?download=true",
+        expectedBytes = 5_126_304_928L
     )
 )
 
@@ -133,7 +143,24 @@ fun SettingsDialog(
     var downloadingModel by remember { mutableStateOf<GemmaDownload?>(null) }
     var downloadProgress by remember { mutableStateOf<Float?>(null) }
     var downloadError by remember { mutableStateOf<String?>(null) }
-    val coroutineScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+    var downloadRevision by remember { mutableStateOf(0) }
+    val coroutineScope = rememberCoroutineScope()
+
+    fun useDownloadedModel(model: GemmaDownload) {
+        val destFile = File(context.filesDir, model.fileName)
+        val validationError = validateDownloadedGemma(model, destFile)
+        if (validationError != null) {
+            downloadError = validationError
+            return
+        }
+
+        selectedProvider = AIProvider.LOCAL
+        selectedModel = AIModel.LOCAL_MODEL
+        onSaveProvider(AIProvider.LOCAL)
+        onSaveModel(AIModel.LOCAL_MODEL)
+        onLoadLocalModel(destFile.absolutePath)
+        saved = true
+    }
 
     fun startGemmaDownload(model: GemmaDownload) {
         downloadingModel = model
@@ -141,69 +168,48 @@ fun SettingsDialog(
         downloadError = null
         copyError = null
 
-        coroutineScope.launch {
+        coroutineScope.launch(Dispatchers.IO) {
             val destFile = File(context.filesDir, model.fileName)
             val tempFile = File(context.cacheDir, "${model.fileName}.download")
 
             try {
-                if (tempFile.exists()) tempFile.delete()
-
-                val connection = (URL(model.url).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 30000
-                    readTimeout = 30000
-                    instanceFollowRedirects = true
-                    setRequestProperty("User-Agent", "RhymeAI-Android")
+                if (validateDownloadedGemma(model, destFile) == null) {
+                    withContext(Dispatchers.Main) {
+                        downloadingModel = null
+                        downloadProgress = null
+                        useDownloadedModel(model)
+                    }
+                    return@launch
                 }
 
-                try {
-                    val code = connection.responseCode
-                    if (code !in 200..299) {
-                        throw IllegalStateException("Hugging Face returned HTTP $code")
-                    }
+                ensureEnoughSpaceForGemma(model, destFile, tempFile)
+                if (destFile.exists()) destFile.delete()
 
-                    val totalBytes = connection.contentLengthLong
-                    var copiedBytes = 0L
-                    connection.inputStream.use { input ->
-                        tempFile.outputStream().buffered().use { output ->
-                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                            while (true) {
-                                val read = input.read(buffer)
-                                if (read == -1) break
-                                output.write(buffer, 0, read)
-                                copiedBytes += read
-                                if (totalBytes > 0L) {
-                                    val progress = copiedBytes.toFloat() / totalBytes.toFloat()
-                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                        downloadProgress = progress.coerceIn(0f, 1f)
-                                    }
-                                }
-                            }
+                if (validateDownloadedGemma(model, tempFile) != null) {
+                    downloadGemmaToTemp(model, tempFile) { progress ->
+                        withContext(Dispatchers.Main) {
+                            downloadProgress = progress
                         }
                     }
-                } finally {
-                    connection.disconnect()
                 }
 
-                if (destFile.exists()) destFile.delete()
+                validateDownloadedGemma(model, tempFile)?.let { throw IllegalStateException(it) }
+
                 if (!tempFile.renameTo(destFile)) {
-                    tempFile.copyTo(destFile, overwrite = true)
+                    tempFile.copyTo(destFile, overwrite = true, bufferSize = DOWNLOAD_BUFFER_BYTES)
                     tempFile.delete()
                 }
 
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                withContext(Dispatchers.Main) {
                     downloadingModel = null
                     downloadProgress = null
-                    selectedProvider = AIProvider.LOCAL
-                    selectedModel = AIModel.LOCAL_MODEL
-                    onSaveProvider(AIProvider.LOCAL)
-                    onSaveModel(AIModel.LOCAL_MODEL)
-                    onLoadLocalModel(destFile.absolutePath)
-                    saved = true
+                    downloadRevision++
+                    useDownloadedModel(model)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 tempFile.delete()
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                withContext(Dispatchers.Main) {
                     downloadingModel = null
                     downloadProgress = null
                     downloadError = "Failed to download ${model.label}: ${e.message}"
@@ -218,7 +224,7 @@ fun SettingsDialog(
         uri?.let {
             copyingFile = true
             copyError = null
-            coroutineScope.launch {
+            coroutineScope.launch(Dispatchers.IO) {
                 try {
                     val inputStream = context.contentResolver.openInputStream(it)
                         ?: throw Exception("Cannot open file")
@@ -228,10 +234,14 @@ fun SettingsDialog(
                     if (destFile.exists()) destFile.delete()
                     inputStream.use { input ->
                         destFile.outputStream().buffered().use { output ->
-                            input.copyTo(output, bufferSize = 8192 * 1024) // 8MB buffer
+                            input.copyTo(output, bufferSize = DOWNLOAD_BUFFER_BYTES)
                         }
                     }
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    if (!destFile.isGgufFile()) {
+                        destFile.delete()
+                        throw Exception("Selected file is not a GGUF model")
+                    }
+                    withContext(Dispatchers.Main) {
                         copyingFile = false
                         selectedProvider = AIProvider.LOCAL
                         selectedModel = AIModel.LOCAL_MODEL
@@ -242,7 +252,7 @@ fun SettingsDialog(
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    withContext(Dispatchers.Main) {
                         copyingFile = false
                         copyError = "Failed to load file: ${e.message}"
                     }
@@ -386,9 +396,25 @@ fun SettingsDialog(
                         Spacer(Modifier.height(8.dp))
 
                         GEMMA_DOWNLOADS.forEach { model ->
+                            val installedFile = File(context.filesDir, model.fileName)
+                            val installedError = remember(downloadRevision, model.fileName) {
+                                validateDownloadedGemma(model, installedFile)
+                            }
+                            val isInstalled = installedError == null
+                            val installedLabel = if (isInstalled) {
+                                "Downloaded - ${formatFileSize(installedFile.length())}"
+                            } else {
+                                model.description
+                            }
                             val isDownloadingThis = downloadingModel?.fileName == model.fileName
                             OutlinedButton(
-                                onClick = { startGemmaDownload(model) },
+                                onClick = {
+                                    if (isInstalled) {
+                                        useDownloadedModel(model)
+                                    } else {
+                                        startGemmaDownload(model)
+                                    }
+                                },
                                 enabled = !localModelLoading && !copyingFile && downloadingModel == null,
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(12.dp)
@@ -404,7 +430,11 @@ fun SettingsDialog(
                                         fontWeight = FontWeight.Medium
                                     )
                                 } else {
-                                    Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
+                                    Icon(
+                                        if (isInstalled) Icons.Default.CheckCircle else Icons.Default.Download,
+                                        null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
                                     Column(
                                         modifier = Modifier
                                             .weight(1f)
@@ -413,7 +443,7 @@ fun SettingsDialog(
                                     ) {
                                         Text(model.label, fontWeight = FontWeight.Medium)
                                         Text(
-                                            model.description,
+                                            installedLabel,
                                             fontSize = 11.sp,
                                             color = colorScheme.onSurfaceVariant
                                         )
@@ -606,4 +636,84 @@ fun SettingsDialog(
 private fun formatDownloadProgress(progress: Float?): String {
     if (progress == null || progress <= 0f) return "downloading..."
     return "${String.format(Locale.US, "%.0f", progress * 100f)}%"
+}
+
+private fun validateDownloadedGemma(model: GemmaDownload, file: File): String? {
+    if (!file.exists()) return "${model.label} is not downloaded yet"
+    if (file.length() < model.expectedBytes) {
+        return "${model.label} download is incomplete: ${formatFileSize(file.length())} of ${formatFileSize(model.expectedBytes)}"
+    }
+    if (!file.isGgufFile()) return "${model.label} download did not produce a GGUF file"
+    return null
+}
+
+private suspend fun downloadGemmaToTemp(
+    model: GemmaDownload,
+    tempFile: File,
+    onProgress: suspend (Float) -> Unit
+) {
+    val resumeBytes = tempFile.length().takeIf { it > 0L && it < model.expectedBytes } ?: 0L
+    val connection = openGemmaConnection(model, resumeBytes)
+    try {
+        val code = connection.responseCode
+        if (code !in 200..299) {
+            throw IllegalStateException("Hugging Face returned HTTP $code")
+        }
+
+        val append = resumeBytes > 0L && code == HttpURLConnection.HTTP_PARTIAL
+        var copiedBytes = if (append) resumeBytes else 0L
+        if (resumeBytes > 0L && !append) tempFile.delete()
+        onProgress((copiedBytes.toFloat() / model.expectedBytes.toFloat()).coerceIn(0f, 1f))
+
+        connection.inputStream.use { input ->
+            FileOutputStream(tempFile, append).buffered().use { output ->
+                val buffer = ByteArray(DOWNLOAD_BUFFER_BYTES)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    output.write(buffer, 0, read)
+                    copiedBytes += read
+                    onProgress((copiedBytes.toFloat() / model.expectedBytes.toFloat()).coerceIn(0f, 1f))
+                }
+            }
+        }
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun openGemmaConnection(model: GemmaDownload, resumeBytes: Long): HttpURLConnection =
+    (URL(model.url).openConnection() as HttpURLConnection).apply {
+        connectTimeout = 30_000
+        readTimeout = 60_000
+        instanceFollowRedirects = true
+        setRequestProperty("User-Agent", "RhymeAI-Android")
+        if (resumeBytes > 0L) {
+            setRequestProperty("Range", "bytes=$resumeBytes-")
+        }
+    }
+
+private fun ensureEnoughSpaceForGemma(model: GemmaDownload, destFile: File, tempFile: File) {
+    val reclaimableBytes = listOf(destFile, tempFile)
+        .filter { it.exists() }
+        .sumOf { it.length() }
+    val availableBytes = (tempFile.parentFile ?: tempFile).usableSpace + reclaimableBytes
+    val requiredBytes = model.expectedBytes + MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES
+    if (availableBytes < requiredBytes) {
+        throw IllegalStateException(
+            "Need ${formatFileSize(requiredBytes)} free for ${model.label}; only ${formatFileSize(availableBytes)} available."
+        )
+    }
+}
+
+private fun File.isGgufFile(): Boolean {
+    if (length() < 4L) return false
+    return inputStream().use { input ->
+        val header = ByteArray(4)
+        input.read(header) == header.size && header.contentEquals(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+    }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    return "${String.format(Locale.US, "%.2f", bytes / 1_000_000_000.0)} GB"
 }
