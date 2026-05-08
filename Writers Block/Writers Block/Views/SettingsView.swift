@@ -24,32 +24,47 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
-                // MARK: - API Key
-                Section {
-                    HStack {
-                        if showKey {
-                            TextField("API Key", text: apiKeyBinding)
-                                .font(.system(.body, design: .monospaced))
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                        } else {
-                            SecureField("API Key", text: apiKeyBinding)
-                                .font(.system(.body, design: .monospaced))
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                        }
+                if viewModel.selectedProvider == .local {
+                    Section {
+                        Label("Apple Foundation Models", systemImage: "iphone.gen3.radiowaves.left.and.right")
+                            .font(.body.weight(.medium))
 
-                        Button {
-                            showKey.toggle()
-                        } label: {
-                            Image(systemName: showKey ? "eye.slash" : "eye")
-                                .foregroundStyle(.secondary)
-                        }
+                        Text("Runs suggestions on-device when Apple Intelligence is available. No API key is needed and lyrics stay on the device.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } header: {
+                        Text("On-Device Model")
+                    } footer: {
+                        Text(viewModel.selectedProvider.keyHint)
                     }
-                } header: {
-                    Text("\(viewModel.selectedProvider.displayName) API Key")
-                } footer: {
-                    Text(viewModel.selectedProvider.keyHint)
+                } else {
+                    // MARK: - API Key
+                    Section {
+                        HStack {
+                            if showKey {
+                                TextField("API Key", text: apiKeyBinding)
+                                    .font(.system(.body, design: .monospaced))
+                                    .autocorrectionDisabled()
+                                    .textInputAutocapitalization(.never)
+                            } else {
+                                SecureField("API Key", text: apiKeyBinding)
+                                    .font(.system(.body, design: .monospaced))
+                                    .autocorrectionDisabled()
+                                    .textInputAutocapitalization(.never)
+                            }
+
+                            Button {
+                                showKey.toggle()
+                            } label: {
+                                Image(systemName: showKey ? "eye.slash" : "eye")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: {
+                        Text("\(viewModel.selectedProvider.displayName) API Key")
+                    } footer: {
+                        Text(viewModel.selectedProvider.keyHint)
+                    }
                 }
 
                 // MARK: - Model

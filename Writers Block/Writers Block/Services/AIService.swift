@@ -1,7 +1,9 @@
 import Foundation
+import FoundationModels
 
 enum AIServiceError: LocalizedError {
     case noApiKey(provider: String)
+    case localModelUnavailable(reason: String)
     case invalidResponse
     case apiError(statusCode: Int, message: String)
     case decodingError
@@ -10,6 +12,8 @@ enum AIServiceError: LocalizedError {
         switch self {
         case .noApiKey(let provider):
             return "No API key set. Go to Settings to add your \(provider) API key."
+        case .localModelUnavailable(let reason):
+            return "On-device model unavailable: \(reason)"
         case .invalidResponse:
             return "Invalid response from server."
         case .apiError(let code, let msg):
@@ -36,6 +40,18 @@ struct AIService {
         complexity: RhymeComplexity,
         useWholeSongContext: Bool
     ) async throws -> [String] {
+        if provider == .local {
+            let prompt = buildLocalPrompt(
+                theme: theme,
+                lyrics: lyrics,
+                targetRhymeLine: targetRhymeLine,
+                rhymeType: rhymeType,
+                currentLetter: currentLetter,
+                useWholeSongContext: useWholeSongContext
+            )
+            return try await callLocal(prompt: prompt)
+        }
+
         guard !apiKey.isEmpty else {
             throw AIServiceError.noApiKey(provider: provider.displayName)
         }
@@ -58,6 +74,8 @@ struct AIService {
             return try await callOpenAI(apiKey: apiKey, modelId: modelId, prompt: prompt)
         case .claude:
             return try await callClaude(apiKey: apiKey, modelId: modelId, prompt: prompt)
+        case .local:
+            throw AIServiceError.invalidResponse
         }
     }
 
@@ -218,6 +236,73 @@ struct AIService {
 
         let results = parseJsonArray(text)
         return results.isEmpty ? parseLines(text) : results
+    }
+
+    // MARK: - Local
+
+    private func buildLocalPrompt(
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        currentLetter: String,
+        useWholeSongContext: Bool
+    ) -> String {
+        let rhymeHint: String
+        if let targetRhymeLine {
+            rhymeHint = "Each line must rhyme (\(rhymeType.displayName)) with: \"\(targetRhymeLine)\""
+        } else {
+            rhymeHint = "Start a new rhyme sound for letter \"\(currentLetter)\"."
+        }
+        let songContextInstruction = useWholeSongContext
+            ? "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
+            : "Use the immediate stanza, rhyme target, and theme first."
+        let themeClause = !useWholeSongContext && !theme.isEmpty ? " about \(theme)" : ""
+
+        return """
+        Write \(Self.suggestionCount) next lines for this song\(themeClause).
+        \(rhymeHint)
+        \(songContextInstruction)
+
+        Lyrics so far:
+        \(lyrics)
+
+        Reply with exactly \(Self.suggestionCount) lines, one per line, no numbering, no extra text.
+        """
+    }
+
+    private func callLocal(prompt: String) async throws -> [String] {
+        let model = SystemLanguageModel.default
+        guard model.isAvailable else {
+            throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
+        }
+
+        let session = LanguageModelSession(
+            model: model,
+            instructions: "You are an expert songwriter and lyricist. Return concise lyric line suggestions only."
+        )
+        let response = try await session.respond(to: prompt)
+        let results = parseJsonArray(response.content)
+        let parsed = results.isEmpty ? parseLines(response.content) : results
+        guard !parsed.isEmpty else {
+            throw AIServiceError.decodingError
+        }
+        return parsed
+    }
+
+    private func describe(_ availability: SystemLanguageModel.Availability) -> String {
+        switch availability {
+        case .available:
+            return "ready"
+        case .unavailable(.deviceNotEligible):
+            return "this device is not eligible for Apple Intelligence local models."
+        case .unavailable(.appleIntelligenceNotEnabled):
+            return "Apple Intelligence is not enabled."
+        case .unavailable(.modelNotReady):
+            return "the local model is still downloading or not ready yet."
+        @unknown default:
+            return "unknown availability state."
+        }
     }
 
     // MARK: - HTTP

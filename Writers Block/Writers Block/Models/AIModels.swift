@@ -4,12 +4,14 @@ enum AIProvider: String, CaseIterable, Codable {
     case gemini = "GEMINI"
     case openai = "OPENAI"
     case claude = "CLAUDE"
+    case local = "LOCAL"
 
     var displayName: String {
         switch self {
         case .gemini: return "Gemini"
         case .openai: return "OpenAI"
         case .claude: return "Claude"
+        case .local: return "Local"
         }
     }
 
@@ -18,6 +20,7 @@ enum AIProvider: String, CaseIterable, Codable {
         case .gemini: return "Get your key at aistudio.google.com"
         case .openai: return "Get your key at platform.openai.com"
         case .claude: return "Get your key at console.anthropic.com"
+        case .local: return "Runs on-device with Apple Foundation Models when available."
         }
     }
 }
@@ -40,6 +43,8 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
     case claudeSonnet = "claude-sonnet-4-20250514"
     case claudeHaiku = "claude-haiku-4-5-20251001"
     case claudeOpus = "claude-opus-4-20250514"
+    // Local on-device
+    case localModel = "local-model"
 
     var id: String { rawValue }
 
@@ -59,6 +64,7 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
         case .claudeSonnet: return "Claude Sonnet 4"
         case .claudeHaiku: return "Claude Haiku 4.5"
         case .claudeOpus: return "Claude Opus 4"
+        case .localModel: return "On-Device Model"
         }
     }
 
@@ -71,6 +77,8 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
             return .openai
         case .claudeSonnet, .claudeHaiku, .claudeOpus:
             return .claude
+        case .localModel:
+            return .local
         }
     }
 
