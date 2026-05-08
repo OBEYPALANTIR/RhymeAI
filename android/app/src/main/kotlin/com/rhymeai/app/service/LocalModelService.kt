@@ -23,12 +23,25 @@ class LocalModelService {
         // while staying ~half the memory footprint of llama.cpp's stock
         // 2048 default — keeps multi-GB GGUFs loadable on ~4 GB-RAM phones.
         const val DEFAULT_CONTEXT_LENGTH = 1024
+        const val SESSION_FILE_NAME = "rhymeai_kv_session.bin"
     }
 
     private var llama: LlamaAndroid? = null
     private var contextId: Int? = null
     private var _loadedModelPath: String? = null
     private var appContext: Context? = null
+    private var hasSavedSession = false
+
+    /**
+     * When true, [generateResponse] persists the KV cache to disk after each
+     * completion and reloads it before the next one. llama.cpp matches the
+     * cached tokens against the new prompt and only processes the divergent
+     * suffix — for songwriting, ~95% of the prompt (the few-shot example +
+     * the unchanged song body) is shared between calls, so this typically
+     * cuts perceived latency on the second-and-later Suggest tap by several
+     * seconds at the cost of ~200 MB of cache-dir write per call.
+     */
+    var kvCacheReuseEnabled = true
 
     // Set by [generateResponse] to capture streamed tokens for the current
     // request. The token callback installed at startEngine time fires for the
@@ -107,9 +120,21 @@ class LocalModelService {
         val id = contextId
             ?: throw IllegalStateException("No model loaded. Go to Settings to load a GGUF model file.")
 
+        // KV-cache reuse: if a session from a previous call exists, restore
+        // it. llama.cpp will compare the cached token list against the new
+        // prompt and resume processing from the first divergence — so the
+        // unchanged lyrics + few-shot prefix don't get re-tokenized and
+        // re-evaluated from scratch. Failures here are non-fatal; the model
+        // simply processes from scratch as before.
+        if (kvCacheReuseEnabled && hasSavedSession) {
+            sessionFileOrNull()?.takeIf { it.exists() }?.let { f ->
+                runCatching { client.loadSession(id, f.absolutePath).first() }
+            }
+        }
+
         val sb = StringBuilder()
         streamSink = { word -> sb.append(word) }
-        try {
+        val response = try {
             val pred = mapOf<String, Any>(
                 "prompt" to prompt,
                 "temperature" to params.temperature,
@@ -133,6 +158,22 @@ class LocalModelService {
         } finally {
             streamSink = null
         }
+
+        // Persist the post-completion KV cache (full state including the
+        // freshly generated tokens). On the next call, the diff happens at
+        // whatever tokens differ in the new prompt, so the completion-region
+        // bytes get truncated automatically when llama.cpp resumes — saving
+        // -1 (== all tokens, per llama.cpp convention) keeps the call simple.
+        if (kvCacheReuseEnabled) {
+            sessionFileOrNull()?.let { f ->
+                runCatching {
+                    val written = client.saveSession(id, f.absolutePath, -1).first()
+                    if (written > 0) hasSavedSession = true
+                }
+            }
+        }
+
+        response
     }
 
     suspend fun stop() {
@@ -149,26 +190,16 @@ class LocalModelService {
         }
         contextId = null
         _loadedModelPath = null
+        // The KV cache file is keyed to the loaded model's tokenizer + arch;
+        // if the user swaps to a different GGUF the old session is invalid,
+        // so wipe it on every unload.
+        sessionFileOrNull()?.let { runCatching { it.delete() } }
+        hasSavedSession = false
     }
 
-    /**
-     * Persist the current KV cache to disk so a future [loadSession] can skip
-     * reprocessing the prompt prefix. Returns the number of tokens written, or
-     * -1 on error. See follow-up note in the PR description — we're not yet
-     * calling this from anywhere because prefix-detection between calls hasn't
-     * been wired into [AIService] yet, but the plumbing is here so the next
-     * step is mechanical.
-     */
-    suspend fun saveSession(path: String, tokens: Int = -1): Int = withContext(Dispatchers.IO) {
-        val client = llama ?: return@withContext -1
-        val id = contextId ?: return@withContext -1
-        runCatching { client.saveSession(id, path, tokens).first() }.getOrDefault(-1)
-    }
-
-    suspend fun loadSession(path: String): Boolean = withContext(Dispatchers.IO) {
-        val client = llama ?: return@withContext false
-        val id = contextId ?: return@withContext false
-        runCatching { client.loadSession(id, path).first() }.isSuccess
+    private fun sessionFileOrNull(): File? {
+        val ctx = appContext ?: return null
+        return File(ctx.cacheDir, SESSION_FILE_NAME)
     }
 
     /**
