@@ -272,7 +272,7 @@ Reply with exactly 5 lines, one per line, no numbering, no extra text.
                 val response = stream.bufferedReader().use { it.readText() }
 
                 if (code !in 200..299) {
-                    throw RuntimeException("API error ($code): $response")
+                    throw RuntimeException("API error ($code)")
                 }
                 response
             } finally {
