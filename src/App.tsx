@@ -35,6 +35,12 @@ const SONG_TEMPLATES = [
   }
 ];
 
+const SYLLABLE_COLORS: Record<number, string> = {
+  1: 'text-emerald-300',
+  2: 'text-blue-300',
+  3: 'text-purple-300',
+};
+
 export default function App() {
   const [theme, setTheme] = useState('');
   const [title, setTitle] = useState(() => localStorage.getItem('lyricist-title') || '');
@@ -283,10 +289,7 @@ export default function App() {
         let colorClass = 'text-white/90'; // default
         
         if (isSyllableColoringEnabled) {
-          if (count === 1) colorClass = 'text-emerald-300';
-          else if (count === 2) colorClass = 'text-blue-300';
-          else if (count === 3) colorClass = 'text-purple-300';
-          else if (count >= 4) colorClass = 'text-rose-300';
+          colorClass = SYLLABLE_COLORS[count] || (count >= 4 ? 'text-rose-300' : 'text-white/90');
         }
         
         return <span key={i} className={colorClass}>{part}</span>;
