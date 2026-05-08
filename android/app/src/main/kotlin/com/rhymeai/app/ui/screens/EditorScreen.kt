@@ -452,6 +452,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 AssistantPanel(
                     viewModel = viewModel,
                     rhymeContext = rhymeContext,
+                    onSuggestionInserted = { showBottomSheet = false },
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
