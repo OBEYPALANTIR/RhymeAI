@@ -103,61 +103,72 @@ final class EditorViewModel: ObservableObject {
             )
         }
 
-        let pos = min(cursorPosition, lyrics.count)
+        let pos = min(max(cursorPosition, 0), lyrics.count)
         let textIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
-        let textBeforeCursor = String(lyrics[lyrics.startIndex..<textIndex])
-        let textAfterCursor = String(lyrics[textIndex..<lyrics.endIndex])
+        let textBeforeCursor = String(lyrics.prefix(pos))
+        let textAfterCursor = String(lyrics.suffix(lyrics.count - pos))
 
-        // Find stanza boundaries (double newline)
-        let stanzaStart: String.Index
+        let stanzaStartOffset: Int
         if let range = textBeforeCursor.range(of: "\n\n", options: .backwards) {
-            stanzaStart = lyrics.index(range.upperBound, offsetBy: 0, limitedBy: lyrics.endIndex) ?? lyrics.startIndex
+            stanzaStartOffset = textBeforeCursor.distance(from: textBeforeCursor.startIndex, to: range.upperBound)
         } else {
-            stanzaStart = lyrics.startIndex
+            stanzaStartOffset = 0
         }
 
-        let stanzaEnd: String.Index
+        let stanzaEndOffset: Int
         if let range = textAfterCursor.range(of: "\n\n") {
-            let offset = textAfterCursor.distance(from: textAfterCursor.startIndex, to: range.lowerBound)
-            stanzaEnd = lyrics.index(textIndex, offsetBy: offset, limitedBy: lyrics.endIndex) ?? lyrics.endIndex
+            stanzaEndOffset = pos + textAfterCursor.distance(from: textAfterCursor.startIndex, to: range.lowerBound)
         } else {
-            stanzaEnd = lyrics.endIndex
+            stanzaEndOffset = lyrics.count
         }
+
+        let stanzaStart = lyrics.index(lyrics.startIndex, offsetBy: stanzaStartOffset)
+        let stanzaEnd = lyrics.index(lyrics.startIndex, offsetBy: stanzaEndOffset)
 
         let currentStanza = String(lyrics[stanzaStart..<stanzaEnd])
         let stanzaLines = currentStanza.components(separatedBy: "\n")
 
-        // Determine current line index within stanza
+        // Determine the raw cursor line, then map only real lyric lines to the rhyme scheme.
         let stanzaTextBeforeCursor = String(lyrics[stanzaStart..<textIndex])
-        let currentLineIndex = stanzaTextBeforeCursor.components(separatedBy: "\n").count - 1
+        let rawCursorLineIndex = stanzaTextBeforeCursor.components(separatedBy: "\n").count - 1
+        let lyricLinePosition = stanzaLines.prefix(rawCursorLineIndex + 1).filter { line in
+            !isSectionHeader(line) && !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }.count - 1
+        let effectiveLineIndex = max(lyricLinePosition, 0)
 
         let schemeLetters = Array(activeRhymeScheme)
         guard !schemeLetters.isEmpty else {
-            return RhymeContext(targetLine: nil, currentLetter: "A", stanzaLines: stanzaLines, currentLineIndex: currentLineIndex)
+            return RhymeContext(targetLine: nil, currentLetter: "A", stanzaLines: stanzaLines, currentLineIndex: rawCursorLineIndex)
         }
 
-        let currentLetter = String(schemeLetters[currentLineIndex % schemeLetters.count])
+        let currentLetter = String(schemeLetters[effectiveLineIndex % schemeLetters.count])
 
-        // Find previous line in stanza with same scheme letter
         var targetLine: String?
-        for i in stride(from: currentLineIndex - 1, through: 0, by: -1) {
-            let letter = String(schemeLetters[i % schemeLetters.count])
+        var lyricCount = 0
+        for i in stanzaLines.indices {
+            if i >= rawCursorLineIndex { break }
+
+            let line = stanzaLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if isSectionHeader(line) || line.isEmpty { continue }
+
+            let letter = String(schemeLetters[lyricCount % schemeLetters.count])
             if letter == currentLetter {
-                let line = stanzaLines[i].trimmingCharacters(in: .whitespaces)
-                // Skip section headers like [Verse 1]
-                if !line.isEmpty && !line.hasPrefix("[") {
-                    targetLine = line
-                    break
-                }
+                targetLine = line
             }
+            lyricCount += 1
         }
 
         return RhymeContext(
             targetLine: targetLine,
             currentLetter: currentLetter,
             stanzaLines: stanzaLines,
-            currentLineIndex: currentLineIndex
+            currentLineIndex: rawCursorLineIndex
         )
+    }
+
+    private func isSectionHeader(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("[") && trimmed.hasSuffix("]")
     }
 
     // MARK: - AI Suggestions

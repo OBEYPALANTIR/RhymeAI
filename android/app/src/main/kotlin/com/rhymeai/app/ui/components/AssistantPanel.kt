@@ -31,6 +31,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -61,7 +64,8 @@ import com.rhymeai.app.util.SyllableCounter
 fun AssistantPanel(
     viewModel: MainViewModel,
     rhymeContext: RhymeContext,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onSuggestionInserted: () -> Unit = {}
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val textFieldColors = OutlinedTextFieldDefaults.colors(
@@ -245,6 +249,31 @@ fun AssistantPanel(
                 }
             }
 
+            // Rhyme Type
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Rhyme Density", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    RhymeType.entries.forEachIndexed { index, type ->
+                        SegmentedButton(
+                            selected = viewModel.rhymeType == type,
+                            onClick = { viewModel.rhymeType = type },
+                            shape = SegmentedButtonDefaults.itemShape(index, RhymeType.entries.size),
+                            colors = SegmentedButtonDefaults.colors(
+                                activeContainerColor = colorScheme.primary,
+                                activeContentColor = colorScheme.onPrimary,
+                                inactiveContainerColor = colorScheme.surfaceContainerLow,
+                                inactiveContentColor = colorScheme.onSurfaceVariant,
+                                activeBorderColor = colorScheme.primary,
+                                inactiveBorderColor = colorScheme.outlineVariant
+                            )
+                        ) {
+                            Text(type.shortLabel(), fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+
             // Rhyme Complexity Slider
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(
@@ -387,7 +416,10 @@ fun AssistantPanel(
                         SuggestionCard(
                             suggestion = suggestion,
                             highlightRhyme = viewModel.isHighlightEnabled,
-                            onClick = { viewModel.insertSuggestion(suggestion) }
+                            onClick = {
+                                viewModel.insertSuggestion(suggestion)
+                                onSuggestionInserted()
+                            }
                         )
                     }
                 }
@@ -410,4 +442,10 @@ fun AssistantPanel(
             Spacer(Modifier.height(16.dp))
         }
     }
+}
+
+private fun RhymeType.shortLabel(): String = when (this) {
+    RhymeType.PERFECT -> "Perfect"
+    RhymeType.NEAR -> "Near"
+    RhymeType.SLANT -> "Slant"
 }
