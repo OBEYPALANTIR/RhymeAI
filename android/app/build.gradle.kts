@@ -1,4 +1,5 @@
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
@@ -45,8 +46,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
+        }
     }
 }
 
@@ -73,7 +76,7 @@ dependencies {
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
 
     // On-device LLM inference (GGUF support via llama.cpp)
-    implementation("io.github.ljcamargo:llamacpp-kotlin:0.2.0")
+    implementation("io.github.ljcamargo:llamacpp-kotlin:0.4.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

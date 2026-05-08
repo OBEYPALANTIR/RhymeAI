@@ -68,6 +68,9 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
 class AIService {
     private companion object {
         const val SUGGESTION_COUNT = 6
+        const val LOCAL_RECENT_CONTEXT_CHARS = 2600
+        const val LOCAL_WHOLE_SONG_HEAD_CHARS = 900
+        const val LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -141,7 +144,16 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         }
 
         return if (provider == AIProvider.LOCAL) {
-            val localPrompt = buildLocalPrompt(theme, lyrics, targetRhymeLine, rhymeType, currentLetter, useWholeSongContext)
+            val localPrompt = buildLocalPrompt(
+                theme = theme,
+                lyrics = lyrics,
+                targetRhymeLine = targetRhymeLine,
+                rhymeType = rhymeType,
+                rhymeScheme = rhymeScheme,
+                currentLetter = currentLetter,
+                complexity = complexity,
+                useWholeSongContext = useWholeSongContext
+            )
             callLocal(localPrompt)
         } else {
             val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
@@ -232,30 +244,50 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         lyrics: String,
         targetRhymeLine: String?,
         rhymeType: RhymeType,
+        rhymeScheme: String,
         currentLetter: String,
+        complexity: RhymeComplexity,
         useWholeSongContext: Boolean
     ): String {
         val rhymeHint = if (targetRhymeLine != null) {
-            "Each line must rhyme (${rhymeType.displayName}) with: \"$targetRhymeLine\""
+            "End every suggestion with a ${rhymeType.displayName.lowercase()} for: \"$targetRhymeLine\"."
         } else {
             "Start a new rhyme sound for letter \"$currentLetter\"."
         }
         val songContextInstruction = if (useWholeSongContext) {
-            "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
+            "Use the whole-song context for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
         } else {
             "Use the immediate stanza, rhyme target, and theme first."
         }
-        val themeClause = if (!useWholeSongContext && theme.isNotEmpty()) " about $theme" else ""
-        return """
-Write $SUGGESTION_COUNT next lines for this song$themeClause.
+        val effectiveTheme = if (theme.isNotBlank() && !useWholeSongContext) {
+            theme.trim()
+        } else {
+            "Infer from the lyrics."
+        }
+        val lyricContext = localLyricsContext(lyrics, useWholeSongContext)
+        val userPrompt = """
+You are RhymeAI's on-device songwriting assistant.
+
+Task: write exactly $SUGGESTION_COUNT next-line options for the song.
+Theme: $effectiveTheme
+Rhyme scheme: "$rhymeScheme"; next line is "$currentLetter".
 $rhymeHint
 $songContextInstruction
+Complexity: ${complexity.label}. ${complexity.promptHint}
 
-Lyrics so far:
-$lyrics
+Lyrics context:
+${"\"\"\""}
+$lyricContext
+${"\"\"\""}
 
-Reply with exactly $SUGGESTION_COUNT lines, one per line, no numbering, no extra text.
+Rules:
+- Return exactly $SUGGESTION_COUNT lines.
+- One suggestion per line.
+- No numbering, bullets, quotes, markdown, labels, or explanation.
+- Keep each suggestion under 16 words.
 """.trimIndent()
+
+        return gemmaInstructionPrompt(userPrompt)
     }
 
     private suspend fun callLocal(prompt: String): List<String> {
@@ -278,7 +310,14 @@ Reply with exactly $SUGGESTION_COUNT lines, one per line, no numbering, no extra
     private fun parseLines(text: String): List<String> {
         return text.lines()
             .map { it.replace(numberedPrefixPattern, "").trim().removeSurrounding("\"") }
-            .filter { it.isNotBlank() && it.length > 3 }
+            .filter { line ->
+                line.isNotBlank() &&
+                    line.length > 3 &&
+                    !line.startsWith("<start_of_turn>") &&
+                    !line.startsWith("<end_of_turn>") &&
+                    !line.equals("model", ignoreCase = true) &&
+                    !line.equals("user", ignoreCase = true)
+            }
             .take(SUGGESTION_COUNT)
     }
 
@@ -317,6 +356,39 @@ Reply with exactly $SUGGESTION_COUNT lines, one per line, no numbering, no extra
             json.decodeFromString<List<String>>(cleaned).take(SUGGESTION_COUNT)
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    private fun gemmaInstructionPrompt(userPrompt: String): String =
+        """
+<start_of_turn>user
+$userPrompt
+<end_of_turn>
+<start_of_turn>model
+""".trimIndent()
+
+    private fun localLyricsContext(lyrics: String, useWholeSongContext: Boolean): String {
+        val trimmed = lyrics.trim()
+        if (trimmed.length <= LOCAL_RECENT_CONTEXT_CHARS) return trimmed
+
+        return if (useWholeSongContext) {
+            val head = trimmed.take(LOCAL_WHOLE_SONG_HEAD_CHARS).trimToLineBoundary(preferStart = false)
+            val tail = trimmed.takeLast(LOCAL_WHOLE_SONG_TAIL_CHARS).trimToLineBoundary(preferStart = true)
+            "$head\n\n[Middle lyrics trimmed for on-device speed]\n\n$tail"
+        } else {
+            "[Earlier lyrics trimmed for on-device speed]\n" +
+                trimmed.takeLast(LOCAL_RECENT_CONTEXT_CHARS).trimToLineBoundary(preferStart = true)
+        }
+    }
+
+    private fun String.trimToLineBoundary(preferStart: Boolean): String {
+        if (isEmpty()) return this
+        return if (preferStart) {
+            val newline = indexOf('\n')
+            if (newline >= 0 && newline < lastIndex) substring(newline + 1).trim() else trim()
+        } else {
+            val newline = lastIndexOf('\n')
+            if (newline > 0) substring(0, newline).trim() else trim()
         }
     }
 }
