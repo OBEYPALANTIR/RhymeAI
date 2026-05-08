@@ -93,7 +93,10 @@ class ModelDownloader(private val context: Context) {
     }
 
     fun startDownload(model: FeaturedModel, allowMetered: Boolean) {
-        cancelInternal()
+        // A previous download may still be enqueued in the system DownloadManager;
+        // remove it (and its partial file) before starting the new one so we don't
+        // leave orphaned downloads running in the background.
+        removeCurrentDownload()
         scope.launch {
             try {
                 _state.value = State.Resolving(model)
@@ -120,14 +123,7 @@ class ModelDownloader(private val context: Context) {
     }
 
     fun cancelDownload() {
-        val id = currentDownloadId
-        if (id != null) {
-            runCatching {
-                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                dm.remove(id)
-            }
-        }
-        cancelInternal()
+        removeCurrentDownload()
         _state.value = State.Idle
     }
 
@@ -137,7 +133,31 @@ class ModelDownloader(private val context: Context) {
         }
     }
 
-    private fun cancelInternal() {
+    /**
+     * Cancel polling and let the in-flight DownloadManager job continue in the
+     * background (it survives process death). Called from MainViewModel.onCleared.
+     */
+    fun shutdown() {
+        pollJob?.cancel()
+        pollJob = null
+        currentDownloadId = null
+        scope.cancel()
+    }
+
+    /** Drop the active download from DownloadManager (deletes any partial file). */
+    private fun removeCurrentDownload() {
+        val id = currentDownloadId
+        if (id != null) {
+            runCatching {
+                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                dm.remove(id)
+            }
+        }
+        forgetCurrentDownload()
+    }
+
+    /** Drop local references only; leave the DownloadManager entry alone. */
+    private fun forgetCurrentDownload() {
         pollJob?.cancel()
         pollJob = null
         currentDownloadId = null
@@ -156,11 +176,16 @@ class ModelDownloader(private val context: Context) {
         destPath: String
     ) {
         while (true) {
-            val cursor: Cursor = dm.query(DownloadManager.Query().setFilterById(id)) ?: break
+            val cursor: Cursor = dm.query(DownloadManager.Query().setFilterById(id))
+                ?: run {
+                    _state.value = State.Failed(model, "Download manager unavailable")
+                    forgetCurrentDownload()
+                    return
+                }
             try {
                 if (!cursor.moveToFirst()) {
                     _state.value = State.Failed(model, "Download was removed")
-                    cancelInternal()
+                    forgetCurrentDownload()
                     return
                 }
                 val statusCol = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
@@ -180,13 +205,13 @@ class ModelDownloader(private val context: Context) {
                     }
                     DownloadManager.STATUS_SUCCESSFUL -> {
                         _state.value = State.Complete(model, destPath)
-                        cancelInternal()
+                        forgetCurrentDownload()
                         return
                     }
                     DownloadManager.STATUS_FAILED -> {
                         val reason = cursor.getInt(reasonCol)
                         _state.value = State.Failed(model, "Download failed (${reasonText(reason)})")
-                        cancelInternal()
+                        forgetCurrentDownload()
                         return
                     }
                 }

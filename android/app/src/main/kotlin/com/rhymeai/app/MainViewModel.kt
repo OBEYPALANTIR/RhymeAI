@@ -421,4 +421,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         localModelError = null
         modelDownloader.startDownload(model, allowMetered)
     }
+
+    override fun onCleared() {
+        super.onCleared()
+        // Stop polling and tear down the downloader's internal scope. Any
+        // in-flight DownloadManager job keeps running in the background.
+        modelDownloader.shutdown()
+    }
 }
