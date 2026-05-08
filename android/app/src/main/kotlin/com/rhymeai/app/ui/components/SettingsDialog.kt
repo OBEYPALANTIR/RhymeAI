@@ -3,7 +3,10 @@ package com.rhymeai.app.ui.components
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -104,7 +107,7 @@ fun SettingsDialog(
     // File picker for local models
     var copyingFile by remember { mutableStateOf(false) }
     var copyError by remember { mutableStateOf<String?>(null) }
-    val coroutineScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+    val coroutineScope = rememberCoroutineScope()
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -114,27 +117,26 @@ fun SettingsDialog(
             copyError = null
             coroutineScope.launch {
                 try {
-                    val inputStream = context.contentResolver.openInputStream(it)
-                        ?: throw Exception("Cannot open file")
-                    val fileName = "local_model.gguf"
-                    val destFile = File(context.filesDir, fileName)
-                    // Delete old model file if exists
-                    if (destFile.exists()) destFile.delete()
-                    inputStream.use { input ->
-                        destFile.outputStream().buffered().use { output ->
-                            input.copyTo(output, bufferSize = 8192 * 1024) // 8MB buffer
+                    val destFile = withContext(Dispatchers.IO) {
+                        val inputStream = context.contentResolver.openInputStream(it)
+                            ?: throw Exception("Cannot open file")
+                        val out = File(context.filesDir, "local_model.gguf")
+                        if (out.exists()) out.delete()
+                        // 256 KB buffer: large enough for fast copies, small enough
+                        // to avoid OOM on devices with constrained Java heap.
+                        inputStream.use { input ->
+                            out.outputStream().buffered().use { output ->
+                                input.copyTo(output, bufferSize = 256 * 1024)
+                            }
                         }
+                        out
                     }
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        copyingFile = false
-                        onLoadLocalModel(destFile.absolutePath)
-                    }
+                    copyingFile = false
+                    onLoadLocalModel(destFile.absolutePath)
                 } catch (e: Exception) {
                     e.printStackTrace()
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        copyingFile = false
-                        copyError = "Failed to load file: ${e.message}"
-                    }
+                    copyingFile = false
+                    copyError = "Failed to load file: ${e.message}"
                 }
             }
         }

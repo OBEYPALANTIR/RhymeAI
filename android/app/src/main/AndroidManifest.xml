@@ -9,6 +9,7 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:resizeableActivity="true"
+        android:largeHeap="true"
         android:theme="@style/Theme.RhymeAI">
 
         <meta-data android:name="android.max_aspect" android:value="2.4" />
