@@ -154,7 +154,7 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
                 complexity = complexity,
                 useWholeSongContext = useWholeSongContext
             )
-            callLocal(localPrompt)
+            callLocal(localPrompt, lyrics)
         } else {
             val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
             when (provider) {
@@ -283,6 +283,8 @@ ${"\"\"\""}
 Rules:
 - Return exactly $SUGGESTION_COUNT lines.
 - One suggestion per line.
+- Do not copy any existing lyric line.
+- Do not repeat the same suggestion.
 - No numbering, bullets, quotes, markdown, labels, or explanation.
 - Keep each suggestion under 16 words.
 """.trimIndent()
@@ -290,35 +292,39 @@ Rules:
         return gemmaInstructionPrompt(userPrompt)
     }
 
-    private suspend fun callLocal(prompt: String): List<String> {
+    private suspend fun callLocal(prompt: String, lyrics: String): List<String> {
         val service = localModelService
             ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         if (!service.isLoaded) {
             throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         }
         val response = service.generateResponse(prompt)
-        // Try JSON first, fall back to line-based parsing
-        val results = parseJsonArray(response).ifEmpty { parseLines(response) }
+        val rawResults = parseJsonArray(response).ifEmpty { parseLines(response) }
+        val results = sanitizeLocalSuggestions(rawResults, lyrics)
         if (results.isEmpty()) {
             throw RuntimeException("Local model returned no usable suggestions. Try a different model or use a cloud provider.")
         }
         return results
     }
 
-    private val numberedPrefixPattern = Regex("^\\s*\\d+[.)\\-]\\s*")
+    private val listPrefixPattern = Regex("^\\s*(?:[-*]\\s+|\\d+[.)\\-:]\\s*)")
+    private val markerOnlyPattern = Regex(
+        pattern = "^\\s*(?:_?response>|_?model_response>|assistant_response>|model_response>|<[^>]+>|user|model|assistant)\\s*$",
+        option = RegexOption.IGNORE_CASE
+    )
+    private val markerPrefixPattern = Regex(
+        pattern = "^\\s*(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<start_of_turn>\\w+|<end_of_turn>)\\s*",
+        option = RegexOption.IGNORE_CASE
+    )
+    private val promptEchoPattern = Regex(
+        pattern = "^(?:task:|theme:|rhyme scheme:|lyrics context:|rules:|return exactly|one suggestion|no numbering|keep each|you are rhymeai)",
+        option = RegexOption.IGNORE_CASE
+    )
+    private val normalizedLinePattern = Regex("[^a-z0-9]+")
 
     private fun parseLines(text: String): List<String> {
         return text.lines()
-            .map { it.replace(numberedPrefixPattern, "").trim().removeSurrounding("\"") }
-            .filter { line ->
-                line.isNotBlank() &&
-                    line.length > 3 &&
-                    !line.startsWith("<start_of_turn>") &&
-                    !line.startsWith("<end_of_turn>") &&
-                    !line.equals("model", ignoreCase = true) &&
-                    !line.equals("user", ignoreCase = true)
-            }
-            .take(SUGGESTION_COUNT)
+            .mapNotNull { cleanLocalSuggestionLine(it) }
     }
 
     private suspend fun httpPost(url: String, headers: Map<String, String>, body: String): String =
@@ -380,6 +386,56 @@ $userPrompt
                 trimmed.takeLast(LOCAL_RECENT_CONTEXT_CHARS).trimToLineBoundary(preferStart = true)
         }
     }
+
+    private fun sanitizeLocalSuggestions(candidates: List<String>, lyrics: String): List<String> {
+        val existingLines = lyrics.lines()
+            .map { normalizeSuggestionKey(it) }
+            .filter { it.isNotEmpty() }
+            .toSet()
+        val seen = mutableSetOf<String>()
+
+        return candidates
+            .flatMap { it.lines() }
+            .mapNotNull { cleanLocalSuggestionLine(it) }
+            .filter { suggestion ->
+                val key = normalizeSuggestionKey(suggestion)
+                key.isNotEmpty() &&
+                    key !in existingLines &&
+                    seen.add(key)
+            }
+            .take(SUGGESTION_COUNT)
+    }
+
+    private fun cleanLocalSuggestionLine(line: String): String? {
+        var cleaned = line.trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+
+        if (cleaned.isBlank() || markerOnlyPattern.matches(cleaned)) return null
+
+        cleaned = cleaned
+            .substringBefore("<end_of_turn>")
+            .substringBefore("<start_of_turn>")
+            .let { markerPrefixPattern.replace(it, "") }
+            .let { listPrefixPattern.replace(it, "") }
+            .trim()
+            .removeSurrounding("\"")
+            .removeSurrounding("'")
+            .trim()
+
+        if (cleaned.isBlank()) return null
+        if (markerOnlyPattern.matches(cleaned)) return null
+        if (promptEchoPattern.containsMatchIn(cleaned)) return null
+        if (cleaned.contains("response>", ignoreCase = true)) return null
+        if (cleaned.length > 140) return null
+
+        return cleaned
+    }
+
+    private fun normalizeSuggestionKey(text: String): String =
+        normalizedLinePattern.replace(text.lowercase().trim(), "")
 
     private fun String.trimToLineBoundary(preferStart: Boolean): String {
         if (isEmpty()) return this
