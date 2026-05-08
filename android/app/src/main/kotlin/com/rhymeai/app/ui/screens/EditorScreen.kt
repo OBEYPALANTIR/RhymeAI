@@ -34,7 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
@@ -409,7 +409,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 contentColor = colorScheme.onPrimary,
                 shape = RoundedCornerShape(28.dp)
             ) {
-                Icon(Icons.Default.AutoFixHigh, null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
                 Text("  UnBlock", fontWeight = FontWeight.Medium)
             }
         }
