@@ -1,5 +1,6 @@
 package com.rhymeai.app.ui.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -37,14 +38,17 @@ fun RhymeNavGraph(
             )
         }
         composable(Routes.EDITOR) {
+            val navigateToWelcome = {
+                viewModel.goToStartMenu()
+                navController.navigate(Routes.WELCOME) {
+                    popUpTo(0) { inclusive = true }
+                }
+            }
+
+            BackHandler(onBack = navigateToWelcome)
             EditorScreen(
                 viewModel = viewModel,
-                onNavigateToStart = {
-                    viewModel.goToStartMenu()
-                    navController.navigate(Routes.WELCOME) {
-                        popUpTo(0) { inclusive = true }
-                    }
-                }
+                onNavigateToStart = navigateToWelcome
             )
         }
     }
