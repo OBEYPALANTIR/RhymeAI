@@ -72,8 +72,10 @@ dependencies {
 
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
 
-    // On-device LLM inference (GGUF support via llama.cpp)
-    implementation("io.github.ljcamargo:llamacpp-kotlin:0.2.0")
+    // On-device LLM inference (GGUF support via llama.cpp).
+    // 0.4.0 adds gemma3/gemma3n/gemma4 architectures to the bundled native lib;
+    // 0.2.0 cannot load Gemma 4 GGUFs at all ("unknown model architecture").
+    implementation("io.github.ljcamargo:llamacpp-kotlin:0.4.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

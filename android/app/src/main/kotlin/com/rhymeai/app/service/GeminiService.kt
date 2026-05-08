@@ -291,7 +291,10 @@ Output:
         if (!service.isLoaded) {
             throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         }
-        val response = service.generateResponse(prompt)
+        val response = service.generateResponse(
+            prompt = prompt,
+            params = LocalModelService.GenerationParams.SONGWRITING
+        )
         // Try JSON first, fall back to line-based parsing
         val results = parseJsonArray(response).ifEmpty { parseLines(response) }
         if (results.isEmpty()) {
