@@ -24,12 +24,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,8 +39,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
@@ -48,6 +52,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,7 +72,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
+import com.rhymeai.app.service.ModelDownloader
 import java.io.File
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -79,11 +86,19 @@ fun SettingsDialog(
     localModelLoaded: Boolean,
     localModelPath: String?,
     localModelError: String?,
+    featuredModels: List<ModelDownloader.FeaturedModel>,
+    downloadState: ModelDownloader.State,
+    pendingMeteredModel: ModelDownloader.FeaturedModel?,
     onSaveApiKey: (AIProvider, String) -> Unit,
     onSaveProvider: (AIProvider) -> Unit,
     onSaveModel: (AIModel) -> Unit,
     onLoadLocalModel: (String) -> Unit,
     onUnloadLocalModel: () -> Unit,
+    onRequestDownload: (ModelDownloader.FeaturedModel) -> Unit,
+    onConfirmMeteredDownload: () -> Unit,
+    onCancelMeteredPrompt: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onDismissDownloadResult: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -230,13 +245,35 @@ fun SettingsDialog(
                     Text("On-Device Model", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Load a GGUF model to run AI entirely on your device. No data leaves your phone. Download models like Llama 3.2 3B, Gemma 2B, or Phi-3 Mini from HuggingFace.",
+                        "Run AI entirely on your device. No data leaves your phone.",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         lineHeight = 16.sp
                     )
 
                     Spacer(Modifier.height(12.dp))
+
+                    if (!localModelLoaded) {
+                        FeaturedModelsSection(
+                            featuredModels = featuredModels,
+                            downloadState = downloadState,
+                            disabled = localModelLoading || copyingFile,
+                            onRequestDownload = onRequestDownload,
+                            onCancelDownload = onCancelDownload,
+                            onDismissResult = onDismissDownloadResult
+                        )
+
+                        Spacer(Modifier.height(16.dp))
+                        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "Or load your own GGUF",
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
 
                     // Model status
                     if (localModelLoaded && localModelPath != null) {
@@ -450,4 +487,165 @@ fun SettingsDialog(
             }
         }
     }
+
+    if (pendingMeteredModel != null) {
+        AlertDialog(
+            onDismissRequest = onCancelMeteredPrompt,
+            title = { Text("Use mobile data?") },
+            text = {
+                Text(
+                    "You're not on Wi-Fi. Downloading ${pendingMeteredModel.displayName} " +
+                        "will use about ${pendingMeteredModel.approxSizeMb} MB of your mobile data."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = onConfirmMeteredDownload) { Text("Use mobile data") }
+            },
+            dismissButton = {
+                TextButton(onClick = onCancelMeteredPrompt) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun FeaturedModelsSection(
+    featuredModels: List<ModelDownloader.FeaturedModel>,
+    downloadState: ModelDownloader.State,
+    disabled: Boolean,
+    onRequestDownload: (ModelDownloader.FeaturedModel) -> Unit,
+    onCancelDownload: () -> Unit,
+    onDismissResult: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val activeModelId: String? = when (downloadState) {
+        is ModelDownloader.State.Resolving -> downloadState.model.id
+        is ModelDownloader.State.Running -> downloadState.model.id
+        else -> null
+    }
+
+    Text(
+        "Featured models",
+        fontSize = 12.sp,
+        color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        fontWeight = FontWeight.Medium
+    )
+    Spacer(Modifier.height(8.dp))
+
+    featuredModels.forEach { model ->
+        val isActive = activeModelId == model.id
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(colorScheme.surfaceContainer, RoundedCornerShape(12.dp))
+                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                .padding(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        model.displayName,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        model.description,
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+                if (isActive) {
+                    OutlinedButton(
+                        onClick = onCancelDownload,
+                        shape = RoundedCornerShape(10.dp)
+                    ) { Text("Cancel", fontSize = 12.sp) }
+                } else {
+                    Button(
+                        onClick = { onRequestDownload(model) },
+                        enabled = !disabled && activeModelId == null,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        )
+                    ) {
+                        Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(16.dp))
+                        Text("  Download", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+
+            if (isActive) {
+                Spacer(Modifier.height(10.dp))
+                when (val s = downloadState) {
+                    is ModelDownloader.State.Resolving -> {
+                        Text(
+                            "Resolving file…",
+                            fontSize = 11.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    is ModelDownloader.State.Running -> {
+                        val pct = (s.progress * 100).coerceIn(0f, 100f)
+                        Text(
+                            String.format(
+                                Locale.getDefault(),
+                                "%.0f%%   %s / %s",
+                                pct,
+                                formatBytes(s.downloadedBytes),
+                                if (s.totalBytes > 0) formatBytes(s.totalBytes)
+                                else "${model.approxSizeMb} MB"
+                            ),
+                            fontSize = 11.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        if (s.totalBytes > 0) {
+                            LinearProgressIndicator(
+                                progress = { s.progress.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+
+        if (downloadState is ModelDownloader.State.Failed && downloadState.model.id == model.id) {
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    downloadState.message,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onDismissResult) { Text("Dismiss", fontSize = 11.sp) }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB")
+    var value = bytes.toDouble()
+    var idx = 0
+    while (value >= 1024 && idx < units.lastIndex) {
+        value /= 1024
+        idx++
+    }
+    return String.format(Locale.getDefault(), "%.1f %s", value, units[idx])
 }

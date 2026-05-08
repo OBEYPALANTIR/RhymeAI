@@ -18,6 +18,7 @@ import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
+import com.rhymeai.app.service.ModelDownloader
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -42,6 +43,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         it.initialize(application)
     }
     private val aiService = AIService().also { it.localModelService = localModelService }
+    private val modelDownloader = ModelDownloader(application)
 
     // Editor state
     var title by mutableStateOf("")
@@ -84,6 +86,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var localModelLoaded by mutableStateOf(false)
     var localModelError by mutableStateOf<String?>(null)
 
+    // Featured-model download state, mirrored from ModelDownloader
+    var downloadState by mutableStateOf<ModelDownloader.State>(ModelDownloader.State.Idle)
+    var pendingMeteredModel by mutableStateOf<ModelDownloader.FeaturedModel?>(null)
+    val featuredModels: List<ModelDownloader.FeaturedModel> = ModelDownloader.FeaturedModel.entries
+
     // Error state
     var errorMessage by mutableStateOf<String?>(null)
 
@@ -95,6 +102,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else rhymeScheme.pattern
 
     init {
+        viewModelScope.launch {
+            modelDownloader.state.collect { state ->
+                downloadState = state
+                if (state is ModelDownloader.State.Complete) {
+                    loadLocalModel(state.filePath)
+                }
+            }
+        }
         viewModelScope.launch {
             // Load projects
             projects = repo.projectsFlow.first()
@@ -370,5 +385,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         localModelService.unload()
         localModelLoaded = false
         localModelPath = null
+    }
+
+    fun requestFeaturedDownload(model: ModelDownloader.FeaturedModel) {
+        if (modelDownloader.isOnUnmeteredNetwork()) {
+            startFeaturedDownload(model, allowMetered = false)
+        } else {
+            // Defer to UI: show "this will use ~X MB of mobile data" confirm.
+            pendingMeteredModel = model
+        }
+    }
+
+    fun confirmMeteredDownload() {
+        val model = pendingMeteredModel ?: return
+        pendingMeteredModel = null
+        startFeaturedDownload(model, allowMetered = true)
+    }
+
+    fun cancelMeteredPrompt() {
+        pendingMeteredModel = null
+    }
+
+    fun cancelDownload() {
+        modelDownloader.cancelDownload()
+    }
+
+    fun dismissDownloadResult() {
+        modelDownloader.reset()
+    }
+
+    private fun startFeaturedDownload(
+        model: ModelDownloader.FeaturedModel,
+        allowMetered: Boolean
+    ) {
+        localModelError = null
+        modelDownloader.startDownload(model, allowMetered)
     }
 }

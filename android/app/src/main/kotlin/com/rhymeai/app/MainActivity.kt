@@ -75,11 +75,19 @@ class MainActivity : ComponentActivity() {
                         localModelLoaded = viewModel.localModelLoaded,
                         localModelPath = viewModel.localModelPath,
                         localModelError = viewModel.localModelError,
+                        featuredModels = viewModel.featuredModels,
+                        downloadState = viewModel.downloadState,
+                        pendingMeteredModel = viewModel.pendingMeteredModel,
                         onSaveApiKey = { provider, key -> viewModel.saveApiKey(provider, key) },
                         onSaveProvider = { viewModel.saveProvider(it) },
                         onSaveModel = { viewModel.saveModel(it) },
                         onLoadLocalModel = { viewModel.loadLocalModel(it) },
                         onUnloadLocalModel = { viewModel.unloadLocalModel() },
+                        onRequestDownload = { viewModel.requestFeaturedDownload(it) },
+                        onConfirmMeteredDownload = { viewModel.confirmMeteredDownload() },
+                        onCancelMeteredPrompt = { viewModel.cancelMeteredPrompt() },
+                        onCancelDownload = { viewModel.cancelDownload() },
+                        onDismissDownloadResult = { viewModel.dismissDownloadResult() },
                         onDismiss = { viewModel.showSettingsDialog = false }
                     )
                 }
