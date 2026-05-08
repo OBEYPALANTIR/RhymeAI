@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Settings
@@ -65,6 +66,31 @@ import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.Locale
+
+private data class GemmaDownload(
+    val label: String,
+    val description: String,
+    val fileName: String,
+    val url: String
+)
+
+private val GEMMA_DOWNLOADS = listOf(
+    GemmaDownload(
+        label = "Gemma 4 E2B",
+        description = "Smaller phone-first model, about 3.17 GB.",
+        fileName = "gemma-4-E2B-it-UD-Q4_K_XL.gguf",
+        url = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf?download=true"
+    ),
+    GemmaDownload(
+        label = "Gemma 4 E4B",
+        description = "Higher quality local model, about 5.1 GB.",
+        fileName = "gemma-4-E4B-it-UD-Q4_K_XL.gguf",
+        url = "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf?download=true"
+    )
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -104,7 +130,87 @@ fun SettingsDialog(
     // File picker for local models
     var copyingFile by remember { mutableStateOf(false) }
     var copyError by remember { mutableStateOf<String?>(null) }
+    var downloadingModel by remember { mutableStateOf<GemmaDownload?>(null) }
+    var downloadProgress by remember { mutableStateOf<Float?>(null) }
+    var downloadError by remember { mutableStateOf<String?>(null) }
     val coroutineScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+
+    fun startGemmaDownload(model: GemmaDownload) {
+        downloadingModel = model
+        downloadProgress = 0f
+        downloadError = null
+        copyError = null
+
+        coroutineScope.launch {
+            val destFile = File(context.filesDir, model.fileName)
+            val tempFile = File(context.cacheDir, "${model.fileName}.download")
+
+            try {
+                if (tempFile.exists()) tempFile.delete()
+
+                val connection = (URL(model.url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 30000
+                    readTimeout = 30000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "RhymeAI-Android")
+                }
+
+                try {
+                    val code = connection.responseCode
+                    if (code !in 200..299) {
+                        throw IllegalStateException("Hugging Face returned HTTP $code")
+                    }
+
+                    val totalBytes = connection.contentLengthLong
+                    var copiedBytes = 0L
+                    connection.inputStream.use { input ->
+                        tempFile.outputStream().buffered().use { output ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read == -1) break
+                                output.write(buffer, 0, read)
+                                copiedBytes += read
+                                if (totalBytes > 0L) {
+                                    val progress = copiedBytes.toFloat() / totalBytes.toFloat()
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        downloadProgress = progress.coerceIn(0f, 1f)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    connection.disconnect()
+                }
+
+                if (destFile.exists()) destFile.delete()
+                if (!tempFile.renameTo(destFile)) {
+                    tempFile.copyTo(destFile, overwrite = true)
+                    tempFile.delete()
+                }
+
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    downloadingModel = null
+                    downloadProgress = null
+                    selectedProvider = AIProvider.LOCAL
+                    selectedModel = AIModel.LOCAL_MODEL
+                    onSaveProvider(AIProvider.LOCAL)
+                    onSaveModel(AIModel.LOCAL_MODEL)
+                    onLoadLocalModel(destFile.absolutePath)
+                    saved = true
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                tempFile.delete()
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    downloadingModel = null
+                    downloadProgress = null
+                    downloadError = "Failed to download ${model.label}: ${e.message}"
+                }
+            }
+        }
+    }
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -127,7 +233,12 @@ fun SettingsDialog(
                     }
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                         copyingFile = false
+                        selectedProvider = AIProvider.LOCAL
+                        selectedModel = AIModel.LOCAL_MODEL
+                        onSaveProvider(AIProvider.LOCAL)
+                        onSaveModel(AIModel.LOCAL_MODEL)
                         onLoadLocalModel(destFile.absolutePath)
+                        saved = true
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -228,7 +339,7 @@ fun SettingsDialog(
                     Text("On-Device Model", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Load a GGUF model to run AI entirely on your device. No data leaves your phone. Download models like Llama 3.2 3B, Gemma 2B, or Phi-3 Mini from HuggingFace.",
+                        "Load a GGUF model to run AI entirely on your device. No data leaves your phone. You can choose your own file or download a recommended Gemma model from Hugging Face.",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         lineHeight = 16.sp
@@ -270,10 +381,52 @@ fun SettingsDialog(
                             Text("Unload Model")
                         }
                     } else {
+                        // Recommended model downloads
+                        Text("Recommended Downloads", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(8.dp))
+
+                        GEMMA_DOWNLOADS.forEach { model ->
+                            val isDownloadingThis = downloadingModel?.fileName == model.fileName
+                            OutlinedButton(
+                                onClick = { startGemmaDownload(model) },
+                                enabled = !localModelLoading && !copyingFile && downloadingModel == null,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                if (isDownloadingThis) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = colorScheme.primary,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Text(
+                                        "  ${model.label} ${formatDownloadProgress(downloadProgress)}",
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(start = 8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(model.label, fontWeight = FontWeight.Medium)
+                                        Text(
+                                            model.description,
+                                            fontSize = 11.sp,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
+
                         // Load model button
                         Button(
                             onClick = { filePicker.launch(arrayOf("*/*")) },
-                            enabled = !localModelLoading && !copyingFile,
+                            enabled = !localModelLoading && !copyingFile && downloadingModel == null,
                             modifier = Modifier.fillMaxWidth().height(48.dp),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(
@@ -302,7 +455,7 @@ fun SettingsDialog(
                         }
                     }
 
-                    val displayError = copyError ?: localModelError
+                    val displayError = copyError ?: downloadError ?: localModelError
                     displayError?.let {
                         Spacer(Modifier.height(8.dp))
                         Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error, lineHeight = 16.sp)
@@ -448,4 +601,9 @@ fun SettingsDialog(
             }
         }
     }
+}
+
+private fun formatDownloadProgress(progress: Float?): String {
+    if (progress == null || progress <= 0f) return "downloading..."
+    return "${String.format(Locale.US, "%.0f", progress * 100f)}%"
 }
