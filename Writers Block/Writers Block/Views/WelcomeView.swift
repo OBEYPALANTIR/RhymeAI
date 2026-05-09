@@ -22,20 +22,18 @@ struct WelcomeView: View {
                 Spacer()
 
                 // App Icon
-                ZStack {
-                    Circle()
-                        .fill(Color.indigo.opacity(0.2))
-                        .frame(width: 80, height: 80)
-                        .overlay(
-                            Circle()
-                                .strokeBorder(Color.indigo.opacity(0.3), lineWidth: 1)
-                        )
-                        .shadow(color: .indigo.opacity(0.2), radius: 20)
-
-                    Image(systemName: "music.quarternote.3")
-                        .font(.system(size: 36))
-                        .foregroundStyle(.indigo)
-                }
+                Image("BrandIcon")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 82, height: 82)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+                    .shadow(color: .indigo.opacity(0.32), radius: 22, y: 10)
+                    .padding(10)
+                    .liquidGlassSurface(cornerRadius: 30, tint: .white.opacity(0.04))
                 .padding(.bottom, 32)
 
                 // Title
