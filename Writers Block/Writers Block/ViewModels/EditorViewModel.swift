@@ -84,7 +84,11 @@ final class EditorViewModel: ObservableObject {
         let providerRaw = UserDefaults.standard.string(forKey: "selectedProvider") ?? AIProvider.gemini.rawValue
         selectedProvider = AIProvider(rawValue: providerRaw) ?? .gemini
         let modelRaw = UserDefaults.standard.string(forKey: "selectedModel") ?? AIModel.default.rawValue
-        selectedModel = AIModel(rawValue: modelRaw) ?? .default
+        if let savedModel = AIModel(rawValue: modelRaw), savedModel.provider == selectedProvider {
+            selectedModel = savedModel
+        } else {
+            selectedModel = AIModel.models(for: selectedProvider).first ?? .default
+        }
 
         for provider in AIProvider.allCases {
             apiKeys[provider.rawValue] = UserDefaults.standard.string(forKey: "apiKey_\(provider.rawValue)") ?? ""
