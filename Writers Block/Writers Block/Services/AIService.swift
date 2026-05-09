@@ -41,15 +41,18 @@ struct AIService {
         useWholeSongContext: Bool
     ) async throws -> [String] {
         if provider == .local {
-            let prompt = buildLocalPrompt(
-                theme: theme,
-                lyrics: lyrics,
-                targetRhymeLine: targetRhymeLine,
-                rhymeType: rhymeType,
-                currentLetter: currentLetter,
-                useWholeSongContext: useWholeSongContext
-            )
-            return try await callLocal(prompt: prompt)
+            if #available(iOS 26.0, *) {
+                let prompt = buildLocalPrompt(
+                    theme: theme,
+                    lyrics: lyrics,
+                    targetRhymeLine: targetRhymeLine,
+                    rhymeType: rhymeType,
+                    currentLetter: currentLetter,
+                    useWholeSongContext: useWholeSongContext
+                )
+                return try await callLocal(prompt: prompt)
+            }
+            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
         }
 
         guard !apiKey.isEmpty else {
@@ -271,6 +274,7 @@ struct AIService {
         """
     }
 
+    @available(iOS 26.0, *)
     private func callLocal(prompt: String) async throws -> [String] {
         let model = SystemLanguageModel.default
         guard model.isAvailable else {
@@ -290,6 +294,7 @@ struct AIService {
         return parsed
     }
 
+    @available(iOS 26.0, *)
     private func describe(_ availability: SystemLanguageModel.Availability) -> String {
         switch availability {
         case .available:
