@@ -71,6 +71,7 @@ struct EditorView: View {
                 assistantSheetDragOffset = 0
             }
         }
+        .highPriorityGesture(assistantBackSwipeGesture, including: viewModel.showAssistantSheet ? .all : .subviews)
     }
 
     @ViewBuilder
@@ -181,6 +182,25 @@ struct EditorView: View {
         assistantSheetDragOffset = 0
         withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
             viewModel.showAssistantSheet = true
+        }
+    }
+
+    private var assistantBackSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 18, coordinateSpace: .local)
+            .onEnded { value in
+                guard viewModel.showAssistantSheet else { return }
+                guard value.startLocation.x <= 32 else { return }
+                guard value.translation.width > 60 else { return }
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+
+                dismissAssistantSheetWithAnimation()
+            }
+    }
+
+    private func dismissAssistantSheetWithAnimation() {
+        assistantSheetDragOffset = 0
+        withAnimation(.easeInOut(duration: 0.18)) {
+            viewModel.showAssistantSheet = false
         }
     }
 
