@@ -34,6 +34,24 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testUnBlockButtonHidesWhenAssistantSheetOpens() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let unblockButton = app.buttons["unblockButton"]
+        XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        unblockButton.tap()
+
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["unblockButton"].exists)
+        XCTAssertFalse(app.buttons["UnBlock"].exists)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
