@@ -34,15 +34,18 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
     case gemini25Flash = "gemini-2.5-flash"
     case gemini25FlashLite = "gemini-2.5-flash-lite"
     // OpenAI
+    case gpt55 = "gpt-5.5"
+    case gpt55Pro = "gpt-5.5-pro"
+    case gpt54 = "gpt-5.4"
+    case gpt54Mini = "gpt-5.4-mini"
+    case gpt54Nano = "gpt-5.4-nano"
     case gpt41 = "gpt-4.1"
     case gpt41Mini = "gpt-4.1-mini"
     case gpt41Nano = "gpt-4.1-nano"
-    case gpt4o = "gpt-4o"
-    case gpt4oMini = "gpt-4o-mini"
     // Claude
-    case claudeSonnet = "claude-sonnet-4-20250514"
-    case claudeHaiku = "claude-haiku-4-5-20251001"
-    case claudeOpus = "claude-opus-4-20250514"
+    case claudeOpus47 = "claude-opus-4-7"
+    case claudeSonnet46 = "claude-sonnet-4-6"
+    case claudeHaiku45 = "claude-haiku-4-5-20251001"
     // Local on-device
     case localModel = "local-model"
 
@@ -56,14 +59,17 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
         case .gemini25Pro: return "Gemini 2.5 Pro"
         case .gemini25Flash: return "Gemini 2.5 Flash"
         case .gemini25FlashLite: return "Gemini 2.5 Flash Lite"
+        case .gpt55: return "GPT-5.5"
+        case .gpt55Pro: return "GPT-5.5 Pro"
+        case .gpt54: return "GPT-5.4"
+        case .gpt54Mini: return "GPT-5.4 Mini"
+        case .gpt54Nano: return "GPT-5.4 Nano"
         case .gpt41: return "GPT-4.1"
         case .gpt41Mini: return "GPT-4.1 Mini"
         case .gpt41Nano: return "GPT-4.1 Nano"
-        case .gpt4o: return "GPT-4o"
-        case .gpt4oMini: return "GPT-4o Mini"
-        case .claudeSonnet: return "Claude Sonnet 4"
-        case .claudeHaiku: return "Claude Haiku 4.5"
-        case .claudeOpus: return "Claude Opus 4"
+        case .claudeOpus47: return "Claude Opus 4.7"
+        case .claudeSonnet46: return "Claude Sonnet 4.6"
+        case .claudeHaiku45: return "Claude Haiku 4.5"
         case .localModel: return "On-Device Model"
         }
     }
@@ -73,9 +79,10 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
         case .gemini31Pro, .gemini3Flash, .gemini31FlashLite,
              .gemini25Pro, .gemini25Flash, .gemini25FlashLite:
             return .gemini
-        case .gpt41, .gpt41Mini, .gpt41Nano, .gpt4o, .gpt4oMini:
+        case .gpt55, .gpt55Pro, .gpt54, .gpt54Mini, .gpt54Nano,
+             .gpt41, .gpt41Mini, .gpt41Nano:
             return .openai
-        case .claudeSonnet, .claudeHaiku, .claudeOpus:
+        case .claudeOpus47, .claudeSonnet46, .claudeHaiku45:
             return .claude
         case .localModel:
             return .local

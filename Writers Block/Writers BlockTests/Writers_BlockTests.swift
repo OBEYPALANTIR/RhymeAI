@@ -35,4 +35,26 @@ struct Writers_BlockTests {
         #expect(context.targetLine == "second rain")
     }
 
+    @Test func openAIModelPickerStartsWithCurrentGPT5Models() {
+        let modelIDs = AIModel.models(for: .openai).map(\.id)
+
+        #expect(Array(modelIDs.prefix(5)) == [
+            "gpt-5.5",
+            "gpt-5.5-pro",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.4-nano"
+        ])
+    }
+
+    @Test func claudeModelPickerUsesCurrentClaudeModels() {
+        let modelIDs = AIModel.models(for: .claude).map(\.id)
+
+        #expect(modelIDs == [
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001"
+        ])
+    }
+
 }
