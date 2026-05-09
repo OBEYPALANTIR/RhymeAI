@@ -1,5 +1,6 @@
 package com.rhymeai.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -158,6 +159,26 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
     }
 
+    fun dismissAssistantSheet() {
+        pendingAssistantSheet = false
+        if (!showBottomSheet) {
+            assistantSheetDragOffsetPx = 0f
+            return
+        }
+
+        scope.launch {
+            val animation = Animatable(assistantSheetDragOffsetPx)
+            animation.animateTo(
+                targetValue = fullSheetHeightPx,
+                animationSpec = tween(durationMillis = 180)
+            ) {
+                assistantSheetDragOffsetPx = value
+            }
+            showBottomSheet = false
+            assistantSheetDragOffsetPx = 0f
+        }
+    }
+
     fun openAssistantSheet() {
         if (keyboardVisible) {
             focusManager.clearFocus(force = true)
@@ -165,6 +186,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         } else {
             beginAssistantSheetPresentation()
         }
+    }
+
+    BackHandler(enabled = showBottomSheet || pendingAssistantSheet) {
+        dismissAssistantSheet()
     }
 
     Box(
