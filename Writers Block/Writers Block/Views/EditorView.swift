@@ -53,7 +53,29 @@ struct EditorView: View {
                 editorScrollView
             }
 
-            // Floating Action Button
+            assistantFloatingButton
+                .zIndex(1)
+
+            assistantSheetOverlay
+                .zIndex(2)
+        }
+        .animation(.spring(response: 0.34, dampingFraction: 0.88), value: viewModel.showAssistantSheet)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardIsVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardIsVisible = false
+        }
+        .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
+            if isPresented {
+                assistantSheetDragOffset = 0
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var assistantFloatingButton: some View {
+        if !viewModel.showAssistantSheet {
             VStack {
                 Spacer()
                 HStack {
@@ -73,24 +95,12 @@ struct EditorView: View {
                         .liquidGlassSurface(cornerRadius: 28, tint: .indigo, interactive: true, fallbackOpacity: 0.35)
                         .shadow(color: .indigo.opacity(0.26), radius: 12, y: 4)
                     }
+                    .accessibilityIdentifier("unblockButton")
                     .padding(.trailing, 20)
                     .padding(.bottom, 20)
                 }
             }
-
-            assistantSheetOverlay
-        }
-        .animation(.spring(response: 0.34, dampingFraction: 0.88), value: viewModel.showAssistantSheet)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            keyboardIsVisible = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardIsVisible = false
-        }
-        .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
-            if isPresented {
-                assistantSheetDragOffset = 0
-            }
+            .transition(.scale(scale: 0.92, anchor: .bottomTrailing).combined(with: .opacity))
         }
     }
 
