@@ -11,6 +11,7 @@ struct EditorView: View {
     @State private var assistantSheetDragOffset: CGFloat = 0
     @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
     @State private var fileExporterPresented: Bool = false
+    @State private var projectDrawerOpen: Bool = false
 
     var body: some View {
         Group {
@@ -20,6 +21,13 @@ struct EditorView: View {
                 iPhoneLayout
             }
         }
+        .overlay {
+            if projectDrawerOpen {
+                ProjectsDrawerView(isPresented: $projectDrawerOpen)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: projectDrawerOpen)
         .preferredColorScheme(.dark)
         .onAppear {
             viewModel.modelContext = modelContext
@@ -345,30 +353,14 @@ struct EditorView: View {
 
     private var topBar: some View {
         HStack(spacing: 12) {
-            // Back to Welcome
             Button {
-                viewModel.goToStartMenu()
+                projectDrawerOpen = true
             } label: {
-                Image(systemName: "music.quarternote.3")
+                Image(systemName: "line.3.horizontal")
                     .font(.body)
-                    .foregroundStyle(.indigo)
+                    .foregroundStyle(.secondary)
             }
-
-            Divider()
-                .frame(height: 16)
-
-            // Projects
-            Button {
-                viewModel.showProjectsSheet = true
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "folder")
-                        .font(.caption)
-                    Text("Projects")
-                        .font(.caption.weight(.medium))
-                }
-                .foregroundStyle(.secondary)
-            }
+            .accessibilityLabel("Open songs drawer")
 
             // Save status
             if viewModel.saveStatus == .saving {

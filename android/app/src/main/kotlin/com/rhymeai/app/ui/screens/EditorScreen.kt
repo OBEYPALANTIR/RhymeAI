@@ -39,7 +39,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
@@ -295,18 +294,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             // Top bar — always visible
             val wordCount = remember(viewModel.lyrics) { SyllableCounter.wordCount(viewModel.lyrics) }
             val syllableCount = remember(viewModel.lyrics) { SyllableCounter.countText(viewModel.lyrics) }
-            val projectsColor = if (viewModel.saveStatus == SaveStatus.SAVED) {
-                colorScheme.tertiary
-            } else {
-                colorScheme.onSurfaceVariant
-            }
-
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = { onNavigateToStart() }) {
+                    IconButton(onClick = { viewModel.showProjectsDialog = true }) {
                         Icon(
                             Icons.Default.Menu,
-                            contentDescription = "Menu",
+                            contentDescription = "Open songs drawer",
                             tint = colorScheme.onSurfaceVariant
                         )
                     }
@@ -339,13 +332,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 colorScheme.onSurfaceVariant
                             else
                                 colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        )
-                    }
-                    IconButton(onClick = { viewModel.showProjectsDialog = true }) {
-                        Icon(
-                            Icons.Default.FolderOpen,
-                            contentDescription = "Projects",
-                            tint = projectsColor
                         )
                     }
                     IconButton(onClick = { viewModel.showSettingsDialog = true }) {
