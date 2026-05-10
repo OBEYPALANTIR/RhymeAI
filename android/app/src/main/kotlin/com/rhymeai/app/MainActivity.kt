@@ -50,6 +50,12 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onDeleteProject = { viewModel.deleteProject(it) },
+                        onImportProject = { project ->
+                            viewModel.importProject(project)
+                            navController.navigate(Routes.EDITOR) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        },
                         onDismiss = { viewModel.showProjectsDialog = false }
                     )
                 }

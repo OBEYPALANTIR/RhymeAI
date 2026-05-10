@@ -3,6 +3,7 @@ import SwiftUI
 struct AssistantPanelView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     var isInline: Bool = false
+    var onDismiss: (() -> Void)?
 
     var body: some View {
         let rhymeContext = viewModel.computeRhymeContext()
@@ -20,6 +21,16 @@ struct AssistantPanelView: View {
                 .background(Color(UIColor.systemBackground))
                 .navigationTitle("Assistant")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    if let onDismiss {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button(action: onDismiss) {
+                                Image(systemName: "xmark")
+                            }
+                            .accessibilityLabel("Close Assistant")
+                        }
+                    }
+                }
         }
         .preferredColorScheme(.dark)
     }
@@ -28,7 +39,7 @@ struct AssistantPanelView: View {
         VStack(spacing: 0) {
             // Simple header
             HStack {
-                Label("Assistant", systemImage: "wand.and.stars")
+                Label("Assistant", systemImage: "pencil")
                     .font(.headline)
                 Spacer()
             }
@@ -49,7 +60,7 @@ struct AssistantPanelView: View {
 
                     // MARK: - Context & Theme
                     VStack(alignment: .leading, spacing: 8) {
-                        Label("Context & Theme", systemImage: "wand.and.stars")
+                        Label("Context & Theme", systemImage: "pencil")
                             .font(.headline)
 
                         TextField("What is this song about?", text: $viewModel.theme, axis: .vertical)
@@ -184,9 +195,25 @@ struct AssistantPanelView: View {
                         .font(.subheadline)
                         .tint(.indigo)
 
-                    Toggle("Color Syllables", isOn: $viewModel.isSyllableColoringEnabled)
-                        .font(.subheadline)
-                        .tint(.indigo)
+                    Toggle("Color Syllables", isOn: Binding(
+                        get: { viewModel.isSyllableColoringEnabled },
+                        set: { newValue in
+                            viewModel.isSyllableColoringEnabled = newValue
+                            if newValue { viewModel.isRhymeHighlightEnabled = false }
+                        }
+                    ))
+                    .font(.subheadline)
+                    .tint(.indigo)
+
+                    Toggle("Color Rhymes", isOn: Binding(
+                        get: { viewModel.isRhymeHighlightEnabled },
+                        set: { newValue in
+                            viewModel.isRhymeHighlightEnabled = newValue
+                            if newValue { viewModel.isSyllableColoringEnabled = false }
+                        }
+                    ))
+                    .font(.subheadline)
+                    .tint(.indigo)
 
                     // MARK: - Suggest Button
                     Button {
