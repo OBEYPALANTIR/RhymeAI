@@ -2,19 +2,31 @@ package com.rhymeai.app.ui.components
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,7 +35,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileOpen
-import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CardDefaults
@@ -44,6 +55,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -61,7 +73,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 @Composable
-fun ProjectsDialog(
+fun ProjectsDrawer(
     projects: List<SongProject>,
     currentProjectId: String?,
     onLoadProject: (SongProject) -> Unit,
@@ -71,10 +83,12 @@ fun ProjectsDialog(
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val importJson = remember { Json { ignoreUnknownKeys = true } }
     var importError by remember { mutableStateOf<String?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -95,10 +109,12 @@ fun ProjectsDialog(
         }
     }
 
-    var searchQuery by remember { mutableStateOf("") }
     val sortedProjects = projects.sortedByDescending { it.updatedAt }
     val filteredProjects = searchProjects(sortedProjects, searchQuery)
     val isSearching = searchQuery.isNotBlank()
+    val drawerWidth = (configuration.screenWidthDp.dp - 32.dp)
+        .coerceAtLeast(296.dp)
+        .coerceAtMost(360.dp)
     val textFieldColors = OutlinedTextFieldDefaults.colors(
         unfocusedBorderColor = colorScheme.outlineVariant,
         focusedBorderColor = colorScheme.primary,
@@ -117,101 +133,144 @@ fun ProjectsDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .imePadding()
-                .padding(24.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Surface(
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                color = colorScheme.surfaceContainerLow,
-                contentColor = colorScheme.onSurface,
-                tonalElevation = 6.dp,
-                border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                    .fillMaxSize()
+                    .background(colorScheme.scrim.copy(alpha = 0.42f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onDismiss
+                    )
+            )
+
+            AnimatedVisibility(
+                visible = true,
+                enter = slideInHorizontally(initialOffsetX = { -it }) + fadeIn(),
+                exit = slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
             ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                // Header
-                Row(
+                Surface(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .fillMaxHeight()
+                        .width(drawerWidth)
+                        .widthIn(max = 360.dp)
+                        .imePadding()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {}
+                        ),
+                    shape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+                    color = colorScheme.surfaceContainerLow,
+                    contentColor = colorScheme.onSurface,
+                    tonalElevation = 8.dp,
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 16.dp, bottom = 20.dp)
                     ) {
-                        Icon(Icons.Default.FolderOpen, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
-                        Text("Song Projects", fontWeight = FontWeight.Medium, fontSize = 18.sp, color = colorScheme.onSurface)
-                    }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = colorScheme.onSurfaceVariant)
-                    }
-                }
-
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f, false)
-                        .padding(horizontal = 20.dp)
-                        .padding(bottom = 20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    item {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            singleLine = true,
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Search,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            },
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = "Clear search",
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                            },
-                            placeholder = { Text("Search songs", fontSize = 14.sp) },
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                            colors = textFieldColors,
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                    }
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                singleLine = true,
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "Clear search",
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                },
+                                placeholder = { Text("Search songs", fontSize = 14.sp) },
+                                modifier = Modifier.weight(1f),
+                                colors = textFieldColors,
+                                shape = RoundedCornerShape(14.dp)
+                            )
 
-                    // New song button
-                    item {
+                            IconButton(onClick = onDismiss) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Close drawer",
+                                    tint = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
                         OutlinedButton(
                             onClick = onNewProject,
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .padding(top = 14.dp)
                                 .height(56.dp),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(14.dp),
                             border = BorderStroke(1.dp, colorScheme.outline)
                         ) {
-                            Icon(Icons.Default.Add, null, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
                             Spacer(Modifier.width(8.dp))
                             Text("Create New Song", fontWeight = FontWeight.Medium)
                         }
-                    }
 
-                    // Import from file button
-                    item {
+                        Text(
+                            "Recent Songs",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            color = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 22.dp, bottom = 10.dp)
+                        )
+
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            if (projects.isEmpty()) {
+                                item {
+                                    EmptyDrawerState(
+                                        icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
+                                        text = "No saved songs yet."
+                                    )
+                                }
+                            } else if (filteredProjects.isEmpty()) {
+                                item {
+                                    EmptyDrawerState(
+                                        icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                        text = if (isSearching) "No songs match your search." else "No saved songs yet."
+                                    )
+                                }
+                            } else {
+                                items(filteredProjects, key = { it.id }) { project ->
+                                    ProjectDrawerRow(
+                                        project = project,
+                                        isActive = project.id == currentProjectId,
+                                        onLoadProject = onLoadProject,
+                                        onDeleteProject = onDeleteProject
+                                    )
+                                }
+                            }
+                        }
+
                         OutlinedButton(
                             onClick = {
                                 importError = null
@@ -219,107 +278,144 @@ fun ProjectsDialog(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(56.dp),
-                            shape = RoundedCornerShape(12.dp),
+                                .height(50.dp),
+                            shape = RoundedCornerShape(14.dp),
                             border = BorderStroke(1.dp, colorScheme.outlineVariant)
                         ) {
-                            Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
                             Text("Import From File", fontWeight = FontWeight.Medium)
                         }
+
                         importError?.let {
-                            Spacer(Modifier.height(8.dp))
-                            Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                            Text(
+                                it,
+                                color = colorScheme.error,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
                         }
                     }
+                }
+            }
+        }
+    }
+}
 
-                    if (projects.isEmpty()) {
-                        item {
-                            Column(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(Icons.Default.MusicNote, null, tint = colorScheme.onSurfaceVariant.copy(alpha = 0.45f), modifier = Modifier.size(48.dp))
-                                Spacer(Modifier.height(16.dp))
-                                Text("No saved songs yet.", color = colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    } else if (filteredProjects.isEmpty()) {
-                        item {
-                            Column(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(Icons.Default.Search, null, tint = colorScheme.onSurfaceVariant.copy(alpha = 0.45f), modifier = Modifier.size(48.dp))
-                                Spacer(Modifier.height(16.dp))
-                                Text(
-                                    if (isSearching) "No songs match your search." else "No saved songs yet.",
-                                    color = colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+@Composable
+fun ProjectsDialog(
+    projects: List<SongProject>,
+    currentProjectId: String?,
+    onLoadProject: (SongProject) -> Unit,
+    onNewProject: () -> Unit,
+    onDeleteProject: (String) -> Unit,
+    onImportProject: (SongProject) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ProjectsDrawer(
+        projects = projects,
+        currentProjectId = currentProjectId,
+        onLoadProject = onLoadProject,
+        onNewProject = onNewProject,
+        onDeleteProject = onDeleteProject,
+        onImportProject = onImportProject,
+        onDismiss = onDismiss
+    )
+}
+
+@Composable
+private fun EmptyDrawerState(icon: @Composable () -> Unit, text: String) {
+    val colorScheme = MaterialTheme.colorScheme
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 42.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier.size(44.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+            ) {
+                icon()
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(text, color = colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun ProjectDrawerRow(
+    project: SongProject,
+    isActive: Boolean,
+    onLoadProject: (SongProject) -> Unit,
+    onDeleteProject: (String) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val dateStr = remember(project.updatedAt) {
+        SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(project.updatedAt))
+    }
+    val wordCount = remember(project.lyrics) { SyllableCounter.wordCount(project.lyrics) }
+
+    OutlinedCard(
+        onClick = { onLoadProject(project) },
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = if (isActive) {
+                colorScheme.primaryContainer
+            } else {
+                colorScheme.surfaceContainer
+            },
+            contentColor = if (isActive) {
+                colorScheme.onPrimaryContainer
+            } else {
+                colorScheme.onSurface
+            }
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (isActive) colorScheme.primary else colorScheme.outlineVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    project.title.ifEmpty { "Untitled Song" },
+                    fontWeight = FontWeight.Medium,
+                    color = if (isActive) colorScheme.onPrimaryContainer else colorScheme.onSurface,
+                    maxLines = 1
+                )
+                Text(
+                    "$dateStr \u2022 $wordCount words",
+                    fontSize = 13.sp,
+                    color = if (isActive) {
+                        colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
                     } else {
-                        items(filteredProjects, key = { it.id }) { project ->
-                            val isActive = project.id == currentProjectId
-                            val dateStr = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
-                                .format(Date(project.updatedAt))
-                            val wordCount = SyllableCounter.wordCount(project.lyrics)
-
-                            OutlinedCard(
-                                onClick = { onLoadProject(project) },
-                                modifier = Modifier
-                                    .fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.outlinedCardColors(
-                                    containerColor = if (isActive) colorScheme.primaryContainer else colorScheme.surfaceContainer,
-                                    contentColor = if (isActive) colorScheme.onPrimaryContainer else colorScheme.onSurface
-                                ),
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (isActive) colorScheme.primary else colorScheme.outlineVariant
-                                )
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            project.title.ifEmpty { "Untitled Song" },
-                                            fontWeight = FontWeight.Medium,
-                                            color = if (isActive) colorScheme.onPrimaryContainer else colorScheme.onSurface,
-                                            maxLines = 1
-                                        )
-                                        Text(
-                                            "$dateStr \u2022 $wordCount words",
-                                            fontSize = 13.sp,
-                                            color = if (isActive) {
-                                                colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                                            } else {
-                                                colorScheme.onSurfaceVariant
-                                            }
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = { onDeleteProject(project.id) },
-                                        modifier = Modifier.size(36.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Delete,
-                                            contentDescription = "Delete",
-                                            tint = colorScheme.error.copy(alpha = 0.75f),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        colorScheme.onSurfaceVariant
                     }
-                }
-                }
+                )
+            }
+            IconButton(
+                onClick = { onDeleteProject(project.id) },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = colorScheme.error.copy(alpha = 0.75f),
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
     }
