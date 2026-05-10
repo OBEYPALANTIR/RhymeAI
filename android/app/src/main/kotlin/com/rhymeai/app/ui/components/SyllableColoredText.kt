@@ -1,5 +1,6 @@
 package com.rhymeai.app.ui.components
 
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -30,12 +31,14 @@ fun SyllableColoredText(
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default
 ) {
+    val baseTextColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f)
+
     if (!enabled || text.isEmpty()) {
         Text(
             text = text,
             modifier = modifier,
             style = style,
-            color = Color.White.copy(alpha = 0.9f)
+            color = baseTextColor
         )
         return
     }
@@ -45,7 +48,7 @@ fun SyllableColoredText(
         wordPattern.findAll(text).forEach { match ->
             // Append non-word text before this match
             if (match.range.first > lastIndex) {
-                withStyle(SpanStyle(color = Color.White.copy(alpha = 0.9f))) {
+                withStyle(SpanStyle(color = baseTextColor)) {
                     append(text.substring(lastIndex, match.range.first))
                 }
             }
@@ -59,7 +62,7 @@ fun SyllableColoredText(
         }
         // Append remaining text
         if (lastIndex < text.length) {
-            withStyle(SpanStyle(color = Color.White.copy(alpha = 0.9f))) {
+            withStyle(SpanStyle(color = baseTextColor)) {
                 append(text.substring(lastIndex))
             }
         }

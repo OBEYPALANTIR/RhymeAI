@@ -32,6 +32,8 @@ private let gemmaDownloadOptions: [GemmaDownloadOption] = [
     )
 ]
 
+private let providerSectionAnimation = Animation.spring(response: 0.34, dampingFraction: 0.88)
+
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
@@ -116,15 +118,12 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             providerSection
 
-            if viewModel.selectedProvider == .local {
-                localModelSection
-            } else {
-                apiKeySection
-            }
+            providerSpecificSection
 
             modelSection
             saveSection
         }
+        .animation(providerSectionAnimation, value: viewModel.selectedProvider)
     }
 
     private var providerSection: some View {
@@ -133,7 +132,11 @@ struct SettingsView: View {
 
             Picker("AI Provider", selection: Binding(
                 get: { viewModel.selectedProvider },
-                set: { viewModel.saveProvider($0) }
+                set: { provider in
+                    withAnimation(providerSectionAnimation) {
+                        viewModel.saveProvider(provider)
+                    }
+                }
             )) {
                 ForEach(AIProvider.allCases, id: \.self) { provider in
                     Text(provider.displayName).tag(provider)
@@ -143,6 +146,17 @@ struct SettingsView: View {
         }
         .padding(16)
         .liquidGlassSurface(cornerRadius: 22, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
+    }
+
+    @ViewBuilder
+    private var providerSpecificSection: some View {
+        if viewModel.selectedProvider == .local {
+            localModelSection
+                .transition(.opacity)
+        } else {
+            apiKeySection
+                .transition(.opacity)
+        }
     }
 
     private var localModelSection: some View {

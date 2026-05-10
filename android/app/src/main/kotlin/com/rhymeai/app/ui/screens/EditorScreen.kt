@@ -1,6 +1,8 @@
 package com.rhymeai.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -10,6 +12,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -35,15 +38,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,29 +65,43 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.SaveStatus
+import com.rhymeai.app.data.model.ExportFormat
+import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.ui.components.AssistantPanel
+import com.rhymeai.app.ui.components.ExportSheet
+import com.rhymeai.app.ui.components.RewriteChipBar
+import com.rhymeai.app.ui.components.RewriteDialog
+import com.rhymeai.app.ui.components.RhymeHighlightedText
 import com.rhymeai.app.ui.components.SyllableColoredText
+import com.rhymeai.app.util.LyricsExporter
 import com.rhymeai.app.util.SyllableCounter
 import kotlin.math.ceil
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val rhymeContext = remember(viewModel.lyrics, viewModel.cursorPosition, viewModel.activeRhymeScheme) {
@@ -192,70 +214,158 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         dismissAssistantSheet()
     }
 
+    val context = LocalContext.current
+    var pendingExport by remember { mutableStateOf<Pair<ExportFormat, SongProject>?>(null) }
+
+    fun writeExport(format: ExportFormat, project: SongProject, uri: android.net.Uri) {
+        scope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    when (format) {
+                        ExportFormat.TXT -> LyricsExporter.buildTxt(project)
+                        ExportFormat.JSON -> LyricsExporter.buildJson(project)
+                        ExportFormat.PDF -> LyricsExporter.buildPdf(project)
+                        ExportFormat.LRC -> LyricsExporter.buildLrc(project)
+                    }
+                }
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) }
+                        ?: throw Exception("Cannot open destination for writing")
+                }
+            } catch (_: Exception) {
+                // Surface via existing errorMessage channel
+                viewModel.errorMessage = "Export failed. Try a different location."
+            }
+        }
+    }
+
+    val txtLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ExportFormat.TXT.mimeType)
+    ) { uri ->
+        val pending = pendingExport
+        pendingExport = null
+        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
+    }
+    val jsonLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ExportFormat.JSON.mimeType)
+    ) { uri ->
+        val pending = pendingExport
+        pendingExport = null
+        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
+    }
+    val pdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ExportFormat.PDF.mimeType)
+    ) { uri ->
+        val pending = pendingExport
+        pendingExport = null
+        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
+    }
+    val lrcLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ExportFormat.LRC.mimeType)
+    ) { uri ->
+        val pending = pendingExport
+        pendingExport = null
+        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
+    }
+
+    fun launchExport(format: ExportFormat) {
+        val project = viewModel.snapshotCurrentForExport()
+        val safeTitle = project.title
+            .replace(Regex("[^A-Za-z0-9_\\- ]"), "")
+            .trim()
+            .ifEmpty { "Untitled" }
+        val filename = "$safeTitle.${format.extension}"
+        pendingExport = format to project
+        when (format) {
+            ExportFormat.TXT -> txtLauncher.launch(filename)
+            ExportFormat.JSON -> jsonLauncher.launch(filename)
+            ExportFormat.PDF -> pdfLauncher.launch(filename)
+            ExportFormat.LRC -> lrcLauncher.launch(filename)
+        }
+        viewModel.showExportSheet = false
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background)
-            .statusBarsPadding()
             .imePadding()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Top bar — always visible
-            run {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(colorScheme.surface)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.weight(1f, fill = false)
-                    ) {
-                        TextButton(onClick = { onNavigateToStart() }) {
-                            Icon(Icons.Default.Menu, null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Menu", color = colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
-                        }
-
-                        Box(Modifier.width(1.dp).height(16.dp).background(colorScheme.outlineVariant))
-
-                        val projectsColor = if (viewModel.saveStatus == SaveStatus.SAVED)
-                            Color(0xFF6EE7B7) else colorScheme.onSurfaceVariant
-
-                        TextButton(onClick = { viewModel.showProjectsDialog = true }) {
-                            Icon(Icons.Default.FolderOpen, null, tint = projectsColor, modifier = Modifier.size(14.dp))
-                            Text(" Projects", color = projectsColor, fontSize = 11.sp)
-                        }
-
-                        TextButton(onClick = { viewModel.showSettingsDialog = true }) {
-                            Icon(Icons.Default.Settings, null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-                        }
-                    }
-
-                    val wordCount = remember(viewModel.lyrics) { SyllableCounter.wordCount(viewModel.lyrics) }
-                    val syllableCount = remember(viewModel.lyrics) { SyllableCounter.countText(viewModel.lyrics) }
-
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            "$wordCount words",
-                            fontSize = 10.sp,
-                            color = colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            "$syllableCount syllables",
-                            fontSize = 10.sp,
-                            color = colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+            val wordCount = remember(viewModel.lyrics) { SyllableCounter.wordCount(viewModel.lyrics) }
+            val syllableCount = remember(viewModel.lyrics) { SyllableCounter.countText(viewModel.lyrics) }
+            val projectsColor = if (viewModel.saveStatus == SaveStatus.SAVED) {
+                colorScheme.tertiary
+            } else {
+                colorScheme.onSurfaceVariant
             }
 
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = { onNavigateToStart() }) {
+                        Icon(
+                            Icons.Default.Menu,
+                            contentDescription = "Menu",
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                title = {
+                    Column {
+                        Text(
+                            viewModel.title.ifBlank { "Writers Block" },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            "$wordCount words • $syllableCount syllables",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { viewModel.showExportSheet = true },
+                        enabled = viewModel.lyrics.isNotBlank()
+                    ) {
+                        Icon(
+                            Icons.Default.IosShare,
+                            contentDescription = "Export",
+                            tint = if (viewModel.lyrics.isNotBlank())
+                                colorScheme.onSurfaceVariant
+                            else
+                                colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                    IconButton(onClick = { viewModel.showProjectsDialog = true }) {
+                        Icon(
+                            Icons.Default.FolderOpen,
+                            contentDescription = "Projects",
+                            tint = projectsColor
+                        )
+                    }
+                    IconButton(onClick = { viewModel.showSettingsDialog = true }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = colorScheme.surface,
+                    navigationIconContentColor = colorScheme.onSurfaceVariant,
+                    titleContentColor = colorScheme.onSurface,
+                    actionIconContentColor = colorScheme.onSurfaceVariant
+                )
+            )
+
             // Divider
-            Box(Modifier.fillMaxWidth().height(1.dp).background(colorScheme.outlineVariant))
+            HorizontalDivider(color = colorScheme.outlineVariant)
 
             // Editor
             val scrollState = rememberScrollState()
@@ -363,19 +473,33 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
                     Spacer(Modifier.height(24.dp))
 
-                    // Lyrics editor with syllable coloring overlay
+                    // Lyrics editor with overlay (syllable or rhyme coloring)
+                    val overlayActive = (viewModel.isSyllableColoringEnabled ||
+                        viewModel.isRhymeHighlightEnabled) && viewModel.lyrics.isNotEmpty()
                     Box(modifier = Modifier.fillMaxWidth()) {
                         // Colored overlay (behind)
-                        if (viewModel.isSyllableColoringEnabled && viewModel.lyrics.isNotEmpty()) {
-                            SyllableColoredText(
-                                text = viewModel.lyrics,
-                                enabled = true,
-                                style = TextStyle(
-                                    fontSize = 16.sp,
-                                    lineHeight = 28.sp,
-                                    fontFamily = FontFamily.Default
+                        if (overlayActive) {
+                            if (viewModel.isRhymeHighlightEnabled) {
+                                RhymeHighlightedText(
+                                    text = viewModel.lyrics,
+                                    enabled = true,
+                                    style = TextStyle(
+                                        fontSize = 16.sp,
+                                        lineHeight = 28.sp,
+                                        fontFamily = FontFamily.Default
+                                    )
                                 )
-                            )
+                            } else {
+                                SyllableColoredText(
+                                    text = viewModel.lyrics,
+                                    enabled = true,
+                                    style = TextStyle(
+                                        fontSize = 16.sp,
+                                        lineHeight = 28.sp,
+                                        fontFamily = FontFamily.Default
+                                    )
+                                )
+                            }
                         }
 
                         // Actual text field (on top, transparent if coloring is on)
@@ -387,7 +511,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 fontSize = 16.sp,
                                 lineHeight = 28.sp,
                                 fontFamily = FontFamily.Default,
-                                color = if (viewModel.isSyllableColoringEnabled)
+                                color = if (overlayActive)
                                     Color.Transparent
                                 else
                                     colorScheme.onBackground.copy(alpha = 0.9f)
@@ -418,9 +542,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
 
-        // UnBlock FAB — always visible when sheet is closed
+        val modalOpen = viewModel.showSettingsDialog ||
+            viewModel.showProjectsDialog ||
+            viewModel.showExportSheet ||
+            viewModel.rewriteAction != null
+
+        // UnBlock FAB — visible only when the editor is unobstructed.
         AnimatedVisibility(
-            visible = !showBottomSheet && !pendingAssistantSheet,
+            visible = !showBottomSheet && !pendingAssistantSheet && !modalOpen,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
             exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
             modifier = Modifier
@@ -434,9 +563,52 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 contentColor = colorScheme.onPrimary,
                 shape = RoundedCornerShape(28.dp)
             ) {
-                Icon(Icons.Default.AutoFixHigh, null, modifier = Modifier.size(18.dp))
-                Text("  UnBlock", fontWeight = FontWeight.Medium)
+                Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                UnBlockWordmark()
             }
+        }
+
+        // Rewrite chip bar — shown when text is selected and no other UI is open
+        val selection = viewModel.lyricsFieldValue.selection
+        val rewriteVisible = !selection.collapsed &&
+            !showBottomSheet &&
+            !pendingAssistantSheet &&
+            !modalOpen &&
+            viewModel.rewriteAction == null
+        AnimatedVisibility(
+            visible = rewriteVisible,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            RewriteChipBar(
+                onAction = { viewModel.requestRewrite(it) }
+            )
+        }
+
+        // Export sheet
+        if (viewModel.showExportSheet) {
+            ExportSheet(
+                onPick = { launchExport(it) },
+                onDismiss = { viewModel.showExportSheet = false }
+            )
+        }
+
+        // Rewrite preview dialog
+        viewModel.rewriteAction?.let { action ->
+            RewriteDialog(
+                action = action,
+                original = viewModel.rewriteOriginal.orEmpty(),
+                preview = viewModel.rewritePreview,
+                loading = viewModel.rewriteLoading,
+                error = viewModel.rewriteError,
+                onApply = { viewModel.applyRewrite() },
+                onDismiss = { viewModel.dismissRewrite() }
+            )
         }
 
         // Bottom sheet for assistant
@@ -485,6 +657,50 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         .padding(bottom = 16.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun UnBlockWordmark() {
+    val color = MaterialTheme.colorScheme.onPrimary
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("UnBlock", fontWeight = FontWeight.Medium)
+        Canvas(
+            modifier = Modifier
+                .width(68.dp)
+                .height(5.dp)
+        ) {
+            val strokeWidth = 1.6.dp.toPx()
+            drawLine(
+                color = color.copy(alpha = 0.9f),
+                start = Offset(0f, size.height * 0.55f),
+                end = Offset(size.width * 0.18f, size.height * 0.25f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = color.copy(alpha = 0.9f),
+                start = Offset(size.width * 0.18f, size.height * 0.25f),
+                end = Offset(size.width * 0.42f, size.height * 0.78f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = color.copy(alpha = 0.9f),
+                start = Offset(size.width * 0.42f, size.height * 0.78f),
+                end = Offset(size.width * 0.68f, size.height * 0.28f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = color.copy(alpha = 0.9f),
+                start = Offset(size.width * 0.68f, size.height * 0.28f),
+                end = Offset(size.width, size.height * 0.58f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
         }
     }
 }

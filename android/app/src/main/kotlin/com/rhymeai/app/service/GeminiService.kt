@@ -2,6 +2,7 @@ package com.rhymeai.app.service
 
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.generationConfig
+import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import kotlinx.coroutines.Dispatchers
@@ -163,6 +164,197 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
                 AIProvider.CLAUDE -> callClaude(apiKey, modelId, prompt)
                 AIProvider.LOCAL -> error("unreachable")
             }
+        }
+    }
+
+    suspend fun getRewrite(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        action: RewriteAction,
+        fullLyrics: String,
+        selection: String
+    ): String {
+        if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
+            throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
+        }
+        if (selection.isBlank()) {
+            throw IllegalStateException("Nothing selected to rewrite.")
+        }
+
+        return if (provider == AIProvider.LOCAL) {
+            val prompt = buildLocalRewritePrompt(action, fullLyrics, selection)
+            callLocalRewrite(prompt, selection)
+        } else {
+            val prompt = buildRewritePrompt(action, fullLyrics, selection)
+            val raw = when (provider) {
+                AIProvider.GEMINI -> callGeminiRaw(apiKey, modelId, prompt)
+                AIProvider.OPENAI -> callOpenAIRaw(apiKey, modelId, prompt)
+                AIProvider.CLAUDE -> callClaudeRaw(apiKey, modelId, prompt)
+                AIProvider.LOCAL -> error("unreachable")
+            }
+            extractRewriteField(raw)?.takeIf { it.isNotBlank() }
+                ?: throw RuntimeException("AI did not return a rewrite. Try again.")
+        }
+    }
+
+    private fun buildRewritePrompt(action: RewriteAction, lyrics: String, selection: String): String =
+        """
+You are an expert songwriter helping the user rewrite a portion of their song.
+
+Full lyrics for context:
+${"\"\"\""}
+$lyrics
+${"\"\"\""}
+
+The user has selected the following passage from those lyrics. Rewrite ONLY this passage:
+${"\"\"\""}
+$selection
+${"\"\"\""}
+
+Action: ${action.label}
+Instruction: ${action.instruction}
+
+Rules:
+- Output the rewritten passage only.
+- Preserve line breaks where present.
+- Do not include the surrounding lyrics, commentary, labels, or markdown.
+
+Respond ONLY with a JSON object of the form {"rewrite": "..."}. No code fences.
+""".trimIndent()
+
+    private fun buildLocalRewritePrompt(action: RewriteAction, lyrics: String, selection: String): String {
+        val lyricContext = localLyricsContext(lyrics, useWholeSongContext = false)
+        val userPrompt = """
+You are RhymeAI's on-device songwriting assistant.
+
+Task: rewrite the selected passage from the user's song.
+Action: ${action.label}.
+Instruction: ${action.instruction}
+
+Lyrics context:
+${"\"\"\""}
+$lyricContext
+${"\"\"\""}
+
+Selected passage to rewrite:
+${"\"\"\""}
+$selection
+${"\"\"\""}
+
+Rules:
+- Output the rewritten passage only.
+- Preserve line breaks if the selection has multiple lines.
+- No quotes, no markdown, no labels, no commentary.
+""".trimIndent()
+        return gemmaInstructionPrompt(userPrompt)
+    }
+
+    private suspend fun callGeminiRaw(apiKey: String, modelId: String, prompt: String): String {
+        val model = GenerativeModel(
+            modelName = modelId,
+            apiKey = apiKey,
+            generationConfig = generationConfig {
+                responseMimeType = "application/json"
+            }
+        )
+        return model.generateContent(prompt).text?.trim().orEmpty()
+    }
+
+    private suspend fun callOpenAIRaw(apiKey: String, modelId: String, prompt: String): String {
+        val body = buildJsonObject {
+            put("model", modelId)
+            put("messages", buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            })
+            put("temperature", 0.7)
+        }
+        val responseText = httpPost(
+            url = "https://api.openai.com/v1/chat/completions",
+            headers = mapOf(
+                "Authorization" to "Bearer $apiKey",
+                "Content-Type" to "application/json"
+            ),
+            body = body.toString()
+        )
+        val responseJson = json.parseToJsonElement(responseText).jsonObject
+        return responseJson["choices"]?.jsonArray
+            ?.firstOrNull()?.jsonObject
+            ?.get("message")?.jsonObject
+            ?.get("content")?.jsonPrimitive?.content
+            .orEmpty()
+    }
+
+    private suspend fun callClaudeRaw(apiKey: String, modelId: String, prompt: String): String {
+        val body = buildJsonObject {
+            put("model", modelId)
+            put("max_tokens", 1024)
+            put("messages", buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            })
+        }
+        val responseText = httpPost(
+            url = "https://api.anthropic.com/v1/messages",
+            headers = mapOf(
+                "x-api-key" to apiKey,
+                "anthropic-version" to "2023-06-01",
+                "Content-Type" to "application/json"
+            ),
+            body = body.toString()
+        )
+        val responseJson = json.parseToJsonElement(responseText).jsonObject
+        return responseJson["content"]?.jsonArray
+            ?.firstOrNull()?.jsonObject
+            ?.get("text")?.jsonPrimitive?.content
+            .orEmpty()
+    }
+
+    private suspend fun callLocalRewrite(prompt: String, selection: String): String {
+        val service = localModelService
+            ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
+        if (!service.isLoaded) {
+            throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
+        }
+        val response = service.generateResponse(prompt)
+        val cleaned = cleanLocalRewrite(response)
+        if (cleaned.isBlank()) {
+            throw RuntimeException("Local model returned no rewrite. Try a different model or use a cloud provider.")
+        }
+        return cleaned
+    }
+
+    private fun cleanLocalRewrite(response: String): String {
+        val trimmed = response
+            .substringBefore("<end_of_turn>")
+            .substringBefore("<start_of_turn>")
+            .trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        // If the model still emitted JSON, extract its rewrite field.
+        extractRewriteField(trimmed)?.let { return it }
+        return trimmed.removeSurrounding("\"").removeSurrounding("'").trim()
+    }
+
+    private fun extractRewriteField(text: String): String? {
+        val cleaned = text.trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        if (cleaned.isEmpty()) return null
+        return try {
+            val obj = json.parseToJsonElement(cleaned).jsonObject
+            obj["rewrite"]?.jsonPrimitive?.content
+        } catch (_: Exception) {
+            null
         }
     }
 

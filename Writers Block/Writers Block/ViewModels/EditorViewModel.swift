@@ -31,6 +31,22 @@ final class EditorViewModel: ObservableObject {
     @Published var useWholeSongContext: Bool = false
     @Published var isHighlightEnabled: Bool = true
     @Published var isSyllableColoringEnabled: Bool = true
+    @Published var isRhymeHighlightEnabled: Bool = false
+
+    // MARK: - Selection / Rewrite
+
+    @Published var selectedRange: NSRange = NSRange(location: 0, length: 0)
+    @Published var rewriteAction: RewriteAction?
+    @Published var rewriteLoading: Bool = false
+    @Published var rewritePreview: String?
+    @Published var rewriteOriginal: String?
+    @Published var rewriteError: String?
+    private var rewriteRange: NSRange?
+    private var rewriteTask: Task<Void, Never>?
+
+    // MARK: - Export
+
+    @Published var showExportSheet: Bool = false
 
     // MARK: - Navigation
 
@@ -207,6 +223,71 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Rewrite
+
+    func requestRewrite(_ action: RewriteAction) {
+        let range = selectedRange
+        guard range.length > 0 else { return }
+        let ns = lyrics as NSString
+        guard range.location + range.length <= ns.length else { return }
+        let original = ns.substring(with: range)
+        guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        rewriteTask?.cancel()
+        rewriteAction = action
+        rewriteOriginal = original
+        rewriteRange = range
+        rewritePreview = nil
+        rewriteError = nil
+        rewriteLoading = true
+
+        rewriteTask = Task { @MainActor in
+            do {
+                let result = try await aiService.getRewrite(
+                    provider: selectedProvider,
+                    apiKey: currentApiKey,
+                    modelId: selectedModel.id,
+                    action: action,
+                    fullLyrics: lyrics,
+                    selection: original
+                )
+                guard !Task.isCancelled else { return }
+                rewritePreview = result
+            } catch {
+                guard !Task.isCancelled else { return }
+                rewriteError = error.localizedDescription
+            }
+            rewriteLoading = false
+        }
+    }
+
+    func applyRewrite() {
+        guard let preview = rewritePreview, let range = rewriteRange else { return }
+        let ns = lyrics as NSString
+        guard range.location + range.length <= ns.length else {
+            dismissRewrite()
+            return
+        }
+        let updated = ns.replacingCharacters(in: range, with: preview)
+        lyrics = updated
+        let newCursor = range.location + (preview as NSString).length
+        cursorPosition = newCursor
+        selectedRange = NSRange(location: newCursor, length: 0)
+        dismissRewrite()
+        triggerAutoSave()
+    }
+
+    func dismissRewrite() {
+        rewriteTask?.cancel()
+        rewriteTask = nil
+        rewriteAction = nil
+        rewriteLoading = false
+        rewritePreview = nil
+        rewriteOriginal = nil
+        rewriteError = nil
+        rewriteRange = nil
+    }
+
     // MARK: - Suggestion Insertion
 
     func insertSuggestion(_ suggestion: String) {
@@ -259,6 +340,40 @@ final class EditorViewModel: ObservableObject {
         }
         context.delete(project)
         try? context.save()
+    }
+
+    func importProject(_ exported: SongProjectExport) {
+        guard let context = modelContext else { return }
+        let project = SongProject(
+            id: UUID().uuidString,
+            title: exported.title.isEmpty ? "Imported Song" : exported.title,
+            lyrics: exported.lyrics,
+            theme: exported.theme,
+            updatedAt: Date()
+        )
+        context.insert(project)
+        try? context.save()
+
+        title = project.title
+        lyrics = project.lyrics
+        theme = project.theme
+        cursorPosition = project.lyrics.count
+        currentProjectId = project.id
+        suggestions = []
+        errorMessage = nil
+        saveStatus = .saved
+        showWelcome = false
+        showProjectsSheet = false
+    }
+
+    func snapshotForExport() -> SongProject {
+        SongProject(
+            id: currentProjectId ?? UUID().uuidString,
+            title: title.isEmpty ? "Untitled Song" : title,
+            lyrics: lyrics,
+            theme: theme,
+            updatedAt: Date()
+        )
     }
 
     func applyTemplate(_ template: SongTemplate) {

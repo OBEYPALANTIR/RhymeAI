@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import UniformTypeIdentifiers
 
 struct EditorView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
@@ -8,6 +9,8 @@ struct EditorView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var keyboardIsVisible = false
     @State private var assistantSheetDragOffset: CGFloat = 0
+    @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
+    @State private var fileExporterPresented: Bool = false
 
     var body: some View {
         Group {
@@ -21,6 +24,49 @@ struct EditorView: View {
         .onAppear {
             viewModel.modelContext = modelContext
         }
+        .sheet(item: $viewModel.rewriteAction) { action in
+            RewriteSheet(
+                action: action,
+                original: viewModel.rewriteOriginal ?? "",
+                preview: viewModel.rewritePreview,
+                loading: viewModel.rewriteLoading,
+                error: viewModel.rewriteError,
+                onApply: { viewModel.applyRewrite() },
+                onDismiss: { viewModel.dismissRewrite() }
+            )
+        }
+        .sheet(
+            isPresented: $viewModel.showExportSheet,
+            onDismiss: {
+                if pendingExport != nil { fileExporterPresented = true }
+            }
+        ) {
+            ExportSheet(
+                onPick: { format in
+                    let project = viewModel.snapshotForExport()
+                    let data = LyricsExporter.data(for: project, format: format)
+                    pendingExport = (format, ExportDocument(data: data))
+                    viewModel.showExportSheet = false
+                },
+                onDismiss: { viewModel.showExportSheet = false }
+            )
+        }
+        .fileExporter(
+            isPresented: $fileExporterPresented,
+            document: pendingExport?.doc,
+            contentType: pendingExport?.format.contentType ?? .data,
+            defaultFilename: pendingExport.map { suggestedFilename(format: $0.format) }
+        ) { _ in
+            pendingExport = nil
+        }
+    }
+
+    private func suggestedFilename(format: ExportFormat) -> String {
+        let raw = viewModel.title.isEmpty ? "Untitled" : viewModel.title
+        let safe = raw.replacingOccurrences(of: "[^A-Za-z0-9_\\- ]", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let base = safe.isEmpty ? "Untitled" : safe
+        return base
     }
 
     // MARK: - iPad Layout (split view)
@@ -30,7 +76,7 @@ struct EditorView: View {
             // Editor column
             VStack(spacing: 0) {
                 topBar
-                editorScrollView
+                editorWithChips
             }
             .frame(maxWidth: .infinity)
 
@@ -50,8 +96,10 @@ struct EditorView: View {
 
             VStack(spacing: 0) {
                 topBar
-                editorScrollView
+                editorWithChips
             }
+            .allowsHitTesting(!viewModel.showAssistantSheet)
+            .accessibilityHidden(viewModel.showAssistantSheet)
 
             assistantFloatingButton
                 .zIndex(1)
@@ -71,7 +119,7 @@ struct EditorView: View {
                 assistantSheetDragOffset = 0
             }
         }
-        .highPriorityGesture(assistantBackSwipeGesture, including: viewModel.showAssistantSheet ? .all : .subviews)
+        .simultaneousGesture(assistantBackSwipeGesture, including: viewModel.showAssistantSheet ? .all : .subviews)
     }
 
     @ViewBuilder
@@ -85,10 +133,9 @@ struct EditorView: View {
                         presentAssistantSheet()
                     } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: "wand.and.stars")
+                            Image(systemName: "pencil")
                                 .font(.body.weight(.semibold))
-                            Text("UnBlock")
-                                .font(.body.weight(.semibold))
+                            UnBlockWordmark()
                         }
                         .foregroundStyle(.white)
                         .padding(.horizontal, 20)
@@ -113,7 +160,7 @@ struct EditorView: View {
                     assistantSheetDragHandle(sheetHeight: proxy.size.height)
                         .padding(.top, proxy.safeAreaInsets.top + 8)
 
-                    AssistantPanelView()
+                    AssistantPanelView(onDismiss: dismissAssistantSheetWithAnimation)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
@@ -128,7 +175,7 @@ struct EditorView: View {
     private func assistantSheetDragHandle(sheetHeight: CGFloat) -> some View {
         Rectangle()
             .fill(Color.clear)
-            .frame(height: 64)
+            .frame(height: 72)
             .overlay {
                 Capsule()
                     .fill(.secondary.opacity(0.45))
@@ -136,22 +183,32 @@ struct EditorView: View {
             }
             .contentShape(Rectangle())
             .gesture(
-                DragGesture()
+                DragGesture(minimumDistance: 8, coordinateSpace: .local)
                     .onChanged { value in
-                        assistantSheetDragOffset = max(0, value.translation.height)
+                        assistantSheetDragOffset = min(max(0, value.translation.height), sheetHeight)
                     }
                     .onEnded { value in
-                        settleAssistantSheetDrag(translation: value.translation.height, sheetHeight: sheetHeight)
+                        settleAssistantSheetDrag(
+                            translation: value.translation.height,
+                            predictedTranslation: value.predictedEndTranslation.height,
+                            sheetHeight: sheetHeight
+                        )
                     }
             )
             .accessibilityLabel("Dismiss Assistant")
+            .accessibilityIdentifier("assistantSheetGrabber")
     }
 
-    private func settleAssistantSheetDrag(translation: CGFloat, sheetHeight: CGFloat) {
+    private func settleAssistantSheetDrag(
+        translation: CGFloat,
+        predictedTranslation: CGFloat,
+        sheetHeight: CGFloat
+    ) {
         let dragDistance = max(0, translation)
-        let closeThreshold = max(0, sheetHeight - 64) * 0.5
+        let projectedDistance = max(0, predictedTranslation)
+        let closeThreshold = min(180, max(96, sheetHeight * 0.18))
 
-        if dragDistance >= closeThreshold {
+        if dragDistance >= closeThreshold || projectedDistance >= closeThreshold {
             withAnimation(.easeInOut(duration: 0.18)) {
                 assistantSheetDragOffset = sheetHeight
             }
@@ -206,6 +263,24 @@ struct EditorView: View {
 
     // MARK: - Shared Editor Content
 
+    private var editorWithChips: some View {
+        ZStack(alignment: .bottom) {
+            editorScrollView
+
+            if viewModel.selectedRange.length > 0
+                && viewModel.rewriteAction == nil
+                && !viewModel.showAssistantSheet {
+                RewriteChipBar { action in
+                    viewModel.requestRewrite(action)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: viewModel.selectedRange.length)
+    }
+
     private var editorScrollView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -221,8 +296,14 @@ struct EditorView: View {
 
                 // Lyrics Editor
                 ZStack(alignment: .topLeading) {
-                    // Syllable coloring overlay
-                    if viewModel.isSyllableColoringEnabled && !viewModel.lyrics.isEmpty {
+                    // Coloring overlay (rhyme wins over syllable)
+                    if viewModel.isRhymeHighlightEnabled && !viewModel.lyrics.isEmpty {
+                        RhymeHighlightedText(
+                            text: viewModel.lyrics,
+                            enabled: true
+                        )
+                        .padding(.horizontal, 20)
+                    } else if viewModel.isSyllableColoringEnabled && !viewModel.lyrics.isEmpty {
                         SyllableColoredText(
                             text: viewModel.lyrics,
                             enabled: true
@@ -236,7 +317,10 @@ struct EditorView: View {
                         onCursorChange: { pos in
                             viewModel.cursorPosition = pos
                         },
-                        isTransparentText: viewModel.isSyllableColoringEnabled && !viewModel.lyrics.isEmpty
+                        onSelectionChange: { range in
+                            viewModel.selectedRange = range
+                        },
+                        isTransparentText: overlayActive && !viewModel.lyrics.isEmpty
                     )
                     .frame(minHeight: 400)
                     .padding(.horizontal, 20)
@@ -251,6 +335,10 @@ struct EditorView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Color.black)
+    }
+
+    private var overlayActive: Bool {
+        viewModel.isRhymeHighlightEnabled || viewModel.isSyllableColoringEnabled
     }
 
     // MARK: - Top Bar
@@ -312,6 +400,16 @@ struct EditorView: View {
             }
             .foregroundStyle(.secondary)
 
+            // Export
+            Button {
+                viewModel.showExportSheet = true
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.body)
+                    .foregroundStyle(Color.secondary.opacity(viewModel.lyrics.isEmpty ? 0.4 : 1.0))
+            }
+            .disabled(viewModel.lyrics.isEmpty)
+
             // Settings
             Button {
                 viewModel.showSettingsSheet = true
@@ -327,6 +425,37 @@ struct EditorView: View {
         .overlay(
             Divider(), alignment: .bottom
         )
+    }
+}
+
+private struct UnBlockWordmark: View {
+    var body: some View {
+        VStack(spacing: 1) {
+            Text("UnBlock")
+                .font(.body.weight(.semibold))
+
+            ScribbleUnderline()
+                .frame(width: 58, height: 5)
+        }
+    }
+}
+
+private struct ScribbleUnderline: View {
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            path.move(to: CGPoint(x: 0, y: size.height * 0.55))
+            path.addLine(to: CGPoint(x: size.width * 0.18, y: size.height * 0.25))
+            path.addLine(to: CGPoint(x: size.width * 0.42, y: size.height * 0.78))
+            path.addLine(to: CGPoint(x: size.width * 0.68, y: size.height * 0.28))
+            path.addLine(to: CGPoint(x: size.width, y: size.height * 0.58))
+
+            context.stroke(
+                path,
+                with: .color(.white.opacity(0.9)),
+                style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)
+            )
+        }
     }
 }
 

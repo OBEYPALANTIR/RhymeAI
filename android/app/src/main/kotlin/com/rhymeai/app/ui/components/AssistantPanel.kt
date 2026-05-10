@@ -18,7 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -46,7 +46,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -96,9 +95,9 @@ fun AssistantPanel(
                     .fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.AutoFixHigh, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.Edit, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Context & Theme", fontWeight = FontWeight.Medium, fontSize = 16.sp, color = Color.White)
+                Text("Context & Theme", fontWeight = FontWeight.Medium, fontSize = 16.sp, color = colorScheme.onSurface)
             }
 
             OutlinedTextField(
@@ -117,7 +116,7 @@ fun AssistantPanel(
         }
 
         // Divider
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.1f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(colorScheme.outlineVariant))
 
         // Main controls
         Column(
@@ -137,20 +136,20 @@ fun AssistantPanel(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Notes, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
-                        Text("Target Line", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.7f))
+                        Icon(Icons.AutoMirrored.Filled.Notes, null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                        Text("Target Line", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     }
                     if (rhymeContext.targetLine != null) {
                         Box(
                             modifier = Modifier
-                                .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(6.dp))
+                                .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(6.dp))
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
                                 "${SyllableCounter.countText(rhymeContext.targetLine)} syllables",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 11.sp,
-                                color = Color.White.copy(alpha = 0.6f)
+                                color = colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -159,8 +158,8 @@ fun AssistantPanel(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                        .background(colorScheme.surfaceContainer, RoundedCornerShape(8.dp))
+                        .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(8.dp))
                         .padding(16.dp)
                 ) {
                     if (rhymeContext.targetLine != null) {
@@ -168,14 +167,14 @@ fun AssistantPanel(
                             "\"${rhymeContext.targetLine}\"",
                             fontFamily = FontFamily.Serif,
                             fontStyle = FontStyle.Italic,
-                            color = Color.White.copy(alpha = 0.9f),
+                            color = colorScheme.onSurface,
                             fontSize = 14.sp
                         )
                     } else {
                         Text(
                             "New rhyme sound (or place cursor on a line)",
                             fontStyle = FontStyle.Italic,
-                            color = Color.White.copy(alpha = 0.3f),
+                            color = colorScheme.onSurfaceVariant,
                             fontSize = 13.sp
                         )
                     }
@@ -189,7 +188,7 @@ fun AssistantPanel(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Rhyme Scheme", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.7f))
+                    Text("Rhyme Scheme", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
 
                     var expanded by remember { mutableStateOf(false) }
                     ExposedDropdownMenuBox(
@@ -203,7 +202,7 @@ fun AssistantPanel(
                             modifier = Modifier
                                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                                 .width(130.dp),
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Color.White),
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = colorScheme.onSurface),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                             colors = textFieldColors,
                             shape = RoundedCornerShape(8.dp),
@@ -212,11 +211,11 @@ fun AssistantPanel(
                         ExposedDropdownMenu(
                             expanded = expanded,
                             onDismissRequest = { expanded = false },
-                            containerColor = Color(0xFF1A1A1A)
+                            containerColor = colorScheme.surfaceContainerHigh
                         ) {
                             RhymeScheme.entries.forEach { scheme ->
                                 DropdownMenuItem(
-                                    text = { Text(scheme.label, color = Color.White, fontSize = 13.sp) },
+                                    text = { Text(scheme.label, color = colorScheme.onSurface, fontSize = 13.sp) },
                                     onClick = {
                                         viewModel.rhymeScheme = scheme
                                         expanded = false
@@ -328,15 +327,15 @@ fun AssistantPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Whole Song Context", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.7f))
+                Text("Whole Song Context", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                 Switch(
                     checked = viewModel.useWholeSongContext,
                     onCheckedChange = { viewModel.useWholeSongContext = it },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
+                        checkedThumbColor = colorScheme.onPrimary,
                         checkedTrackColor = colorScheme.primary,
-                        uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
-                        uncheckedTrackColor = Color.White.copy(alpha = 0.1f)
+                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
+                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
                     )
                 )
             }
@@ -346,15 +345,15 @@ fun AssistantPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Highlight Rhymes", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.7f))
+                Text("Highlight Rhymes", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                 Switch(
                     checked = viewModel.isHighlightEnabled,
                     onCheckedChange = { viewModel.isHighlightEnabled = it },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
+                        checkedThumbColor = colorScheme.onPrimary,
                         checkedTrackColor = colorScheme.primary,
-                        uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
-                        uncheckedTrackColor = Color.White.copy(alpha = 0.1f)
+                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
+                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
                     )
                 )
             }
@@ -364,15 +363,39 @@ fun AssistantPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Color Syllables", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.7f))
+                Text("Color Syllables", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                 Switch(
                     checked = viewModel.isSyllableColoringEnabled,
-                    onCheckedChange = { viewModel.isSyllableColoringEnabled = it },
+                    onCheckedChange = {
+                        viewModel.isSyllableColoringEnabled = it
+                        if (it) viewModel.isRhymeHighlightEnabled = false
+                    },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
+                        checkedThumbColor = colorScheme.onPrimary,
                         checkedTrackColor = colorScheme.primary,
-                        uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
-                        uncheckedTrackColor = Color.White.copy(alpha = 0.1f)
+                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
+                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
+                    )
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Color Rhymes", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                Switch(
+                    checked = viewModel.isRhymeHighlightEnabled,
+                    onCheckedChange = {
+                        viewModel.isRhymeHighlightEnabled = it
+                        if (it) viewModel.isSyllableColoringEnabled = false
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = colorScheme.onPrimary,
+                        checkedTrackColor = colorScheme.primary,
+                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
+                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
                     )
                 )
             }
@@ -393,25 +416,27 @@ fun AssistantPanel(
                 if (viewModel.isLoading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
-                        color = Color.White,
+                        color = colorScheme.onPrimary,
                         strokeWidth = 2.dp
                     )
-                    Text("  Thinking...", fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Thinking...", fontWeight = FontWeight.Medium)
                 } else {
                     Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
-                    Text("  Suggest Next Line", fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Suggest Next Line", fontWeight = FontWeight.Medium)
                 }
             }
 
             // Error message
             viewModel.errorMessage?.let {
-                Text(it, color = Color.Red.copy(alpha = 0.7f), fontSize = 12.sp)
+                Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
             // Suggestions
             if (viewModel.suggestions.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Suggestions", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.7f))
+                    Text("Suggestions", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     viewModel.suggestions.forEach { suggestion ->
                         SuggestionCard(
                             suggestion = suggestion,
