@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
@@ -48,6 +49,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,9 +70,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+
+private const val DrawerAnimationMillis = 260
 
 @Composable
 fun ProjectsDrawer(
@@ -89,6 +94,23 @@ fun ProjectsDrawer(
     val importJson = remember { Json { ignoreUnknownKeys = true } }
     var importError by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
+    var drawerVisible by remember { mutableStateOf(false) }
+    var isClosing by remember { mutableStateOf(false) }
+
+    fun closeDrawer(afterClose: () -> Unit = {}) {
+        if (isClosing) return
+        isClosing = true
+        drawerVisible = false
+        scope.launch {
+            delay(DrawerAnimationMillis.toLong())
+            afterClose()
+            onDismiss()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        drawerVisible = true
+    }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -102,7 +124,7 @@ fun ProjectsDrawer(
                 }
                 val project = importJson.decodeFromString(SongProject.serializer(), text)
                 importError = null
-                onImportProject(project)
+                closeDrawer { onImportProject(project) }
             } catch (e: Exception) {
                 importError = "Could not import this file. Pick a RhymeAI project JSON."
             }
@@ -130,25 +152,37 @@ fun ProjectsDrawer(
     )
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { closeDrawer() },
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(colorScheme.scrim.copy(alpha = 0.42f))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onDismiss
-                    )
-            )
+            AnimatedVisibility(
+                visible = drawerVisible,
+                enter = fadeIn(animationSpec = tween(DrawerAnimationMillis)),
+                exit = fadeOut(animationSpec = tween(DrawerAnimationMillis))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(colorScheme.scrim.copy(alpha = 0.42f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { closeDrawer() }
+                        )
+                )
+            }
 
             AnimatedVisibility(
-                visible = true,
-                enter = slideInHorizontally(initialOffsetX = { -it }) + fadeIn(),
-                exit = slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
+                visible = drawerVisible,
+                enter = slideInHorizontally(
+                    animationSpec = tween(DrawerAnimationMillis),
+                    initialOffsetX = { -it }
+                ) + fadeIn(animationSpec = tween(DrawerAnimationMillis)),
+                exit = slideOutHorizontally(
+                    animationSpec = tween(DrawerAnimationMillis),
+                    targetOffsetX = { -it }
+                ) + fadeOut(animationSpec = tween(DrawerAnimationMillis))
             ) {
                 Surface(
                     modifier = Modifier
@@ -208,7 +242,7 @@ fun ProjectsDrawer(
                                 shape = RoundedCornerShape(14.dp)
                             )
 
-                            IconButton(onClick = onDismiss) {
+                            IconButton(onClick = { closeDrawer() }) {
                                 Icon(
                                     Icons.Default.Close,
                                     contentDescription = "Close drawer",
@@ -218,7 +252,7 @@ fun ProjectsDrawer(
                         }
 
                         OutlinedButton(
-                            onClick = onNewProject,
+                            onClick = { closeDrawer(afterClose = onNewProject) },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 14.dp)
@@ -264,7 +298,9 @@ fun ProjectsDrawer(
                                     ProjectDrawerRow(
                                         project = project,
                                         isActive = project.id == currentProjectId,
-                                        onLoadProject = onLoadProject,
+                                        onLoadProject = { selected ->
+                                            closeDrawer { onLoadProject(selected) }
+                                        },
                                         onDeleteProject = onDeleteProject
                                     )
                                 }
