@@ -24,10 +24,8 @@ struct EditorView: View {
         .overlay {
             if projectDrawerOpen {
                 ProjectsDrawerView(isPresented: $projectDrawerOpen)
-                    .transition(.opacity)
             }
         }
-        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: projectDrawerOpen)
         .preferredColorScheme(.dark)
         .onAppear {
             viewModel.modelContext = modelContext

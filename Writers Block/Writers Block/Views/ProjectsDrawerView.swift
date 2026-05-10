@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+private let projectDrawerAnimationDuration: TimeInterval = 0.26
+
 struct ProjectsDrawerView: View {
     @Binding var isPresented: Bool
     @EnvironmentObject private var viewModel: EditorViewModel
@@ -9,6 +11,8 @@ struct ProjectsDrawerView: View {
     @State private var searchText = ""
     @State private var fileImporterPresented = false
     @State private var importError: String?
+    @State private var drawerVisible = false
+    @State private var isClosing = false
 
     private var filteredProjects: [SongProject] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,7 +31,7 @@ struct ProjectsDrawerView: View {
             let drawerWidth = min(max(proxy.size.width - 36, 300), 360)
 
             ZStack(alignment: .leading) {
-                Color.black.opacity(0.42)
+                Color.black.opacity(drawerVisible ? 0.42 : 0)
                     .ignoresSafeArea()
                     .onTapGesture { closeDrawer() }
 
@@ -40,7 +44,13 @@ struct ProjectsDrawerView: View {
                             .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
                     )
                     .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .offset(x: drawerVisible ? 0 : -drawerWidth)
+            }
+            .animation(.easeInOut(duration: projectDrawerAnimationDuration), value: drawerVisible)
+        }
+        .onAppear {
+            DispatchQueue.main.async {
+                drawerVisible = true
             }
         }
         .fileImporter(
@@ -238,7 +248,12 @@ struct ProjectsDrawerView: View {
     }
 
     private func closeDrawer() {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) {
+        guard !isClosing else { return }
+        isClosing = true
+        withAnimation(.easeInOut(duration: projectDrawerAnimationDuration)) {
+            drawerVisible = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + projectDrawerAnimationDuration) {
             isPresented = false
         }
     }
