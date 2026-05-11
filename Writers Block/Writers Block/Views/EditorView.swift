@@ -302,17 +302,12 @@ struct EditorView: View {
 
                 // Lyrics Editor
                 ZStack(alignment: .topLeading) {
-                    // Coloring overlay (rhyme wins over syllable)
-                    if viewModel.isRhymeHighlightEnabled && !viewModel.lyrics.isEmpty {
+                    // Coloring overlay
+                    if overlayActive && !viewModel.lyrics.isEmpty {
                         RhymeHighlightedText(
                             text: viewModel.lyrics,
-                            enabled: true
-                        )
-                        .padding(.horizontal, 20)
-                    } else if viewModel.isSyllableColoringEnabled && !viewModel.lyrics.isEmpty {
-                        SyllableColoredText(
-                            text: viewModel.lyrics,
-                            enabled: true
+                            enabled: viewModel.isRhymeHighlightEnabled,
+                            syllablesEnabled: viewModel.isSyllableColoringEnabled
                         )
                         .padding(.horizontal, 20)
                     }

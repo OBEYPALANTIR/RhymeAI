@@ -195,22 +195,16 @@ struct AssistantPanelView: View {
                         .font(.subheadline)
                         .tint(.indigo)
 
-                    Toggle("Color Syllables", isOn: Binding(
+                    Toggle("Underline Syllables", isOn: Binding(
                         get: { viewModel.isSyllableColoringEnabled },
-                        set: { newValue in
-                            viewModel.isSyllableColoringEnabled = newValue
-                            if newValue { viewModel.isRhymeHighlightEnabled = false }
-                        }
+                        set: { viewModel.isSyllableColoringEnabled = $0 }
                     ))
                     .font(.subheadline)
                     .tint(.indigo)
 
                     Toggle("Color Rhymes", isOn: Binding(
                         get: { viewModel.isRhymeHighlightEnabled },
-                        set: { newValue in
-                            viewModel.isRhymeHighlightEnabled = newValue
-                            if newValue { viewModel.isSyllableColoringEnabled = false }
-                        }
+                        set: { viewModel.isRhymeHighlightEnabled = $0 }
                     ))
                     .font(.subheadline)
                     .tint(.indigo)

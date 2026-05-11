@@ -363,13 +363,10 @@ fun AssistantPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Color Syllables", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                Text("Underline Syllables", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                 Switch(
                     checked = viewModel.isSyllableColoringEnabled,
-                    onCheckedChange = {
-                        viewModel.isSyllableColoringEnabled = it
-                        if (it) viewModel.isRhymeHighlightEnabled = false
-                    },
+                    onCheckedChange = { viewModel.isSyllableColoringEnabled = it },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = colorScheme.onPrimary,
                         checkedTrackColor = colorScheme.primary,
@@ -387,10 +384,7 @@ fun AssistantPanel(
                 Text("Color Rhymes", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                 Switch(
                     checked = viewModel.isRhymeHighlightEnabled,
-                    onCheckedChange = {
-                        viewModel.isRhymeHighlightEnabled = it
-                        if (it) viewModel.isSyllableColoringEnabled = false
-                    },
+                    onCheckedChange = { viewModel.isRhymeHighlightEnabled = it },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = colorScheme.onPrimary,
                         checkedTrackColor = colorScheme.primary,
