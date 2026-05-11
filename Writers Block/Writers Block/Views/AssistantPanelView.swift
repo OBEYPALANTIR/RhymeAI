@@ -323,6 +323,8 @@ struct AssistantPanelView: View {
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
+        .frame(width: 34, height: 34)
+        .contentShape(Rectangle())
         .accessibilityLabel("\(help.title) help")
     }
 }
@@ -428,6 +430,7 @@ private struct FeatureHelpSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 

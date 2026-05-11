@@ -2,7 +2,6 @@ package com.rhymeai.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -51,6 +51,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -599,7 +601,8 @@ private fun FeatureHelpLabel(
         )
         HelpButton(
             onClick = { onHelp(help) },
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            contentDescription = "$text help"
         )
     }
 }
@@ -607,21 +610,28 @@ private fun FeatureHelpLabel(
 @Composable
 private fun HelpButton(
     onClick: () -> Unit,
-    tint: Color
+    tint: Color,
+    contentDescription: String
 ) {
-    Box(
+    IconButton(
+        onClick = onClick,
         modifier = Modifier
-            .size(20.dp)
-            .border(1.dp, tint.copy(alpha = 0.72f), CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+            .size(40.dp)
+            .semantics { this.contentDescription = contentDescription }
     ) {
-        Text(
-            "?",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = tint
-        )
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .border(1.dp, tint.copy(alpha = 0.72f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "?",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = tint
+            )
+        }
     }
 }
 
