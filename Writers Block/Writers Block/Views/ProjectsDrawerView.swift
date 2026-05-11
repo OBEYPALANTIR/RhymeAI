@@ -38,11 +38,7 @@ struct ProjectsDrawerView: View {
                 drawerContent
                     .frame(width: drawerWidth)
                     .frame(maxHeight: .infinity)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-                    )
+                    .background(.ultraThinMaterial)
                     .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
                     .offset(x: drawerVisible ? 0 : -drawerWidth)
             }

@@ -153,7 +153,10 @@ fun ProjectsDrawer(
 
     Dialog(
         onDismissRequest = { closeDrawer() },
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
@@ -195,11 +198,10 @@ fun ProjectsDrawer(
                             indication = null,
                             onClick = {}
                         ),
-                    shape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+                    shape = RoundedCornerShape(0.dp),
                     color = colorScheme.surfaceContainerLow,
                     contentColor = colorScheme.onSurface,
-                    tonalElevation = 8.dp,
-                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                    tonalElevation = 8.dp
                 ) {
                     Column(
                         modifier = Modifier
