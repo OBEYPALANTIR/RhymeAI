@@ -16,16 +16,22 @@ private struct LiquidGlassSurfaceModifier: ViewModifier {
                     in: .rect(cornerRadius: cornerRadius)
                 )
         } else {
-            content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .background(
-                    (tint ?? Color.white).opacity(fallbackOpacity),
-                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-                )
+            if cornerRadius == 0 {
+                content
+                    .background(.ultraThinMaterial)
+                    .background((tint ?? Color.white).opacity(fallbackOpacity))
+            } else {
+                content
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .background(
+                        (tint ?? Color.white).opacity(fallbackOpacity),
+                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+            }
         }
     }
 }

@@ -352,6 +352,7 @@ struct EditorView: View {
                 Image(systemName: "line.3.horizontal")
                     .font(.body)
                     .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
             }
             .accessibilityLabel("Open songs drawer")
 
@@ -392,6 +393,7 @@ struct EditorView: View {
                 Image(systemName: "square.and.arrow.up")
                     .font(.body)
                     .foregroundStyle(Color.secondary.opacity(viewModel.lyrics.isEmpty ? 0.4 : 1.0))
+                    .frame(width: 44, height: 44)
             }
             .disabled(viewModel.lyrics.isEmpty)
 
@@ -402,10 +404,11 @@ struct EditorView: View {
                 Image(systemName: "gearshape")
                     .font(.body)
                     .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .liquidGlassSurface(cornerRadius: 0, fallbackOpacity: 0.02)
         .overlay(
             Divider(), alignment: .bottom

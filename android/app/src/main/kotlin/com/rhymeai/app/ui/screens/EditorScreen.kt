@@ -38,12 +38,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -305,22 +307,66 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     }
                 },
                 title = {
-                    Column {
-                        Text(
-                            viewModel.title.ifBlank { "Writers Block" },
-                            style = MaterialTheme.typography.titleMedium,
-                            color = colorScheme.onSurface,
+                    when (viewModel.saveStatus) {
+                        SaveStatus.SAVING -> Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "Saving...",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                        SaveStatus.SAVED -> Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = colorScheme.tertiary
+                            )
+                            Text(
+                                "Saved",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = colorScheme.tertiary,
+                                maxLines = 1
+                            )
+                        }
+                        SaveStatus.IDLE -> Text(
+                            "Writers Block",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            "$wordCount words • $syllableCount syllables",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colorScheme.onSurfaceVariant
                         )
                     }
                 },
                 actions = {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(end = 4.dp)
+                    ) {
+                        Text(
+                            "$wordCount words",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "$syllableCount syllables",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
                     IconButton(
                         onClick = { viewModel.showExportSheet = true },
                         enabled = viewModel.lyrics.isNotBlank()
