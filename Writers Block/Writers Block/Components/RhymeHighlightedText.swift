@@ -3,6 +3,13 @@ import SwiftUI
 struct RhymeHighlightedText: View {
     let text: String
     let enabled: Bool
+    let syllablesEnabled: Bool
+
+    init(text: String, enabled: Bool, syllablesEnabled: Bool = false) {
+        self.text = text
+        self.enabled = enabled
+        self.syllablesEnabled = syllablesEnabled
+    }
 
     private static let palette: [Color] = [
         Color(red: 252/255, green: 165/255, blue: 165/255), // rose
@@ -22,7 +29,7 @@ struct RhymeHighlightedText: View {
     private static let wordPattern = try! NSRegularExpression(pattern: "[a-zA-Z']+")
 
     var body: some View {
-        if enabled && !text.isEmpty {
+        if (enabled || syllablesEnabled) && !text.isEmpty {
             Text(highlightedAttributedString)
                 .font(.system(size: 16))
         } else {
@@ -67,11 +74,18 @@ struct RhymeHighlightedText: View {
                 result += pre
             }
             var seg = AttributedString(tok.value)
-            if let familyKey = familyKeyPerToken[i] {
+            if enabled, let familyKey = familyKeyPerToken[i] {
                 seg.foregroundColor = colorFor(key: familyKey)
                 seg.font = .system(size: 16, weight: .semibold)
             } else {
                 seg.foregroundColor = .primary.opacity(0.9)
+            }
+            if syllablesEnabled {
+                let count = SyllableCounter.count(tok.value)
+                seg.underlineStyle = Text.LineStyle(
+                    pattern: .solid,
+                    color: Self.syllableColor(for: count)
+                )
             }
             result += seg
             cursor = tok.range.upperBound
@@ -89,5 +103,14 @@ struct RhymeHighlightedText: View {
     private func colorFor(key: String) -> Color {
         let h = abs(key.hashValue)
         return Self.palette[h % Self.palette.count]
+    }
+
+    private static func syllableColor(for count: Int) -> Color {
+        switch count {
+        case 1: return Color(red: 110.0 / 255, green: 231.0 / 255, blue: 183.0 / 255)
+        case 2: return Color(red: 147.0 / 255, green: 197.0 / 255, blue: 253.0 / 255)
+        case 3: return Color(red: 216.0 / 255, green: 180.0 / 255, blue: 254.0 / 255)
+        default: return Color(red: 253.0 / 255, green: 164.0 / 255, blue: 175.0 / 255)
+        }
     }
 }

@@ -91,7 +91,7 @@ import com.rhymeai.app.ui.components.ExportSheet
 import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.RewriteDialog
 import com.rhymeai.app.ui.components.RhymeHighlightedText
-import com.rhymeai.app.ui.components.SyllableColoredText
+import com.rhymeai.app.ui.components.syllableUnderlines
 import com.rhymeai.app.util.LyricsExporter
 import com.rhymeai.app.util.SyllableCounter
 import kotlin.math.ceil
@@ -462,6 +462,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     // Lyrics editor with overlay (syllable or rhyme coloring)
                     val overlayActive = (viewModel.isSyllableColoringEnabled ||
                         viewModel.isRhymeHighlightEnabled) && viewModel.lyrics.isNotEmpty()
+                    val lyricsTextStyle = TextStyle(
+                        fontSize = 16.sp,
+                        lineHeight = 28.sp,
+                        fontFamily = FontFamily.Default
+                    )
+                    val syllableUnderlineGap = with(density) { 2.dp.toPx() }
+                    val syllableUnderlineWidth = with(density) { 3.dp.toPx() }
                     Box(modifier = Modifier.fillMaxWidth()) {
                         // Colored overlay (behind)
                         if (overlayActive) {
@@ -469,21 +476,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 RhymeHighlightedText(
                                     text = viewModel.lyrics,
                                     enabled = true,
-                                    style = TextStyle(
-                                        fontSize = 16.sp,
-                                        lineHeight = 28.sp,
-                                        fontFamily = FontFamily.Default
-                                    )
+                                    style = lyricsTextStyle
                                 )
                             } else {
-                                SyllableColoredText(
+                                Text(
                                     text = viewModel.lyrics,
-                                    enabled = true,
-                                    style = TextStyle(
-                                        fontSize = 16.sp,
-                                        lineHeight = 28.sp,
-                                        fontFamily = FontFamily.Default
-                                    )
+                                    style = lyricsTextStyle,
+                                    color = colorScheme.onBackground.copy(alpha = 0.9f)
                                 )
                             }
                         }
@@ -493,10 +492,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             value = viewModel.lyricsFieldValue,
                             onValueChange = { viewModel.onLyricsChanged(it) },
                             onTextLayout = { lyricsTextLayout = it },
-                            textStyle = TextStyle(
-                                fontSize = 16.sp,
-                                lineHeight = 28.sp,
-                                fontFamily = FontFamily.Default,
+                            textStyle = lyricsTextStyle.copy(
                                 color = if (overlayActive)
                                     Color.Transparent
                                 else
@@ -505,6 +501,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             cursorBrush = SolidColor(colorScheme.primary),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .syllableUnderlines(
+                                    text = viewModel.lyrics,
+                                    enabled = overlayActive && viewModel.isSyllableColoringEnabled,
+                                    textLayoutResult = lyricsTextLayout,
+                                    underlineGap = syllableUnderlineGap,
+                                    strokeWidth = syllableUnderlineWidth
+                                )
                                 .onFocusChanged { lyricsFocused = it.isFocused },
                             decorationBox = { innerTextField ->
                                 Box {
