@@ -1,5 +1,6 @@
 package com.rhymeai.app.ui.components
 
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -66,6 +68,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.util.SyllableCounter
+import com.rhymeai.app.ui.theme.DesignTokens
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -75,7 +78,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
-private const val DrawerAnimationMillis = 260
+private val DrawerAnimationMillis: Int get() = DesignTokens.Motion.drawerPresentMillis
 
 @Composable
 fun ProjectsDrawer(
@@ -126,6 +129,7 @@ fun ProjectsDrawer(
                 importError = null
                 closeDrawer { onImportProject(project) }
             } catch (e: Exception) {
+                Log.e("ProjectsDialog", "Import failed", e)
                 importError = "Could not import this file. Pick a RhymeAI project JSON."
             }
         }
@@ -134,9 +138,9 @@ fun ProjectsDrawer(
     val sortedProjects = projects.sortedByDescending { it.updatedAt }
     val filteredProjects = searchProjects(sortedProjects, searchQuery)
     val isSearching = searchQuery.isNotBlank()
-    val drawerWidth = (configuration.screenWidthDp.dp - 32.dp)
-        .coerceAtLeast(296.dp)
-        .coerceAtMost(360.dp)
+    val drawerWidth = (configuration.screenWidthDp.dp - DesignTokens.Spacing.xxl)
+        .coerceAtLeast(DesignTokens.Drawer.compactWidth)
+        .coerceAtMost(DesignTokens.Drawer.width)
     val textFieldColors = OutlinedTextFieldDefaults.colors(
         unfocusedBorderColor = colorScheme.outlineVariant,
         focusedBorderColor = colorScheme.primary,
@@ -191,7 +195,7 @@ fun ProjectsDrawer(
                     modifier = Modifier
                         .fillMaxHeight()
                         .width(drawerWidth)
-                        .widthIn(max = 360.dp)
+                        .widthIn(max = DesignTokens.Drawer.width)
                         .imePadding()
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
@@ -208,12 +212,12 @@ fun ProjectsDrawer(
                             .fillMaxSize()
                             .statusBarsPadding()
                             .navigationBarsPadding()
-                            .padding(horizontal = 16.dp)
-                            .padding(top = 16.dp, bottom = 20.dp)
+                            .padding(horizontal = DesignTokens.Spacing.lg)
+                            .padding(top = DesignTokens.Spacing.lg, bottom = DesignTokens.Spacing.lg)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             OutlinedTextField(
@@ -241,7 +245,7 @@ fun ProjectsDrawer(
                                 placeholder = { Text("Search songs", fontSize = 14.sp) },
                                 modifier = Modifier.weight(1f),
                                 colors = textFieldColors,
-                                shape = RoundedCornerShape(14.dp)
+                                shape = RoundedCornerShape(DesignTokens.Radius.xl)
                             )
 
                             IconButton(onClick = { closeDrawer() }) {
@@ -257,13 +261,13 @@ fun ProjectsDrawer(
                             onClick = { closeDrawer(afterClose = onNewProject) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 14.dp)
+                                .padding(top = DesignTokens.Spacing.md)
                                 .height(56.dp),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(DesignTokens.Radius.xl),
                             border = BorderStroke(1.dp, colorScheme.outline)
                         ) {
                             Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(DesignTokens.Spacing.sm))
                             Text("Create New Song", fontWeight = FontWeight.Medium)
                         }
 
@@ -272,14 +276,14 @@ fun ProjectsDrawer(
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp,
                             color = colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 22.dp, bottom = 10.dp)
+                            modifier = Modifier.padding(top = DesignTokens.Spacing.lg, bottom = DesignTokens.Spacing.sm)
                         )
 
                         LazyColumn(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
                         ) {
                             if (projects.isEmpty()) {
                                 item {
@@ -316,12 +320,12 @@ fun ProjectsDrawer(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(50.dp),
-                            shape = RoundedCornerShape(14.dp),
+                                .height(DesignTokens.Touch.minTarget),
+                            shape = RoundedCornerShape(DesignTokens.Radius.xl),
                             border = BorderStroke(1.dp, colorScheme.outlineVariant)
                         ) {
                             Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(DesignTokens.Spacing.sm))
                             Text("Import From File", fontWeight = FontWeight.Medium)
                         }
 
@@ -330,7 +334,7 @@ fun ProjectsDrawer(
                                 it,
                                 color = colorScheme.error,
                                 fontSize = 12.sp,
-                                modifier = Modifier.padding(top = 8.dp)
+                                modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
                             )
                         }
                     }
@@ -368,11 +372,11 @@ private fun EmptyDrawerState(icon: @Composable () -> Unit, text: String) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 42.dp),
+            .padding(vertical = DesignTokens.Spacing.golden),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
-            modifier = Modifier.size(44.dp),
+            modifier = Modifier.size(DesignTokens.Touch.minTarget),
             contentAlignment = Alignment.Center
         ) {
             androidx.compose.runtime.CompositionLocalProvider(
@@ -381,7 +385,7 @@ private fun EmptyDrawerState(icon: @Composable () -> Unit, text: String) {
                 icon()
             }
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(DesignTokens.Spacing.md))
         Text(text, color = colorScheme.onSurfaceVariant)
     }
 }
@@ -401,8 +405,10 @@ private fun ProjectDrawerRow(
 
     OutlinedCard(
         onClick = { onLoadProject(project) },
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = DesignTokens.Touch.minTarget),
+        shape = RoundedCornerShape(DesignTokens.Radius.xl),
         colors = CardDefaults.outlinedCardColors(
             containerColor = if (isActive) {
                 colorScheme.primaryContainer
@@ -423,7 +429,7 @@ private fun ProjectDrawerRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
+                .padding(DesignTokens.Spacing.md),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -446,7 +452,7 @@ private fun ProjectDrawerRow(
             }
             IconButton(
                 onClick = { onDeleteProject(project.id) },
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(DesignTokens.Touch.minTarget)
             ) {
                 Icon(
                     Icons.Default.Delete,

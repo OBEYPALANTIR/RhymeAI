@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -29,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.SONG_TEMPLATES
+import com.rhymeai.app.ui.theme.DesignTokens
 
 @Composable
 fun TemplatesDialog(
@@ -44,13 +47,14 @@ fun TemplatesDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp),
+                .padding(DesignTokens.Spacing.xl),
             contentAlignment = Alignment.Center
         ) {
             Surface(
                 modifier = Modifier
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
+                    .fillMaxWidth()
+                    .widthIn(max = DesignTokens.Drawer.expandedWidth),
+                shape = RoundedCornerShape(DesignTokens.Radius.xxl),
                 color = colorScheme.surfaceContainerLow,
                 contentColor = colorScheme.onSurface,
                 tonalElevation = 6.dp,
@@ -61,13 +65,13 @@ fun TemplatesDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp),
+                        .padding(DesignTokens.Spacing.lg),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
                     ) {
                         Icon(Icons.Default.GridView, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
                         Text("Choose a Template", fontWeight = FontWeight.Medium, fontSize = 18.sp, color = colorScheme.onSurface)
@@ -80,23 +84,24 @@ fun TemplatesDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                        .padding(bottom = 20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .padding(horizontal = DesignTokens.Spacing.lg)
+                        .padding(bottom = DesignTokens.Spacing.lg),
+                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
                 ) {
                     SONG_TEMPLATES.forEach { template ->
                         OutlinedCard(
                             onClick = { onSelectTemplate(template.name, template.theme, template.lyrics) },
                             modifier = Modifier
-                                .fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
+                                .fillMaxWidth()
+                                .heightIn(min = DesignTokens.Touch.minTarget),
+                            shape = RoundedCornerShape(DesignTokens.Radius.lg),
                             colors = CardDefaults.outlinedCardColors(
                                 containerColor = colorScheme.surfaceContainer,
                                 contentColor = colorScheme.onSurface
                             ),
                             border = BorderStroke(1.dp, colorScheme.outlineVariant)
                         ) {
-                            Column(modifier = Modifier.padding(20.dp)) {
+                            Column(modifier = Modifier.padding(DesignTokens.Spacing.lg)) {
                                 Text(
                                     template.name,
                                     fontWeight = FontWeight.Medium,
@@ -107,7 +112,7 @@ fun TemplatesDialog(
                                     template.theme,
                                     fontSize = 13.sp,
                                     color = colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(top = 4.dp)
+                                    modifier = Modifier.padding(top = DesignTokens.Spacing.xs)
                                 )
                             }
                         }

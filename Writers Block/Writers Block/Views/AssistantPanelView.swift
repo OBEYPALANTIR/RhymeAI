@@ -7,7 +7,7 @@ struct AssistantPanelView: View {
     var onDismiss: (() -> Void)?
 
     var body: some View {
-        let rhymeContext = viewModel.computeRhymeContext()
+        let rhymeContext = viewModel.rhymeContext
 
         Group {
             if isInline {
@@ -50,8 +50,8 @@ struct AssistantPanelView: View {
                     .font(.headline)
                 Spacer()
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            .padding(.horizontal, RhymeAITokens.Spacing.md)
+            .padding(.vertical, RhymeAITokens.Spacing.sm)
             .liquidGlassSurface(cornerRadius: 0, fallbackOpacity: 0.02)
             .overlay(Divider(), alignment: .bottom)
 
@@ -63,228 +63,246 @@ struct AssistantPanelView: View {
 
     private func panelScrollView(rhymeContext: RhymeContext) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            panelControls(rhymeContext: rhymeContext)
+                .padding(RhymeAITokens.Spacing.md)
+                .liquidGlassGroup(spacing: RhymeAITokens.Spacing.md)
+        }
+    }
 
-                    // MARK: - Context & Theme
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Label("Context & Theme", systemImage: "pencil")
-                                .font(.headline)
-                            helpButton(.contextTheme)
-                        }
+    private func panelControls(rhymeContext: RhymeContext) -> some View {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+            // MARK: - Context & Theme
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                HStack(spacing: RhymeAITokens.Spacing.xs) {
+                    Label("Context & Theme", systemImage: "pencil")
+                        .font(.headline)
+                    helpButton(.contextTheme)
+                }
 
-                        TextField("What is this song about?", text: $viewModel.theme, axis: .vertical)
-                            .lineLimit(3...6)
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(viewModel.useWholeSongContext)
-                    }
+                TextField("What is this song about?", text: $viewModel.theme, axis: .vertical)
+                    .lineLimit(3...6)
+                    .textFieldStyle(.plain)
+                    .padding(RhymeAITokens.Spacing.sm)
+                    .liquidGlassSurface(
+                        cornerRadius: RhymeAITokens.Radius.md,
+                        tint: viewModel.useWholeSongContext ? .gray.opacity(0.12) : .white.opacity(0.04),
+                        interactive: !viewModel.useWholeSongContext,
+                        fallbackOpacity: viewModel.useWholeSongContext ? 0.04 : 0.06
+                    )
+                    .disabled(viewModel.useWholeSongContext)
+            }
 
-                    Divider()
+            Divider()
 
-                    // MARK: - Target Line
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Label("Target Line", systemImage: "text.alignleft")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.secondary)
-                            helpButton(.targetLine)
+            // MARK: - Target Line
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                HStack {
+                    Label("Target Line", systemImage: "text.alignleft")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    helpButton(.targetLine)
 
-                            Spacer()
+                    Spacer()
 
-                            if let targetLine = rhymeContext.targetLine {
-                                Text("\(SyllableCounter.countText(targetLine)) syl")
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                            }
-                        }
-
-                        Group {
-                            if let targetLine = rhymeContext.targetLine {
-                                Text("\"\(targetLine)\"")
-                                    .font(.system(.body, design: .serif))
-                                    .italic()
-                                    .foregroundStyle(.primary.opacity(0.9))
-                            } else {
-                                Text("New rhyme sound (or place cursor on a line)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary.opacity(0.5))
-                                    .italic()
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                        .background(Color.white.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-
-                    // MARK: - Rhyme Scheme
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            featureHelpLabel("Rhyme Scheme", help: .rhymeScheme)
-
-                            Spacer()
-
-                            Picker("Scheme", selection: $viewModel.rhymeScheme) {
-                                ForEach(RhymeScheme.allCases, id: \.self) { scheme in
-                                    Text(scheme.label).tag(scheme)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .tint(.indigo)
-                        }
-
-                        if viewModel.rhymeScheme == .custom {
-                            TextField("e.g. AABBCC", text: $viewModel.customRhymeScheme)
-                                .textFieldStyle(.roundedBorder)
-                                .textInputAutocapitalization(.characters)
-                                .onChange(of: viewModel.customRhymeScheme) { _, newValue in
-                                    viewModel.customRhymeScheme = newValue.uppercased().filter { $0.isLetter }
-                                }
-                        }
-
-                        if !viewModel.lyrics.isEmpty {
-                            RhymeSchemeDisplayView(
-                                rhymeContext: rhymeContext,
-                                activeScheme: viewModel.activeRhymeScheme
-                            )
-                        }
-                    }
-
-                    // MARK: - Rhyme Density
-                    VStack(alignment: .leading, spacing: 8) {
-                        featureHelpLabel("Rhyme Density", help: .rhymeDensity)
-
-                        Picker("Type", selection: $viewModel.rhymeType) {
-                            ForEach(RhymeType.allCases, id: \.self) { type in
-                                Text(type.shortName).tag(type)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                    }
-
-                    // MARK: - Complexity
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            featureHelpLabel("Complexity", help: .complexity)
-                            Spacer()
-                            Text(viewModel.rhymeComplexity.label)
-                                .font(.caption)
-                                .foregroundStyle(.indigo)
-                        }
-
-                        Slider(
-                            value: Binding(
-                                get: { Double(viewModel.rhymeComplexity.rawValue) },
-                                set: { viewModel.rhymeComplexity = RhymeComplexity(rawValue: Int($0)) ?? .moderate }
-                            ),
-                            in: 0...2,
-                            step: 1
-                        )
-                        .tint(.indigo)
-
-                        Text(viewModel.rhymeComplexity.description)
-                            .font(.caption)
+                    if let targetLine = rhymeContext.targetLine {
+                        Text("\(SyllableCounter.countText(targetLine)) syl")
+                            .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
+                            .padding(.horizontal, RhymeAITokens.Spacing.xs)
+                            .padding(.vertical, 3)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, fallbackOpacity: 0.08)
                     }
+                }
 
-                    // MARK: - Toggles
-                    toggleHelpRow(
-                        "Whole Song Context",
-                        help: .wholeSongContext,
-                        isOn: $viewModel.useWholeSongContext
-                    )
-
-                    toggleHelpRow(
-                        "Highlight Rhymes",
-                        help: .highlightRhymes,
-                        isOn: $viewModel.isHighlightEnabled
-                    )
-
-                    toggleHelpRow(
-                        "Underline Syllables",
-                        help: .underlineSyllables,
-                        isOn: Binding(
-                            get: { viewModel.isSyllableColoringEnabled },
-                            set: { viewModel.isSyllableColoringEnabled = $0 }
-                        )
-                    )
-
-                    toggleHelpRow(
-                        "Color Rhymes",
-                        help: .colorRhymes,
-                        isOn: Binding(
-                            get: { viewModel.isRhymeHighlightEnabled },
-                            set: { viewModel.isRhymeHighlightEnabled = $0 }
-                        )
-                    )
-
-                    // MARK: - Suggest Button
-                    Button {
-                        viewModel.getSuggestions()
-                    } label: {
-                        let isDisabled = viewModel.lyrics.isEmpty || viewModel.isLoading
-                        HStack {
-                            if viewModel.isLoading {
-                                ProgressView()
-                                    .tint(.white)
-                                Text("Thinking...")
-                            } else {
-                                Image(systemName: "sparkles")
-                                Text("Suggest Next Line")
-                            }
-                        }
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .liquidGlassSurface(
-                            cornerRadius: 14,
-                            tint: isDisabled ? .gray.opacity(0.2) : .indigo,
-                            interactive: !isDisabled,
-                            fallbackOpacity: isDisabled ? 0.12 : 0.32
-                        )
-                    }
-                    .disabled(viewModel.lyrics.isEmpty || viewModel.isLoading)
-
-                    // MARK: - Error
-                    if let error = viewModel.errorMessage {
-                        Text(error)
+                Group {
+                    if let targetLine = rhymeContext.targetLine {
+                        Text("\"\(targetLine)\"")
+                            .font(.system(.body, design: .serif))
+                            .italic()
+                            .foregroundStyle(.primary.opacity(0.9))
+                    } else {
+                        Text("New rhyme sound (or place cursor on a line)")
                             .font(.caption)
-                            .foregroundStyle(.red)
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.red.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .foregroundStyle(.secondary.opacity(0.5))
+                            .italic()
                     }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(RhymeAITokens.Spacing.sm)
+                .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm, tint: .white.opacity(0.03), fallbackOpacity: 0.05)
+            }
 
-                    // MARK: - Suggestions
-                    if !viewModel.suggestions.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Suggestions")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.secondary)
+            // MARK: - Rhyme Scheme
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                HStack {
+                    featureHelpLabel("Rhyme Scheme", help: .rhymeScheme)
 
-                            ForEach(Array(viewModel.suggestions.enumerated()), id: \.offset) { _, suggestion in
-                                SuggestionCardView(
-                                    suggestion: suggestion,
-                                    highlightRhyme: viewModel.isHighlightEnabled
-                                ) {
-                                    viewModel.insertSuggestion(suggestion)
-                                    if !isInline {
-                                        viewModel.showAssistantSheet = false
-                                    }
-                                }
+                    Spacer()
+
+                    Picker("Scheme", selection: $viewModel.rhymeScheme) {
+                        ForEach(RhymeScheme.allCases, id: \.self) { scheme in
+                            Text(scheme.label).tag(scheme)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(.indigo)
+                }
+
+                if viewModel.rhymeScheme == .custom {
+                    TextField("e.g. AABBCC", text: $viewModel.customRhymeScheme)
+                        .textFieldStyle(.plain)
+                        .textInputAutocapitalization(.characters)
+                        .padding(RhymeAITokens.Spacing.sm)
+                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .liquidGlassSurface(
+                            cornerRadius: RhymeAITokens.Radius.md,
+                            tint: .white.opacity(0.04),
+                            interactive: true,
+                            fallbackOpacity: 0.06
+                        )
+                        .onChange(of: viewModel.customRhymeScheme) { _, newValue in
+                            viewModel.customRhymeScheme = newValue.uppercased().filter { $0.isLetter }
+                        }
+                }
+
+                if !viewModel.lyrics.isEmpty {
+                    RhymeSchemeDisplayView(
+                        rhymeContext: rhymeContext,
+                        activeScheme: viewModel.activeRhymeScheme
+                    )
+                }
+            }
+
+            // MARK: - Rhyme Density
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                featureHelpLabel("Rhyme Density", help: .rhymeDensity)
+
+                Picker("Type", selection: $viewModel.rhymeType) {
+                    ForEach(RhymeType.allCases, id: \.self) { type in
+                        Text(type.shortName).tag(type)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            // MARK: - Complexity
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                HStack {
+                    featureHelpLabel("Complexity", help: .complexity)
+                    Spacer()
+                    Text(viewModel.rhymeComplexity.label)
+                        .font(.caption)
+                        .foregroundStyle(.indigo)
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { Double(viewModel.rhymeComplexity.rawValue) },
+                        set: { viewModel.rhymeComplexity = RhymeComplexity(rawValue: Int($0)) ?? .moderate }
+                    ),
+                    in: 0...2,
+                    step: 1
+                )
+                .tint(.indigo)
+
+                Text(viewModel.rhymeComplexity.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // MARK: - Toggles
+            toggleHelpRow(
+                "Whole Song Context",
+                help: .wholeSongContext,
+                isOn: $viewModel.useWholeSongContext
+            )
+
+            toggleHelpRow(
+                "Highlight Rhymes",
+                help: .highlightRhymes,
+                isOn: $viewModel.isHighlightEnabled
+            )
+
+            toggleHelpRow(
+                "Underline Syllables",
+                help: .underlineSyllables,
+                isOn: Binding(
+                    get: { viewModel.isSyllableColoringEnabled },
+                    set: { viewModel.isSyllableColoringEnabled = $0 }
+                )
+            )
+
+            toggleHelpRow(
+                "Color Rhymes",
+                help: .colorRhymes,
+                isOn: Binding(
+                    get: { viewModel.isRhymeHighlightEnabled },
+                    set: { viewModel.isRhymeHighlightEnabled = $0 }
+                )
+            )
+
+            // MARK: - Suggest Button
+            Button {
+                viewModel.getSuggestions()
+            } label: {
+                let isDisabled = viewModel.lyrics.isEmpty || viewModel.isLoading
+                HStack {
+                    if viewModel.isLoading {
+                        ProgressView()
+                            .tint(.white)
+                        Text("Thinking...")
+                    } else {
+                        Image(systemName: "sparkles")
+                        Text("Suggest Next Line")
+                    }
+                }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, RhymeAITokens.Spacing.sm)
+                .frame(minHeight: RhymeAITokens.Touch.minimum)
+                .liquidGlassSurface(
+                    cornerRadius: RhymeAITokens.Radius.md,
+                    tint: isDisabled ? .gray.opacity(0.2) : .indigo,
+                    interactive: !isDisabled,
+                    fallbackOpacity: isDisabled ? 0.12 : 0.32
+                )
+            }
+            .disabled(viewModel.lyrics.isEmpty || viewModel.isLoading)
+            .buttonStyle(.rhymePress)
+
+            // MARK: - Error
+            if let error = viewModel.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(RhymeAITokens.Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm, tint: .red.opacity(0.12), fallbackOpacity: 0.08)
+            }
+
+            // MARK: - Suggestions
+            if !viewModel.suggestions.isEmpty {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    Text("Suggestions")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    ForEach(Array(viewModel.suggestions.enumerated()), id: \.offset) { _, suggestion in
+                        SuggestionCardView(
+                            suggestion: suggestion,
+                            highlightRhyme: viewModel.isHighlightEnabled
+                        ) {
+                            viewModel.insertSuggestion(suggestion)
+                            if !isInline {
+                                viewModel.showAssistantSheet = false
                             }
                         }
                     }
                 }
-                .padding(20)
             }
         }
+    }
 
     private func featureHelpLabel(
         _ text: String,
@@ -292,7 +310,7 @@ struct AssistantPanelView: View {
         font: Font = .subheadline.weight(.medium),
         color: Color = .secondary
     ) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: RhymeAITokens.Spacing.xs) {
             Text(text)
                 .font(font)
                 .foregroundStyle(color)
@@ -318,12 +336,14 @@ struct AssistantPanelView: View {
         Button {
             activeHelp = help
         } label: {
-            Image(systemName: "questionmark.circle")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.secondary)
+            ZStack {
+                Image(systemName: "questionmark.circle")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum, alignment: .center)
         }
-        .buttonStyle(.plain)
-        .frame(width: 34, height: 34)
+        .buttonStyle(.rhymePress)
         .contentShape(Rectangle())
         .accessibilityLabel("\(help.title) help")
     }
@@ -400,7 +420,7 @@ private struct FeatureHelpSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.lg) {
                     Text(help.message)
                         .font(.body)
                         .foregroundStyle(.primary.opacity(0.9))
@@ -416,7 +436,7 @@ private struct FeatureHelpSheet: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(20)
+                .padding(RhymeAITokens.Spacing.md)
             }
             .background(Color(UIColor.systemBackground))
             .navigationTitle(help.title)
@@ -436,7 +456,7 @@ private struct FeatureHelpSheet: View {
 
 private struct SyllableLegendView: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             Text("Underline colors")
                 .font(.subheadline.weight(.semibold))
 
@@ -445,8 +465,8 @@ private struct SyllableLegendView: View {
             SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 3), label: "3 syllables")
             SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 4), label: "4+ syllables")
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(RhymeAITokens.Spacing.md)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
     }
 }
 
@@ -455,7 +475,7 @@ private struct SyllableLegendRow: View {
     let label: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: RhymeAITokens.Spacing.sm) {
             Capsule()
                 .fill(color)
                 .frame(width: 28, height: 4)
@@ -477,7 +497,7 @@ private struct RhymeLegendView: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             Text("Rhyme colors")
                 .font(.subheadline.weight(.semibold))
 
@@ -485,7 +505,7 @@ private struct RhymeLegendView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 8) {
+            HStack(spacing: RhymeAITokens.Spacing.xs) {
                 ForEach(Array(palette.enumerated()), id: \.offset) { _, color in
                     Circle()
                         .fill(color)
@@ -497,8 +517,8 @@ private struct RhymeLegendView: View {
                 }
             }
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(RhymeAITokens.Spacing.md)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
     }
 }
 
