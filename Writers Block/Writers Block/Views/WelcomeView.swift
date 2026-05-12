@@ -34,11 +34,11 @@ struct WelcomeView: View {
                     .shadow(color: .indigo.opacity(0.32), radius: 22, y: 10)
                     .padding(10)
                     .liquidGlassSurface(cornerRadius: 30, tint: .white.opacity(0.04))
-                .padding(.bottom, 32)
+                .padding(.bottom, RhymeAITokens.Spacing.xl)
 
                 // Title
                 Text("Writers Block")
-                    .font(.system(size: 44, weight: .bold, design: .serif))
+                    .font(.system(.largeTitle, design: .serif, weight: .bold))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [.indigo, .purple],
@@ -53,24 +53,25 @@ struct WelcomeView: View {
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 420)
-                    .padding(.horizontal, 32)
-                    .padding(.bottom, 48)
+                    .frame(maxWidth: RhymeAITokens.Layout.assistantReadableWidth)
+                    .padding(.horizontal, RhymeAITokens.Spacing.xl)
+                    .padding(.bottom, RhymeAITokens.Spacing.xxl)
 
                 // Action Cards — horizontal on iPad, vertical on iPhone
                 Group {
                     if isRegular {
-                        HStack(spacing: 16) {
+                        HStack(spacing: RhymeAITokens.Spacing.lg) {
                             cardContent
                         }
                     } else {
-                        VStack(spacing: 16) {
+                        VStack(spacing: RhymeAITokens.Spacing.lg) {
                             cardContent
                         }
                     }
                 }
-                .frame(maxWidth: 600)
-                .padding(.horizontal, 24)
+                .frame(maxWidth: RhymeAITokens.Layout.drawerMaxWidth + RhymeAITokens.Layout.drawerMinWidth)
+                .padding(.horizontal, RhymeAITokens.Spacing.xl)
+                .liquidGlassGroup(spacing: RhymeAITokens.Spacing.lg)
 
                 Spacer()
                 Spacer()
@@ -122,15 +123,14 @@ private struct WelcomeCard: View {
             Group {
                 if compact {
                     // Vertical card layout for iPad horizontal arrangement
-                    VStack(spacing: 12) {
+                    VStack(spacing: RhymeAITokens.Spacing.sm) {
                         Image(systemName: icon)
                             .font(.title2)
                             .foregroundStyle(.indigo)
-                            .frame(width: 44, height: 44)
-                            .background(Color.indigo.opacity(0.15))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .indigo.opacity(0.16), fallbackOpacity: 0.10)
 
-                        VStack(spacing: 2) {
+                        VStack(spacing: RhymeAITokens.Spacing.xs) {
                             Text(title)
                                 .font(.headline)
                                 .foregroundStyle(.primary)
@@ -141,18 +141,17 @@ private struct WelcomeCard: View {
                         .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(20)
+                    .padding(RhymeAITokens.Spacing.md)
                 } else {
                     // Horizontal card layout for iPhone
-                    HStack(spacing: 16) {
+                    HStack(spacing: RhymeAITokens.Spacing.lg) {
                         Image(systemName: icon)
                             .font(.title2)
                             .foregroundStyle(.indigo)
-                            .frame(width: 44, height: 44)
-                            .background(Color.indigo.opacity(0.15))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .indigo.opacity(0.16), fallbackOpacity: 0.10)
 
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                             Text(title)
                                 .font(.headline)
                                 .foregroundStyle(.primary)
@@ -167,12 +166,13 @@ private struct WelcomeCard: View {
                             .font(.caption)
                             .foregroundStyle(.secondary.opacity(0.5))
                     }
-                    .padding(16)
+                    .padding(RhymeAITokens.Spacing.lg)
                 }
             }
-            .liquidGlassSurface(cornerRadius: 16, tint: .indigo.opacity(0.08), interactive: true)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.08), interactive: true)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.rhymePress)
     }
 }
 

@@ -52,6 +52,26 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testUnBlockButtonHidesWhileEditingLyrics() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let unblockButton = app.buttons["unblockButton"]
+        XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+
+        let lyricsEditor = app.textViews.firstMatch
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        lyricsEditor.tap()
+        lyricsEditor.typeText("Testing keyboard overlap")
+
+        XCTAssertFalse(unblockButton.exists)
+    }
+
+    @MainActor
     func testBackSwipeClosesAssistantSheetWithoutReturningToMenu() throws {
         let app = XCUIApplication()
         app.launch()

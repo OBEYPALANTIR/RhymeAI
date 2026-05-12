@@ -35,6 +35,18 @@ const SONG_TEMPLATES = [
   }
 ];
 
+const RHYME_MOTION = {
+  feedback: 0.18,
+  dismiss: 0.18,
+  state: 0.26,
+  dialog: 0.26,
+  origin: 0.34,
+  settle: 0.42,
+} as const;
+
+const RHYME_EASE_EMPHASIZED: [number, number, number, number] = [0.2, 0, 0, 1];
+
+
 export default function App() {
   const [theme, setTheme] = useState('');
   const [title, setTitle] = useState(() => localStorage.getItem('lyricist-title') || '');
@@ -331,8 +343,8 @@ export default function App() {
         {/* Header */}
         <motion.header 
           animate={{ y: isFocused ? '-100%' : 0, opacity: isFocused ? 0 : 1 }}
-          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-          className="h-16 border-b border-white/10 flex items-center px-6 justify-between shrink-0 glass-panel absolute top-0 w-full z-20 bg-[#0a0a0a]/90 backdrop-blur-md"
+          transition={{ duration: RHYME_MOTION.origin, ease: RHYME_EASE_EMPHASIZED }}
+          className="h-16 border-b border-white/10 flex items-center px-[var(--rhyme-space-screen-x)] justify-between shrink-0 glass-panel absolute top-0 w-full z-20 bg-[#0a0a0a]/90 backdrop-blur-md"
         >
           <div className="flex items-center gap-2 text-white/80">
             <Music className="w-5 h-5 text-indigo-400" />
@@ -340,19 +352,19 @@ export default function App() {
             <div className="h-4 w-px bg-white/20 mx-2" />
             <button 
               onClick={() => setIsProjectsModalOpen(true)}
-              className="text-xs font-medium text-white/60 hover:text-white flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-white/10 transition-colors cursor-pointer"
+              className="rhyme-touch-target text-xs font-medium text-white/60 hover:text-white flex items-center gap-1.5 px-3 rounded-md hover:bg-white/10 transition-colors duration-[var(--rhyme-motion-feedback)] cursor-pointer"
             >
               <FolderOpen className="w-3.5 h-3.5" />
               Projects
             </button>
             {saveStatus === 'saving' && (
-              <span className="text-xs font-medium text-white/50 flex items-center gap-1.5 px-2 py-1">
+              <span role="status" aria-live="polite" className="text-xs font-medium text-white/50 flex items-center gap-1.5 px-2 py-1">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 Saving...
               </span>
             )}
             {saveStatus === 'saved' && (
-              <span className="text-xs font-medium text-emerald-400/80 flex items-center gap-1.5 px-2 py-1">
+              <span role="status" aria-live="polite" className="text-xs font-medium text-emerald-400/80 flex items-center gap-1.5 px-2 py-1">
                 <Check className="w-3.5 h-3.5" />
                 Saved
               </span>
@@ -367,7 +379,7 @@ export default function App() {
         {/* Editor */}
         <motion.div 
           animate={{ paddingTop: isFocused ? '0' : '4rem' }}
-          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+          transition={{ duration: RHYME_MOTION.origin, ease: RHYME_EASE_EMPHASIZED }}
           className="flex-1 relative overflow-hidden flex flex-col"
         >
           <div className="absolute inset-0 pointer-events-none bg-gradient-to-b from-indigo-500/5 to-transparent opacity-50" />
@@ -376,10 +388,10 @@ export default function App() {
             className="flex-1 overflow-y-auto relative scroll-smooth"
             onScroll={(e) => setScrollY(e.currentTarget.scrollTop)}
           >
-            <div className="max-w-3xl mx-auto min-h-full flex flex-col">
+            <div className="max-w-[var(--rhyme-width-editor-max)] mx-auto min-h-full flex flex-col">
               {/* Sticky Title */}
               <div 
-                className={`sticky top-0 z-10 bg-[#0a0a0a]/90 backdrop-blur-xl transition-all duration-300 px-8 md:px-12 ${
+                className={`sticky top-0 z-10 bg-[#0a0a0a]/90 backdrop-blur-xl transition-[padding,border-color,box-shadow] duration-[var(--rhyme-motion-state)] px-[var(--rhyme-space-lg)] md:px-[var(--rhyme-space-xl)] ${
                   scrollY > 20 
                     ? 'py-4 border-b border-white/10 shadow-lg shadow-black/50' 
                     : 'pt-8 md:pt-12 pb-8 border-b border-transparent'
@@ -391,14 +403,14 @@ export default function App() {
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Song Title..."
                   onFocus={() => setIsFocused(true)}
-                  className={`bg-transparent font-serif font-bold outline-none placeholder:text-white/20 w-full transition-all duration-300 ${
+                  className={`bg-transparent font-serif font-bold outline-none placeholder:text-white/20 w-full transition-[font-size] duration-[var(--rhyme-motion-state)] ${
                     scrollY > 20 ? 'text-2xl md:text-3xl' : 'text-4xl md:text-5xl'
                   }`}
                 />
               </div>
 
               {/* Lyrics Textarea */}
-              <div className="px-8 md:px-12 pb-[50vh] md:pb-32 flex-1 flex flex-col">
+              <div className="px-[var(--rhyme-space-lg)] md:px-[var(--rhyme-space-xl)] pb-[var(--rhyme-space-editor-bottom-rest)] flex-1 flex flex-col">
                 <div className="relative w-full flex-1">
                   <div 
                     className={`lyrics-editor lyrics-backdrop w-full min-h-[50vh] ${!isSyllableColoringEnabled ? 'opacity-0' : ''}`}
@@ -432,20 +444,21 @@ export default function App() {
 
       {/* Sidebar / Assistant */}
       <aside 
-        className={`w-full md:w-96 border-t md:border-t-0 md:border-l border-white/10 glass-panel flex flex-col h-[55vh] md:h-screen fixed bottom-0 md:right-0 md:top-0 z-40 bg-[#0a0a0a]/95 backdrop-blur-2xl shadow-2xl shadow-black transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+        className={`rhyme-assistant-panel border-t md:border-t-0 md:border-l border-white/10 glass-panel flex flex-col fixed bottom-0 md:right-0 md:top-0 z-40 bg-[#0a0a0a]/95 backdrop-blur-2xl shadow-2xl shadow-black transition-transform duration-[var(--rhyme-motion-origin)] ease-[var(--rhyme-ease-emphasized)] ${
           isFocused ? 'translate-y-full md:translate-y-0 md:translate-x-full' : 'translate-y-0 md:translate-x-0'
         }`}
       >
-        <div className="p-6 border-b border-white/10">
+        <div className="p-[var(--rhyme-space-assistant-panel)] border-b border-white/10">
           <button 
             onClick={() => setIsContextExpanded(!isContextExpanded)}
-            className="w-full flex items-center justify-between text-left group cursor-pointer"
+            aria-expanded={isContextExpanded}
+            className="rhyme-touch-target w-full flex items-center justify-between text-left group cursor-pointer rounded-lg"
           >
             <h2 className="text-lg font-medium flex items-center gap-2">
               <Wand2 className="w-5 h-5 text-indigo-400" />
               Context & Theme
             </h2>
-            <ChevronDown className={`w-5 h-5 text-white/40 transition-transform duration-300 ${isContextExpanded ? 'rotate-180' : ''}`} />
+            <ChevronDown className={`w-5 h-5 text-white/40 transition-transform duration-[var(--rhyme-motion-state)] ${isContextExpanded ? 'rotate-180' : ''}`} />
           </button>
           
           <AnimatePresence initial={false}>
@@ -454,7 +467,7 @@ export default function App() {
                 initial={{ height: 0, opacity: 0, marginTop: 0 }}
                 animate={{ height: 'auto', opacity: 1, marginTop: 16 }}
                 exit={{ height: 0, opacity: 0, marginTop: 0 }}
-                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                transition={{ duration: RHYME_MOTION.state, ease: RHYME_EASE_EMPHASIZED }}
                 className="overflow-hidden"
               >
                 <textarea
@@ -474,7 +487,7 @@ export default function App() {
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
+        <div className="flex-1 overflow-y-auto p-[var(--rhyme-space-assistant-panel)] flex flex-col gap-[var(--rhyme-space-assistant-panel)]">
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium text-white/70 flex items-center gap-2">
@@ -502,7 +515,8 @@ export default function App() {
                 <select 
                   value={rhymeScheme} 
                   onChange={(e) => setRhymeScheme(e.target.value)}
-                  className="bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-white outline-none cursor-pointer"
+                  aria-label="Rhyme scheme"
+                  className="rhyme-touch-target bg-black/40 border border-white/10 rounded-lg px-3 text-xs text-white outline-none cursor-pointer"
                 >
                   <option value="AABB">AABB</option>
                   <option value="ABAB">ABAB</option>
@@ -517,7 +531,7 @@ export default function App() {
                   value={customRhymeScheme}
                   onChange={(e) => setCustomRhymeScheme(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
                   placeholder="e.g. AABBCC"
-                  className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors"
+                  className="rhyme-touch-target w-full bg-black/40 border border-white/10 rounded-lg px-3 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors duration-[var(--rhyme-motion-feedback)]"
                 />
               )}
               
@@ -550,7 +564,8 @@ export default function App() {
                   <button
                     key={option}
                     onClick={() => setRhymeType(option)}
-                    className={`flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-200 ${
+                    aria-pressed={rhymeType === option}
+                    className={`rhyme-touch-target flex-1 text-xs font-medium rounded-lg transition-[background-color,color,box-shadow] duration-[var(--rhyme-motion-state)] ${
                       rhymeType === option 
                         ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20' 
                         : 'text-white/50 hover:text-white/90 hover:bg-white/5'
@@ -566,15 +581,19 @@ export default function App() {
               <h3 className="text-sm font-medium text-white/70">Highlight Rhymes</h3>
               <button
                 onClick={() => setIsHighlightEnabled(!isHighlightEnabled)}
-                className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${
-                  isHighlightEnabled ? 'bg-indigo-600' : 'bg-white/10'
-                }`}
+                aria-label="Toggle rhyme highlighting"
+                aria-pressed={isHighlightEnabled}
+                className="rhyme-touch-target flex items-center justify-center rounded-full cursor-pointer"
               >
-                <motion.div
-                  className="w-4 h-4 bg-white rounded-full absolute top-0.5"
-                  animate={{ left: isHighlightEnabled ? '1.25rem' : '0.125rem' }}
-                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                />
+                <span className={`w-10 h-5 rounded-full transition-colors duration-[var(--rhyme-motion-state)] relative ${
+                  isHighlightEnabled ? 'bg-indigo-600' : 'bg-white/10'
+                }`}>
+                  <motion.span
+                    className="w-4 h-4 bg-white rounded-full absolute top-0.5"
+                    animate={{ left: isHighlightEnabled ? '1.25rem' : '0.125rem' }}
+                    transition={{ duration: RHYME_MOTION.state, ease: RHYME_EASE_EMPHASIZED }}
+                  />
+                </span>
               </button>
             </div>
 
@@ -582,22 +601,27 @@ export default function App() {
               <h3 className="text-sm font-medium text-white/70">Color Syllables</h3>
               <button
                 onClick={() => setIsSyllableColoringEnabled(!isSyllableColoringEnabled)}
-                className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${
-                  isSyllableColoringEnabled ? 'bg-indigo-600' : 'bg-white/10'
-                }`}
+                aria-label="Toggle syllable coloring"
+                aria-pressed={isSyllableColoringEnabled}
+                className="rhyme-touch-target flex items-center justify-center rounded-full cursor-pointer"
               >
-                <motion.div
-                  className="w-4 h-4 bg-white rounded-full absolute top-0.5"
-                  animate={{ left: isSyllableColoringEnabled ? '1.25rem' : '0.125rem' }}
-                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                />
+                <span className={`w-10 h-5 rounded-full transition-colors duration-[var(--rhyme-motion-state)] relative ${
+                  isSyllableColoringEnabled ? 'bg-indigo-600' : 'bg-white/10'
+                }`}>
+                  <motion.span
+                    className="w-4 h-4 bg-white rounded-full absolute top-0.5"
+                    animate={{ left: isSyllableColoringEnabled ? '1.25rem' : '0.125rem' }}
+                    transition={{ duration: RHYME_MOTION.state, ease: RHYME_EASE_EMPHASIZED }}
+                  />
+                </span>
               </button>
             </div>
 
             <button
               onClick={handleGetSuggestions}
               disabled={!lyrics || isLoading}
-              className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/30 text-white rounded-xl font-medium transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 disabled:shadow-none cursor-pointer"
+              aria-busy={isLoading}
+              className="rhyme-touch-target w-full px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/30 text-white rounded-xl font-medium transition-[background-color,color,box-shadow] duration-[var(--rhyme-motion-feedback)] flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 disabled:shadow-none cursor-pointer"
             >
               {isLoading ? (
                 <>
@@ -619,25 +643,20 @@ export default function App() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: RHYME_MOTION.state, ease: RHYME_EASE_EMPHASIZED }}
                 className="space-y-3"
               >
                 <h3 className="text-sm font-medium text-white/70">Suggestions</h3>
                 <div className="space-y-2">
                   {suggestions.map((suggestion, idx) => (
                     <motion.button
-                      key={idx}
-                      initial={{ opacity: 0, y: 15, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      transition={{ 
-                        type: "spring", 
-                        stiffness: 400, 
-                        damping: 25, 
-                        delay: idx * 0.08 
-                      }}
+                      key={`${suggestion}-${idx}`}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      whileTap={{ scale: 0.99 }}
+                      transition={{ duration: RHYME_MOTION.feedback, ease: RHYME_EASE_EMPHASIZED }}
                       onClick={() => insertSuggestion(suggestion)}
-                      className="w-full text-left p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 hover:border-indigo-500/40 transition-all group flex items-start justify-between gap-4 cursor-pointer hover:shadow-lg hover:shadow-indigo-500/10"
+                      className="rhyme-touch-target w-full text-left p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 hover:border-indigo-500/40 transition-[background-color,border-color,box-shadow] duration-[var(--rhyme-motion-feedback)] group flex items-start justify-between gap-4 cursor-pointer hover:shadow-lg hover:shadow-indigo-500/10"
                     >
                       <span className="font-serif text-white/90 leading-relaxed">
                         {renderSuggestionWithRhymeHighlight(suggestion)}
@@ -646,7 +665,7 @@ export default function App() {
                         <span className="text-xs font-mono text-white/40 bg-white/5 px-2 py-1 rounded-md">
                           {syllable(suggestion)}
                         </span>
-                        <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-indigo-400 transition-all group-hover:translate-x-1" />
+                        <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-indigo-400 transition-[color,transform] duration-[var(--rhyme-motion-feedback)] group-hover:translate-x-1" />
                       </div>
                     </motion.button>
                   ))}
@@ -661,11 +680,13 @@ export default function App() {
       <AnimatePresence>
         {isFocused && (
           <motion.button
-            initial={{ opacity: 0, y: 20, scale: 0.9 }}
+            initial={{ opacity: 0, y: 20, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.9 }}
+            exit={{ opacity: 0, y: 20, scale: 0.96 }}
+            transition={{ duration: RHYME_MOTION.origin, ease: RHYME_EASE_EMPHASIZED }}
             onClick={() => setIsFocused(false)}
-            className="fixed bottom-8 right-8 z-30 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-3 rounded-full shadow-lg shadow-indigo-500/20 flex items-center gap-2 transition-all cursor-pointer"
+            aria-label="Show assistant"
+            className="rhyme-touch-target fixed bottom-8 right-8 z-30 bg-indigo-600 hover:bg-indigo-500 text-white px-5 rounded-full shadow-lg shadow-indigo-500/20 flex items-center gap-2 transition-[background-color,box-shadow] duration-[var(--rhyme-motion-feedback)] cursor-pointer"
           >
             <Wand2 className="w-4 h-4" />
             <span className="font-medium">Show Assistant</span>
@@ -681,32 +702,35 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              transition={{ duration: RHYME_MOTION.dismiss, ease: RHYME_EASE_EMPHASIZED }}
               onClick={() => setIsProjectsModalOpen(false)}
               className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             />
             <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              initial={{ opacity: 0, scale: 0.96, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-2xl bg-[#111] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+              exit={{ opacity: 0, scale: 0.96, y: 20 }}
+              transition={{ duration: RHYME_MOTION.dialog, ease: RHYME_EASE_EMPHASIZED }}
+              className="relative w-full max-w-[var(--rhyme-width-modal)] bg-[#111] border border-white/10 rounded-[var(--rhyme-radius-sheet)] shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
             >
-              <div className="p-6 border-b border-white/10 flex items-center justify-between shrink-0">
+              <div className="p-[var(--rhyme-space-modal)] border-b border-white/10 flex items-center justify-between shrink-0">
                 <h2 className="text-xl font-medium flex items-center gap-2">
                   <FolderOpen className="w-5 h-5 text-indigo-400" />
                   Song Projects
                 </h2>
                 <button 
                   onClick={() => setIsProjectsModalOpen(false)}
-                  className="p-2 hover:bg-white/10 rounded-full transition-colors cursor-pointer"
+                  aria-label="Close projects"
+                  className="rhyme-touch-target flex items-center justify-center hover:bg-white/10 rounded-full transition-colors duration-[var(--rhyme-motion-feedback)] cursor-pointer"
                 >
                   <X className="w-5 h-5 text-white/50 hover:text-white" />
                 </button>
               </div>
 
-              <div className="p-6 overflow-y-auto flex-1">
+              <div className="p-[var(--rhyme-space-modal)] overflow-y-auto flex-1">
                 <button
                   onClick={handleNewProject}
-                  className="w-full mb-6 py-4 border-2 border-dashed border-white/20 hover:border-indigo-500/50 hover:bg-indigo-500/5 rounded-xl flex items-center justify-center gap-2 text-white/70 hover:text-white transition-all cursor-pointer"
+                  className="rhyme-touch-target w-full mb-6 px-4 border-2 border-dashed border-white/20 hover:border-indigo-500/50 hover:bg-indigo-500/5 rounded-xl flex items-center justify-center gap-2 text-white/70 hover:text-white transition-[background-color,border-color,color] duration-[var(--rhyme-motion-feedback)] cursor-pointer"
                 >
                   <Plus className="w-5 h-5" />
                   Create New Song
@@ -723,7 +747,15 @@ export default function App() {
                       <div 
                         key={project.id}
                         onClick={() => handleLoadProject(project)}
-                        className={`p-4 rounded-xl border transition-all cursor-pointer group flex items-center justify-between ${
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handleLoadProject(project);
+                          }
+                        }}
+                        className={`min-h-[var(--rhyme-touch-target)] p-4 rounded-xl border transition-[background-color,border-color] duration-[var(--rhyme-motion-feedback)] cursor-pointer group flex items-center justify-between ${
                           currentProjectId === project.id 
                             ? 'bg-indigo-600/10 border-indigo-500/50' 
                             : 'bg-white/5 border-white/5 hover:border-white/20 hover:bg-white/10'
@@ -739,7 +771,8 @@ export default function App() {
                         </div>
                         <button
                           onClick={(e) => handleDeleteProject(e, project.id)}
-                          className="p-2 text-white/20 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+                          className="rhyme-touch-target flex items-center justify-center text-white/30 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-[background-color,color,opacity] duration-[var(--rhyme-motion-feedback)] opacity-100 md:opacity-0 md:group-hover:opacity-100 cursor-pointer"
+                          aria-label={`Delete ${project.title || 'Untitled Song'}`}
                           title="Delete Project"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -762,29 +795,32 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              transition={{ duration: RHYME_MOTION.dismiss, ease: RHYME_EASE_EMPHASIZED }}
               onClick={() => setIsTemplatesModalOpen(false)}
               className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             />
             <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              initial={{ opacity: 0, scale: 0.96, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-2xl bg-[#111] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+              exit={{ opacity: 0, scale: 0.96, y: 20 }}
+              transition={{ duration: RHYME_MOTION.dialog, ease: RHYME_EASE_EMPHASIZED }}
+              className="relative w-full max-w-[var(--rhyme-width-modal)] bg-[#111] border border-white/10 rounded-[var(--rhyme-radius-sheet)] shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
             >
-              <div className="p-6 border-b border-white/10 flex items-center justify-between shrink-0">
+              <div className="p-[var(--rhyme-space-modal)] border-b border-white/10 flex items-center justify-between shrink-0">
                 <h2 className="text-xl font-medium flex items-center gap-2">
                   <LayoutTemplate className="w-5 h-5 text-indigo-400" />
                   Choose a Template
                 </h2>
                 <button 
                   onClick={() => setIsTemplatesModalOpen(false)}
-                  className="p-2 hover:bg-white/10 rounded-full transition-colors cursor-pointer"
+                  aria-label="Close templates"
+                  className="rhyme-touch-target flex items-center justify-center hover:bg-white/10 rounded-full transition-colors duration-[var(--rhyme-motion-feedback)] cursor-pointer"
                 >
                   <X className="w-5 h-5 text-white/50 hover:text-white" />
                 </button>
               </div>
 
-              <div className="p-6 overflow-y-auto flex-1">
+              <div className="p-[var(--rhyme-space-modal)] overflow-y-auto flex-1">
                 <div className="grid gap-4 md:grid-cols-2">
                   {SONG_TEMPLATES.map((template, idx) => (
                     <button
@@ -797,7 +833,7 @@ export default function App() {
                         setIsTemplatesModalOpen(false);
                         setIsStartMenuOpen(false);
                       }}
-                      className="text-left p-6 rounded-xl border bg-white/5 border-white/5 hover:border-indigo-500/50 hover:bg-white/10 transition-all cursor-pointer group"
+                      className="min-h-[var(--rhyme-touch-target)] text-left p-[var(--rhyme-space-modal)] rounded-xl border bg-white/5 border-white/5 hover:border-indigo-500/50 hover:bg-white/10 transition-[background-color,border-color] duration-[var(--rhyme-motion-feedback)] cursor-pointer group"
                     >
                       <h3 className="font-medium text-lg text-white mb-2 group-hover:text-indigo-300 transition-colors">
                         {template.name}
@@ -825,7 +861,8 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="relative w-full max-w-4xl flex flex-col items-center text-center"
+              transition={{ duration: RHYME_MOTION.dialog, ease: RHYME_EASE_EMPHASIZED }}
+              className="relative w-full max-w-[var(--rhyme-width-start)] flex flex-col items-center text-center"
             >
               <div className="w-20 h-20 bg-indigo-500/20 rounded-full flex items-center justify-center mb-8 border border-indigo-500/30 shadow-[0_0_40px_rgba(99,102,241,0.2)]">
                 <Music className="w-10 h-10 text-indigo-400" />
@@ -838,15 +875,15 @@ export default function App() {
                 Your intelligent songwriting companion. Start from scratch, load an existing masterpiece, or kickstart your creativity with a template.
               </p>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-[var(--rhyme-space-lg)] w-full">
                 <button
                   onClick={() => {
                     setIsStartMenuOpen(false);
                     handleNewProject();
                   }}
-                  className="group relative p-8 rounded-2xl bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-all cursor-pointer flex flex-col items-center text-center overflow-hidden"
+                  className="rhyme-touch-target group relative p-8 rounded-[var(--rhyme-radius-sheet)] bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-[background-color,border-color] duration-[var(--rhyme-motion-feedback)] cursor-pointer flex flex-col items-center text-center overflow-hidden"
                 >
-                  <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:to-transparent transition-all" />
+                  <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:to-transparent transition-colors duration-[var(--rhyme-motion-feedback)]" />
                   <Plus className="w-8 h-8 text-white/70 group-hover:text-indigo-400 mb-4 transition-colors" />
                   <h3 className="text-xl font-medium mb-2">New Song</h3>
                   <p className="text-sm text-white/40">Start with a blank canvas</p>
@@ -856,9 +893,9 @@ export default function App() {
                   onClick={() => {
                     setIsProjectsModalOpen(true);
                   }}
-                  className="group relative p-8 rounded-2xl bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-all cursor-pointer flex flex-col items-center text-center overflow-hidden"
+                  className="rhyme-touch-target group relative p-8 rounded-[var(--rhyme-radius-sheet)] bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-[background-color,border-color] duration-[var(--rhyme-motion-feedback)] cursor-pointer flex flex-col items-center text-center overflow-hidden"
                 >
-                  <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:to-transparent transition-all" />
+                  <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:to-transparent transition-colors duration-[var(--rhyme-motion-feedback)]" />
                   <FolderOpen className="w-8 h-8 text-white/70 group-hover:text-indigo-400 mb-4 transition-colors" />
                   <h3 className="text-xl font-medium mb-2">Load Song</h3>
                   <p className="text-sm text-white/40">Continue where you left off</p>
@@ -868,9 +905,9 @@ export default function App() {
                   onClick={() => {
                     setIsTemplatesModalOpen(true);
                   }}
-                  className="group relative p-8 rounded-2xl bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-all cursor-pointer flex flex-col items-center text-center overflow-hidden"
+                  className="rhyme-touch-target group relative p-8 rounded-[var(--rhyme-radius-sheet)] bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-[background-color,border-color] duration-[var(--rhyme-motion-feedback)] cursor-pointer flex flex-col items-center text-center overflow-hidden"
                 >
-                  <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:to-transparent transition-all" />
+                  <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:to-transparent transition-colors duration-[var(--rhyme-motion-feedback)]" />
                   <LayoutTemplate className="w-8 h-8 text-white/70 group-hover:text-indigo-400 mb-4 transition-colors" />
                   <h3 className="text-xl font-medium mb-2">Song Templates</h3>
                   <p className="text-sm text-white/40">Start with a structured layout</p>

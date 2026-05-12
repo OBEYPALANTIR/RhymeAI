@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
-private let projectDrawerAnimationDuration: TimeInterval = 0.26
+private let projectDrawerAnimationDuration: TimeInterval = RhymeAITokens.Motion.presentationDuration
 
 struct ProjectsDrawerView: View {
     @Binding var isPresented: Bool
@@ -28,22 +28,24 @@ struct ProjectsDrawerView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let drawerWidth = min(max(proxy.size.width - 36, 300), 360)
+            let drawerWidth = min(max(proxy.size.width - RhymeAITokens.Layout.drawerHorizontalMargin, RhymeAITokens.Layout.drawerMinWidth), RhymeAITokens.Layout.drawerMaxWidth)
 
             ZStack(alignment: .leading) {
                 Color.black.opacity(drawerVisible ? 0.42 : 0)
                     .ignoresSafeArea()
                     .onTapGesture { closeDrawer() }
 
-                drawerContent
+                drawerContent(topInset: proxy.safeAreaInsets.top, bottomInset: proxy.safeAreaInsets.bottom)
                     .frame(width: drawerWidth)
                     .frame(maxHeight: .infinity)
                     .background(.ultraThinMaterial)
+                    .background(Color.black.opacity(0.28))
                     .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
                     .offset(x: drawerVisible ? 0 : -drawerWidth)
             }
-            .animation(.easeInOut(duration: projectDrawerAnimationDuration), value: drawerVisible)
+            .animation(RhymeAITokens.Motion.presentation, value: drawerVisible)
         }
+        .ignoresSafeArea()
         .onAppear {
             DispatchQueue.main.async {
                 drawerVisible = true
@@ -58,9 +60,11 @@ struct ProjectsDrawerView: View {
         }
     }
 
-    private var drawerContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+    private func drawerContent(topInset: CGFloat, bottomInset: CGFloat) -> some View {
+        let resolvedTopInset = topInset > 0 ? topInset : 45
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: RhymeAITokens.Spacing.xs) {
                 searchField
 
                 Button {
@@ -69,19 +73,19 @@ struct ProjectsDrawerView: View {
                     Image(systemName: "xmark")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 38, height: 38)
+                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.rhymePress)
                 .accessibilityLabel("Close drawer")
             }
-            .padding(.top, 18)
+            .padding(.top, RhymeAITokens.Spacing.lg)
 
             Button {
                 viewModel.newProject()
                 closeDrawer()
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: RhymeAITokens.Spacing.sm) {
                     Image(systemName: "plus")
                         .font(.body.weight(.semibold))
                     Text("Create New Song")
@@ -90,19 +94,19 @@ struct ProjectsDrawerView: View {
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 54)
-                .liquidGlassSurface(cornerRadius: 16, tint: .indigo.opacity(0.10), interactive: true)
+                .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.10), interactive: true)
             }
-            .buttonStyle(.plain)
-            .padding(.top, 14)
+            .buttonStyle(.rhymePress)
+            .padding(.top, RhymeAITokens.Spacing.md)
 
             Text("Recent Songs")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .padding(.top, 22)
-                .padding(.bottom, 10)
+                .padding(.top, RhymeAITokens.Spacing.md)
+                .padding(.bottom, RhymeAITokens.Spacing.xs)
 
             ScrollView {
-                LazyVStack(spacing: 10) {
+                LazyVStack(spacing: RhymeAITokens.Spacing.xs) {
                     if projects.isEmpty {
                         emptyState(systemImage: "music.note", title: "No saved songs yet.")
                     } else if filteredProjects.isEmpty {
@@ -113,40 +117,40 @@ struct ProjectsDrawerView: View {
                         }
                     }
                 }
-                .padding(.bottom, 12)
+                .padding(.bottom, RhymeAITokens.Spacing.sm)
             }
 
             Button {
                 importError = nil
                 fileImporterPresented = true
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: RhymeAITokens.Spacing.xs) {
                     Image(systemName: "square.and.arrow.down")
                     Text("Import From File")
                 }
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity)
-                .frame(height: 48)
-                .liquidGlassSurface(cornerRadius: 16, interactive: true)
+                .frame(height: RhymeAITokens.Touch.minimum)
+                .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.rhymePress)
 
             if let importError {
                 Text(importError)
                     .font(.caption)
                     .foregroundStyle(.red)
-                    .padding(.top, 8)
+                    .padding(.top, RhymeAITokens.Spacing.xs)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 18)
-        .safeAreaPadding(.top, 4)
-        .safeAreaPadding(.bottom, 4)
+        .padding(.horizontal, RhymeAITokens.Spacing.lg)
+        .padding(.top, resolvedTopInset + RhymeAITokens.Spacing.sm)
+        .padding(.bottom, bottomInset + RhymeAITokens.Spacing.lg)
+        .liquidGlassGroup(spacing: RhymeAITokens.Spacing.lg)
     }
 
     private var searchField: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: RhymeAITokens.Spacing.xs) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
 
@@ -161,31 +165,31 @@ struct ProjectsDrawerView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.rhymePress)
                 .accessibilityLabel("Clear search")
             }
         }
-        .padding(.horizontal, 12)
-        .frame(height: 46)
-        .liquidGlassSurface(cornerRadius: 16, interactive: true)
+        .padding(.horizontal, RhymeAITokens.Spacing.sm)
+        .frame(height: RhymeAITokens.Touch.minimum)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
     }
 
     private func projectRow(_ project: SongProject) -> some View {
         let isActive = viewModel.currentProjectId == project.id
 
-        return HStack(spacing: 8) {
+        return HStack(spacing: RhymeAITokens.Spacing.xs) {
             Button {
                 viewModel.loadProject(project)
                 closeDrawer()
             } label: {
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: RhymeAITokens.Spacing.sm) {
+                    VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                         Text(project.title.isEmpty ? "Untitled Song" : project.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
 
-                        HStack(spacing: 6) {
+                        HStack(spacing: RhymeAITokens.Spacing.xs) {
                             Text(project.updatedAt, style: .date)
                             Text("·")
                             Text("\(SyllableCounter.wordCount(project.lyrics)) words")
@@ -203,7 +207,7 @@ struct ProjectsDrawerView: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.rhymePress)
 
             Button(role: .destructive) {
                 viewModel.deleteProject(project)
@@ -211,27 +215,24 @@ struct ProjectsDrawerView: View {
                 Image(systemName: "trash")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.red.opacity(0.85))
-                    .frame(width: 34, height: 34)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.rhymePress)
             .accessibilityLabel("Delete \(project.title.isEmpty ? "Untitled Song" : project.title)")
         }
-        .padding(.vertical, 12)
-        .padding(.leading, 14)
-        .padding(.trailing, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isActive ? Color.indigo.opacity(0.18) : Color.white.opacity(0.06))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(isActive ? Color.indigo.opacity(0.6) : Color.white.opacity(0.10), lineWidth: 1)
+        .padding(.vertical, RhymeAITokens.Spacing.sm)
+        .padding(.leading, RhymeAITokens.Spacing.md)
+        .padding(.trailing, RhymeAITokens.Spacing.xs)
+        .liquidGlassSurface(
+            cornerRadius: RhymeAITokens.Radius.lg,
+            tint: isActive ? .indigo.opacity(0.16) : .white.opacity(0.03),
+            fallbackOpacity: isActive ? 0.12 : 0.05
         )
     }
 
     private func emptyState(systemImage: String, title: String) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: RhymeAITokens.Spacing.sm) {
             Image(systemName: systemImage)
                 .font(.title2)
                 .foregroundStyle(.secondary.opacity(0.7))
@@ -240,13 +241,13 @@ struct ProjectsDrawerView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 44)
+        .padding(.vertical, RhymeAITokens.Touch.minimum)
     }
 
     private func closeDrawer() {
         guard !isClosing else { return }
         isClosing = true
-        withAnimation(.easeInOut(duration: projectDrawerAnimationDuration)) {
+        withAnimation(RhymeAITokens.Motion.dismiss) {
             drawerVisible = false
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + projectDrawerAnimationDuration) {

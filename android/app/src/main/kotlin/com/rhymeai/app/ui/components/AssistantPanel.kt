@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Notes
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
@@ -64,6 +65,7 @@ import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.ui.theme.RhymePalette
+import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.SyllableBlue
 import com.rhymeai.app.ui.theme.SyllableEmerald
 import com.rhymeai.app.ui.theme.SyllablePurple
@@ -108,7 +110,7 @@ fun AssistantPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(DesignTokens.Spacing.lg)
         ) {
             Row(
                 modifier = Modifier
@@ -137,7 +139,7 @@ fun AssistantPanel(
                     .padding(top = 12.dp)
                     .height(100.dp),
                 colors = textFieldColors,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(DesignTokens.Radius.lg),
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
             )
         }
@@ -149,11 +151,11 @@ fun AssistantPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(DesignTokens.Spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.lg)
         ) {
             // Target Line
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -161,7 +163,7 @@ fun AssistantPanel(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Notes, null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
                         FeatureHelpLabel(
@@ -174,8 +176,8 @@ fun AssistantPanel(
                     if (rhymeContext.targetLine != null) {
                         Box(
                             modifier = Modifier
-                                .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(6.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.xs))
+                                .padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
                         ) {
                             Text(
                                 "${SyllableCounter.countText(rhymeContext.targetLine)} syllables",
@@ -190,9 +192,9 @@ fun AssistantPanel(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(colorScheme.surfaceContainer, RoundedCornerShape(8.dp))
-                        .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                        .padding(16.dp)
+                        .background(colorScheme.surfaceContainer, RoundedCornerShape(DesignTokens.Radius.sm))
+                        .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.sm))
+                        .padding(DesignTokens.Spacing.lg)
                 ) {
                     if (rhymeContext.targetLine != null) {
                         Text(
@@ -214,7 +216,7 @@ fun AssistantPanel(
             }
 
             // Rhyme Scheme
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -242,7 +244,7 @@ fun AssistantPanel(
                             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = colorScheme.onSurface),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                             colors = textFieldColors,
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(DesignTokens.Radius.sm),
                             singleLine = true
                         )
                         ExposedDropdownMenu(
@@ -268,9 +270,9 @@ fun AssistantPanel(
                         value = viewModel.customRhymeScheme,
                         onValueChange = { viewModel.customRhymeScheme = it.uppercase().filter { c -> c.isLetter() } },
                         placeholder = { Text("e.g. AABBCC", fontSize = 13.sp) },
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        modifier = Modifier.fillMaxWidth().height(DesignTokens.Touch.minTarget),
                         colors = textFieldColors,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(DesignTokens.Radius.sm),
                         singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
                     )
@@ -286,7 +288,7 @@ fun AssistantPanel(
             }
 
             // Rhyme Type
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
                 FeatureHelpLabel(
                     text = "Rhyme Density",
                     help = FeatureHelp.RHYME_DENSITY,
@@ -316,7 +318,7 @@ fun AssistantPanel(
             }
 
             // Rhyme Complexity Slider
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -364,7 +366,7 @@ fun AssistantPanel(
                     viewModel.rhymeComplexity.description,
                     fontSize = 11.sp,
                     color = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(top = 4.dp)
+                    modifier = Modifier.padding(top = DesignTokens.Spacing.xs)
                 )
             }
 
@@ -465,8 +467,8 @@ fun AssistantPanel(
             Button(
                 onClick = { viewModel.getSuggestions() },
                 enabled = viewModel.lyrics.isNotEmpty() && !viewModel.isLoading,
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().height(DesignTokens.Touch.minTarget),
+                shape = RoundedCornerShape(DesignTokens.Radius.lg),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = colorScheme.primary,
                     contentColor = colorScheme.onPrimary,
@@ -496,7 +498,7 @@ fun AssistantPanel(
 
             // Suggestions
             if (viewModel.suggestions.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
                     Text("Suggestions", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     viewModel.suggestions.forEach { suggestion ->
                         SuggestionCard(
@@ -511,7 +513,7 @@ fun AssistantPanel(
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(DesignTokens.Spacing.xl))
 
             // Footer
             Row(
@@ -525,7 +527,7 @@ fun AssistantPanel(
                 )
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(DesignTokens.Spacing.lg))
         }
     }
 }
@@ -591,7 +593,7 @@ private fun FeatureHelpLabel(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
     ) {
         Text(
             text = text,
@@ -616,22 +618,15 @@ private fun HelpButton(
     IconButton(
         onClick = onClick,
         modifier = Modifier
-            .size(40.dp)
+            .size(DesignTokens.Touch.minTarget)
             .semantics { this.contentDescription = contentDescription }
     ) {
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .border(1.dp, tint.copy(alpha = 0.72f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                "?",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = tint
-            )
-        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Outlined.HelpOutline,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 
@@ -651,7 +646,7 @@ private fun FeatureHelpDialog(
             Text(help.title, fontWeight = FontWeight.SemiBold)
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)) {
                 Text(help.message, fontSize = 14.sp, lineHeight = 20.sp)
 
                 when (help.legend) {

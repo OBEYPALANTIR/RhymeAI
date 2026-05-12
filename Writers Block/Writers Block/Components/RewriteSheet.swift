@@ -21,8 +21,7 @@ struct RewriteSheet: View {
                         .foregroundStyle(.primary.opacity(0.8))
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.white.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .liquidGlassSurface(cornerRadius: 8, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
 
                     Text("Rewrite")
                         .font(.caption.weight(.semibold))
@@ -49,15 +48,12 @@ struct RewriteSheet: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
-                    .background(Color.indigo.opacity(0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.indigo.opacity(0.3), lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .liquidGlassSurface(cornerRadius: 8, tint: .indigo.opacity(0.10), fallbackOpacity: 0.08)
                 }
                 .padding(20)
+                .liquidGlassGroup(spacing: 16)
             }
+            .background(Color(UIColor.systemBackground))
             .navigationTitle(action.label)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -1,5 +1,76 @@
 import SwiftUI
 
+enum RhymeAITokens {
+    static let phi: CGFloat = 1.618
+    static let inversePhi: CGFloat = 0.618
+    static let phiSquared: CGFloat = 2.618
+
+    enum Spacing {
+        static let xxs: CGFloat = 4
+        static let xs: CGFloat = 8
+        static let sm: CGFloat = 12
+        static let md: CGFloat = 20
+        static let lg: CGFloat = 24
+        static let xl: CGFloat = 32
+        static let xxl: CGFloat = 52
+    }
+
+    enum Touch {
+        static let minimum: CGFloat = 44
+    }
+
+    enum Radius {
+        static let xs: CGFloat = 6
+        static let sm: CGFloat = 8
+        static let md: CGFloat = 12
+        static let lg: CGFloat = 16
+        static let xl: CGFloat = 22
+        static let xxl: CGFloat = 32
+        static let pill: CGFloat = 52
+    }
+
+    enum Layout {
+        static let drawerMinWidth: CGFloat = 300
+        static let drawerMaxWidth: CGFloat = 360
+        static let drawerHorizontalMargin: CGFloat = 36
+        static let assistantColumnWidth: CGFloat = 380
+        static let assistantReadableWidth: CGFloat = 420
+        static let assistantSheetHandleArea: CGFloat = 72
+        static let assistantSheetHandleWidth: CGFloat = 52
+        static let assistantSheetHandleHeight: CGFloat = 4
+        static let editorMaxWidth: CGFloat = 740
+        static let editorBottomRest: CGFloat = 200
+    }
+
+    enum Motion {
+        static let feedbackDuration: TimeInterval = 0.180
+        static let stateDuration: TimeInterval = 0.260
+        static let presentationDuration: TimeInterval = 0.340
+        static let settleDuration: TimeInterval = 0.420
+
+        static let feedback: Animation = .easeInOut(duration: feedbackDuration)
+        static let dismiss: Animation = .easeInOut(duration: feedbackDuration)
+        static let state: Animation = .easeInOut(duration: stateDuration)
+        static let dialog: Animation = .easeInOut(duration: stateDuration)
+        static let presentation: Animation = .spring(response: presentationDuration, dampingFraction: 0.88)
+        static let settle: Animation = .spring(response: settleDuration, dampingFraction: 0.72)
+    }
+}
+
+struct RhymeAIPressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(configuration.isPressed ? 0.86 : 1)
+            .animation(RhymeAITokens.Motion.feedback, value: configuration.isPressed)
+    }
+}
+
+extension ButtonStyle where Self == RhymeAIPressButtonStyle {
+    static var rhymePress: RhymeAIPressButtonStyle { RhymeAIPressButtonStyle() }
+}
+
+
 private struct LiquidGlassSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
     let tint: Color?
@@ -51,5 +122,16 @@ extension View {
                 fallbackOpacity: fallbackOpacity
             )
         )
+    }
+
+    @ViewBuilder
+    func liquidGlassGroup(spacing: CGFloat = 16) -> some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) {
+                self
+            }
+        } else {
+            self
+        }
     }
 }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +27,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.util.SyllableCounter
+import com.rhymeai.app.ui.theme.DesignTokens
 
 private val lastWordPattern = Regex("(.*?)(\\b\\w+\\b)([^\\w]*)\$")
 
@@ -41,8 +43,9 @@ fun SuggestionCard(
     OutlinedCard(
         onClick = onClick,
         modifier = modifier
-            .fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+            .fillMaxWidth()
+            .heightIn(min = DesignTokens.Touch.minTarget),
+        shape = RoundedCornerShape(DesignTokens.Radius.lg),
         colors = CardDefaults.outlinedCardColors(
             containerColor = colorScheme.surfaceContainer,
             contentColor = colorScheme.onSurface
@@ -52,7 +55,7 @@ fun SuggestionCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(DesignTokens.Spacing.lg),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -100,11 +103,11 @@ fun SuggestionCard(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
         ) {
             // Syllable count badge
             Surface(
-                shape = RoundedCornerShape(6.dp),
+                shape = RoundedCornerShape(DesignTokens.Radius.xs),
                 color = colorScheme.surfaceContainerHigh,
                 contentColor = colorScheme.onSurfaceVariant
             ) {
@@ -112,7 +115,7 @@ fun SuggestionCard(
                     text = "${SyllableCounter.countText(suggestion)}",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    modifier = Modifier.padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
                 )
             }
             Icon(

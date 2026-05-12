@@ -94,6 +94,7 @@ import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.RewriteDialog
 import com.rhymeai.app.ui.components.RhymeHighlightedText
 import com.rhymeai.app.ui.components.syllableUnderlines
+import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.util.LyricsExporter
 import com.rhymeai.app.util.SyllableCounter
 import kotlin.math.ceil
@@ -119,7 +120,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val fullSheetHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
-    val assistantSheetHandleHeightPx = with(density) { 64.dp.toPx() }
+    val assistantSheetHandleHeightPx = with(density) { DesignTokens.Sheet.handleArea.toPx() }
     val assistantSheetCloseThresholdPx =
         ((fullSheetHeightPx - assistantSheetHandleHeightPx).coerceAtLeast(0f)) * 0.5f
     var assistantSheetDragOffsetPx by remember { mutableFloatStateOf(0f) }
@@ -147,7 +148,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         val animation = Animatable(startOffset)
         animation.animateTo(
             targetValue = 0f,
-            animationSpec = tween(durationMillis = 260)
+            animationSpec = tween(
+                durationMillis = DesignTokens.Motion.sheetPresentMillis,
+                easing = DesignTokens.Motion.emphasizedEasing
+            )
         ) {
             assistantSheetDragOffsetPx = value
         }
@@ -162,17 +166,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             if (targetOffset == 0f) {
                 animation.animateTo(
                     targetValue = 0f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    )
+                    animationSpec = DesignTokens.Motion.settleSpring()
                 ) {
                     assistantSheetDragOffsetPx = value
                 }
             } else {
                 animation.animateTo(
                     targetValue = targetOffset,
-                    animationSpec = tween(durationMillis = 180)
+                    animationSpec = tween(
+                        durationMillis = DesignTokens.Motion.dismissMillis,
+                        easing = DesignTokens.Motion.exitEasing
+                    )
                 ) {
                     assistantSheetDragOffsetPx = value
                 }
@@ -193,7 +197,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             val animation = Animatable(assistantSheetDragOffsetPx)
             animation.animateTo(
                 targetValue = fullSheetHeightPx,
-                animationSpec = tween(durationMillis = 180)
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                )
             ) {
                 assistantSheetDragOffsetPx = value
             }
@@ -407,12 +414,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     .fillMaxWidth()
             ) {
                 val trailingScrollSpace = if (keyboardVisible) {
-                    72.dp
+                    DesignTokens.Editor.keyboardOffset
                 } else {
-                    300.dp
+                    DesignTokens.Editor.bottomRest
                 }
                 val viewportHeightPx = with(density) { maxHeight.roundToPx() }
-                val editorWidthPx = with(density) { (maxWidth - 48.dp).roundToPx() }
+                val editorWidthPx = with(density) {
+                    (maxWidth - DesignTokens.Editor.horizontalPadding - DesignTokens.Editor.horizontalPadding).roundToPx()
+                }
                 val estimatedCharsPerLine = (editorWidthPx / with(density) { 8.5.dp.roundToPx() })
                     .coerceAtLeast(1)
                 val cursorVisualLine = remember(
@@ -426,7 +435,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         charsPerLine = estimatedCharsPerLine
                     )
                 }
-                val lyricsTopPx = with(density) { (16.dp + 24.dp).roundToPx() } + titleHeightPx
+                val lyricsTopPx = with(density) {
+                    (DesignTokens.Spacing.lg + DesignTokens.Spacing.xl).roundToPx()
+                } + titleHeightPx
                 val lineHeightPx = with(density) { 28.dp.roundToPx() }
                 val cursorOffset = viewModel.cursorPosition.coerceIn(0, viewModel.lyrics.length)
                 val cursorTopInLyricsPx = lyricsTextLayout
@@ -436,7 +447,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     ?.roundToInt()
                     ?: cursorVisualLine * lineHeightPx
                 val cursorContentY = lyricsTopPx + cursorTopInLyricsPx
-                val minCursorTopPx = with(density) { 64.dp.roundToPx() }
+                val minCursorTopPx = with(density) { DesignTokens.Sheet.handleArea.roundToPx() }
                 val maxCursorTopPx = (viewportHeightPx * 0.45f)
                     .roundToInt()
                     .coerceAtLeast(minCursorTopPx + lineHeightPx)
@@ -469,18 +480,15 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(scrollState)
-                        .padding(horizontal = 24.dp)
+                        .padding(horizontal = DesignTokens.Editor.horizontalPadding)
                 ) {
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(DesignTokens.Spacing.lg))
 
                     // Title field
                     BasicTextField(
                         value = viewModel.title,
                         onValueChange = { viewModel.onTitleChanged(it) },
-                        textStyle = TextStyle(
-                            fontFamily = FontFamily.Serif,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 32.sp,
+                        textStyle = MaterialTheme.typography.headlineLarge.copy(
                             color = colorScheme.onBackground
                         ),
                         cursorBrush = SolidColor(colorScheme.primary),
@@ -492,9 +500,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 if (viewModel.title.isEmpty()) {
                                     Text(
                                         "Song Title...",
-                                        fontFamily = FontFamily.Serif,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 32.sp,
+                                        style = MaterialTheme.typography.headlineLarge,
                                         color = colorScheme.onBackground.copy(alpha = 0.2f)
                                     )
                                 }
@@ -503,7 +509,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
                     )
 
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(DesignTokens.Spacing.xl))
 
                     // Lyrics editor with overlay (syllable or rhyme coloring)
                     val overlayActive = (viewModel.isSyllableColoringEnabled ||
@@ -585,18 +591,40 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         // UnBlock FAB — visible only when the editor is unobstructed.
         AnimatedVisibility(
             visible = !showBottomSheet && !pendingAssistantSheet && !modalOpen,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+            enter = fadeIn(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.assistantPresentMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                )
+            ) + slideInVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.assistantPresentMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                ),
+                initialOffsetY = { it }
+            ),
+            exit = fadeOut(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                )
+            ) + slideOutVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                ),
+                targetOffsetY = { it }
+            ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
-                .padding(24.dp)
+                .padding(DesignTokens.Spacing.xl)
         ) {
             ExtendedFloatingActionButton(
                 onClick = { openAssistantSheet() },
                 containerColor = colorScheme.primary,
                 contentColor = colorScheme.onPrimary,
-                shape = RoundedCornerShape(28.dp)
+                shape = RoundedCornerShape(DesignTokens.Radius.pill)
             ) {
                 Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
@@ -613,12 +641,34 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             viewModel.rewriteAction == null
         AnimatedVisibility(
             visible = rewriteVisible,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+            enter = fadeIn(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.standardMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                )
+            ) + slideInVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.standardMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                ),
+                initialOffsetY = { it }
+            ),
+            exit = fadeOut(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                )
+            ) + slideOutVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                ),
+                targetOffsetY = { it }
+            ),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.md)
         ) {
             RewriteChipBar(
                 onAction = { viewModel.requestRewrite(it) }
@@ -658,7 +708,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .height(64.dp)
+                        .height(DesignTokens.Sheet.handleArea)
                         .pointerInput(showBottomSheet, fullSheetHeightPx) {
                             detectVerticalDragGestures(
                                 onVerticalDrag = { change, dragAmount ->
@@ -675,9 +725,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 ) {
                     Box(
                         modifier = Modifier
-                            .width(44.dp)
-                            .height(5.dp)
-                            .background(colorScheme.outlineVariant, RoundedCornerShape(2.5.dp))
+                            .width(DesignTokens.Sheet.handleWidth)
+                            .height(DesignTokens.Sheet.handleHeight)
+                            .background(colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Sheet.handleHeight / 2))
                     )
                 }
 
@@ -689,7 +739,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         .fillMaxWidth()
                         .weight(1f)
                         .navigationBarsPadding()
-                        .padding(bottom = 16.dp)
+                        .padding(bottom = DesignTokens.Spacing.lg)
                 )
             }
         }
