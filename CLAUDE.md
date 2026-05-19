@@ -42,7 +42,7 @@ Capacitor sync (after web build, when shipping the web inside the native shell):
 
 ## Config / secrets
 
-- Web: `GEMINI_API_KEY` in `.env.local` (gitignored). Vite inlines it via `define: { 'process.env.GEMINI_API_KEY': ... }` in `vite.config.ts` — it ships to the client bundle, so do not put server-only keys there.
+- Web: `GEMINI_API_KEY` in `.env.local` (gitignored). Vite inlines it via `define: { 'process.env.GEMINI_API_KEY': ... }` in `vite.config.ts` — it ships to the client bundle, so do not put server-only keys there. Mitigate by applying referrer/IP restrictions and per-key quotas in Google AI Studio; long-term, move calls behind a server proxy and drop the `define` inlining.
 - Android: `GEMINI_API_KEY` in `android/local.properties` (gitignored). Read by `GeminiService`.
 - iOS: configured at runtime via `Views/SettingsView.swift` (AI provider/key selection), not committed.
 - `.env.example` lists keys; never write real values into it.
@@ -51,5 +51,5 @@ Capacitor sync (after web build, when shipping the web inside the native shell):
 ## Conventions
 
 - See `AGENTS.md` for repo-wide style/testing/commit rules. Highlights: keep commits focused per platform (don't mix web + Android + iOS in one commit); test names describe behavior (`generatesSyllableCountsForLyrics`); web/iOS/Android each follow native naming (PascalCase components, 4-space Kotlin, SwiftUI `*View` / `*Service`).
-- Per user global preferences: work on `master`/current branch unless asked, prefer direct code over new abstractions, no new deps without justification, no emoji in code/commits.
+- Default branch is `main`; PRs target `main`. Work on the current branch unless asked otherwise. Prefer direct code over new abstractions, no new deps without justification, no emoji in code/commits.
 - `app-icon.png` and Xcode project files may show as locally modified — check `git status` before staging.
