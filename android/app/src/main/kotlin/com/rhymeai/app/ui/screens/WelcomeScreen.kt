@@ -1,8 +1,8 @@
 package com.rhymeai.app.ui.screens
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,31 +19,27 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.rhymeai.app.ui.theme.Purple400
+import com.rhymeai.app.R
 
 @Composable
 fun WelcomeScreen(
@@ -62,22 +58,12 @@ fun WelcomeScreen(
     ) {
         val isCompact = maxHeight < 600.dp
         val iconSize = if (isCompact) 56.dp else 80.dp
-        val titleSize = if (isCompact) 24.sp else 32.sp
+        val titleStyle = if (isCompact) {
+            MaterialTheme.typography.headlineLarge
+        } else {
+            MaterialTheme.typography.displayMedium
+        }
         val verticalSpacing = if (isCompact) 16.dp else 32.dp
-
-        // Gradient overlay
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            colorScheme.primary.copy(alpha = 0.1f),
-                            Color.Transparent
-                        )
-                    )
-                )
-        )
 
         Column(
             modifier = Modifier
@@ -87,38 +73,39 @@ fun WelcomeScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Icon
-            Box(
+            // App icon
+            Surface(
                 modifier = Modifier
-                    .size(iconSize)
-                    .background(colorScheme.primary.copy(alpha = 0.2f), CircleShape)
-                    .border(1.dp, colorScheme.primary.copy(alpha = 0.3f), CircleShape),
-                contentAlignment = Alignment.Center
+                    .size(iconSize),
+                shape = RoundedCornerShape(iconSize * 0.22f),
+                color = colorScheme.primaryContainer,
+                tonalElevation = 4.dp,
+                shadowElevation = 6.dp,
+                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.24f))
             ) {
-                Icon(
-                    Icons.Default.Keyboard,
-                    contentDescription = null,
-                    tint = colorScheme.primary,
-                    modifier = Modifier.size(iconSize / 2)
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(iconSize * 0.14f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        painter = painterResource(R.mipmap.ic_launcher_foreground),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        colorFilter = ColorFilter.tint(colorScheme.onPrimaryContainer)
+                    )
+                }
             }
 
             Spacer(Modifier.height(verticalSpacing))
 
             // Title
             Text(
-                text = buildAnnotatedString {
-                    withStyle(SpanStyle(
-                        brush = Brush.horizontalGradient(listOf(colorScheme.primary, colorScheme.secondary))
-                    )) {
-                        append("Writers Block")
-                    }
-                },
-                fontFamily = FontFamily.Serif,
-                fontWeight = FontWeight.Bold,
-                fontSize = titleSize,
+                text = "Writers Block",
+                style = titleStyle,
+                color = colorScheme.primary,
                 textAlign = TextAlign.Center,
-                lineHeight = titleSize * 1.25
             )
 
             Spacer(Modifier.height(12.dp))
@@ -126,9 +113,8 @@ fun WelcomeScreen(
             Text(
                 "Your intelligent songwriting companion. Start from scratch, load an existing project, or kickstart your creativity with a template.",
                 color = colorScheme.onSurfaceVariant,
-                fontSize = 14.sp,
+                style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
-                lineHeight = 20.sp,
                 modifier = Modifier.padding(horizontal = 8.dp)
             )
 
@@ -171,34 +157,43 @@ private fun WelcomeCard(
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
-    Row(
+    OutlinedCard(
+        onClick = onClick,
         modifier = Modifier
-            .fillMaxWidth()
-            .background(colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-            .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = colorScheme.surfaceContainerLow,
+            contentColor = colorScheme.onSurface
+        ),
+        border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(28.dp)
-        )
-        Spacer(Modifier.width(16.dp))
-        Column {
-            Text(
-                title,
-                fontWeight = FontWeight.Medium,
-                fontSize = 16.sp,
-                color = colorScheme.onSurface
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = colorScheme.primary,
+                modifier = Modifier.size(28.dp)
             )
-            Text(
-                subtitle,
-                fontSize = 13.sp,
-                color = colorScheme.onSurfaceVariant
-            )
+            Spacer(Modifier.width(16.dp))
+            Column {
+                Text(
+                    title,
+                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colorScheme.onSurface
+                )
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

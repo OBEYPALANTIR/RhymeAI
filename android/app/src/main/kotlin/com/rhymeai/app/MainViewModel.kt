@@ -9,6 +9,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
@@ -61,6 +62,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var useWholeSongContext by mutableStateOf(false)
     var isHighlightEnabled by mutableStateOf(true)
     var isSyllableColoringEnabled by mutableStateOf(true)
+    var isRhymeHighlightEnabled by mutableStateOf(false)
 
     // Project management
     var projects by mutableStateOf<List<SongProject>>(emptyList())
@@ -69,6 +71,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var showProjectsDialog by mutableStateOf(false)
     var showTemplatesDialog by mutableStateOf(false)
     var showStartMenu by mutableStateOf(true)
+    var showExportSheet by mutableStateOf(false)
 
     // Settings
     var selectedProvider by mutableStateOf(AIProvider.GEMINI)
@@ -86,6 +89,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Error state
     var errorMessage by mutableStateOf<String?>(null)
+
+    // Rewrite state
+    var rewriteAction by mutableStateOf<RewriteAction?>(null)
+    var rewriteLoading by mutableStateOf(false)
+    var rewritePreview by mutableStateOf<String?>(null)
+    var rewriteOriginal by mutableStateOf<String?>(null)
+    var rewriteError by mutableStateOf<String?>(null)
+    private var rewriteRange: TextRange? = null
+    private var rewriteJob: Job? = null
 
     private var autoSaveJob: Job? = null
 
@@ -199,6 +211,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun requestRewrite(action: RewriteAction) {
+        val selection = lyricsFieldValue.selection
+        if (selection.collapsed) return
+        val start = selection.min
+        val end = selection.max
+        val original = lyrics.substring(start, end)
+        if (original.isBlank()) return
+
+        rewriteJob?.cancel()
+        rewriteAction = action
+        rewriteOriginal = original
+        rewriteRange = TextRange(start, end)
+        rewritePreview = null
+        rewriteError = null
+        rewriteLoading = true
+
+        rewriteJob = viewModelScope.launch {
+            try {
+                val result = aiService.getRewrite(
+                    provider = selectedProvider,
+                    apiKey = currentApiKey,
+                    modelId = selectedModel.id,
+                    action = action,
+                    fullLyrics = lyrics,
+                    selection = original
+                )
+                rewritePreview = result
+            } catch (e: Exception) {
+                rewriteError = e.message ?: "Rewrite failed"
+            } finally {
+                rewriteLoading = false
+            }
+        }
+    }
+
+    fun applyRewrite() {
+        val preview = rewritePreview ?: return
+        val range = rewriteRange ?: return
+        val text = lyrics
+        if (range.start > text.length || range.end > text.length) {
+            dismissRewrite()
+            return
+        }
+        val before = text.substring(0, range.start)
+        val after = text.substring(range.end)
+        val newText = before + preview + after
+        val newCursor = (range.start + preview.length).coerceAtMost(newText.length)
+        lyricsFieldValue = TextFieldValue(newText, TextRange(newCursor))
+        dismissRewrite()
+        triggerAutoSave()
+    }
+
+    fun dismissRewrite() {
+        rewriteJob?.cancel()
+        rewriteJob = null
+        rewriteAction = null
+        rewriteLoading = false
+        rewritePreview = null
+        rewriteOriginal = null
+        rewriteError = null
+        rewriteRange = null
+    }
+
     fun insertSuggestion(suggestion: String) {
         val pos = cursorPosition
         val text = lyrics
@@ -248,6 +323,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repo.saveProjects(projects)
             if (currentProjectId == null) repo.setCurrentProjectId(null)
         }
+    }
+
+    fun importProject(imported: SongProject) {
+        val newId = java.util.UUID.randomUUID().toString()
+        val project = imported.copy(
+            id = newId,
+            title = imported.title.ifBlank { "Imported Song" },
+            updatedAt = System.currentTimeMillis()
+        )
+        projects = listOf(project) + projects
+        title = project.title
+        lyricsFieldValue = TextFieldValue(project.lyrics)
+        theme = project.theme
+        currentProjectId = project.id
+        suggestions = emptyList()
+        showProjectsDialog = false
+        showStartMenu = false
+        viewModelScope.launch {
+            repo.saveProjects(projects)
+            repo.setCurrentProjectId(project.id)
+            repo.saveEditorState(project.title, project.lyrics, project.theme)
+        }
+    }
+
+    fun snapshotCurrentForExport(): SongProject {
+        return SongProject(
+            id = currentProjectId ?: java.util.UUID.randomUUID().toString(),
+            title = title.ifBlank { "Untitled Song" },
+            lyrics = lyrics,
+            theme = theme,
+            updatedAt = System.currentTimeMillis()
+        )
     }
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String) {

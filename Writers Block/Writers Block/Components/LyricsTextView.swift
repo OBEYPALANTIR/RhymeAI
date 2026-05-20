@@ -4,6 +4,7 @@ import UIKit
 struct LyricsTextView: UIViewRepresentable {
     @Binding var text: String
     var onCursorChange: (Int) -> Void
+    var onSelectionChange: ((NSRange) -> Void)? = nil
     var isTransparentText: Bool = false
     var placeholder: String = "Start writing your lyrics here..."
 
@@ -99,6 +100,7 @@ struct LyricsTextView: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
             parent.onCursorChange(textView.selectedRange.location)
+            parent.onSelectionChange?(textView.selectedRange)
             updatePlaceholder(textView, text: textView.text)
             // Invalidate intrinsic content size so SwiftUI resizes
             textView.invalidateIntrinsicContentSize()
@@ -107,6 +109,7 @@ struct LyricsTextView: UIViewRepresentable {
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             parent.onCursorChange(textView.selectedRange.location)
+            parent.onSelectionChange?(textView.selectedRange)
             scheduleKeepCursorVisible()
         }
 

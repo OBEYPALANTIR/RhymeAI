@@ -310,6 +310,199 @@ struct AIService {
         }
     }
 
+    // MARK: - Rewrite
+
+    func getRewrite(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        action: RewriteAction,
+        fullLyrics: String,
+        selection: String
+    ) async throws -> String {
+        guard !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AIServiceError.invalidResponse
+        }
+
+        if provider == .local {
+            if #available(iOS 26.0, *) {
+                let prompt = buildLocalRewritePrompt(action: action, lyrics: fullLyrics, selection: selection)
+                return try await callLocalRewrite(prompt: prompt)
+            }
+            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence rewrites require iOS 26 or later.")
+        }
+
+        guard !apiKey.isEmpty else {
+            throw AIServiceError.noApiKey(provider: provider.displayName)
+        }
+
+        let prompt = buildRewritePrompt(action: action, lyrics: fullLyrics, selection: selection)
+        let raw: String
+        switch provider {
+        case .gemini:
+            raw = try await callGeminiRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
+        case .openai:
+            raw = try await callOpenAIRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
+        case .claude:
+            raw = try await callClaudeRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
+        case .local:
+            throw AIServiceError.invalidResponse
+        }
+
+        if let extracted = extractRewriteField(raw)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !extracted.isEmpty {
+            return extracted
+        }
+        throw AIServiceError.decodingError
+    }
+
+    private func buildRewritePrompt(action: RewriteAction, lyrics: String, selection: String) -> String {
+        return """
+        You are an expert songwriter helping the user rewrite a portion of their song.
+
+        Full lyrics for context:
+        \"""
+        \(lyrics)
+        \"""
+
+        The user has selected the following passage from those lyrics. Rewrite ONLY this passage:
+        \"""
+        \(selection)
+        \"""
+
+        Action: \(action.label)
+        Instruction: \(action.instruction)
+
+        Rules:
+        - Output the rewritten passage only.
+        - Preserve line breaks where present.
+        - Do not include the surrounding lyrics, commentary, labels, or markdown.
+
+        Respond ONLY with a JSON object of the form {"rewrite": "..."}. No code fences.
+        """
+    }
+
+    private func buildLocalRewritePrompt(action: RewriteAction, lyrics: String, selection: String) -> String {
+        return """
+        Rewrite the selected passage from this song.
+        Action: \(action.label).
+        Instruction: \(action.instruction)
+
+        Lyrics so far:
+        \(lyrics)
+
+        Selected passage:
+        \(selection)
+
+        Reply with the rewritten passage only. No quotes, no labels, no commentary.
+        """
+    }
+
+    private func callGeminiRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
+        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):generateContent?key=\(apiKey)"
+        guard let url = URL(string: urlString) else { throw AIServiceError.invalidResponse }
+
+        let body: [String: Any] = [
+            "contents": [["parts": [["text": prompt]]]],
+            "generationConfig": ["responseMimeType": "application/json"]
+        ]
+        let data = try await httpPost(
+            url: url,
+            headers: ["Content-Type": "application/json"],
+            body: try JSONSerialization.data(withJSONObject: body)
+        )
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let candidates = json["candidates"] as? [[String: Any]],
+              let content = candidates.first?["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]],
+              let text = parts.first?["text"] as? String else {
+            throw AIServiceError.decodingError
+        }
+        return text
+    }
+
+    private func callOpenAIRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
+        guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
+            throw AIServiceError.invalidResponse
+        }
+        let body: [String: Any] = [
+            "model": modelId,
+            "messages": [["role": "user", "content": prompt]],
+            "response_format": ["type": "json_object"]
+        ]
+        let data = try await httpPost(
+            url: url,
+            headers: [
+                "Content-Type": "application/json",
+                "Authorization": "Bearer \(apiKey)"
+            ],
+            body: try JSONSerialization.data(withJSONObject: body)
+        )
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            throw AIServiceError.decodingError
+        }
+        return content
+    }
+
+    private func callClaudeRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
+            throw AIServiceError.invalidResponse
+        }
+        let body: [String: Any] = [
+            "model": modelId,
+            "max_tokens": 1024,
+            "messages": [["role": "user", "content": prompt]]
+        ]
+        let data = try await httpPost(
+            url: url,
+            headers: [
+                "Content-Type": "application/json",
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01"
+            ],
+            body: try JSONSerialization.data(withJSONObject: body)
+        )
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let contentArray = json["content"] as? [[String: Any]],
+              let text = contentArray.first?["text"] as? String else {
+            throw AIServiceError.decodingError
+        }
+        return text
+    }
+
+    @available(iOS 26.0, *)
+    private func callLocalRewrite(prompt: String) async throws -> String {
+        let model = SystemLanguageModel.default
+        guard model.isAvailable else {
+            throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
+        }
+        let session = LanguageModelSession(
+            model: model,
+            instructions: "You are an expert songwriter. Rewrite passages only. Output the rewrite only — no quotes, no commentary."
+        )
+        let response = try await session.respond(to: prompt)
+        let trimmed = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let extracted = extractRewriteField(trimmed) { return extracted }
+        return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+    }
+
+    private func extractRewriteField(_ text: String) -> String? {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```json") { cleaned = String(cleaned.dropFirst(7)) }
+        if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
+        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = cleaned.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = obj["rewrite"] as? String else {
+            return nil
+        }
+        return value
+    }
+
     // MARK: - HTTP
 
     private func httpPost(url: URL, headers: [String: String], body: Data) async throws -> Data {

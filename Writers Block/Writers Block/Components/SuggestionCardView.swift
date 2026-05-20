@@ -7,36 +7,31 @@ struct SuggestionCardView: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .center, spacing: RhymeAITokens.Spacing.sm) {
                 highlightedText
                     .font(.system(.body, design: .serif))
                     .foregroundStyle(.primary.opacity(0.9))
                     .lineSpacing(4)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 8) {
+                HStack(spacing: RhymeAITokens.Spacing.xs) {
                     Text("\(SyllableCounter.countText(suggestion))")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary.opacity(0.6))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.ultraThinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .padding(.horizontal, RhymeAITokens.Spacing.xs)
+                        .padding(.vertical, RhymeAITokens.Spacing.xs)
+                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, fallbackOpacity: 0.08)
 
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundStyle(.secondary.opacity(0.3))
                 }
             }
-            .padding(16)
-            .background(Color.white.opacity(0.05))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
-            )
+            .padding(RhymeAITokens.Spacing.lg)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.rhymePress)
     }
 
     @ViewBuilder

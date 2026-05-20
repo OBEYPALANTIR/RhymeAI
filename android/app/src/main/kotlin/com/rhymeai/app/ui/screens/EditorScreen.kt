@@ -1,6 +1,8 @@
 package com.rhymeai.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -10,6 +12,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -35,15 +38,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,29 +66,44 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.SaveStatus
+import com.rhymeai.app.data.model.ExportFormat
+import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.ui.components.AssistantPanel
-import com.rhymeai.app.ui.components.SyllableColoredText
+import com.rhymeai.app.ui.components.ExportSheet
+import com.rhymeai.app.ui.components.RewriteChipBar
+import com.rhymeai.app.ui.components.RewriteDialog
+import com.rhymeai.app.ui.components.RhymeHighlightedText
+import com.rhymeai.app.ui.components.syllableUnderlines
+import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.util.LyricsExporter
 import com.rhymeai.app.util.SyllableCounter
 import kotlin.math.ceil
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val rhymeContext = remember(viewModel.lyrics, viewModel.cursorPosition, viewModel.activeRhymeScheme) {
@@ -96,7 +120,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val fullSheetHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
-    val assistantSheetHandleHeightPx = with(density) { 64.dp.toPx() }
+    val assistantSheetHandleHeightPx = with(density) { DesignTokens.Sheet.handleArea.toPx() }
     val assistantSheetCloseThresholdPx =
         ((fullSheetHeightPx - assistantSheetHandleHeightPx).coerceAtLeast(0f)) * 0.5f
     var assistantSheetDragOffsetPx by remember { mutableFloatStateOf(0f) }
@@ -124,7 +148,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         val animation = Animatable(startOffset)
         animation.animateTo(
             targetValue = 0f,
-            animationSpec = tween(durationMillis = 260)
+            animationSpec = tween(
+                durationMillis = DesignTokens.Motion.sheetPresentMillis,
+                easing = DesignTokens.Motion.emphasizedEasing
+            )
         ) {
             assistantSheetDragOffsetPx = value
         }
@@ -139,17 +166,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             if (targetOffset == 0f) {
                 animation.animateTo(
                     targetValue = 0f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    )
+                    animationSpec = DesignTokens.Motion.settleSpring()
                 ) {
                     assistantSheetDragOffsetPx = value
                 }
             } else {
                 animation.animateTo(
                     targetValue = targetOffset,
-                    animationSpec = tween(durationMillis = 180)
+                    animationSpec = tween(
+                        durationMillis = DesignTokens.Motion.dismissMillis,
+                        easing = DesignTokens.Motion.exitEasing
+                    )
                 ) {
                     assistantSheetDragOffsetPx = value
                 }
@@ -170,7 +197,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             val animation = Animatable(assistantSheetDragOffsetPx)
             animation.animateTo(
                 targetValue = fullSheetHeightPx,
-                animationSpec = tween(durationMillis = 180)
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                )
             ) {
                 assistantSheetDragOffsetPx = value
             }
@@ -192,70 +222,189 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         dismissAssistantSheet()
     }
 
+    val context = LocalContext.current
+    var pendingExport by remember { mutableStateOf<Pair<ExportFormat, SongProject>?>(null) }
+
+    fun writeExport(format: ExportFormat, project: SongProject, uri: android.net.Uri) {
+        scope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    when (format) {
+                        ExportFormat.TXT -> LyricsExporter.buildTxt(project)
+                        ExportFormat.JSON -> LyricsExporter.buildJson(project)
+                        ExportFormat.PDF -> LyricsExporter.buildPdf(project)
+                        ExportFormat.LRC -> LyricsExporter.buildLrc(project)
+                    }
+                }
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) }
+                        ?: throw Exception("Cannot open destination for writing")
+                }
+            } catch (_: Exception) {
+                // Surface via existing errorMessage channel
+                viewModel.errorMessage = "Export failed. Try a different location."
+            }
+        }
+    }
+
+    val txtLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ExportFormat.TXT.mimeType)
+    ) { uri ->
+        val pending = pendingExport
+        pendingExport = null
+        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
+    }
+    val jsonLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ExportFormat.JSON.mimeType)
+    ) { uri ->
+        val pending = pendingExport
+        pendingExport = null
+        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
+    }
+    val pdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ExportFormat.PDF.mimeType)
+    ) { uri ->
+        val pending = pendingExport
+        pendingExport = null
+        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
+    }
+    val lrcLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ExportFormat.LRC.mimeType)
+    ) { uri ->
+        val pending = pendingExport
+        pendingExport = null
+        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
+    }
+
+    fun launchExport(format: ExportFormat) {
+        val project = viewModel.snapshotCurrentForExport()
+        val safeTitle = project.title
+            .replace(Regex("[^A-Za-z0-9_\\- ]"), "")
+            .trim()
+            .ifEmpty { "Untitled" }
+        val filename = "$safeTitle.${format.extension}"
+        pendingExport = format to project
+        when (format) {
+            ExportFormat.TXT -> txtLauncher.launch(filename)
+            ExportFormat.JSON -> jsonLauncher.launch(filename)
+            ExportFormat.PDF -> pdfLauncher.launch(filename)
+            ExportFormat.LRC -> lrcLauncher.launch(filename)
+        }
+        viewModel.showExportSheet = false
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background)
-            .statusBarsPadding()
             .imePadding()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Top bar — always visible
-            run {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(colorScheme.surface)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.weight(1f, fill = false)
-                    ) {
-                        TextButton(onClick = { onNavigateToStart() }) {
-                            Icon(Icons.Default.Menu, null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Menu", color = colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
-                        }
-
-                        Box(Modifier.width(1.dp).height(16.dp).background(colorScheme.outlineVariant))
-
-                        val projectsColor = if (viewModel.saveStatus == SaveStatus.SAVED)
-                            Color(0xFF6EE7B7) else colorScheme.onSurfaceVariant
-
-                        TextButton(onClick = { viewModel.showProjectsDialog = true }) {
-                            Icon(Icons.Default.FolderOpen, null, tint = projectsColor, modifier = Modifier.size(14.dp))
-                            Text(" Projects", color = projectsColor, fontSize = 11.sp)
-                        }
-
-                        TextButton(onClick = { viewModel.showSettingsDialog = true }) {
-                            Icon(Icons.Default.Settings, null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-                        }
+            val wordCount = remember(viewModel.lyrics) { SyllableCounter.wordCount(viewModel.lyrics) }
+            val syllableCount = remember(viewModel.lyrics) { SyllableCounter.countText(viewModel.lyrics) }
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = { viewModel.showProjectsDialog = true }) {
+                        Icon(
+                            Icons.Default.Menu,
+                            contentDescription = "Open songs drawer",
+                            tint = colorScheme.onSurfaceVariant
+                        )
                     }
-
-                    val wordCount = remember(viewModel.lyrics) { SyllableCounter.wordCount(viewModel.lyrics) }
-                    val syllableCount = remember(viewModel.lyrics) { SyllableCounter.countText(viewModel.lyrics) }
-
-                    Column(horizontalAlignment = Alignment.End) {
+                },
+                title = {
+                    when (viewModel.saveStatus) {
+                        SaveStatus.SAVING -> Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "Saving...",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                        SaveStatus.SAVED -> Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = colorScheme.tertiary
+                            )
+                            Text(
+                                "Saved",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = colorScheme.tertiary,
+                                maxLines = 1
+                            )
+                        }
+                        SaveStatus.IDLE -> Text(
+                            "Writers Block",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                },
+                actions = {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(end = 4.dp)
+                    ) {
                         Text(
                             "$wordCount words",
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant
                         )
                         Text(
                             "$syllableCount syllables",
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant
                         )
                     }
-                }
-            }
+                    IconButton(
+                        onClick = { viewModel.showExportSheet = true },
+                        enabled = viewModel.lyrics.isNotBlank()
+                    ) {
+                        Icon(
+                            Icons.Default.IosShare,
+                            contentDescription = "Export",
+                            tint = if (viewModel.lyrics.isNotBlank())
+                                colorScheme.onSurfaceVariant
+                            else
+                                colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                    IconButton(onClick = { viewModel.showSettingsDialog = true }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = colorScheme.surface,
+                    navigationIconContentColor = colorScheme.onSurfaceVariant,
+                    titleContentColor = colorScheme.onSurface,
+                    actionIconContentColor = colorScheme.onSurfaceVariant
+                )
+            )
 
             // Divider
-            Box(Modifier.fillMaxWidth().height(1.dp).background(colorScheme.outlineVariant))
+            HorizontalDivider(color = colorScheme.outlineVariant)
 
             // Editor
             val scrollState = rememberScrollState()
@@ -265,12 +414,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     .fillMaxWidth()
             ) {
                 val trailingScrollSpace = if (keyboardVisible) {
-                    72.dp
+                    DesignTokens.Editor.keyboardOffset
                 } else {
-                    300.dp
+                    DesignTokens.Editor.bottomRest
                 }
                 val viewportHeightPx = with(density) { maxHeight.roundToPx() }
-                val editorWidthPx = with(density) { (maxWidth - 48.dp).roundToPx() }
+                val editorWidthPx = with(density) {
+                    (maxWidth - DesignTokens.Editor.horizontalPadding - DesignTokens.Editor.horizontalPadding).roundToPx()
+                }
                 val estimatedCharsPerLine = (editorWidthPx / with(density) { 8.5.dp.roundToPx() })
                     .coerceAtLeast(1)
                 val cursorVisualLine = remember(
@@ -284,7 +435,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         charsPerLine = estimatedCharsPerLine
                     )
                 }
-                val lyricsTopPx = with(density) { (16.dp + 24.dp).roundToPx() } + titleHeightPx
+                val lyricsTopPx = with(density) {
+                    (DesignTokens.Spacing.lg + DesignTokens.Spacing.xl).roundToPx()
+                } + titleHeightPx
                 val lineHeightPx = with(density) { 28.dp.roundToPx() }
                 val cursorOffset = viewModel.cursorPosition.coerceIn(0, viewModel.lyrics.length)
                 val cursorTopInLyricsPx = lyricsTextLayout
@@ -294,7 +447,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     ?.roundToInt()
                     ?: cursorVisualLine * lineHeightPx
                 val cursorContentY = lyricsTopPx + cursorTopInLyricsPx
-                val minCursorTopPx = with(density) { 64.dp.roundToPx() }
+                val minCursorTopPx = with(density) { DesignTokens.Sheet.handleArea.roundToPx() }
                 val maxCursorTopPx = (viewportHeightPx * 0.45f)
                     .roundToInt()
                     .coerceAtLeast(minCursorTopPx + lineHeightPx)
@@ -327,18 +480,15 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(scrollState)
-                        .padding(horizontal = 24.dp)
+                        .padding(horizontal = DesignTokens.Editor.horizontalPadding)
                 ) {
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(DesignTokens.Spacing.lg))
 
                     // Title field
                     BasicTextField(
                         value = viewModel.title,
                         onValueChange = { viewModel.onTitleChanged(it) },
-                        textStyle = TextStyle(
-                            fontFamily = FontFamily.Serif,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 32.sp,
+                        textStyle = MaterialTheme.typography.headlineLarge.copy(
                             color = colorScheme.onBackground
                         ),
                         cursorBrush = SolidColor(colorScheme.primary),
@@ -350,9 +500,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 if (viewModel.title.isEmpty()) {
                                     Text(
                                         "Song Title...",
-                                        fontFamily = FontFamily.Serif,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 32.sp,
+                                        style = MaterialTheme.typography.headlineLarge,
                                         color = colorScheme.onBackground.copy(alpha = 0.2f)
                                     )
                                 }
@@ -361,21 +509,34 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
                     )
 
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(DesignTokens.Spacing.xl))
 
-                    // Lyrics editor with syllable coloring overlay
+                    // Lyrics editor with overlay (syllable or rhyme coloring)
+                    val overlayActive = (viewModel.isSyllableColoringEnabled ||
+                        viewModel.isRhymeHighlightEnabled) && viewModel.lyrics.isNotEmpty()
+                    val lyricsTextStyle = TextStyle(
+                        fontSize = 16.sp,
+                        lineHeight = 28.sp,
+                        fontFamily = FontFamily.Default
+                    )
+                    val syllableUnderlineGap = with(density) { 2.dp.toPx() }
+                    val syllableUnderlineWidth = with(density) { 3.dp.toPx() }
                     Box(modifier = Modifier.fillMaxWidth()) {
                         // Colored overlay (behind)
-                        if (viewModel.isSyllableColoringEnabled && viewModel.lyrics.isNotEmpty()) {
-                            SyllableColoredText(
-                                text = viewModel.lyrics,
-                                enabled = true,
-                                style = TextStyle(
-                                    fontSize = 16.sp,
-                                    lineHeight = 28.sp,
-                                    fontFamily = FontFamily.Default
+                        if (overlayActive) {
+                            if (viewModel.isRhymeHighlightEnabled) {
+                                RhymeHighlightedText(
+                                    text = viewModel.lyrics,
+                                    enabled = true,
+                                    style = lyricsTextStyle
                                 )
-                            )
+                            } else {
+                                Text(
+                                    text = viewModel.lyrics,
+                                    style = lyricsTextStyle,
+                                    color = colorScheme.onBackground.copy(alpha = 0.9f)
+                                )
+                            }
                         }
 
                         // Actual text field (on top, transparent if coloring is on)
@@ -383,11 +544,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             value = viewModel.lyricsFieldValue,
                             onValueChange = { viewModel.onLyricsChanged(it) },
                             onTextLayout = { lyricsTextLayout = it },
-                            textStyle = TextStyle(
-                                fontSize = 16.sp,
-                                lineHeight = 28.sp,
-                                fontFamily = FontFamily.Default,
-                                color = if (viewModel.isSyllableColoringEnabled)
+                            textStyle = lyricsTextStyle.copy(
+                                color = if (overlayActive)
                                     Color.Transparent
                                 else
                                     colorScheme.onBackground.copy(alpha = 0.9f)
@@ -395,6 +553,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             cursorBrush = SolidColor(colorScheme.primary),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .syllableUnderlines(
+                                    text = viewModel.lyrics,
+                                    enabled = overlayActive && viewModel.isSyllableColoringEnabled,
+                                    textLayoutResult = lyricsTextLayout,
+                                    underlineGap = syllableUnderlineGap,
+                                    strokeWidth = syllableUnderlineWidth
+                                )
                                 .onFocusChanged { lyricsFocused = it.isFocused },
                             decorationBox = { innerTextField ->
                                 Box {
@@ -418,25 +583,117 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
 
-        // UnBlock FAB — always visible when sheet is closed
+        val modalOpen = viewModel.showSettingsDialog ||
+            viewModel.showProjectsDialog ||
+            viewModel.showExportSheet ||
+            viewModel.rewriteAction != null
+
+        // UnBlock FAB — visible only when the editor is unobstructed.
         AnimatedVisibility(
-            visible = !showBottomSheet && !pendingAssistantSheet,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+            visible = !showBottomSheet && !pendingAssistantSheet && !modalOpen,
+            enter = fadeIn(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.assistantPresentMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                )
+            ) + slideInVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.assistantPresentMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                ),
+                initialOffsetY = { it }
+            ),
+            exit = fadeOut(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                )
+            ) + slideOutVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                ),
+                targetOffsetY = { it }
+            ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
-                .padding(24.dp)
+                .padding(DesignTokens.Spacing.xl)
         ) {
             ExtendedFloatingActionButton(
                 onClick = { openAssistantSheet() },
                 containerColor = colorScheme.primary,
                 contentColor = colorScheme.onPrimary,
-                shape = RoundedCornerShape(28.dp)
+                shape = RoundedCornerShape(DesignTokens.Radius.pill)
             ) {
-                Icon(Icons.Default.AutoFixHigh, null, modifier = Modifier.size(18.dp))
-                Text("  UnBlock", fontWeight = FontWeight.Medium)
+                Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                UnBlockWordmark()
             }
+        }
+
+        // Rewrite chip bar — shown when text is selected and no other UI is open
+        val selection = viewModel.lyricsFieldValue.selection
+        val rewriteVisible = !selection.collapsed &&
+            !showBottomSheet &&
+            !pendingAssistantSheet &&
+            !modalOpen &&
+            viewModel.rewriteAction == null
+        AnimatedVisibility(
+            visible = rewriteVisible,
+            enter = fadeIn(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.standardMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                )
+            ) + slideInVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.standardMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                ),
+                initialOffsetY = { it }
+            ),
+            exit = fadeOut(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                )
+            ) + slideOutVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                ),
+                targetOffsetY = { it }
+            ),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.md)
+        ) {
+            RewriteChipBar(
+                onAction = { viewModel.requestRewrite(it) }
+            )
+        }
+
+        // Export sheet
+        if (viewModel.showExportSheet) {
+            ExportSheet(
+                onPick = { launchExport(it) },
+                onDismiss = { viewModel.showExportSheet = false }
+            )
+        }
+
+        // Rewrite preview dialog
+        viewModel.rewriteAction?.let { action ->
+            RewriteDialog(
+                action = action,
+                original = viewModel.rewriteOriginal.orEmpty(),
+                preview = viewModel.rewritePreview,
+                loading = viewModel.rewriteLoading,
+                error = viewModel.rewriteError,
+                onApply = { viewModel.applyRewrite() },
+                onDismiss = { viewModel.dismissRewrite() }
+            )
         }
 
         // Bottom sheet for assistant
@@ -451,7 +708,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .height(64.dp)
+                        .height(DesignTokens.Sheet.handleArea)
                         .pointerInput(showBottomSheet, fullSheetHeightPx) {
                             detectVerticalDragGestures(
                                 onVerticalDrag = { change, dragAmount ->
@@ -468,9 +725,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 ) {
                     Box(
                         modifier = Modifier
-                            .width(44.dp)
-                            .height(5.dp)
-                            .background(colorScheme.outlineVariant, RoundedCornerShape(2.5.dp))
+                            .width(DesignTokens.Sheet.handleWidth)
+                            .height(DesignTokens.Sheet.handleHeight)
+                            .background(colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Sheet.handleHeight / 2))
                     )
                 }
 
@@ -482,9 +739,53 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         .fillMaxWidth()
                         .weight(1f)
                         .navigationBarsPadding()
-                        .padding(bottom = 16.dp)
+                        .padding(bottom = DesignTokens.Spacing.lg)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun UnBlockWordmark() {
+    val color = MaterialTheme.colorScheme.onPrimary
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("UnBlock", fontWeight = FontWeight.Medium)
+        Canvas(
+            modifier = Modifier
+                .width(68.dp)
+                .height(5.dp)
+        ) {
+            val strokeWidth = 1.6.dp.toPx()
+            drawLine(
+                color = color.copy(alpha = 0.9f),
+                start = Offset(0f, size.height * 0.55f),
+                end = Offset(size.width * 0.18f, size.height * 0.25f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = color.copy(alpha = 0.9f),
+                start = Offset(size.width * 0.18f, size.height * 0.25f),
+                end = Offset(size.width * 0.42f, size.height * 0.78f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = color.copy(alpha = 0.9f),
+                start = Offset(size.width * 0.42f, size.height * 0.78f),
+                end = Offset(size.width * 0.68f, size.height * 0.28f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = color.copy(alpha = 0.9f),
+                start = Offset(size.width * 0.68f, size.height * 0.28f),
+                end = Offset(size.width, size.height * 0.58f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
         }
     }
 }
