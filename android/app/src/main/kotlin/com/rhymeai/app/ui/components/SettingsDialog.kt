@@ -72,6 +72,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
+import com.rhymeai.app.service.isGgufFile
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -738,14 +739,6 @@ private fun ensureEnoughSpaceForGemma(model: GemmaDownload, destFile: File, temp
         throw IllegalStateException(
             "Need ${formatFileSize(requiredBytes)} free for ${model.label}; only ${formatFileSize(availableBytes)} available."
         )
-    }
-}
-
-private fun File.isGgufFile(): Boolean {
-    if (length() < 4L) return false
-    return inputStream().use { input ->
-        val header = ByteArray(4)
-        input.read(header) == header.size && header.contentEquals(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
     }
 }
 
