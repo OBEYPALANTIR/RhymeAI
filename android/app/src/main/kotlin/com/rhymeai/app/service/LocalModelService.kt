@@ -144,7 +144,7 @@ class LocalModelService {
     }
 }
 
-private fun File.isGgufFile(): Boolean {
+internal fun File.isGgufFile(): Boolean {
     if (length() < 4L) return false
     return inputStream().use { input ->
         val header = ByteArray(4)
