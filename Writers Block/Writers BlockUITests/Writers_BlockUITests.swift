@@ -52,6 +52,26 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testUnBlockButtonHidesWhileEditingLyrics() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let unblockButton = app.buttons["unblockButton"]
+        XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+
+        let lyricsEditor = app.textViews.firstMatch
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        lyricsEditor.tap()
+        lyricsEditor.typeText("Testing keyboard overlap")
+
+        XCTAssertFalse(unblockButton.exists)
+    }
+
+    @MainActor
     func testBackSwipeClosesAssistantSheetWithoutReturningToMenu() throws {
         let app = XCUIApplication()
         app.launch()
@@ -68,6 +88,30 @@ final class Writers_BlockUITests: XCTestCase {
 
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.72, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end)
+
+        XCTAssertTrue(app.buttons["unblockButton"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["Assistant"].exists)
+        XCTAssertFalse(newSongButton.exists)
+    }
+
+    @MainActor
+    func testPullDownClosesAssistantSheetWithoutLockingEditor() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let unblockButton = app.buttons["unblockButton"]
+        XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        unblockButton.tap()
+
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42))
         start.press(forDuration: 0.05, thenDragTo: end)
 
         XCTAssertTrue(app.buttons["unblockButton"].waitForExistence(timeout: 3))

@@ -7,21 +7,20 @@ struct TemplatesView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 12) {
+                VStack(spacing: RhymeAITokens.Spacing.sm) {
                     ForEach(SongTemplate.builtIn) { template in
                         Button {
                             viewModel.applyTemplate(template)
                             dismiss()
                         } label: {
-                            HStack(spacing: 16) {
+                            HStack(spacing: RhymeAITokens.Spacing.lg) {
                                 Image(systemName: template.icon)
                                     .font(.title2)
                                     .foregroundStyle(.indigo)
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.indigo.opacity(0.15))
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .indigo.opacity(0.16), fallbackOpacity: 0.10)
 
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                                     Text(template.name)
                                         .font(.headline)
                                         .foregroundStyle(.primary)
@@ -36,15 +35,17 @@ struct TemplatesView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary.opacity(0.5))
                             }
-                            .padding(16)
-                            .liquidGlassSurface(cornerRadius: 16, tint: .indigo.opacity(0.08), interactive: true)
+                            .padding(RhymeAITokens.Spacing.lg)
+                            .frame(minHeight: RhymeAITokens.Touch.minimum)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.08), interactive: true)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.rhymePress)
                     }
                 }
-                .frame(maxWidth: 500)
+                .frame(maxWidth: RhymeAITokens.Layout.assistantReadableWidth)
                 .frame(maxWidth: .infinity)
-                .padding(20)
+                .padding(RhymeAITokens.Spacing.md)
+                .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
             }
             .background(Color(UIColor.systemBackground))
             .navigationTitle("Choose a Template")

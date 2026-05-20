@@ -1,13 +1,22 @@
 package com.rhymeai.app.ui.components
 
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
 import com.rhymeai.app.ui.theme.SyllableBlue
 import com.rhymeai.app.ui.theme.SyllableEmerald
 import com.rhymeai.app.ui.theme.SyllablePurple
@@ -30,44 +39,97 @@ fun SyllableColoredText(
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default
 ) {
-    if (!enabled || text.isEmpty()) {
-        Text(
-            text = text,
-            modifier = modifier,
-            style = style,
-            color = Color.White.copy(alpha = 0.9f)
-        )
-        return
-    }
-
-    val annotated = buildAnnotatedString {
-        var lastIndex = 0
-        wordPattern.findAll(text).forEach { match ->
-            // Append non-word text before this match
-            if (match.range.first > lastIndex) {
-                withStyle(SpanStyle(color = Color.White.copy(alpha = 0.9f))) {
-                    append(text.substring(lastIndex, match.range.first))
-                }
-            }
-            // Append the word with syllable color
-            val word = match.value
-            val count = SyllableCounter.count(word)
-            withStyle(SpanStyle(color = syllableColor(count))) {
-                append(word)
-            }
-            lastIndex = match.range.last + 1
-        }
-        // Append remaining text
-        if (lastIndex < text.length) {
-            withStyle(SpanStyle(color = Color.White.copy(alpha = 0.9f))) {
-                append(text.substring(lastIndex))
-            }
-        }
-    }
+    val baseTextColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f)
+    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val density = LocalDensity.current
+    val strokeWidth = with(density) { 3.dp.toPx() }
+    val underlineGap = with(density) { 2.dp.toPx() }
 
     Text(
-        text = annotated,
-        modifier = modifier,
-        style = style
+        text = text,
+        modifier = modifier.syllableUnderlines(
+            text = text,
+            enabled = enabled,
+            textLayoutResult = layoutResult,
+            underlineGap = underlineGap,
+            strokeWidth = strokeWidth
+        ),
+        style = style,
+        color = baseTextColor,
+        onTextLayout = { layoutResult = it }
+    )
+}
+
+fun Modifier.syllableUnderlines(
+    text: String,
+    enabled: Boolean,
+    textLayoutResult: TextLayoutResult?,
+    underlineGap: Float,
+    strokeWidth: Float
+): Modifier = drawBehind {
+    val layout = textLayoutResult ?: return@drawBehind
+    if (!enabled || text.isEmpty()) return@drawBehind
+
+    wordPattern.findAll(text).forEach { match ->
+        val count = SyllableCounter.count(match.value)
+        drawWordUnderline(
+            layout = layout,
+            start = match.range.first,
+            endExclusive = match.range.last + 1,
+            color = syllableColor(count),
+            underlineGap = underlineGap,
+            strokeWidth = strokeWidth
+        )
+    }
+}
+
+private fun DrawScope.drawWordUnderline(
+    layout: TextLayoutResult,
+    start: Int,
+    endExclusive: Int,
+    color: Color,
+    underlineGap: Float,
+    strokeWidth: Float
+) {
+    if (start >= endExclusive) return
+
+    var segmentStart = start
+    var segmentLine = layout.getLineForOffset(start)
+
+    for (offset in (start + 1) until endExclusive) {
+        val line = layout.getLineForOffset(offset)
+        if (line != segmentLine) {
+            drawUnderlineSegment(layout, segmentStart, offset, color, underlineGap, strokeWidth)
+            segmentStart = offset
+            segmentLine = line
+        }
+    }
+
+    drawUnderlineSegment(layout, segmentStart, endExclusive, color, underlineGap, strokeWidth)
+}
+
+private fun DrawScope.drawUnderlineSegment(
+    layout: TextLayoutResult,
+    start: Int,
+    endExclusive: Int,
+    color: Color,
+    underlineGap: Float,
+    strokeWidth: Float
+) {
+    val safeEnd = (endExclusive - 1).coerceAtLeast(start)
+    val startBox = layout.getBoundingBox(start)
+    val endBox = layout.getBoundingBox(safeEnd)
+    val y = maxOf(startBox.bottom, endBox.bottom) + underlineGap
+    val left = startBox.left
+    val right = endBox.right
+
+    if (right <= left) return
+
+    drawLine(
+        color = color.copy(alpha = 0.95f),
+        start = Offset(left, y),
+        end = Offset(right, y),
+        strokeWidth = strokeWidth,
+        cap = StrokeCap.Round
     )
 }

@@ -1,11 +1,14 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct ProjectsView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @State private var searchText = ""
+    @State private var fileImporterPresented = false
+    @State private var importError: String?
 
     private var filteredProjects: [SongProject] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -61,6 +64,30 @@ struct ProjectsView: View {
                     .liquidGlassSurface(cornerRadius: 14, tint: .indigo.opacity(0.10), interactive: true)
                 }
                 .listRowBackground(Color.clear)
+
+                // Import from file
+                Button {
+                    importError = nil
+                    fileImporterPresented = true
+                } label: {
+                    HStack {
+                        Image(systemName: "square.and.arrow.down")
+                            .foregroundStyle(.secondary)
+                        Text("Import From File")
+                            .foregroundStyle(.primary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
+                    .liquidGlassSurface(cornerRadius: 14, interactive: true)
+                }
+                .listRowBackground(Color.clear)
+
+                if let importError {
+                    Text(importError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .listRowBackground(Color.clear)
+                }
 
                 if projects.isEmpty {
                     ContentUnavailableView {
@@ -128,8 +155,34 @@ struct ProjectsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .fileImporter(
+                isPresented: $fileImporterPresented,
+                allowedContentTypes: [.json],
+                allowsMultipleSelection: false
+            ) { result in
+                handleImport(result)
+            }
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            do {
+                let didStart = url.startAccessingSecurityScopedResource()
+                defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+                let data = try Data(contentsOf: url)
+                let exported = try LyricsExporter.decodeJsonExport(data)
+                viewModel.importProject(exported)
+                dismiss()
+            } catch {
+                importError = "Could not import this file. Pick a RhymeAI project JSON."
+            }
+        case .failure:
+            importError = "Could not open the selected file."
+        }
     }
 }
 

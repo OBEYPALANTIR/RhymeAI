@@ -34,11 +34,14 @@ struct SyllableColoredText: View {
                 result += segment
             }
 
-            // Append word with syllable color
             let word = String(text[matchRange])
             let count = SyllableCounter.count(word)
             var segment = AttributedString(word)
-            segment.foregroundColor = Self.syllableColor(for: count)
+            segment.foregroundColor = .primary.opacity(0.9)
+            segment.underlineStyle = Text.LineStyle(
+                pattern: .solid,
+                color: Self.syllableColor(for: count)
+            )
             result += segment
 
             lastEnd = matchRange.upperBound

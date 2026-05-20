@@ -7,7 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
-import com.rhymeai.app.ui.components.ProjectsDialog
+import com.rhymeai.app.ui.components.ProjectsDrawer
 import com.rhymeai.app.ui.components.SettingsDialog
 import com.rhymeai.app.ui.components.TemplatesDialog
 import com.rhymeai.app.ui.navigation.RhymeNavGraph
@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
 
                 // Handle dialog navigation from welcome screen
                 if (viewModel.showProjectsDialog) {
-                    ProjectsDialog(
+                    ProjectsDrawer(
                         projects = viewModel.projects,
                         currentProjectId = viewModel.currentProjectId,
                         onLoadProject = { project ->
@@ -50,6 +50,12 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onDeleteProject = { viewModel.deleteProject(it) },
+                        onImportProject = { project ->
+                            viewModel.importProject(project)
+                            navController.navigate(Routes.EDITOR) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        },
                         onDismiss = { viewModel.showProjectsDialog = false }
                     )
                 }

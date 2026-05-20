@@ -10,16 +10,22 @@ val RhymeTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Bold,
+        fontSize = 44.sp,
+        lineHeight = 52.sp
+    ),
+    displayMedium = TextStyle(
+        fontFamily = FontFamily.Serif,
+        fontWeight = FontWeight.Bold,
         fontSize = 40.sp,
         lineHeight = 48.sp
     ),
-    displayMedium = TextStyle(
+    headlineLarge = TextStyle(
         fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Bold,
         fontSize = 32.sp,
         lineHeight = 40.sp
     ),
-    headlineLarge = TextStyle(
+    headlineMedium = TextStyle(
         fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Bold,
         fontSize = 28.sp,
@@ -29,6 +35,11 @@ val RhymeTypography = Typography(
         fontWeight = FontWeight.Medium,
         fontSize = 20.sp,
         lineHeight = 28.sp
+    ),
+    titleMedium = TextStyle(
+        fontWeight = FontWeight.Medium,
+        fontSize = 16.sp,
+        lineHeight = 24.sp
     ),
     bodyLarge = TextStyle(
         fontSize = 16.sp,
