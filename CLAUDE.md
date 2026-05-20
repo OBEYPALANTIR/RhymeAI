@@ -6,15 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Three sibling implementations of one product. Product name = "Writers Block" (user-facing on native), package id = `com.rhymeai.app`, repo dir = `RhymeAI`. Same feature set, separate codebases — do not assume cross-tree refactors.
 
-- `src/` — Vite + React 19 + TypeScript web app. Wrapped by Capacitor (`capacitor.config.ts`, `webDir: dist`) to produce the shipping Android web build alongside the native one. App is a single `src/App.tsx` (~900 lines) with localStorage persistence; only external service is `src/services/gemini.ts`.
-- `android/` — native Kotlin + Jetpack Compose. Package `com.rhymeai.app`. MVVM: `MainActivity` → `MainViewModel` → `data/repository/ProjectRepository` + `service/{AIService,GeminiService,LocalModelService}`. UI split into `ui/screens` (Welcome, Editor), `ui/components` (assistant panel, rhyme/syllable text, dialogs), `ui/theme`, `ui/navigation`. Models in `data/model/`.
+- `src/` — Vite + React 19 + TypeScript web app. Wrapped by Capacitor (`capacitor.config.ts`, `webDir: dist`) to produce the shipping Android web build alongside the native one. App is a single large `src/App.tsx` with localStorage persistence; only external service is `src/services/gemini.ts`.
+- `android/` — native Kotlin + Jetpack Compose. Package `com.rhymeai.app`. MVVM: `MainActivity` → `MainViewModel` → `data/repository/ProjectRepository` + `service/{GeminiService,LocalModelService}` (`GeminiService` is the multi-provider entry point — Gemini, OpenAI, Claude, Local — despite the name). UI split into `ui/screens` (Welcome, Editor), `ui/components` (assistant panel, rhyme/syllable text, dialogs), `ui/theme`, `ui/navigation`. Models in `data/model/`.
 - `Writers Block/` — native iOS SwiftUI (Xcode project `Writers Block.xcodeproj`). MVVM: `Views/` ← `ViewModels/EditorViewModel.swift` ← `Services/{AIService, LyricsExporter, RhymePhonetics, SyllableCounter}` and `Models/`. Liquid Glass styling via `Views/LiquidGlassSupport.swift`. Tests in `Writers BlockTests/`, UI tests in `Writers BlockUITests/`.
 
 The three trees duplicate the same domain types (`SongProject`, `SongTemplate`, `RewriteAction`, `ExportFormat`, rhyme/syllable utilities). When changing a domain concept, check whether the parallel file in the other two trees needs the same change — there is no shared module.
 
 ## Design system
 
-`DESIGN.md` at repo root is the canonical token sheet for all three platforms (colors, typography, rounded, spacing, motion, components). Treat it as source of truth before adjusting any visual constant. Platform notes inside: Android adapts to Material You dynamic color; iOS biases to translucent glass; both keep near-black canvas + indigo primary + serif display type. Rhyme/syllable color tokens are semantic, not decorative — do not reassign them.
+`DESIGN.md` at repo root is the canonical token sheet for all three platforms (colors, typography, rounded, spacing, motion, components). Check it before adjusting any visual constant. Platform notes inside: Android adapts to Material You dynamic color; iOS biases to translucent glass; both keep near-black canvas + indigo primary + serif display type. Rhyme/syllable color tokens are semantic, not decorative — do not reassign them.
 
 ## Commands
 
@@ -42,7 +42,7 @@ Capacitor sync (after web build, when shipping the web inside the native shell):
 
 ## Config / secrets
 
-- Web: `GEMINI_API_KEY` in `.env.local` (gitignored). Vite inlines it via `define: { 'process.env.GEMINI_API_KEY': ... }` in `vite.config.ts` — it ships to the client bundle, so do not put server-only keys there. Mitigate by applying referrer/IP restrictions and per-key quotas in Google AI Studio; long-term, move calls behind a server proxy and drop the `define` inlining.
+- Web: `GEMINI_API_KEY` in `.env.local` (gitignored). Vite inlines it via `define: { 'process.env.GEMINI_API_KEY': ... }` in `vite.config.ts` — it ships to the client bundle, so do not put server-only keys there. Mitigate by setting tight per-key quotas in AI Studio; long-term, move calls behind a server proxy and drop the `define` inlining.
 - Android: `GEMINI_API_KEY` in `android/local.properties` (gitignored). Read by `GeminiService`.
 - iOS: configured at runtime via `Views/SettingsView.swift` (AI provider/key selection), not committed.
 - `.env.example` lists keys; never write real values into it.
