@@ -256,16 +256,20 @@ struct AssistantPanelView: View {
                 )
             )
 
-            // MARK: - Suggest Button
+            // MARK: - Suggest Button — turns into Stop while streaming
             Button {
-                viewModel.getSuggestions()
+                if viewModel.isLoading {
+                    viewModel.cancelSuggestions()
+                } else {
+                    viewModel.getSuggestions()
+                }
             } label: {
-                let isDisabled = viewModel.lyrics.isEmpty || viewModel.isLoading
+                let isDisabled = viewModel.lyrics.isEmpty && !viewModel.isLoading
                 HStack {
                     if viewModel.isLoading {
                         ProgressView()
                             .tint(.white)
-                        Text("Thinking...")
+                        Text("Stop")
                     } else {
                         Image(systemName: "sparkles")
                         Text("Suggest Next Line")
@@ -283,7 +287,7 @@ struct AssistantPanelView: View {
                     fallbackOpacity: isDisabled ? 0.12 : 0.32
                 )
             }
-            .disabled(viewModel.lyrics.isEmpty || viewModel.isLoading)
+            .disabled(viewModel.lyrics.isEmpty && !viewModel.isLoading)
             .buttonStyle(.rhymePress)
 
             // MARK: - Error
