@@ -6,6 +6,9 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -121,7 +124,7 @@ Complexity level: ${complexity.label}. ${complexity.promptHint}
 Provide $SUGGESTION_COUNT creative, poetic, and contextually relevant suggestions for the next line.
 Make sure the rhythm and meter match the style of the current lyrics${if (targetRhymeLine != null) ", and strictly adhere to the requested rhyme type (${rhymeType.displayName})" else ""}.
 
-Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no code fences, just the raw JSON array.
+Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No numbering, no bullets, no quotes, no markdown, no code fences, and no commentary — just the bare suggestion lines.
 """.trimIndent()
     }
 
@@ -164,6 +167,64 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
                 AIProvider.CLAUDE -> callClaude(apiKey, modelId, prompt)
                 AIProvider.LOCAL -> error("unreachable")
             }
+        }
+    }
+
+    fun streamSuggestions(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        rhymeScheme: String,
+        currentLetter: String,
+        complexity: RhymeComplexity = RhymeComplexity.MODERATE,
+        useWholeSongContext: Boolean = false
+    ): Flow<String> = flow {
+        if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
+            throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
+        }
+
+        if (provider == AIProvider.GEMINI) {
+            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
+            streamGemini(apiKey, modelId, prompt).collect { emit(it) }
+        } else {
+            // Non-streaming fallback: emit each completed result.
+            getSuggestions(provider, apiKey, modelId, theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
+                .forEach { emit(it) }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private fun streamGemini(apiKey: String, modelId: String, prompt: String): Flow<String> = flow {
+        val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
+        val buffer = StringBuilder()
+        val seen = mutableSetOf<String>()
+        var emitted = 0
+
+        suspend fun flushLine(rawLine: String): Boolean {
+            val cleaned = cleanLocalSuggestionLine(rawLine) ?: return false
+            val key = normalizeSuggestionKey(cleaned)
+            if (key.isEmpty() || !seen.add(key)) return false
+            emit(cleaned)
+            emitted++
+            return true
+        }
+
+        model.generateContentStream(prompt).collect { response ->
+            val chunkText = response.text ?: return@collect
+            buffer.append(chunkText)
+            while (emitted < SUGGESTION_COUNT) {
+                val newlineIdx = buffer.indexOf('\n')
+                if (newlineIdx < 0) break
+                val rawLine = buffer.substring(0, newlineIdx)
+                buffer.delete(0, newlineIdx + 1)
+                flushLine(rawLine)
+            }
+        }
+        if (emitted < SUGGESTION_COUNT && buffer.isNotBlank()) {
+            flushLine(buffer.toString())
         }
     }
 
@@ -359,16 +420,10 @@ Rules:
     }
 
     private suspend fun callGemini(apiKey: String, modelId: String, prompt: String): List<String> {
-        val model = GenerativeModel(
-            modelName = modelId,
-            apiKey = apiKey,
-            generationConfig = generationConfig {
-                responseMimeType = "application/json"
-            }
-        )
+        val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
         val response = model.generateContent(prompt)
         val text = response.text?.trim() ?: return emptyList()
-        return parseJsonArray(text)
+        return parseSuggestionList(text)
     }
 
     private suspend fun callOpenAI(apiKey: String, modelId: String, prompt: String): List<String> {
@@ -398,7 +453,7 @@ Rules:
             ?.get("message")?.jsonObject
             ?.get("content")?.jsonPrimitive?.content ?: return emptyList()
 
-        return parseJsonArray(content)
+        return parseSuggestionList(content)
     }
 
     private suspend fun callClaude(apiKey: String, modelId: String, prompt: String): List<String> {
@@ -428,7 +483,19 @@ Rules:
             ?.firstOrNull()?.jsonObject
             ?.get("text")?.jsonPrimitive?.content ?: return emptyList()
 
-        return parseJsonArray(content)
+        return parseSuggestionList(content)
+    }
+
+    private fun parseSuggestionList(raw: String): List<String> {
+        val parsed = parseJsonArray(raw).ifEmpty { parseLines(raw) }
+        val seen = mutableSetOf<String>()
+        return parsed
+            .mapNotNull { cleanLocalSuggestionLine(it) }
+            .filter {
+                val key = normalizeSuggestionKey(it)
+                key.isNotEmpty() && seen.add(key)
+            }
+            .take(SUGGESTION_COUNT)
     }
 
     private fun buildLocalPrompt(
