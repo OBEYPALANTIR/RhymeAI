@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Wand2, AlignLeft, Music, Loader2, ChevronRight, ChevronDown, FolderOpen, Save, Plus, Trash2, X, Check, LayoutTemplate } from 'lucide-react';
-import { getRhymeSuggestions } from './services/gemini';
+import { streamRhymeSuggestions } from './services/gemini';
 import { syllable } from 'syllable';
 
 interface SongProject {
@@ -229,26 +229,45 @@ export default function App() {
     return { targetLine, currentLetter, stanzaLines, currentLineIndex };
   };
 
-  const handleGetSuggestions = async () => {
-    const context = getRhymeContext();
-    if (!lyrics) return;
+  const suggestionsAbortRef = useRef<AbortController | null>(null);
 
+  const handleGetSuggestions = async () => {
+    if (!lyrics) return;
+    const context = getRhymeContext();
+
+    suggestionsAbortRef.current?.abort();
+    const abort = new AbortController();
+    suggestionsAbortRef.current = abort;
+    setSuggestions([]);
     setIsLoading(true);
+
     try {
-      const results = await getRhymeSuggestions(
-        theme, 
-        lyrics, 
-        context.targetLine, 
-        rhymeType, 
-        activeRhymeScheme, 
-        context.currentLetter
-      );
-      setSuggestions(results);
+      for await (const line of streamRhymeSuggestions(
+        theme,
+        lyrics,
+        context.targetLine,
+        rhymeType,
+        activeRhymeScheme,
+        context.currentLetter,
+        abort.signal,
+      )) {
+        if (abort.signal.aborted) break;
+        setSuggestions(prev => [...prev, line]);
+      }
     } catch (error) {
-      console.error(error);
+      if (!abort.signal.aborted) console.error(error);
     } finally {
-      setIsLoading(false);
+      if (suggestionsAbortRef.current === abort) {
+        suggestionsAbortRef.current = null;
+        setIsLoading(false);
+      }
     }
+  };
+
+  const cancelSuggestions = () => {
+    suggestionsAbortRef.current?.abort();
+    suggestionsAbortRef.current = null;
+    setIsLoading(false);
   };
 
   const insertSuggestion = (suggestion: string) => {
@@ -618,15 +637,15 @@ export default function App() {
             </div>
 
             <button
-              onClick={handleGetSuggestions}
-              disabled={!lyrics || isLoading}
+              onClick={isLoading ? cancelSuggestions : handleGetSuggestions}
+              disabled={!lyrics && !isLoading}
               aria-busy={isLoading}
               className="rhyme-touch-target w-full px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/30 text-white rounded-xl font-medium transition-[background-color,color,box-shadow] duration-[var(--rhyme-motion-feedback)] flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 disabled:shadow-none cursor-pointer"
             >
               {isLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Thinking...
+                  Stop
                 </>
               ) : (
                 <>
