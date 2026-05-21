@@ -21,8 +21,10 @@ import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -107,6 +109,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var rewriteError by mutableStateOf<String?>(null)
     private var rewriteRange: TextRange? = null
     private var rewriteJob: Job? = null
+    private var suggestionsJob: Job? = null
 
     val hasActiveRewrite: Boolean
         get() = rewriteAction != null
@@ -249,21 +252,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun getSuggestions() {
         if (lyrics.isEmpty()) return
         val context = computeRhymeContext()
-        isLoading = true
+        suggestionsJob?.cancel()
+        suggestions = emptyList()
         errorMessage = null
-        viewModelScope.launch {
+        isLoading = true
+        suggestionsJob = viewModelScope.launch {
             try {
-                val results = aiService.getSuggestions(
+                aiService.streamSuggestions(
                     selectedProvider, currentApiKey, selectedModel.id, theme, lyrics, context.targetLine,
                     rhymeType, activeRhymeScheme, context.currentLetter, context.currentSection, rhymeComplexity, useWholeSongContext
-                )
-                suggestions = results
+                ).collect { line ->
+                    suggestions = suggestions + line
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Failed to get suggestions"
             } finally {
                 isLoading = false
             }
         }
+    }
+
+    fun cancelSuggestions() {
+        suggestionsJob?.cancel()
+        suggestionsJob = null
+        isLoading = false
     }
 
     fun requestRewrite(action: RewriteAction) {
