@@ -493,10 +493,13 @@ fun AssistantPanel(
                 )
             }
 
-            // Suggest button
+            // Suggest button — turns into Stop while streaming.
             Button(
-                onClick = { viewModel.getSuggestions() },
-                enabled = viewModel.lyrics.isNotEmpty() && !viewModel.isLoading,
+                onClick = {
+                    if (viewModel.isLoading) viewModel.cancelSuggestions()
+                    else viewModel.getSuggestions()
+                },
+                enabled = viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth().height(DesignTokens.Touch.minTarget),
                 shape = RoundedCornerShape(DesignTokens.Radius.lg),
                 colors = ButtonDefaults.buttonColors(
@@ -513,7 +516,7 @@ fun AssistantPanel(
                         strokeWidth = 2.dp
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text("Thinking...", fontWeight = FontWeight.Medium)
+                    Text("Stop", fontWeight = FontWeight.Medium)
                 } else {
                     Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(8.dp))
