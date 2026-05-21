@@ -7,8 +7,10 @@ import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -187,23 +189,104 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
-        if (provider == AIProvider.GEMINI) {
-            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
-            streamGemini(apiKey, modelId, prompt).collect { emit(it) }
-        } else {
-            // Non-streaming fallback: emit each completed result.
-            getSuggestions(provider, apiKey, modelId, theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
-                .forEach { emit(it) }
+        when (provider) {
+            AIProvider.GEMINI -> {
+                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
+                streamGemini(apiKey, modelId, prompt).collect { emit(it) }
+            }
+            AIProvider.OPENAI -> {
+                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
+                streamOpenAI(apiKey, modelId, prompt).collect { emit(it) }
+            }
+            AIProvider.CLAUDE -> {
+                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
+                streamClaude(apiKey, modelId, prompt).collect { emit(it) }
+            }
+            AIProvider.LOCAL -> {
+                // Local model already streams tokens internally; needs its own Flow surface (follow-up).
+                getSuggestions(provider, apiKey, modelId, theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
+                    .forEach { emit(it) }
+            }
         }
     }.flowOn(Dispatchers.IO)
 
     private fun streamGemini(apiKey: String, modelId: String, prompt: String): Flow<String> = flow {
         val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
+        val tokens = model.generateContentStream(prompt).mapNotNull { it.text }
+        emitLinesFromTokens(tokens)
+    }
+
+    private fun streamOpenAI(apiKey: String, modelId: String, prompt: String): Flow<String> = flow {
+        val body = buildJsonObject {
+            put("model", modelId)
+            put("messages", buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            })
+            put("temperature", 0.8)
+            put("stream", true)
+        }
+        val payloads = httpPostStream(
+            url = "https://api.openai.com/v1/chat/completions",
+            headers = mapOf(
+                "Authorization" to "Bearer $apiKey",
+                "Content-Type" to "application/json",
+                "Accept" to "text/event-stream"
+            ),
+            body = body.toString()
+        )
+        val tokens = payloads.mapNotNull { payload ->
+            runCatching {
+                json.parseToJsonElement(payload).jsonObject["choices"]
+                    ?.jsonArray?.firstOrNull()?.jsonObject
+                    ?.get("delta")?.jsonObject
+                    ?.get("content")?.jsonPrimitive?.content
+            }.getOrNull()
+        }
+        emitLinesFromTokens(tokens)
+    }
+
+    private fun streamClaude(apiKey: String, modelId: String, prompt: String): Flow<String> = flow {
+        val body = buildJsonObject {
+            put("model", modelId)
+            put("max_tokens", 1024)
+            put("stream", true)
+            put("messages", buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            })
+        }
+        val payloads = httpPostStream(
+            url = "https://api.anthropic.com/v1/messages",
+            headers = mapOf(
+                "x-api-key" to apiKey,
+                "anthropic-version" to "2023-06-01",
+                "Content-Type" to "application/json",
+                "Accept" to "text/event-stream"
+            ),
+            body = body.toString()
+        )
+        val tokens = payloads.mapNotNull { payload ->
+            runCatching {
+                val obj = json.parseToJsonElement(payload).jsonObject
+                if (obj["type"]?.jsonPrimitive?.content != "content_block_delta") return@runCatching null
+                obj["delta"]?.jsonObject?.get("text")?.jsonPrimitive?.content
+            }.getOrNull()
+        }
+        emitLinesFromTokens(tokens)
+    }
+
+    private suspend fun FlowCollector<String>.emitLinesFromTokens(tokens: Flow<String>) {
         val buffer = StringBuilder()
         val seen = mutableSetOf<String>()
         var emitted = 0
 
         suspend fun flushLine(rawLine: String): Boolean {
+            if (emitted >= SUGGESTION_COUNT) return false
             val cleaned = cleanLocalSuggestionLine(rawLine) ?: return false
             val key = normalizeSuggestionKey(cleaned)
             if (key.isEmpty() || !seen.add(key)) return false
@@ -212,9 +295,8 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
             return true
         }
 
-        model.generateContentStream(prompt).collect { response ->
-            val chunkText = response.text ?: return@collect
-            buffer.append(chunkText)
+        tokens.collect { chunk ->
+            buffer.append(chunk)
             while (emitted < SUGGESTION_COUNT) {
                 val newlineIdx = buffer.indexOf('\n')
                 if (newlineIdx < 0) break
@@ -227,6 +309,45 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
             flushLine(buffer.toString())
         }
     }
+
+    private fun httpPostStream(
+        url: String,
+        headers: Map<String, String>,
+        body: String
+    ): Flow<String> = flow {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.connectTimeout = 30000
+            connection.readTimeout = 60000
+            headers.forEach { (k, v) -> connection.setRequestProperty(k, v) }
+
+            OutputStreamWriter(connection.outputStream, "UTF-8").use { it.write(body) }
+
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                throw RuntimeException("API error ($code): $errorBody")
+            }
+
+            connection.inputStream.bufferedReader().use { reader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isEmpty() || line.startsWith(":")) continue
+                    if (!line.startsWith("data:")) continue
+                    val payload = line.substring(5).trim()
+                    if (payload.isEmpty() || payload == "[DONE]") {
+                        if (payload == "[DONE]") break
+                        continue
+                    }
+                    emit(payload)
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }.flowOn(Dispatchers.IO)
 
     suspend fun getRewrite(
         provider: AIProvider,
