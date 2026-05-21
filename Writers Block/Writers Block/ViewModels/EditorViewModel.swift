@@ -60,6 +60,7 @@ final class EditorViewModel: ObservableObject {
     @Published var rewriteError: String?
     private var rewriteRange: NSRange?
     private var rewriteTask: Task<Void, Never>?
+    private var suggestionsTask: Task<Void, Never>?
 
     // MARK: - Export
 
@@ -291,32 +292,44 @@ final class EditorViewModel: ObservableObject {
     func getSuggestions() {
         guard !lyrics.isEmpty else { return }
         let context = rhymeContext
+        suggestionsTask?.cancel()
         isLoading = true
         errorMessage = nil
         suggestions = []
 
-        Task { @MainActor in
+        let stream = aiService.streamSuggestions(
+            provider: selectedProvider,
+            apiKey: currentApiKey,
+            modelId: selectedModel.id,
+            theme: theme,
+            lyrics: lyrics,
+            targetRhymeLine: context.targetLine,
+            rhymeType: rhymeType,
+            rhymeScheme: activeRhymeScheme,
+            currentLetter: context.currentLetter,
+            currentSection: context.currentSection,
+            complexity: rhymeComplexity,
+            useWholeSongContext: useWholeSongContext
+        )
+
+        suggestionsTask = Task { @MainActor in
+            defer { self.isLoading = false }
             do {
-                let results = try await aiService.getSuggestions(
-                    provider: selectedProvider,
-                    apiKey: currentApiKey,
-                    modelId: selectedModel.id,
-                    theme: theme,
-                    lyrics: lyrics,
-                    targetRhymeLine: context.targetLine,
-                    rhymeType: rhymeType,
-                    rhymeScheme: activeRhymeScheme,
-                    currentLetter: context.currentLetter,
-                    currentSection: context.currentSection,
-                    complexity: rhymeComplexity,
-                    useWholeSongContext: useWholeSongContext
-                )
-                self.suggestions = results
+                for try await line in stream {
+                    self.suggestions.append(line)
+                }
+            } catch is CancellationError {
+                // expected when cancelSuggestions() is invoked
             } catch {
                 self.errorMessage = error.localizedDescription
             }
-            self.isLoading = false
         }
+    }
+
+    func cancelSuggestions() {
+        suggestionsTask?.cancel()
+        suggestionsTask = nil
+        isLoading = false
     }
 
     // MARK: - Rewrite

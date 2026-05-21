@@ -85,6 +85,311 @@ struct AIService {
         }
     }
 
+    // MARK: - Streaming
+
+    func streamSuggestions(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        rhymeScheme: String,
+        currentLetter: String,
+        currentSection: SongSection = .unknown,
+        complexity: RhymeComplexity,
+        useWholeSongContext: Bool
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    if provider == .local {
+                        // Local model already token-streams internally; needs its own AsyncStream surface (follow-up).
+                        let results = try await getSuggestions(
+                            provider: provider,
+                            apiKey: apiKey,
+                            modelId: modelId,
+                            theme: theme,
+                            lyrics: lyrics,
+                            targetRhymeLine: targetRhymeLine,
+                            rhymeType: rhymeType,
+                            rhymeScheme: rhymeScheme,
+                            currentLetter: currentLetter,
+                            currentSection: currentSection,
+                            complexity: complexity,
+                            useWholeSongContext: useWholeSongContext
+                        )
+                        for line in results { continuation.yield(line) }
+                        continuation.finish()
+                        return
+                    }
+
+                    guard !apiKey.isEmpty else {
+                        throw AIServiceError.noApiKey(provider: provider.displayName)
+                    }
+
+                    let prompt = buildPrompt(
+                        theme: theme,
+                        lyrics: lyrics,
+                        targetRhymeLine: targetRhymeLine,
+                        rhymeType: rhymeType,
+                        rhymeScheme: rhymeScheme,
+                        currentLetter: currentLetter,
+                        currentSection: currentSection,
+                        complexity: complexity,
+                        useWholeSongContext: useWholeSongContext
+                    )
+
+                    let tokens: AsyncThrowingStream<String, Error>
+                    switch provider {
+                    case .gemini:
+                        tokens = streamGeminiTokens(apiKey: apiKey, modelId: modelId, prompt: prompt)
+                    case .openai:
+                        tokens = streamOpenAITokens(apiKey: apiKey, modelId: modelId, prompt: prompt)
+                    case .claude:
+                        tokens = streamClaudeTokens(apiKey: apiKey, modelId: modelId, prompt: prompt)
+                    case .local:
+                        continuation.finish()
+                        return
+                    }
+
+                    try await emitLines(from: tokens, into: continuation)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func emitLines(
+        from tokens: AsyncThrowingStream<String, Error>,
+        into continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) async throws {
+        var buffer = ""
+        var seen = Set<String>()
+        var emitted = 0
+
+        for try await chunk in tokens {
+            buffer += chunk
+            while emitted < Self.suggestionCount, let newlineIdx = buffer.firstIndex(of: "\n") {
+                let rawLine = String(buffer[..<newlineIdx])
+                buffer = String(buffer[buffer.index(after: newlineIdx)...])
+                if let cleaned = cleanSuggestionLine(rawLine) {
+                    let key = normalizeSuggestionKey(cleaned)
+                    if !key.isEmpty, seen.insert(key).inserted {
+                        continuation.yield(cleaned)
+                        emitted += 1
+                    }
+                }
+            }
+            if emitted >= Self.suggestionCount { break }
+        }
+
+        if emitted < Self.suggestionCount {
+            let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !remaining.isEmpty, let cleaned = cleanSuggestionLine(remaining) {
+                let key = normalizeSuggestionKey(cleaned)
+                if !key.isEmpty, seen.insert(key).inserted {
+                    continuation.yield(cleaned)
+                }
+            }
+        }
+    }
+
+    private func streamGeminiTokens(
+        apiKey: String,
+        modelId: String,
+        prompt: String
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):streamGenerateContent?alt=sse&key=\(apiKey)"
+                    guard let url = URL(string: urlString) else {
+                        throw AIServiceError.invalidResponse
+                    }
+                    let body: [String: Any] = [
+                        "contents": [["parts": [["text": prompt]]]]
+                    ]
+                    let payloads = httpPostStream(
+                        url: url,
+                        headers: ["Content-Type": "application/json"],
+                        body: try JSONSerialization.data(withJSONObject: body)
+                    )
+                    for try await payload in payloads {
+                        if let chunk = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+                           let candidates = chunk["candidates"] as? [[String: Any]],
+                           let content = candidates.first?["content"] as? [String: Any],
+                           let parts = content["parts"] as? [[String: Any]],
+                           let text = parts.first?["text"] as? String {
+                            continuation.yield(text)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func streamOpenAITokens(
+        apiKey: String,
+        modelId: String,
+        prompt: String
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
+                        throw AIServiceError.invalidResponse
+                    }
+                    let body: [String: Any] = [
+                        "model": modelId,
+                        "messages": [["role": "user", "content": prompt]],
+                        "stream": true,
+                        "temperature": 0.8
+                    ]
+                    let payloads = httpPostStream(
+                        url: url,
+                        headers: [
+                            "Content-Type": "application/json",
+                            "Authorization": "Bearer \(apiKey)",
+                            "Accept": "text/event-stream"
+                        ],
+                        body: try JSONSerialization.data(withJSONObject: body)
+                    )
+                    for try await payload in payloads {
+                        if let chunk = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+                           let choices = chunk["choices"] as? [[String: Any]],
+                           let delta = choices.first?["delta"] as? [String: Any],
+                           let content = delta["content"] as? String {
+                            continuation.yield(content)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func streamClaudeTokens(
+        apiKey: String,
+        modelId: String,
+        prompt: String
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
+                        throw AIServiceError.invalidResponse
+                    }
+                    let body: [String: Any] = [
+                        "model": modelId,
+                        "max_tokens": 1024,
+                        "stream": true,
+                        "messages": [["role": "user", "content": prompt]]
+                    ]
+                    let payloads = httpPostStream(
+                        url: url,
+                        headers: [
+                            "Content-Type": "application/json",
+                            "x-api-key": apiKey,
+                            "anthropic-version": "2023-06-01",
+                            "Accept": "text/event-stream"
+                        ],
+                        body: try JSONSerialization.data(withJSONObject: body)
+                    )
+                    for try await payload in payloads {
+                        if let chunk = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+                           chunk["type"] as? String == "content_block_delta",
+                           let delta = chunk["delta"] as? [String: Any],
+                           let text = delta["text"] as? String {
+                            continuation.yield(text)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func httpPostStream(
+        url: URL,
+        headers: [String: String],
+        body: Data
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = URLRequest(url: url)
+                    request.httpMethod = "POST"
+                    request.httpBody = body
+                    request.timeoutInterval = 60
+                    for (key, value) in headers {
+                        request.setValue(value, forHTTPHeaderField: key)
+                    }
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw AIServiceError.invalidResponse
+                    }
+                    if !(200...299).contains(httpResponse.statusCode) {
+                        var errorData = Data()
+                        for try await byte in bytes { errorData.append(byte) }
+                        let bodyText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                        throw AIServiceError.apiError(statusCode: httpResponse.statusCode, message: bodyText)
+                    }
+                    for try await line in bytes.lines {
+                        if line.isEmpty || line.hasPrefix(":") { continue }
+                        guard line.hasPrefix("data:") else { continue }
+                        let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                        if payload.isEmpty { continue }
+                        if payload == "[DONE]" { break }
+                        continuation.yield(payload)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func cleanSuggestionLine(_ line: String) -> String? {
+        var cleaned = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```json") { cleaned = String(cleaned.dropFirst(7)) }
+        if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
+        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty { return nil }
+        if let range = cleaned.range(of: #"^(?:[-*]\s+|\d+[.)]\s*)"#, options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+        if (cleaned.hasPrefix("\"") && cleaned.hasSuffix("\"")) || (cleaned.hasPrefix("'") && cleaned.hasSuffix("'")), cleaned.count > 1 {
+            cleaned = String(cleaned.dropFirst().dropLast())
+        }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty || cleaned.count > 140 { return nil }
+        return cleaned
+    }
+
+    private func normalizeSuggestionKey(_ text: String) -> String {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .joined()
+    }
+
     // MARK: - Prompt Builder
 
     private func buildPrompt(
@@ -140,7 +445,7 @@ struct AIService {
         Provide \(Self.suggestionCount) creative, poetic, and contextually relevant suggestions for the next line.
         Make sure the rhythm and meter match the style of the current lyrics\(rhymeAdherence).
 
-        Respond ONLY with a JSON array of \(Self.suggestionCount) strings. No markdown, no code fences, just the raw JSON array.
+        Respond with exactly \(Self.suggestionCount) lines, one suggestion per line. No numbering, no bullets, no quotes, no markdown, no code fences, and no commentary — just the bare suggestion lines.
         """
     }
 
@@ -153,9 +458,6 @@ struct AIService {
         let body: [String: Any] = [
             "contents": [
                 ["parts": [["text": prompt]]]
-            ],
-            "generationConfig": [
-                "responseMimeType": "application/json"
             ]
         ]
 
@@ -188,8 +490,7 @@ struct AIService {
             "model": modelId,
             "messages": [
                 ["role": "user", "content": prompt]
-            ],
-            "response_format": ["type": "json_object"]
+            ]
         ]
 
         let data = try await httpPost(
