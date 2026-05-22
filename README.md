@@ -10,6 +10,14 @@ The active targets are:
 
 The old React/Vite web variant has been removed. Shared pronunciation/prosody data stays in `shared/`, with generation tooling in `scripts/`, because Android and iOS both consume those assets.
 
+## Features
+
+- Section-aware suggestions and rewrites for `[Verse]`, `[Chorus]`, and `[Bridge]`.
+- Streaming AI suggestions for Gemini, OpenAI, and Claude on Android and iOS.
+- Trash Bin workflows with 30-day retention, restore, and permanent delete.
+- Stress and IPA previews backed by shared CMU pronunciation assets.
+- Native safe-area-aware editor controls for gesture bars, keyboards, and bottom sheets.
+
 ## Android
 
 Run from `/Users/tylermanring/Documents/RhymeAI/android`:
