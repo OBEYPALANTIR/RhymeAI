@@ -38,6 +38,7 @@ enum class AIProvider(val displayName: String) {
 
 enum class AIModel(val id: String, val displayName: String, val provider: AIProvider) {
     // Gemini
+    GEMINI_35_FLASH("gemini-3.5-flash", "Gemini 3.5 Flash", AIProvider.GEMINI),
     GEMINI_31_PRO("gemini-3.1-pro-preview", "Gemini 3.1 Pro", AIProvider.GEMINI),
     GEMINI_3_FLASH("gemini-3-flash-preview", "Gemini 3 Flash", AIProvider.GEMINI),
     GEMINI_31_FLASH_LITE("gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite", AIProvider.GEMINI),
@@ -61,7 +62,7 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
     LOCAL_MODEL("local-model", "On-Device Model", AIProvider.LOCAL);
 
     companion object {
-        val DEFAULT = GEMINI_3_FLASH
+        val DEFAULT = GEMINI_35_FLASH
         fun fromId(id: String): AIModel =
             entries.find { it.id == id } ?: DEFAULT
         fun modelsForProvider(provider: AIProvider): List<AIModel> =
