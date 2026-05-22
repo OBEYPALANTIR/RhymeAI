@@ -100,7 +100,7 @@ private struct LiquidGlassSurfaceModifier: ViewModifier {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                            .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
                     )
             }
         }

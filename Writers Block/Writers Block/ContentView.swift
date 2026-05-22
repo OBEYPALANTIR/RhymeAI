@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -20,17 +21,23 @@ struct ContentView: View {
         .onAppear {
             viewModel.modelContext = modelContext
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                viewModel.purgeExpiredTrashedProjects()
+            }
+        }
         .sheet(isPresented: $viewModel.showProjectsSheet) {
             ProjectsView()
         }
         .sheet(isPresented: $viewModel.showTemplatesSheet) {
             TemplatesView()
         }
-        .popover(isPresented: $viewModel.showSettingsSheet) {
+        .sheet(isPresented: $viewModel.showSettingsSheet) {
             SettingsView()
                 .frame(
-                    minWidth: horizontalSizeClass == .regular ? 400 : nil,
-                    minHeight: horizontalSizeClass == .regular ? 500 : nil
+                    minWidth: horizontalSizeClass == .regular ? 420 : nil,
+                    idealWidth: horizontalSizeClass == .regular ? 520 : nil,
+                    minHeight: horizontalSizeClass == .regular ? 560 : nil
                 )
         }
     }
@@ -39,5 +46,5 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environmentObject(EditorViewModel())
-        .modelContainer(for: SongProject.self, inMemory: true)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self], inMemory: true)
 }

@@ -8,11 +8,14 @@ struct ProjectsDrawerView: View {
     @Binding var isPresented: Bool
     @EnvironmentObject private var viewModel: EditorViewModel
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
+    @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
     @State private var searchText = ""
     @State private var fileImporterPresented = false
     @State private var importError: String?
     @State private var drawerVisible = false
     @State private var isClosing = false
+    @State private var pendingDeleteProject: SongProject?
+    @State private var trashBinPresented = false
 
     private var filteredProjects: [SongProject] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,25 +30,37 @@ struct ProjectsDrawerView: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            let drawerWidth = min(max(proxy.size.width - RhymeAITokens.Layout.drawerHorizontalMargin, RhymeAITokens.Layout.drawerMinWidth), RhymeAITokens.Layout.drawerMaxWidth)
+        ZStack {
+            GeometryReader { proxy in
+                let drawerWidth = min(max(proxy.size.width - RhymeAITokens.Layout.drawerHorizontalMargin, RhymeAITokens.Layout.drawerMinWidth), RhymeAITokens.Layout.drawerMaxWidth)
 
-            ZStack(alignment: .leading) {
-                Color.black.opacity(drawerVisible ? 0.42 : 0)
-                    .ignoresSafeArea()
-                    .onTapGesture { closeDrawer() }
+                ZStack(alignment: .leading) {
+                    Color.black.opacity(drawerVisible ? 0.42 : 0)
+                        .ignoresSafeArea()
+                        .onTapGesture { closeDrawer() }
 
-                drawerContent(topInset: proxy.safeAreaInsets.top, bottomInset: proxy.safeAreaInsets.bottom)
-                    .frame(width: drawerWidth)
-                    .frame(maxHeight: .infinity)
-                    .background(.ultraThinMaterial)
-                    .background(Color.black.opacity(0.28))
-                    .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
-                    .offset(x: drawerVisible ? 0 : -drawerWidth)
+                    drawerContent(topInset: proxy.safeAreaInsets.top, bottomInset: proxy.safeAreaInsets.bottom)
+                        .frame(width: drawerWidth)
+                        .frame(maxHeight: .infinity)
+                        .background(.ultraThinMaterial)
+                        .background(Color(UIColor.systemBackground).opacity(0.88))
+                        .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
+                        .offset(x: drawerVisible ? 0 : -drawerWidth)
+                }
+                .animation(RhymeAITokens.Motion.presentation, value: drawerVisible)
             }
-            .animation(RhymeAITokens.Motion.presentation, value: drawerVisible)
+            .ignoresSafeArea()
+
+            if trashBinPresented {
+                TrashBinView(onDismiss: {
+                    withAnimation(RhymeAITokens.Motion.dismiss) {
+                        trashBinPresented = false
+                    }
+                })
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .zIndex(2)
+            }
         }
-        .ignoresSafeArea()
         .onAppear {
             DispatchQueue.main.async {
                 drawerVisible = true
@@ -57,6 +72,24 @@ struct ProjectsDrawerView: View {
             allowsMultipleSelection: false
         ) { result in
             handleImport(result)
+        }
+        .alert(
+            "Delete this song?",
+            isPresented: Binding(
+                get: { pendingDeleteProject != nil },
+                set: { if !$0 { pendingDeleteProject = nil } }
+            ),
+            presenting: pendingDeleteProject
+        ) { project in
+            Button("Cancel", role: .cancel) {
+                pendingDeleteProject = nil
+            }
+            Button("Move to Trash", role: .destructive) {
+                viewModel.moveProjectToTrash(project)
+                pendingDeleteProject = nil
+            }
+        } message: { project in
+            Text("\"\(project.title.isEmpty ? "Untitled Song" : project.title)\" will move to Trash Bin and be fully deleted after 30 days.")
         }
     }
 
@@ -93,7 +126,7 @@ struct ProjectsDrawerView: View {
                 }
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity)
-                .frame(height: 54)
+                .frame(height: RhymeAITokens.Spacing.xxl)
                 .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.10), interactive: true)
             }
             .buttonStyle(.rhymePress)
@@ -106,7 +139,7 @@ struct ProjectsDrawerView: View {
                 .padding(.bottom, RhymeAITokens.Spacing.xs)
 
             ScrollView {
-                LazyVStack(spacing: RhymeAITokens.Spacing.xs) {
+                LazyVStack(spacing: RhymeAITokens.Spacing.sm) {
                     if projects.isEmpty {
                         emptyState(systemImage: "music.note", title: "No saved songs yet.")
                     } else if filteredProjects.isEmpty {
@@ -120,21 +153,33 @@ struct ProjectsDrawerView: View {
                 .padding(.bottom, RhymeAITokens.Spacing.sm)
             }
 
-            Button {
-                importError = nil
-                fileImporterPresented = true
-            } label: {
-                HStack(spacing: RhymeAITokens.Spacing.xs) {
-                    Image(systemName: "square.and.arrow.down")
-                    Text("Import From File")
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                Button {
+                    importError = nil
+                    fileImporterPresented = true
+                } label: {
+                    HStack(spacing: RhymeAITokens.Spacing.xs) {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Import From File")
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: RhymeAITokens.Touch.minimum)
+                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
                 }
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity)
-                .frame(height: RhymeAITokens.Touch.minimum)
-                .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
+                .buttonStyle(.rhymePress)
+
+                Button {
+                    viewModel.purgeExpiredTrashedProjects()
+                    trashBinPresented = true
+                } label: {
+                    trashBinButtonLabel
+                }
+                .buttonStyle(.rhymePress)
+                .accessibilityLabel("Open Trash Bin")
+                .accessibilityValue(trashedProjects.isEmpty ? "Empty" : "Deleted songs available")
             }
-            .buttonStyle(.rhymePress)
 
             if let importError {
                 Text(importError)
@@ -146,7 +191,14 @@ struct ProjectsDrawerView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.lg)
         .padding(.top, resolvedTopInset + RhymeAITokens.Spacing.sm)
         .padding(.bottom, bottomInset + RhymeAITokens.Spacing.lg)
-        .liquidGlassGroup(spacing: RhymeAITokens.Spacing.lg)
+    }
+
+    private var trashBinButtonLabel: some View {
+        Image(systemName: "trash")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
     }
 
     private var searchField: some View {
@@ -210,9 +262,9 @@ struct ProjectsDrawerView: View {
             .buttonStyle(.rhymePress)
 
             Button(role: .destructive) {
-                viewModel.deleteProject(project)
+                pendingDeleteProject = project
             } label: {
-                Image(systemName: "trash")
+                Image(systemName: "xmark")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.red.opacity(0.85))
                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
@@ -221,14 +273,10 @@ struct ProjectsDrawerView: View {
             .buttonStyle(.rhymePress)
             .accessibilityLabel("Delete \(project.title.isEmpty ? "Untitled Song" : project.title)")
         }
+        .frame(minHeight: 76)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .padding(.leading, RhymeAITokens.Spacing.md)
         .padding(.trailing, RhymeAITokens.Spacing.xs)
-        .liquidGlassSurface(
-            cornerRadius: RhymeAITokens.Radius.lg,
-            tint: isActive ? .indigo.opacity(0.16) : .white.opacity(0.03),
-            fallbackOpacity: isActive ? 0.12 : 0.05
-        )
     }
 
     private func emptyState(systemImage: String, title: String) -> some View {
@@ -278,6 +326,5 @@ struct ProjectsDrawerView: View {
 #Preview {
     ProjectsDrawerView(isPresented: .constant(true))
         .environmentObject(EditorViewModel())
-        .modelContainer(for: SongProject.self, inMemory: true)
-        .preferredColorScheme(.dark)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self], inMemory: true)
 }

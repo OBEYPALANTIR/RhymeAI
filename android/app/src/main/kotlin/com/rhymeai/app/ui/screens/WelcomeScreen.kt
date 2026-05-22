@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -40,6 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.rhymeai.app.R
+import com.rhymeai.app.ui.components.bottomSafeActionPadding
+import com.rhymeai.app.ui.theme.DesignTokens
 
 @Composable
 fun WelcomeScreen(
@@ -54,7 +55,7 @@ fun WelcomeScreen(
             .fillMaxSize()
             .background(colorScheme.background)
             .statusBarsPadding()
-            .navigationBarsPadding()
+            .bottomSafeActionPadding(extra = DesignTokens.Spacing.xl)
     ) {
         val isCompact = maxHeight < 600.dp
         val iconSize = if (isCompact) 56.dp else 80.dp
@@ -63,13 +64,13 @@ fun WelcomeScreen(
         } else {
             MaterialTheme.typography.displayMedium
         }
-        val verticalSpacing = if (isCompact) 16.dp else 32.dp
+        val verticalSpacing = if (isCompact) DesignTokens.Spacing.lg else DesignTokens.Spacing.xxl
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = verticalSpacing),
+                .padding(horizontal = DesignTokens.Spacing.xl, vertical = verticalSpacing),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -108,21 +109,21 @@ fun WelcomeScreen(
                 textAlign = TextAlign.Center,
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(DesignTokens.Spacing.md))
 
             Text(
                 "Your intelligent songwriting companion. Start from scratch, load an existing project, or kickstart your creativity with a template.",
                 color = colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 8.dp)
+                modifier = Modifier.padding(horizontal = DesignTokens.Spacing.sm)
             )
 
             Spacer(Modifier.height(verticalSpacing))
 
             // Cards
             Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 WelcomeCard(
@@ -161,7 +162,7 @@ private fun WelcomeCard(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(DesignTokens.Radius.xxl),
         colors = CardDefaults.outlinedCardColors(
             containerColor = colorScheme.surfaceContainerLow,
             contentColor = colorScheme.onSurface
@@ -171,7 +172,7 @@ private fun WelcomeCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.lg),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -180,7 +181,7 @@ private fun WelcomeCard(
                 tint = colorScheme.primary,
                 modifier = Modifier.size(28.dp)
             )
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.width(DesignTokens.Spacing.lg))
             Column {
                 Text(
                     title,

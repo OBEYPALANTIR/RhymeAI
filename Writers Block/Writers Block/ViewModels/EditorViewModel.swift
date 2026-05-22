@@ -12,9 +12,17 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Editor State
 
     @Published var title: String = ""
-    @Published var lyrics: String = ""
+    @Published var lyrics: String = "" {
+        didSet {
+            refreshLyricsDerivedState()
+        }
+    }
     @Published var theme: String = ""
-    @Published var cursorPosition: Int = 0
+    @Published var cursorPosition: Int = 0 {
+        didSet {
+            refreshRhymeContext()
+        }
+    }
 
     // MARK: - AI State
 
@@ -25,12 +33,21 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Rhyme Settings
 
     @Published var rhymeType: RhymeType = .perfect
-    @Published var rhymeScheme: RhymeScheme = .aabb
-    @Published var customRhymeScheme: String = ""
+    @Published var rhymeScheme: RhymeScheme = .aabb {
+        didSet {
+            refreshRhymeContext()
+        }
+    }
+    @Published var customRhymeScheme: String = "" {
+        didSet {
+            refreshRhymeContext()
+        }
+    }
     @Published var rhymeComplexity: RhymeComplexity = .moderate
     @Published var useWholeSongContext: Bool = false
     @Published var isHighlightEnabled: Bool = true
     @Published var isSyllableColoringEnabled: Bool = true
+    @Published var isStressPreviewEnabled: Bool = false
     @Published var isRhymeHighlightEnabled: Bool = false
 
     // MARK: - Selection / Rewrite
@@ -69,9 +86,20 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Internal
 
-    var modelContext: ModelContext?
+    var modelContext: ModelContext? {
+        didSet {
+            purgeExpiredTrashedProjects()
+            seedTrashProjectForUITestsIfNeeded()
+        }
+    }
     private let aiService = AIService()
     private var autoSaveTask: Task<Void, Never>?
+    private var trashSchedulerTask: Task<Void, Never>?
+    private var didSeedTrashProjectForUITests = false
+
+    private(set) var wordCount: Int = 0
+    private(set) var syllableCount: Int = 0
+    private(set) lazy var rhymeContext = RhymeContext.emptyContext(currentLetter: String(activeRhymeScheme.first ?? Character("A")))
 
     // MARK: - Computed
 
@@ -86,12 +114,43 @@ final class EditorViewModel: ObservableObject {
         apiKeys[selectedProvider.rawValue] ?? ""
     }
 
-    var wordCount: Int {
-        SyllableCounter.wordCount(lyrics)
+    var hasActiveRewrite: Bool {
+        rewriteAction != nil
     }
 
-    var syllableCount: Int {
-        SyllableCounter.countText(lyrics)
+    var canApplyRewrite: Bool {
+        rewritePreview != nil && !rewriteLoading
+    }
+
+    var inlineRewriteText: String {
+        guard hasActiveRewrite,
+              let range = rewriteRange,
+              let replacement = rewritePreview ?? rewriteOriginal else {
+            return lyrics
+        }
+
+        let ns = lyrics as NSString
+        guard range.location >= 0, range.location + range.length <= ns.length else {
+            return lyrics
+        }
+
+        return ns.replacingCharacters(in: range, with: replacement)
+    }
+
+    var inlineRewriteRange: NSRange? {
+        guard hasActiveRewrite,
+              let range = rewriteRange,
+              let replacement = rewritePreview ?? rewriteOriginal else {
+            return nil
+        }
+
+        let displayLength = (inlineRewriteText as NSString).length
+        let replacementLength = (replacement as NSString).length
+        guard range.location >= 0, range.location + replacementLength <= displayLength else {
+            return nil
+        }
+
+        return NSRange(location: range.location, length: replacementLength)
     }
 
     // MARK: - Init
@@ -109,21 +168,41 @@ final class EditorViewModel: ObservableObject {
         for provider in AIProvider.allCases {
             apiKeys[provider.rawValue] = UserDefaults.standard.string(forKey: "apiKey_\(provider.rawValue)") ?? ""
         }
+
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-seed-prosody-song") {
+            let seededLyrics = "[Verse]\nyellow music\nfollow music\nmellow music"
+            title = "UI Prosody Song"
+            lyrics = seededLyrics
+            positionSeededProsodyCursorForUITests()
+            isStressPreviewEnabled = ProcessInfo.processInfo.arguments.contains("--ui-test-enable-stress-preview")
+            showWelcome = false
+            showAssistantSheet = ProcessInfo.processInfo.arguments.contains("--ui-test-open-assistant")
+        }
+    }
+
+    deinit {
+        trashSchedulerTask?.cancel()
     }
 
     // MARK: - Rhyme Context
 
+    private func refreshLyricsDerivedState() {
+        wordCount = SyllableCounter.wordCount(lyrics)
+        syllableCount = SyllableCounter.countText(lyrics)
+        refreshRhymeContext()
+    }
+
+    private func refreshRhymeContext() {
+        rhymeContext = computeRhymeContext()
+    }
+
     func computeRhymeContext() -> RhymeContext {
         guard !lyrics.isEmpty else {
-            return RhymeContext(
-                targetLine: nil,
-                currentLetter: String(activeRhymeScheme.first ?? Character("A")),
-                stanzaLines: [],
-                currentLineIndex: 0
-            )
+            return RhymeContext.emptyContext(currentLetter: String(activeRhymeScheme.first ?? Character("A")))
         }
 
         let pos = min(max(cursorPosition, 0), lyrics.count)
+        let currentSection = currentSongSection(in: lyrics, cursorPosition: pos)
         let textIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
         let textBeforeCursor = String(lyrics.prefix(pos))
         let textAfterCursor = String(lyrics.suffix(lyrics.count - pos))
@@ -158,7 +237,7 @@ final class EditorViewModel: ObservableObject {
 
         let schemeLetters = Array(activeRhymeScheme)
         guard !schemeLetters.isEmpty else {
-            return RhymeContext(targetLine: nil, currentLetter: "A", stanzaLines: stanzaLines, currentLineIndex: rawCursorLineIndex)
+            return RhymeContext(targetLine: nil, currentLetter: "A", stanzaLines: stanzaLines, currentLineIndex: rawCursorLineIndex, currentSection: currentSection)
         }
 
         let currentLetter = String(schemeLetters[effectiveLineIndex % schemeLetters.count])
@@ -182,20 +261,36 @@ final class EditorViewModel: ObservableObject {
             targetLine: targetLine,
             currentLetter: currentLetter,
             stanzaLines: stanzaLines,
-            currentLineIndex: rawCursorLineIndex
+            currentLineIndex: rawCursorLineIndex,
+            currentSection: currentSection
         )
     }
 
+    private func currentSongSection(in lyrics: String, cursorPosition: Int) -> SongSection {
+        let safePosition = min(max(cursorPosition, 0), lyrics.count)
+        let textBeforeCursor = String(lyrics.prefix(safePosition))
+        let header = textBeforeCursor
+            .components(separatedBy: "\n")
+            .compactMap(sectionHeaderTitle)
+            .last
+        return header.map(SongSection.fromHeader) ?? .unknown
+    }
+
     private func isSectionHeader(_ line: String) -> Bool {
+        sectionHeaderTitle(line) != nil
+    }
+
+    private func sectionHeaderTitle(_ line: String) -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.hasPrefix("[") && trimmed.hasSuffix("]")
+        guard trimmed.hasPrefix("["), trimmed.hasSuffix("]"), trimmed.count > 2 else { return nil }
+        return String(trimmed.dropFirst().dropLast())
     }
 
     // MARK: - AI Suggestions
 
     func getSuggestions() {
         guard !lyrics.isEmpty else { return }
-        let context = computeRhymeContext()
+        let context = rhymeContext
         isLoading = true
         errorMessage = nil
         suggestions = []
@@ -212,6 +307,7 @@ final class EditorViewModel: ObservableObject {
                     rhymeType: rhymeType,
                     rhymeScheme: activeRhymeScheme,
                     currentLetter: context.currentLetter,
+                    currentSection: context.currentSection,
                     complexity: rhymeComplexity,
                     useWholeSongContext: useWholeSongContext
                 )
@@ -233,6 +329,20 @@ final class EditorViewModel: ObservableObject {
         let original = ns.substring(with: range)
         guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        beginRewrite(action: action, range: range, original: original)
+    }
+
+    func retryRewrite() {
+        guard let action = rewriteAction,
+              let range = rewriteRange,
+              let original = rewriteOriginal else {
+            return
+        }
+
+        beginRewrite(action: action, range: range, original: original)
+    }
+
+    private func beginRewrite(action: RewriteAction, range: NSRange, original: String) {
         rewriteTask?.cancel()
         rewriteAction = action
         rewriteOriginal = original
@@ -240,6 +350,8 @@ final class EditorViewModel: ObservableObject {
         rewritePreview = nil
         rewriteError = nil
         rewriteLoading = true
+        let fullLyrics = lyrics
+        let currentSection = currentSongSection(in: fullLyrics, cursorPosition: range.location)
 
         rewriteTask = Task { @MainActor in
             do {
@@ -248,8 +360,9 @@ final class EditorViewModel: ObservableObject {
                     apiKey: currentApiKey,
                     modelId: selectedModel.id,
                     action: action,
-                    fullLyrics: lyrics,
-                    selection: original
+                    fullLyrics: fullLyrics,
+                    selection: original,
+                    currentSection: currentSection
                 )
                 guard !Task.isCancelled else { return }
                 rewritePreview = result
@@ -265,6 +378,10 @@ final class EditorViewModel: ObservableObject {
         guard let preview = rewritePreview, let range = rewriteRange else { return }
         let ns = lyrics as NSString
         guard range.location + range.length <= ns.length else {
+            dismissRewrite()
+            return
+        }
+        if let original = rewriteOriginal, ns.substring(with: range) != original {
             dismissRewrite()
             return
         }
@@ -334,12 +451,150 @@ final class EditorViewModel: ObservableObject {
     }
 
     func deleteProject(_ project: SongProject) {
+        moveProjectToTrash(project)
+    }
+
+    func moveProjectToTrash(_ project: SongProject) {
         guard let context = modelContext else { return }
+        autoSaveTask?.cancel()
+        removeExistingTrashEntry(id: project.id, in: context)
+
+        let trashedProject = TrashedSongProject(project: project)
+        context.insert(trashedProject)
         if currentProjectId == project.id {
-            currentProjectId = nil
+            clearEditorAfterProjectDelete()
         }
         context.delete(project)
         try? context.save()
+        scheduleTrashPurge()
+    }
+
+    func restoreTrashedProject(_ trashedProject: TrashedSongProject) {
+        guard let context = modelContext else { return }
+        let restoredProject = trashedProject.restoredProject()
+        context.insert(restoredProject)
+        context.delete(trashedProject)
+        try? context.save()
+        scheduleTrashPurge()
+    }
+
+    func permanentlyDeleteTrashedProject(_ trashedProject: TrashedSongProject) {
+        guard let context = modelContext else { return }
+        context.delete(trashedProject)
+        try? context.save()
+        scheduleTrashPurge()
+    }
+
+    func purgeExpiredTrashedProjects() {
+        guard let context = modelContext else { return }
+        let now = Date()
+        let descriptor = FetchDescriptor<TrashedSongProject>(
+            predicate: #Predicate<TrashedSongProject> { $0.deleteAfter <= now }
+        )
+        guard let expiredProjects = try? context.fetch(descriptor), !expiredProjects.isEmpty else {
+            scheduleTrashPurge()
+            return
+        }
+        for project in expiredProjects {
+            context.delete(project)
+        }
+        try? context.save()
+        scheduleTrashPurge()
+    }
+
+    private func scheduleTrashPurge() {
+        trashSchedulerTask?.cancel()
+        guard let context = modelContext else { return }
+        let now = Date()
+        var descriptor = FetchDescriptor<TrashedSongProject>(
+            predicate: #Predicate<TrashedSongProject> { $0.deleteAfter > now },
+            sortBy: [SortDescriptor(\.deleteAfter, order: .forward)]
+        )
+        descriptor.fetchLimit = 1
+        guard let nextProject = try? context.fetch(descriptor).first else { return }
+
+        let delay = max(nextProject.deleteAfter.timeIntervalSinceNow, 0)
+        trashSchedulerTask = Task { @MainActor [weak self] in
+            let nanoseconds = UInt64(delay * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            self?.trashSchedulerTask = nil
+            self?.purgeExpiredTrashedProjects()
+        }
+    }
+
+    private func removeExistingTrashEntry(id: String, in context: ModelContext) {
+        let projectId = id
+        let descriptor = FetchDescriptor<TrashedSongProject>(
+            predicate: #Predicate<TrashedSongProject> { $0.id == projectId }
+        )
+        if let existing = try? context.fetch(descriptor).first {
+            context.delete(existing)
+        }
+    }
+
+    private func clearEditorAfterProjectDelete() {
+        title = ""
+        lyrics = ""
+        theme = ""
+        cursorPosition = 0
+        currentProjectId = nil
+        suggestions = []
+        errorMessage = nil
+        saveStatus = .idle
+    }
+
+    func positionSeededProsodyCursorForUITests() {
+        guard ProcessInfo.processInfo.arguments.contains("--ui-test-seed-prosody-song") else { return }
+        if let range = lyrics.range(of: "follow music") {
+            cursorPosition = lyrics.distance(from: lyrics.startIndex, to: range.lowerBound)
+        } else {
+            cursorPosition = max(lyrics.count - 1, 0)
+        }
+    }
+
+    private func seedTrashProjectForUITestsIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("--ui-test-seed-trash-song"),
+              !didSeedTrashProjectForUITests,
+              let context = modelContext else {
+            return
+        }
+
+        didSeedTrashProjectForUITests = true
+        let seedId = "ui-trash-song"
+        let projectDescriptor = FetchDescriptor<SongProject>(
+            predicate: #Predicate<SongProject> { $0.id == seedId }
+        )
+        let trashDescriptor = FetchDescriptor<TrashedSongProject>(
+            predicate: #Predicate<TrashedSongProject> { $0.id == seedId }
+        )
+
+        if let trashedProject = try? context.fetch(trashDescriptor).first {
+            context.delete(trashedProject)
+        }
+
+        let project: SongProject
+        if let existingProject = try? context.fetch(projectDescriptor).first {
+            project = existingProject
+        } else {
+            project = SongProject(id: seedId)
+            context.insert(project)
+        }
+        project.title = "UI Trash Song"
+        project.lyrics = "yellow music"
+        project.theme = ""
+        project.updatedAt = Date()
+        try? context.save()
+
+        title = project.title
+        lyrics = project.lyrics
+        theme = project.theme
+        cursorPosition = project.lyrics.count
+        currentProjectId = project.id
+        suggestions = []
+        errorMessage = nil
+        saveStatus = .saved
+        showWelcome = false
+        showProjectsSheet = false
     }
 
     func importProject(_ exported: SongProjectExport) {

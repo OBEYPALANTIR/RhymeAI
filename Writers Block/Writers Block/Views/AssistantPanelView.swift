@@ -16,9 +16,11 @@ struct AssistantPanelView: View {
                 sheetContent(rhymeContext: rhymeContext)
             }
         }
+        .onAppear {
+            viewModel.positionSeededProsodyCursorForUITests()
+        }
         .sheet(item: $activeHelp) { help in
             FeatureHelpSheet(help: help)
-                .preferredColorScheme(.dark)
         }
     }
 
@@ -39,7 +41,6 @@ struct AssistantPanelView: View {
                     }
                 }
         }
-        .preferredColorScheme(.dark)
     }
 
     private func inlineContent(rhymeContext: RhymeContext) -> some View {
@@ -58,7 +59,6 @@ struct AssistantPanelView: View {
             panelScrollView(rhymeContext: rhymeContext)
         }
         .background(Color(UIColor.systemBackground))
-        .preferredColorScheme(.dark)
     }
 
     private func panelScrollView(rhymeContext: RhymeContext) -> some View {
@@ -116,10 +116,16 @@ struct AssistantPanelView: View {
 
                 Group {
                     if let targetLine = rhymeContext.targetLine {
-                        Text("\"\(targetLine)\"")
-                            .font(.system(.body, design: .serif))
-                            .italic()
-                            .foregroundStyle(.primary.opacity(0.9))
+                        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                            Text("\"\(targetLine)\"")
+                                .font(.system(.body, design: .serif))
+                                .italic()
+                                .foregroundStyle(.primary.opacity(0.9))
+
+                            if viewModel.isStressPreviewEnabled {
+                                AssistantProsodyPreviewView(text: targetLine)
+                            }
+                        }
                     } else {
                         Text("New rhyme sound (or place cursor on a line)")
                             .font(.caption)
@@ -233,6 +239,15 @@ struct AssistantPanelView: View {
             )
 
             toggleHelpRow(
+                "Stress + IPA",
+                help: .stressIPA,
+                isOn: Binding(
+                    get: { viewModel.isStressPreviewEnabled },
+                    set: { viewModel.isStressPreviewEnabled = $0 }
+                )
+            )
+
+            toggleHelpRow(
                 "Color Rhymes",
                 help: .colorRhymes,
                 isOn: Binding(
@@ -291,7 +306,8 @@ struct AssistantPanelView: View {
                     ForEach(Array(viewModel.suggestions.enumerated()), id: \.offset) { _, suggestion in
                         SuggestionCardView(
                             suggestion: suggestion,
-                            highlightRhyme: viewModel.isHighlightEnabled
+                            highlightRhyme: viewModel.isHighlightEnabled,
+                            showProsody: viewModel.isStressPreviewEnabled
                         ) {
                             viewModel.insertSuggestion(suggestion)
                             if !isInline {
@@ -329,6 +345,7 @@ struct AssistantPanelView: View {
             Toggle("", isOn: isOn)
                 .labelsHidden()
                 .tint(.indigo)
+                .accessibilityLabel(text)
         }
     }
 
@@ -363,6 +380,7 @@ private enum FeatureHelp: String, Identifiable {
     case wholeSongContext
     case highlightRhymes
     case underlineSyllables
+    case stressIPA
     case colorRhymes
 
     var id: String { rawValue }
@@ -377,6 +395,7 @@ private enum FeatureHelp: String, Identifiable {
         case .wholeSongContext: return "Whole Song Context"
         case .highlightRhymes: return "Highlight Rhymes"
         case .underlineSyllables: return "Underline Syllables"
+        case .stressIPA: return "Stress + IPA"
         case .colorRhymes: return "Color Rhymes"
         }
     }
@@ -399,6 +418,8 @@ private enum FeatureHelp: String, Identifiable {
             return "Highlights rhyme words in suggestions so matching sounds are easier to spot before you insert a line."
         case .underlineSyllables:
             return "Draws colored underlines under words by syllable count. This keeps syllable cues visible while leaving rhyme colors free for rhyme families."
+        case .stressIPA:
+            return "Shows dictionary-backed syllable stress and IPA previews for the target line and suggestions. Stressed syllables are shown as DA and unstressed syllables as da."
         case .colorRhymes:
             return "Colors words that share the same rhyme sound. Each color represents a rhyme family, so matching colors should rhyme or echo each other."
         }
@@ -409,6 +430,28 @@ private enum FeatureHelp: String, Identifiable {
         case .underlineSyllables: return .syllables
         case .colorRhymes: return .rhymes
         default: return nil
+        }
+    }
+}
+
+private struct AssistantProsodyPreviewView: View {
+    let text: String
+    private var prosody: LineProsody { ProsodyAnalyzer.analyzeLine(text) }
+
+    var body: some View {
+        if prosody.syllableCount > 0 {
+            VStack(alignment: .leading, spacing: 2) {
+                if !prosody.feet.isEmpty {
+                    Text(prosody.feet)
+                }
+                if !prosody.ipa.isEmpty {
+                    Text("/\(prosody.ipa)/")
+                }
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary.opacity(0.72))
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

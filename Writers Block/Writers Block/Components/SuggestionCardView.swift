@@ -3,16 +3,24 @@ import SwiftUI
 struct SuggestionCardView: View {
     let suggestion: String
     let highlightRhyme: Bool
+    var showProsody: Bool = false
     let onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
-            HStack(alignment: .center, spacing: RhymeAITokens.Spacing.sm) {
-                highlightedText
-                    .font(.system(.body, design: .serif))
-                    .foregroundStyle(.primary.opacity(0.9))
-                    .lineSpacing(4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    highlightedText
+                        .font(.system(.body, design: .serif))
+                        .foregroundStyle(.primary.opacity(0.9))
+                        .lineSpacing(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if showProsody {
+                        SuggestionProsodyPreviewView(text: suggestion)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: RhymeAITokens.Spacing.xs) {
                     Text("\(SyllableCounter.countText(suggestion))")
@@ -74,5 +82,27 @@ struct SuggestionCardView: View {
         }
 
         return result
+    }
+}
+
+private struct SuggestionProsodyPreviewView: View {
+    let text: String
+    private var prosody: LineProsody { ProsodyAnalyzer.analyzeLine(text) }
+
+    var body: some View {
+        if prosody.syllableCount > 0 {
+            VStack(alignment: .leading, spacing: 2) {
+                if !prosody.feet.isEmpty {
+                    Text(prosody.feet)
+                }
+                if !prosody.ipa.isEmpty {
+                    Text("/\(prosody.ipa)/")
+                }
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary.opacity(0.72))
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

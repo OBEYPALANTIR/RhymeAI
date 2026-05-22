@@ -70,6 +70,7 @@ import com.rhymeai.app.ui.theme.SyllableBlue
 import com.rhymeai.app.ui.theme.SyllableEmerald
 import com.rhymeai.app.ui.theme.SyllablePurple
 import com.rhymeai.app.ui.theme.SyllableRose
+import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.SyllableCounter
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -197,13 +198,18 @@ fun AssistantPanel(
                         .padding(DesignTokens.Spacing.lg)
                 ) {
                     if (rhymeContext.targetLine != null) {
-                        Text(
-                            "\"${rhymeContext.targetLine}\"",
-                            fontFamily = FontFamily.Serif,
-                            fontStyle = FontStyle.Italic,
-                            color = colorScheme.onSurface,
-                            fontSize = 14.sp
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                            Text(
+                                "\"${rhymeContext.targetLine}\"",
+                                fontFamily = FontFamily.Serif,
+                                fontStyle = FontStyle.Italic,
+                                color = colorScheme.onSurface,
+                                fontSize = 14.sp
+                            )
+                            if (viewModel.isStressPreviewEnabled) {
+                                ProsodyPreview(text = rhymeContext.targetLine)
+                            }
+                        }
                     } else {
                         Text(
                             "New rhyme sound (or place cursor on a line)",
@@ -400,6 +406,30 @@ fun AssistantPanel(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 FeatureHelpLabel(
+                    text = "Stress + IPA",
+                    help = FeatureHelp.STRESS_IPA,
+                    onHelp = { activeHelp = it },
+                    color = colorScheme.onSurfaceVariant
+                )
+                Switch(
+                    checked = viewModel.isStressPreviewEnabled,
+                    onCheckedChange = { viewModel.isStressPreviewEnabled = it },
+                    modifier = Modifier.semantics { contentDescription = "Toggle Stress + IPA" },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = colorScheme.onPrimary,
+                        checkedTrackColor = colorScheme.primary,
+                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
+                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
+                    )
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FeatureHelpLabel(
                     text = "Highlight Rhymes",
                     help = FeatureHelp.HIGHLIGHT_RHYMES,
                     onHelp = { activeHelp = it },
@@ -504,6 +534,7 @@ fun AssistantPanel(
                         SuggestionCard(
                             suggestion = suggestion,
                             highlightRhyme = viewModel.isHighlightEnabled,
+                            showProsody = viewModel.isStressPreviewEnabled,
                             onClick = {
                                 viewModel.insertSuggestion(suggestion)
                                 onSuggestionInserted()
@@ -575,11 +606,49 @@ private enum class FeatureHelp(
         "Draws colored underlines under words by syllable count. This keeps syllable cues visible while leaving rhyme colors free for rhyme families.",
         FeatureLegend.SYLLABLES
     ),
+    STRESS_IPA(
+        "Stress + IPA",
+        "Shows dictionary-backed syllable stress and IPA previews for the target line and suggestions. Stressed syllables are shown as DA and unstressed syllables as da."
+    ),
     COLOR_RHYMES(
         "Color Rhymes",
         "Colors words that share the same rhyme sound. Each color represents a rhyme family, so matching colors should rhyme or echo each other.",
         FeatureLegend.RHYMES
     )
+}
+
+@Composable
+fun ProsodyPreview(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val prosody = remember(text) { ProsodyAnalyzer.analyzeLine(text) }
+    if (prosody.syllableCount == 0) return
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        if (prosody.feet.isNotBlank()) {
+            Text(
+                prosody.feet,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                color = colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+            )
+        }
+        if (prosody.ipa.isNotBlank()) {
+            Text(
+                "/${prosody.ipa}/",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                color = colorScheme.onSurfaceVariant.copy(alpha = 0.56f)
+            )
+        }
+    }
 }
 
 @Composable

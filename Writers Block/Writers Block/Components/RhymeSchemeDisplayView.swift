@@ -44,7 +44,7 @@ struct RhymeSchemeDisplayView: View {
                 .padding(12)
             }
             .frame(maxHeight: 160)
-            .background(Color.black.opacity(0.4))
+            .background(Color(UIColor.secondarySystemBackground).opacity(0.72))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)

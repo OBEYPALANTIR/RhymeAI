@@ -30,5 +30,6 @@ struct RewriteChipBar: View {
         .frame(maxWidth: RhymeAITokens.Layout.drawerMaxWidth)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo.opacity(0.08), fallbackOpacity: 0.85)
         .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
+        .accessibilityIdentifier("rewriteChipBar")
     }
 }

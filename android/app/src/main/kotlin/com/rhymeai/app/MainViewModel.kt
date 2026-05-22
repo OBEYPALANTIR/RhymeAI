@@ -13,7 +13,10 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
+import com.rhymeai.app.data.model.SongSection
 import com.rhymeai.app.data.model.SongProject
+import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
@@ -30,12 +33,16 @@ data class RhymeContext(
     val targetLine: String?,
     val currentLetter: String,
     val stanzaLines: List<String>,
-    val currentLineIndex: Int
+    val currentLineIndex: Int,
+    val currentSection: SongSection = SongSection.UNKNOWN
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
+        private const val AUTOSAVE_DEBOUNCE_MILLIS = 450L
+        private const val SAVE_STATUS_VISIBLE_MILLIS = 700L
         val sectionHeaderRegex = Regex("^\\s*\\[.*]\\s*$")
+        val sectionHeaderCaptureRegex = Regex("^\\s*\\[(.+)]\\s*$")
     }
 
     private val repo = ProjectRepository(application)
@@ -50,7 +57,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var theme by mutableStateOf("")
 
     val lyrics: String get() = lyricsFieldValue.text
-    val cursorPosition: Int get() = lyricsFieldValue.selection.start
+    val cursorPosition: Int
+        get() = lyricsFieldValue.selection.start.coerceIn(0, lyricsFieldValue.text.length)
 
     // UI state
     var suggestions by mutableStateOf<List<String>>(emptyList())
@@ -62,10 +70,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var useWholeSongContext by mutableStateOf(false)
     var isHighlightEnabled by mutableStateOf(true)
     var isSyllableColoringEnabled by mutableStateOf(true)
+    var isStressPreviewEnabled by mutableStateOf(false)
     var isRhymeHighlightEnabled by mutableStateOf(false)
 
     // Project management
     var projects by mutableStateOf<List<SongProject>>(emptyList())
+    var trashedProjects by mutableStateOf<List<TrashedSongProject>>(emptyList())
     var currentProjectId by mutableStateOf<String?>(null)
     var saveStatus by mutableStateOf(SaveStatus.IDLE)
     var showProjectsDialog by mutableStateOf(false)
@@ -99,7 +109,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var rewriteRange: TextRange? = null
     private var rewriteJob: Job? = null
 
+    val hasActiveRewrite: Boolean
+        get() = rewriteAction != null
+
+    val canApplyRewrite: Boolean
+        get() = rewritePreview != null && !rewriteLoading
+
+    val inlineRewriteText: String
+        get() {
+            val range = rewriteRange ?: return lyrics
+            val replacement = rewritePreview ?: rewriteOriginal ?: return lyrics
+            val text = lyrics
+            if (range.min < 0 || range.max > text.length) return lyrics
+            return text.replaceRange(range.min, range.max, replacement)
+        }
+
+    val inlineRewriteRange: TextRange?
+        get() {
+            val range = rewriteRange ?: return null
+            val replacement = rewritePreview ?: rewriteOriginal ?: return null
+            val displayText = inlineRewriteText
+            val start = range.min
+            val end = start + replacement.length
+            if (start < 0 || end > displayText.length) return null
+            return TextRange(start, end)
+        }
+
     private var autoSaveJob: Job? = null
+    private var trashSchedulerJob: Job? = null
 
     val activeRhymeScheme: String
         get() = if (rhymeScheme == RhymeScheme.CUSTOM)
@@ -110,6 +147,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             // Load projects
             projects = repo.projectsFlow.first()
+            trashedProjects = repo.trashedProjectsFlow.first()
+            purgeExpiredTrashedProjects()
+            scheduleTrashPurge()
             currentProjectId = repo.currentProjectIdFlow.first()
 
             // Load API keys, provider, and model
@@ -132,6 +172,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             launch {
                 repo.projectsFlow.collect { projects = it }
             }
+            launch {
+                repo.trashedProjectsFlow.collect {
+                    trashedProjects = it
+                    scheduleTrashPurge()
+                }
+            }
         }
     }
 
@@ -143,6 +189,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val pos = cursorPosition.coerceIn(0, text.length)
+        val currentSection = currentSongSection(text, pos)
         val textBefore = text.substring(0, pos)
         val textAfter = text.substring(pos)
 
@@ -169,7 +216,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val schemeLetters = scheme.toList()
         if (schemeLetters.isEmpty()) {
-            return RhymeContext(null, "A", stanzaLines, rawCursorLineIndex)
+            return RhymeContext(null, "A", stanzaLines, rawCursorLineIndex, currentSection)
         }
 
         val currentLetter = schemeLetters[effectiveLineIndex % schemeLetters.size].toString()
@@ -188,7 +235,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             lyricCount++
         }
 
-        return RhymeContext(targetLine, currentLetter, stanzaLines, rawCursorLineIndex)
+        return RhymeContext(targetLine, currentLetter, stanzaLines, rawCursorLineIndex, currentSection)
+    }
+
+    private fun currentSongSection(text: String, cursor: Int): SongSection {
+        val textBeforeCursor = text.take(cursor.coerceIn(0, text.length))
+        val header = textBeforeCursor
+            .lineSequence()
+            .mapNotNull { sectionHeaderCaptureRegex.matchEntire(it)?.groupValues?.getOrNull(1) }
+            .lastOrNull()
+        return header?.let(SongSection::fromHeader) ?: SongSection.UNKNOWN
     }
 
     fun getSuggestions() {
@@ -200,7 +256,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val results = aiService.getSuggestions(
                     selectedProvider, currentApiKey, selectedModel.id, theme, lyrics, context.targetLine,
-                    rhymeType, activeRhymeScheme, context.currentLetter, rhymeComplexity, useWholeSongContext
+                    rhymeType, activeRhymeScheme, context.currentLetter, context.currentSection, rhymeComplexity, useWholeSongContext
                 )
                 suggestions = results
             } catch (e: Exception) {
@@ -219,13 +275,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val original = lyrics.substring(start, end)
         if (original.isBlank()) return
 
+        beginRewrite(action, TextRange(start, end), original)
+    }
+
+    fun retryRewrite() {
+        val action = rewriteAction ?: return
+        val range = rewriteRange ?: return
+        val original = rewriteOriginal ?: return
+        beginRewrite(action, range, original)
+    }
+
+    private fun beginRewrite(action: RewriteAction, range: TextRange, original: String) {
         rewriteJob?.cancel()
         rewriteAction = action
         rewriteOriginal = original
-        rewriteRange = TextRange(start, end)
+        rewriteRange = range
         rewritePreview = null
         rewriteError = null
         rewriteLoading = true
+        val fullLyrics = lyrics
+        val currentSection = currentSongSection(fullLyrics, range.min)
 
         rewriteJob = viewModelScope.launch {
             try {
@@ -234,8 +303,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     apiKey = currentApiKey,
                     modelId = selectedModel.id,
                     action = action,
-                    fullLyrics = lyrics,
-                    selection = original
+                    fullLyrics = fullLyrics,
+                    selection = original,
+                    currentSection = currentSection
                 )
                 rewritePreview = result
             } catch (e: Exception) {
@@ -251,6 +321,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val range = rewriteRange ?: return
         val text = lyrics
         if (range.start > text.length || range.end > text.length) {
+            dismissRewrite()
+            return
+        }
+        if (rewriteOriginal != null && text.substring(range.min, range.max) != rewriteOriginal) {
             dismissRewrite()
             return
         }
@@ -317,12 +391,99 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteProject(id: String) {
-        projects = projects.filter { it.id != id }
-        if (currentProjectId == id) currentProjectId = null
-        viewModelScope.launch {
-            repo.saveProjects(projects)
-            if (currentProjectId == null) repo.setCurrentProjectId(null)
+        moveProjectToTrash(id)
+    }
+
+    fun moveProjectToTrash(id: String) {
+        val project = projects.firstOrNull { it.id == id } ?: return
+        val now = System.currentTimeMillis()
+        val wasCurrentProject = currentProjectId == id
+        autoSaveJob?.cancel()
+
+        val updatedProjects = projects.filter { it.id != id }
+        val updatedTrashedProjects = listOf(
+            TrashedSongProject(
+                project = project,
+                deletedAt = now,
+                deleteAfter = now + TRASH_RETENTION_MILLIS
+            )
+        ) + trashedProjects.filter { it.project.id != id }
+        projects = updatedProjects
+        trashedProjects = updatedTrashedProjects
+
+        if (wasCurrentProject) {
+            clearEditorAfterProjectDelete()
         }
+
+        viewModelScope.launch {
+            repo.saveProjects(updatedProjects)
+            repo.saveTrashedProjects(updatedTrashedProjects)
+            if (wasCurrentProject) {
+                repo.setCurrentProjectId(null)
+                repo.saveEditorState("", "", "")
+            }
+        }
+        scheduleTrashPurge()
+    }
+
+    fun restoreTrashedProject(id: String) {
+        val trashedProject = trashedProjects.firstOrNull { it.project.id == id } ?: return
+        val restoredProject = trashedProject.project.copy(updatedAt = System.currentTimeMillis())
+        val updatedTrashedProjects = trashedProjects.filter { it.project.id != id }
+        val updatedProjects = listOf(restoredProject) + projects.filter { it.id != id }
+        trashedProjects = updatedTrashedProjects
+        projects = updatedProjects
+        viewModelScope.launch {
+            repo.saveProjects(updatedProjects)
+            repo.saveTrashedProjects(updatedTrashedProjects)
+        }
+        scheduleTrashPurge()
+    }
+
+    fun permanentlyDeleteTrashedProject(id: String) {
+        val updatedTrashedProjects = trashedProjects.filter { it.project.id != id }
+        trashedProjects = updatedTrashedProjects
+        viewModelScope.launch {
+            repo.saveTrashedProjects(updatedTrashedProjects)
+        }
+        scheduleTrashPurge()
+    }
+
+    fun purgeExpiredTrashedProjects() {
+        val now = System.currentTimeMillis()
+        val retainedProjects = trashedProjects.filter { it.deleteAfter > now }
+        if (retainedProjects.size != trashedProjects.size) {
+            trashedProjects = retainedProjects
+            viewModelScope.launch {
+                repo.saveTrashedProjects(retainedProjects)
+            }
+        }
+        scheduleTrashPurge()
+    }
+
+    private fun scheduleTrashPurge() {
+        trashSchedulerJob?.cancel()
+        val now = System.currentTimeMillis()
+        val nextDeleteAfter = trashedProjects
+            .filter { it.deleteAfter > now }
+            .minOfOrNull { it.deleteAfter }
+            ?: return
+        trashSchedulerJob = viewModelScope.launch {
+            delay((nextDeleteAfter - now).coerceAtLeast(0L))
+            trashSchedulerJob = null
+            purgeExpiredTrashedProjects()
+        }
+    }
+
+    private fun clearEditorAfterProjectDelete() {
+        autoSaveJob?.cancel()
+        title = ""
+        lyricsFieldValue = TextFieldValue("")
+        theme = ""
+        currentProjectId = null
+        suggestions = emptyList()
+        errorMessage = null
+        saveStatus = SaveStatus.IDLE
     }
 
     fun importProject(imported: SongProject) {
@@ -370,41 +531,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun triggerAutoSave() {
         autoSaveJob?.cancel()
         autoSaveJob = viewModelScope.launch {
-            if (title.isEmpty() && lyrics.isEmpty() && theme.isEmpty()) {
+            val currentTitle = title
+            val currentLyrics = lyrics
+            val currentTheme = theme
+
+            if (currentTitle.isEmpty() && currentLyrics.isEmpty() && currentTheme.isEmpty()) {
                 saveStatus = SaveStatus.IDLE
                 return@launch
             }
 
+            delay(AUTOSAVE_DEBOUNCE_MILLIS)
             saveStatus = SaveStatus.SAVING
 
-            // Create or update project
-            if (currentProjectId == null) {
+            val projectId = currentProjectId
+            val updatedProjectId: String
+            val updatedProjects = if (projectId == null) {
                 val newId = java.util.UUID.randomUUID().toString()
                 val newProject = SongProject(
                     id = newId,
-                    title = title.ifEmpty { "Untitled Song" },
-                    lyrics = lyrics,
-                    theme = theme,
+                    title = currentTitle.ifEmpty { "Untitled Song" },
+                    lyrics = currentLyrics,
+                    theme = currentTheme,
                     updatedAt = System.currentTimeMillis()
                 )
-                projects = listOf(newProject) + projects
-                currentProjectId = newId
+                updatedProjectId = newId
+                listOf(newProject) + projects
             } else {
-                projects = projects.map {
-                    if (it.id == currentProjectId) it.copy(
-                        title = title.ifEmpty { "Untitled Song" },
-                        lyrics = lyrics,
-                        theme = theme,
+                updatedProjectId = projectId
+                projects.map {
+                    if (it.id == projectId) it.copy(
+                        title = currentTitle.ifEmpty { "Untitled Song" },
+                        lyrics = currentLyrics,
+                        theme = currentTheme,
                         updatedAt = System.currentTimeMillis()
                     ) else it
                 }
             }
 
-            repo.saveProjects(projects)
-            repo.setCurrentProjectId(currentProjectId)
-            repo.saveEditorState(title, lyrics, theme)
+            projects = updatedProjects
+            currentProjectId = updatedProjectId
 
-            delay(1000)
+            repo.saveProjects(updatedProjects)
+            repo.setCurrentProjectId(updatedProjectId)
+            repo.saveEditorState(currentTitle, currentLyrics, currentTheme)
+
+            delay(SAVE_STATUS_VISIBLE_MILLIS)
             saveStatus = SaveStatus.SAVED
         }
     }
@@ -415,7 +586,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onLyricsChanged(newValue: TextFieldValue) {
-        lyricsFieldValue = newValue
+        if (hasActiveRewrite) return
+        lyricsFieldValue = newValue.withValidRanges()
         triggerAutoSave()
     }
 
@@ -426,6 +598,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun goToStartMenu() {
         showStartMenu = true
+    }
+
+    private fun TextFieldValue.withValidRanges(): TextFieldValue {
+        val textLength = text.length
+        val safeSelection = TextRange(
+            selection.start.coerceIn(0, textLength),
+            selection.end.coerceIn(0, textLength)
+        )
+        val safeComposition = composition?.let { range ->
+            TextRange(
+                range.start.coerceIn(0, textLength),
+                range.end.coerceIn(0, textLength)
+            )
+        }
+        return if (safeSelection == selection && safeComposition == composition) {
+            this
+        } else {
+            copy(selection = safeSelection, composition = safeComposition)
+        }
     }
 
     fun saveApiKey(provider: AIProvider, key: String) {

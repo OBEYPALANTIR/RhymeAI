@@ -1,6 +1,6 @@
 package com.rhymeai.app.ui.components
 
-import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -11,11 +11,13 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -24,7 +26,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -32,24 +33,32 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,12 +70,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.SongProject
+import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.ui.theme.DesignTokens
 import java.text.SimpleDateFormat
@@ -79,14 +91,19 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 private val DrawerAnimationMillis: Int get() = DesignTokens.Motion.drawerPresentMillis
+private const val MillisPerDay = 24L * 60L * 60L * 1000L
 
 @Composable
 fun ProjectsDrawer(
     projects: List<SongProject>,
+    trashedProjects: List<TrashedSongProject>,
     currentProjectId: String?,
     onLoadProject: (SongProject) -> Unit,
     onNewProject: () -> Unit,
     onDeleteProject: (String) -> Unit,
+    onRestoreProject: (String) -> Unit,
+    onPermanentlyDeleteProject: (String) -> Unit,
+    onPurgeExpiredTrash: () -> Unit,
     onImportProject: (SongProject) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -99,6 +116,12 @@ fun ProjectsDrawer(
     var searchQuery by remember { mutableStateOf("") }
     var drawerVisible by remember { mutableStateOf(false) }
     var isClosing by remember { mutableStateOf(false) }
+    var projectPendingDelete by remember { mutableStateOf<SongProject?>(null) }
+    var showTrashBin by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = showTrashBin) {
+        showTrashBin = false
+    }
 
     fun closeDrawer(afterClose: () -> Unit = {}) {
         if (isClosing) return
@@ -129,7 +152,6 @@ fun ProjectsDrawer(
                 importError = null
                 closeDrawer { onImportProject(project) }
             } catch (e: Exception) {
-                Log.e("ProjectsDialog", "Import failed", e)
                 importError = "Could not import this file. Pick a RhymeAI project JSON."
             }
         }
@@ -156,7 +178,9 @@ fun ProjectsDrawer(
     )
 
     Dialog(
-        onDismissRequest = { closeDrawer() },
+        onDismissRequest = {
+            if (showTrashBin) showTrashBin = false else closeDrawer()
+        },
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false
@@ -207,159 +231,256 @@ fun ProjectsDrawer(
                     contentColor = colorScheme.onSurface,
                     tonalElevation = 8.dp
                 ) {
-                    Column(
+                    val bottomActionClearance = navigationBarBottomPadding(DesignTokens.Spacing.golden)
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .statusBarsPadding()
-                            .navigationBarsPadding()
                             .padding(horizontal = DesignTokens.Spacing.lg)
-                            .padding(top = DesignTokens.Spacing.lg, bottom = DesignTokens.Spacing.lg)
+                            .padding(top = DesignTokens.Spacing.lg)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(
+                                    bottom = bottomActionClearance +
+                                        DesignTokens.Touch.minTarget +
+                                        DesignTokens.Spacing.lg
+                                )
                         ) {
-                            OutlinedTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                singleLine = true,
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.Search,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                },
-                                trailingIcon = {
-                                    if (searchQuery.isNotEmpty()) {
-                                        IconButton(onClick = { searchQuery = "" }) {
-                                            Icon(
-                                                Icons.Default.Close,
-                                                contentDescription = "Clear search",
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = searchQuery,
+                                    onValueChange = { searchQuery = it },
+                                    singleLine = true,
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Search,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        if (searchQuery.isNotEmpty()) {
+                                            IconButton(onClick = { searchQuery = "" }) {
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    contentDescription = "Clear search",
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                         }
-                                    }
-                                },
-                                placeholder = { Text("Search songs", fontSize = 14.sp) },
-                                modifier = Modifier.weight(1f),
-                                colors = textFieldColors,
-                                shape = RoundedCornerShape(DesignTokens.Radius.xl)
+                                    },
+                                    placeholder = { Text("Search songs", fontSize = 14.sp) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = textFieldColors,
+                                    shape = RoundedCornerShape(DesignTokens.Radius.xl)
+                                )
+
+                                IconButton(onClick = { closeDrawer() }) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close drawer",
+                                        tint = colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = { closeDrawer(afterClose = onNewProject) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = DesignTokens.Spacing.md)
+                                    .height(56.dp),
+                                shape = RoundedCornerShape(DesignTokens.Radius.xl),
+                                border = BorderStroke(1.dp, colorScheme.outline)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(DesignTokens.Spacing.sm))
+                                Text("Create New Song", fontWeight = FontWeight.Medium)
+                            }
+
+                            Text(
+                                "Recent Songs",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = DesignTokens.Spacing.lg, bottom = DesignTokens.Spacing.sm)
                             )
 
-                            IconButton(onClick = { closeDrawer() }) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Close drawer",
-                                    tint = colorScheme.onSurfaceVariant
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+                            ) {
+                                if (projects.isEmpty()) {
+                                    item {
+                                        EmptyDrawerState(
+                                            icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
+                                            text = "No saved songs yet."
+                                        )
+                                    }
+                                } else if (filteredProjects.isEmpty()) {
+                                    item {
+                                        EmptyDrawerState(
+                                            icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                            text = if (isSearching) "No songs match your search." else "No saved songs yet."
+                                        )
+                                    }
+                                } else {
+                                    items(filteredProjects, key = { it.id }) { project ->
+                                        ProjectDrawerRow(
+                                            project = project,
+                                            isActive = project.id == currentProjectId,
+                                            onLoadProject = { selected ->
+                                                closeDrawer { onLoadProject(selected) }
+                                            },
+                                            onDeleteProject = { projectPendingDelete = it }
+                                        )
+                                    }
+                                }
+                            }
+
+                            importError?.let {
+                                Text(
+                                    it,
+                                    color = colorScheme.error,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
                                 )
                             }
                         }
 
-                        OutlinedButton(
-                            onClick = { closeDrawer(afterClose = onNewProject) },
+                        BottomSafeActionArea(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = DesignTokens.Spacing.md)
-                                .height(56.dp),
-                            shape = RoundedCornerShape(DesignTokens.Radius.xl),
-                            border = BorderStroke(1.dp, colorScheme.outline)
+                                .align(Alignment.BottomCenter),
+                            extra = DesignTokens.Spacing.golden
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(DesignTokens.Spacing.sm))
-                            Text("Create New Song", fontWeight = FontWeight.Medium)
-                        }
-
-                        Text(
-                            "Recent Songs",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp,
-                            color = colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = DesignTokens.Spacing.lg, bottom = DesignTokens.Spacing.sm)
-                        )
-
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
-                        ) {
-                            if (projects.isEmpty()) {
-                                item {
-                                    EmptyDrawerState(
-                                        icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
-                                        text = "No saved songs yet."
-                                    )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(DesignTokens.Touch.minTarget),
+                                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        importError = null
+                                        importLauncher.launch(arrayOf("application/json", "*/*"))
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight(),
+                                    shape = RoundedCornerShape(DesignTokens.Radius.xl),
+                                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                                ) {
+                                    Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(DesignTokens.Spacing.sm))
+                                    Text("Import From File", fontWeight = FontWeight.Medium)
                                 }
-                            } else if (filteredProjects.isEmpty()) {
-                                item {
-                                    EmptyDrawerState(
-                                        icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                                        text = if (isSearching) "No songs match your search." else "No saved songs yet."
-                                    )
-                                }
-                            } else {
-                                items(filteredProjects, key = { it.id }) { project ->
-                                    ProjectDrawerRow(
-                                        project = project,
-                                        isActive = project.id == currentProjectId,
-                                        onLoadProject = { selected ->
-                                            closeDrawer { onLoadProject(selected) }
-                                        },
-                                        onDeleteProject = onDeleteProject
+
+                                OutlinedIconButton(
+                                    onClick = {
+                                        onPurgeExpiredTrash()
+                                        showTrashBin = true
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(DesignTokens.Touch.minTarget)
+                                        .semantics { contentDescription = "Open Trash Bin" },
+                                    shape = RoundedCornerShape(DesignTokens.Radius.xl),
+                                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Open Trash Bin",
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
                             }
                         }
-
-                        OutlinedButton(
-                            onClick = {
-                                importError = null
-                                importLauncher.launch(arrayOf("application/json", "*/*"))
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(DesignTokens.Touch.minTarget),
-                            shape = RoundedCornerShape(DesignTokens.Radius.xl),
-                            border = BorderStroke(1.dp, colorScheme.outlineVariant)
-                        ) {
-                            Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(DesignTokens.Spacing.sm))
-                            Text("Import From File", fontWeight = FontWeight.Medium)
-                        }
-
-                        importError?.let {
-                            Text(
-                                it,
-                                color = colorScheme.error,
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
-                            )
-                        }
                     }
                 }
             }
+
+            AnimatedVisibility(
+                visible = showTrashBin,
+                enter = slideInHorizontally(
+                    animationSpec = tween(DrawerAnimationMillis),
+                    initialOffsetX = { it }
+                ) + fadeIn(animationSpec = tween(DrawerAnimationMillis)),
+                exit = slideOutHorizontally(
+                    animationSpec = tween(DrawerAnimationMillis),
+                    targetOffsetX = { it }
+                ) + fadeOut(animationSpec = tween(DrawerAnimationMillis))
+            ) {
+                TrashBinPage(
+                    trashedProjects = trashedProjects,
+                    onRestoreProject = onRestoreProject,
+                    onPermanentlyDeleteProject = onPermanentlyDeleteProject,
+                    onDismiss = { showTrashBin = false }
+                )
+            }
         }
     }
+
+    projectPendingDelete?.let { project ->
+        AlertDialog(
+            onDismissRequest = { projectPendingDelete = null },
+            title = { Text("Delete this song?") },
+            text = {
+                Text("\"${project.title.ifEmpty { "Untitled Song" }}\" will move to Trash Bin and be fully deleted after 30 days.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteProject(project.id)
+                        projectPendingDelete = null
+                    }
+                ) {
+                    Text("Move to Trash", color = colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { projectPendingDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
 }
 
 @Composable
 fun ProjectsDialog(
     projects: List<SongProject>,
+    trashedProjects: List<TrashedSongProject> = emptyList(),
     currentProjectId: String?,
     onLoadProject: (SongProject) -> Unit,
     onNewProject: () -> Unit,
     onDeleteProject: (String) -> Unit,
+    onRestoreProject: (String) -> Unit,
+    onPermanentlyDeleteProject: (String) -> Unit,
+    onPurgeExpiredTrash: () -> Unit,
     onImportProject: (SongProject) -> Unit,
     onDismiss: () -> Unit
 ) {
     ProjectsDrawer(
         projects = projects,
+        trashedProjects = trashedProjects,
         currentProjectId = currentProjectId,
         onLoadProject = onLoadProject,
         onNewProject = onNewProject,
         onDeleteProject = onDeleteProject,
+        onRestoreProject = onRestoreProject,
+        onPermanentlyDeleteProject = onPermanentlyDeleteProject,
+        onPurgeExpiredTrash = onPurgeExpiredTrash,
         onImportProject = onImportProject,
         onDismiss = onDismiss
     )
@@ -395,7 +516,7 @@ private fun ProjectDrawerRow(
     project: SongProject,
     isActive: Boolean,
     onLoadProject: (SongProject) -> Unit,
-    onDeleteProject: (String) -> Unit
+    onDeleteProject: (SongProject) -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val dateStr = remember(project.updatedAt) {
@@ -451,17 +572,362 @@ private fun ProjectDrawerRow(
                 )
             }
             IconButton(
-                onClick = { onDeleteProject(project.id) },
+                onClick = { onDeleteProject(project) },
                 modifier = Modifier.size(DesignTokens.Touch.minTarget)
             ) {
                 Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Delete",
+                    Icons.Default.Close,
+                    contentDescription = "Delete ${project.title.ifEmpty { "Untitled Song" }}",
                     tint = colorScheme.error.copy(alpha = 0.75f),
                     modifier = Modifier.size(18.dp)
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun TrashBinPage(
+    trashedProjects: List<TrashedSongProject>,
+    onRestoreProject: (String) -> Unit,
+    onPermanentlyDeleteProject: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val sortedTrashedProjects = remember(trashedProjects) {
+        trashedProjects.sortedByDescending { it.deletedAt }
+    }
+    val trashIds = remember(sortedTrashedProjects) {
+        sortedTrashedProjects.map { it.project.id }
+    }
+    val trashIdSet = remember(trashIds) { trashIds.toSet() }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var confirmPermanentDelete by remember { mutableStateOf(false) }
+    val selectedCount = selectedIds.size
+    val hasSelection = selectedCount > 0
+    val allSelected = sortedTrashedProjects.isNotEmpty() && selectedIds.containsAll(trashIds)
+    val bottomActionClearance = navigationBarBottomPadding(DesignTokens.Spacing.xxl)
+    val bottomActionBarHeight = DesignTokens.Touch.minTarget + DesignTokens.Spacing.md + DesignTokens.Spacing.md
+    val contentBottomPadding = bottomActionClearance + bottomActionBarHeight + DesignTokens.Spacing.xl
+
+    LaunchedEffect(trashIdSet) {
+        selectedIds = selectedIds.intersect(trashIdSet)
+    }
+
+    fun toggleSelection(id: String) {
+        selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+    }
+
+    fun restoreSelected() {
+        val idsToRestore = selectedIds.toList()
+        idsToRestore.forEach(onRestoreProject)
+        selectedIds = emptySet()
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = colorScheme.surfaceContainerLow,
+        contentColor = colorScheme.onSurface
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+                TrashTopBar(onDismiss = onDismiss)
+
+                if (sortedTrashedProjects.isEmpty()) {
+                    EmptyDrawerState(
+                        icon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        text = "Trash Bin is empty."
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentPadding = PaddingValues(
+                            start = DesignTokens.Spacing.lg,
+                            top = DesignTokens.Spacing.md,
+                            end = DesignTokens.Spacing.lg,
+                            bottom = contentBottomPadding
+                        )
+                    ) {
+                        item {
+                            TrashSelectionHeaderRow(
+                                selected = allSelected,
+                                onToggle = {
+                                    selectedIds = if (allSelected) emptySet() else trashIds.toSet()
+                                }
+                            )
+                        }
+
+                        item {
+                            Text(
+                                "30 days left",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colorScheme.onSurface,
+                                modifier = Modifier.padding(
+                                    top = DesignTokens.Spacing.xl,
+                                    bottom = DesignTokens.Spacing.sm
+                                )
+                            )
+                        }
+
+                        items(sortedTrashedProjects, key = { it.project.id }) { trashedProject ->
+                            TrashProjectSelectableRow(
+                                trashedProject = trashedProject,
+                                selected = trashedProject.project.id in selectedIds,
+                                onToggle = { toggleSelection(trashedProject.project.id) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            BottomSafeActionArea(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(),
+                extra = DesignTokens.Spacing.xxl
+            ) {
+                TrashBottomActionBar(
+                    selectedCount = selectedCount,
+                    onRestoreSelected = ::restoreSelected,
+                    onRequestDeleteSelected = { confirmPermanentDelete = true }
+                )
+            }
+        }
+    }
+
+    if (confirmPermanentDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmPermanentDelete = false },
+            title = { Text("Delete forever?") },
+            text = {
+                Text("$selectedCount selected song${if (selectedCount == 1) "" else "s"} will be permanently deleted. This cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = hasSelection,
+                    onClick = {
+                        val idsToDelete = selectedIds.toList()
+                        idsToDelete.forEach(onPermanentlyDeleteProject)
+                        selectedIds = emptySet()
+                        confirmPermanentDelete = false
+                    }
+                ) {
+                    Text("Delete Forever", color = colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmPermanentDelete = false }) {
+                    Text("Cancel")
+                }
+            },
+            containerColor = colorScheme.surfaceContainerHigh
+        )
+    }
+}
+
+@Composable
+private fun TrashTopBar(onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(80.dp)
+            .padding(horizontal = DesignTokens.Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onDismiss) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to songs drawer")
+        }
+        Text(
+            "Trash",
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(start = DesignTokens.Spacing.sm)
+        )
+    }
+}
+
+@Composable
+private fun TrashSelectionHeaderRow(
+    selected: Boolean,
+    onToggle: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(DesignTokens.Touch.minTarget)
+            .clickable(onClick = onToggle),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "All items",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            color = colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
+        SelectionCircle(selected = selected, onToggle = onToggle)
+    }
+}
+
+@Composable
+private fun TrashProjectSelectableRow(
+    trashedProject: TrashedSongProject,
+    selected: Boolean,
+    onToggle: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val project = trashedProject.project
+    val wordCount = remember(project.lyrics) { SyllableCounter.wordCount(project.lyrics) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 76.dp)
+            .clickable(onClick = onToggle)
+            .padding(vertical = DesignTokens.Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.lg)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.MusicNote,
+                contentDescription = null,
+                tint = colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+        ) {
+            Text(
+                project.title.ifEmpty { "Untitled Song" },
+                fontWeight = FontWeight.Medium,
+                fontSize = 17.sp,
+                color = colorScheme.onSurface,
+                maxLines = 1
+            )
+            Text(
+                "$wordCount words • ${trashRemainingLabel(trashedProject.deleteAfter)}",
+                fontSize = 13.sp,
+                color = colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+
+        SelectionCircle(selected = selected, onToggle = onToggle)
+    }
+}
+
+@Composable
+private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
+    val colorScheme = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier
+            .size(DesignTokens.Touch.minTarget)
+            .clickable(onClick = onToggle),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .background(
+                    color = if (selected) colorScheme.primary else colorScheme.surfaceContainerLow,
+                    shape = CircleShape
+                )
+                .border(
+                    width = 2.dp,
+                    color = if (selected) colorScheme.primary else colorScheme.outline,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = colorScheme.onPrimary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrashBottomActionBar(
+    selectedCount: Int,
+    onRestoreSelected: () -> Unit,
+    onRequestDeleteSelected: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val hasSelection = selectedCount > 0
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = colorScheme.surfaceContainer,
+        tonalElevation = 3.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = DesignTokens.Spacing.lg,
+                    top = DesignTokens.Spacing.md,
+                    end = DesignTokens.Spacing.lg,
+                    bottom = DesignTokens.Spacing.md
+                )
+                .height(DesignTokens.Touch.minTarget),
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(
+                enabled = hasSelection,
+                onClick = onRestoreSelected,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                shape = RoundedCornerShape(DesignTokens.Radius.pill)
+            ) {
+                Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(DesignTokens.Spacing.sm))
+                Text("Restore")
+            }
+
+            Button(
+                enabled = hasSelection,
+                onClick = onRequestDeleteSelected,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                shape = RoundedCornerShape(DesignTokens.Radius.pill)
+            ) {
+                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(DesignTokens.Spacing.sm))
+                Text("Delete")
+            }
+        }
+    }
+}
+
+private fun trashRemainingLabel(deleteAfter: Long): String {
+    val remainingMillis = (deleteAfter - System.currentTimeMillis()).coerceAtLeast(0L)
+    val remainingDays = ((remainingMillis + MillisPerDay - 1L) / MillisPerDay).coerceAtLeast(0L)
+    return when (remainingDays) {
+        0L -> "Deletes today"
+        1L -> "Deletes in 1 day"
+        else -> "Deletes in $remainingDays days"
     }
 }
 

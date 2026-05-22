@@ -1,38 +1,113 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Project Overview
 
-RhymeAI is a mixed web, Android, and iOS repository. The root Vite/React app lives in `src/`, with entry points in `src/main.tsx` and `src/App.tsx`; shared styling is in `src/index.css`. Capacitor configuration is in `capacitor.config.ts`. The native Android app is under `android/app/src/main/kotlin/com/rhymeai/app/`, with Compose UI in `ui/`, services in `service/`, models in `data/model/`, and resources in `android/app/src/main/res/`. The iOS SwiftUI app is nested under `Writers Block/`, with tests in `Writers BlockTests/` and UI tests in `Writers BlockUITests/`.
+RhymeAI is a native songwriting assistant for writing lyrics, managing song projects, analyzing rhyme context, counting syllables, previewing stress/IPA, and generating AI rewrite/rhyme suggestions. The active app surfaces are the native Android Jetpack Compose app in `android/` and the native SwiftUI iOS app in `Writers Block/`. A desktop variant is planned, but the React/Vite web variant has been removed.
 
-## Build, Test, and Development Commands
+## Architecture & Data Flow
 
-Run root web commands from this directory:
+- **Android:** `MainViewModel.kt` is the single source of truth for editor, project, settings, AI provider/model, suggestions, rewrite previews, trash state, prosody previews, and save status. Compose screens read/write ViewModel `mutableStateOf` properties directly. `ProjectRepository.kt` persists projects, current editor state, trash state, provider/model choice, and API keys in Preferences DataStore. `AIService` lives in `GeminiService.kt` and dispatches to Gemini, OpenAI, Claude, or a local GGUF model.
+- **iOS:** `Writers_BlockApp.swift` creates the `EditorViewModel` and SwiftData `ModelContainer`. `ContentView.swift` injects the ViewModel into SwiftUI via `@EnvironmentObject`. `EditorViewModel.swift` owns editor/project/settings state, debounced autosave, trash state, rhyme context, prosody previews, and rewrite flow. `AIService.swift` handles Gemini/OpenAI/Claude/Apple Intelligence calls.
+- **Common flow:** lyrics + cursor position -> stanza/rhyme-context parsing -> section-aware prompt shaping -> AI suggestion/rewrite response -> UI preview/application -> debounced persistence. Android persists to DataStore; iOS persists projects with SwiftData and settings/API keys with `UserDefaults`.
+- **Shared prosody assets:** `shared/pronunciation/` contains source fixtures and generated pronunciation data. `scripts/generate-pronunciation-assets.mjs` refreshes native assets for Android and iOS.
 
-- `npm install` installs Node dependencies from `package-lock.json`.
-- `npm run dev` starts Vite on port 3000 for local web work.
-- `npm run build` creates the production web bundle in `dist/`.
-- `npm run lint` runs TypeScript checking with `tsc --noEmit`.
+## Key Directories
+
+- `android/app/src/main/kotlin/com/rhymeai/app/` — Android app source.
+  - `ui/` — Compose screens/components/theme/navigation.
+  - `service/` — cloud and local AI services.
+  - `data/model/` — serializable app models/enums.
+  - `data/repository/` — DataStore persistence.
+  - `util/` — rhyme, syllable, prosody, and export helpers.
+- `android/app/src/main/res/` — Android manifest resources, icons, XML file paths, values.
+- `Writers Block/Writers Block/` — iOS SwiftUI app.
+  - `Views/`, `Components/`, `ViewModels/`, `Services/`, `Models` map to their names.
+- `Writers Block/Writers BlockTests/` — iOS unit tests using Swift Testing.
+- `Writers Block/Writers BlockUITests/` — iOS UI/launch tests using XCTest.
+- `shared/` — cross-platform pronunciation/prosody source data.
+- `scripts/` — repository scripts for generating native shared assets.
+- `DESIGN.md` — design tokens and product styling contract; consult before UI changes.
+
+## Development Commands
 
 Run Android commands from `android/`:
 
-- `./gradlew :app:assembleDebug` builds a debug APK.
-- `./gradlew :app:compileDebugKotlin` is the fastest Kotlin compile check.
-- `./gradlew :app:testDebugUnitTest` runs JVM unit tests when present.
+- `./gradlew :app:assembleDebug` — build a debug APK.
+- `./gradlew :app:compileDebugKotlin` — fastest Kotlin compile check.
+- `./gradlew :app:testDebugUnitTest` — run JVM unit tests.
+- `./gradlew :app:lintDebug` — run Android lint for the debug variant.
+- `./gradlew :app:connectedDebugAndroidTest` — run instrumented tests when a device or emulator is attached.
 
-Use Xcode for the `Writers Block` iOS target, or run `xcodebuild` after confirming the scheme and simulator destination.
+For iOS, use Xcode with `Writers Block/Writers Block.xcodeproj`, or first inspect schemes/destinations with:
 
-## Coding Style & Naming Conventions
+- `xcodebuild -list -project "Writers Block/Writers Block.xcodeproj"`
+- `xcrun simctl list devices`
 
-Use TypeScript and React function components in the web app. Keep UI files and exported components in `PascalCase`. Kotlin uses four-space indentation, `PascalCase` for classes/composables, and `camelCase` for functions, properties, and locals. Swift follows standard SwiftUI naming: views end in `View`, models are nouns, and services end in `Service`. Prefer direct code over new abstractions.
+Then run `xcodebuild build` or `xcodebuild test` with the confirmed scheme and simulator destination.
 
-## Testing Guidelines
+## Code Conventions & Common Patterns
 
-Add tests for risky behavior and regressions, not trivial getters. Put Android unit tests under `android/app/src/test/` and instrumented tests under `android/app/src/androidTest/`. Keep Swift tests in the existing `Writers BlockTests/` and UI flows in `Writers BlockUITests/`. Name tests after behavior, for example `generatesSyllableCountsForLyrics`.
+- **General:** keep platform changes focused. Do not mix unrelated Android and iOS edits. Prefer direct code over new abstractions.
+- **Android/Kotlin:** four-space indentation; `PascalCase` classes/composables; `camelCase` functions/properties. Compose UI is Material 3 and ViewModel-driven; async work uses `viewModelScope.launch`, repository/AI calls are `suspend`, and blocking/network work belongs on `Dispatchers.IO`. Repository reads use `Flow` and one-shot `.first()` when needed.
+- **Android state/errors:** UI state is plain Compose mutable state on `MainViewModel`; error fields (`errorMessage`, `rewriteError`, `localModelError`) are set by caught exceptions and observed by UI. There is no Hilt/DI container; services are wired manually in the ViewModel.
+- **Swift/iOS:** SwiftUI views end in `View`, services in `Service`, models are nouns. `EditorViewModel` uses `@Published`, `@MainActor`, async/await, cancellable `Task`s, and 1-second autosave debounce. SwiftUI dependencies flow through `@EnvironmentObject` and `@Environment(\.modelContext)`.
+- **Rhyme context:** both platforms parse lyrics by line/stanza, skip or account for section headers, compute the active rhyme-scheme letter from cursor position, and use that context in prompts. Keep behavior aligned across Android and iOS when changing rhyme logic.
+- **Prosody and syllables:** both platforms should consume the same pronunciation data and algorithmic rules so stress/IPA previews, syllable counts, and near/slant rhyme decisions stay aligned.
+- **Persistence caution:** Android DataStore and iOS `UserDefaults` are not secure storage. Do not expand API-key persistence without considering Keychain/Encrypted storage.
 
-## Commit & Pull Request Guidelines
+## Important Files
 
-Recent history uses concise conventional-style commits such as `fix: Keep editor text visible above keyboard` and `feat: Search saved songs`. Keep commits focused and do not mix unrelated Android, web, and iOS changes. PRs should state what changed, how it was tested, and include screenshots for UI work.
+- `android/app/src/main/kotlin/com/rhymeai/app/MainActivity.kt` — Android entry and Compose setup.
+- `android/app/src/main/kotlin/com/rhymeai/app/MainViewModel.kt` — Android app state machine.
+- `android/app/src/main/kotlin/com/rhymeai/app/service/GeminiService.kt` — Android `AIService`, provider/model enums, prompts, API parsing.
+- `android/app/src/main/kotlin/com/rhymeai/app/data/repository/ProjectRepository.kt` — Android DataStore persistence.
+- `android/app/build.gradle.kts` — Android SDKs, Kotlin/Compose config, dependencies, `BuildConfig.GEMINI_API_KEY`.
+- `Writers Block/Writers Block/Writers_BlockApp.swift` — iOS app entry and SwiftData container.
+- `Writers Block/Writers Block/ViewModels/EditorViewModel.swift` — iOS central state, autosave, project/template/rewrite/trash/prosody logic.
+- `Writers Block/Writers Block/Services/AIService.swift` — iOS multi-provider AI client and prompt parsing.
+- `Writers Block/Writers Block/Services/ProsodyAnalyzer.swift` — iOS stress/IPA preview logic.
+- `Writers Block/Writers Block/Views/EditorView.swift` — iOS main adaptive editor UI.
+- `Writers Block/Writers Block.xcodeproj/project.pbxproj` — Xcode project settings.
+- `shared/pronunciation/` — shared pronunciation fixtures and generated dictionary data.
+- `scripts/generate-pronunciation-assets.mjs` — native pronunciation asset generator.
 
-## Security & Configuration
+## Runtime/Tooling Preferences
 
-Do not commit secrets. The web app expects `GEMINI_API_KEY` in `.env.local`; Android reads `GEMINI_API_KEY` from `android/local.properties`. Check `git status --short --branch` before pulls or commits, especially because generated app icons and Xcode project files may already be locally modified.
+- Use the Gradle wrapper in `android/`; do not assume a globally installed Gradle.
+- Android uses Kotlin 2.3.20, Android Gradle plugin 8.9.1, Gradle 8.14.3, JVM 17, compile SDK 36, min SDK 26, target SDK 35.
+- iOS is SwiftUI/SwiftData under Xcode; confirm scheme and simulator before command-line builds because no shared `.xcscheme` is checked in.
+- Android reads `GEMINI_API_KEY` from `android/local.properties`. Never commit local secret files.
+- Keep native asset generation in `scripts/`; do not reintroduce a root web package just to run the app.
+
+## Testing & QA
+
+- Android unit and instrumented tests live under `android/app/src/test/` and `android/app/src/androidTest/`.
+- iOS unit tests in `Writers BlockTests/` use Swift Testing (`@Test`, `#expect`) and cover rhyme context/model-picker behavior.
+- iOS UI tests in `Writers BlockUITests/` use XCTest/XCUIApplication and cover assistant sheet gestures, keyboard overlap, button state, launch, iPad layout, and launch performance.
+- Add tests for risky behavior and regressions: rhyme-context parsing, autosave/persistence, trash restore/delete, provider/model selection, rewrite application, export formatting, prosody previews, and error handling. Do not add trivial getter tests.
+- UI changes should be checked against `DESIGN.md`; include screenshots for PRs when visual behavior changes.
+
+## RhymeAI UI Polish Pass — Agent Conventions
+
+- Working branch: `chore/ui-polish-2026-05`.
+- Design contract: `/Users/tylermanring/Documents/RhymeAI/DESIGN.md`.
+- Required commands:
+  - `./gradlew check`
+  - `./gradlew lint`
+  - `./gradlew detekt` — if configured; else skip silently.
+  - `./gradlew spotlessApply` — if configured; else skip silently.
+  - `./gradlew recordRoborazziDebug` — if Roborazzi is/becomes wired in.
+  - `./gradlew connectedDebugAndroidTest` — only if an emulator is available.
+- Commit messages: Conventional Commits with scopes `feat(ui)`, `fix(ui)`, `refactor(ui)`, `chore(ui)`, `test(ui)`, `style(ui)`.
+- Anti-patterns:
+  - Decorative blur outside chrome layers.
+  - Glass on solid content.
+  - Animations longer than 500 ms for utilitarian transitions.
+  - Spring damping < 0.3 outside explicit celebratory feedback.
+  - Custom buttons / switches / sliders duplicating stock Material 3.
+  - Stacked elevation > 3 layers.
+  - Gradients with > 3 stops.
+  - Text on glass without heavier text weight or scrim support.
+  - `contentDescription` equal to visible text.
+  - Skipping edge-to-edge via `WindowCompat.setDecorFitsSystemWindows(window, false)`.
+  - Mixing M2 fixed elevation/shadows on every card with M3 tonal surfaces.

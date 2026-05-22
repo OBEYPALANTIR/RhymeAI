@@ -3,6 +3,7 @@ package com.rhymeai.app.ui.components
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,11 +26,32 @@ import com.rhymeai.app.util.SyllableCounter
 
 private val wordPattern = Regex("[a-zA-Z0-9']+")
 
+@Immutable
+data class SyllableUnderlineSpan(
+    val start: Int,
+    val endExclusive: Int,
+    val color: Color
+)
+
 fun syllableColor(count: Int): Color = when (count) {
     1 -> SyllableEmerald
     2 -> SyllableBlue
     3 -> SyllablePurple
     else -> SyllableRose
+}
+
+fun buildSyllableUnderlineSpans(text: String, enabled: Boolean): List<SyllableUnderlineSpan> {
+    if (!enabled || text.isEmpty()) return emptyList()
+
+    return wordPattern.findAll(text)
+        .map { match ->
+            SyllableUnderlineSpan(
+                start = match.range.first,
+                endExclusive = match.range.last + 1,
+                color = syllableColor(SyllableCounter.count(match.value))
+            )
+        }
+        .toList()
 }
 
 @Composable
@@ -44,12 +66,12 @@ fun SyllableColoredText(
     val density = LocalDensity.current
     val strokeWidth = with(density) { 3.dp.toPx() }
     val underlineGap = with(density) { 2.dp.toPx() }
+    val spans = remember(text, enabled) { buildSyllableUnderlineSpans(text, enabled) }
 
     Text(
         text = text,
         modifier = modifier.syllableUnderlines(
-            text = text,
-            enabled = enabled,
+            spans = spans,
             textLayoutResult = layoutResult,
             underlineGap = underlineGap,
             strokeWidth = strokeWidth
@@ -61,22 +83,21 @@ fun SyllableColoredText(
 }
 
 fun Modifier.syllableUnderlines(
-    text: String,
-    enabled: Boolean,
+    spans: List<SyllableUnderlineSpan>,
     textLayoutResult: TextLayoutResult?,
     underlineGap: Float,
     strokeWidth: Float
 ): Modifier = drawBehind {
     val layout = textLayoutResult ?: return@drawBehind
-    if (!enabled || text.isEmpty()) return@drawBehind
+    if (spans.isEmpty()) return@drawBehind
 
-    wordPattern.findAll(text).forEach { match ->
-        val count = SyllableCounter.count(match.value)
+    spans.forEach { span ->
+        if (span.endExclusive > layout.layoutInput.text.length) return@forEach
         drawWordUnderline(
             layout = layout,
-            start = match.range.first,
-            endExclusive = match.range.last + 1,
-            color = syllableColor(count),
+            start = span.start,
+            endExclusive = span.endExclusive,
+            color = span.color,
             underlineGap = underlineGap,
             strokeWidth = strokeWidth
         )

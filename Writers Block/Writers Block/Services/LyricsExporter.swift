@@ -15,10 +15,10 @@ enum LyricsExporter {
         return d
     }()
 
-    static func data(for project: SongProject, format: ExportFormat) -> Data {
+    static func data(for project: SongProject, format: ExportFormat) throws -> Data {
         switch format {
         case .txt: return buildTxt(project)
-        case .json: return buildJson(project)
+        case .json: return try buildJson(project)
         case .pdf: return buildPdf(project)
         case .lrc: return buildLrc(project)
         }
@@ -38,9 +38,9 @@ enum LyricsExporter {
         return Data((header + project.lyrics).utf8)
     }
 
-    private static func buildJson(_ project: SongProject) -> Data {
+    private static func buildJson(_ project: SongProject) throws -> Data {
         let dto = SongProjectExport(from: project)
-        return (try? jsonEncoder.encode(dto)) ?? Data()
+        return try jsonEncoder.encode(dto)
     }
 
     private static func buildLrc(_ project: SongProject) -> Data {

@@ -73,12 +73,11 @@ struct SettingsView: View {
                 downloadTask?.cancel()
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     private var settingsBackground: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(UIColor.systemBackground).ignoresSafeArea()
 
             LinearGradient(
                 colors: [
@@ -196,7 +195,7 @@ struct SettingsView: View {
                 .font(.title2)
                 .foregroundStyle(.teal)
                 .frame(width: 42, height: 42)
-                .background(Color.teal.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .liquidGlassSurface(cornerRadius: 14, tint: .teal.opacity(0.14), fallbackOpacity: 0.08)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Apple Foundation Models")
@@ -243,7 +242,7 @@ struct SettingsView: View {
                 .accessibilityLabel(showKey ? "Hide API key" : "Show API key")
             }
             .padding(14)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .liquidGlassSurface(cornerRadius: 16, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             Text(viewModel.selectedProvider.keyHint)
                 .font(.caption)
@@ -268,7 +267,7 @@ struct SettingsView: View {
             .pickerStyle(.menu)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .liquidGlassSurface(cornerRadius: 16, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             Text(viewModel.selectedModel.id)
                 .font(.caption.monospaced())
@@ -314,7 +313,7 @@ struct SettingsView: View {
                     .font(.title3)
                     .foregroundStyle(isDownloaded ? .green : .teal)
                     .frame(width: 36, height: 36)
-                    .background(Color.white.opacity(0.06), in: Circle())
+                    .liquidGlassSurface(cornerRadius: 18, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(option.title)
@@ -334,7 +333,7 @@ struct SettingsView: View {
                     .foregroundStyle(isDownloaded ? .green : .primary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.08), in: Capsule())
+                    .liquidGlassSurface(cornerRadius: 14, tint: .white.opacity(0.05), fallbackOpacity: 0.07)
             }
             .padding(14)
             .liquidGlassSurface(cornerRadius: 18, tint: .teal.opacity(0.08), interactive: !isDownloaded, fallbackOpacity: 0.05)
