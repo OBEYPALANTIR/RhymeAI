@@ -147,6 +147,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     var assistantSheetDragOffsetPx by remember { mutableFloatStateOf(0f) }
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
     var pendingAssistantSheet by remember { mutableStateOf(false) }
+    var rewriteChipBarHeightPx by remember { mutableIntStateOf(0) }
+    var rewriteReviewBarHeightPx by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(viewModel.lyrics) {
         val lyricsSnapshot = viewModel.lyrics
@@ -327,6 +329,30 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         viewModel.showExportSheet = false
     }
 
+    val modalOpen = viewModel.showSettingsDialog ||
+        viewModel.showProjectsDialog ||
+        viewModel.showExportSheet
+    val rewriteReviewVisible = viewModel.hasActiveRewrite &&
+        !showBottomSheet &&
+        !pendingAssistantSheet &&
+        !modalOpen
+    val selection = viewModel.lyricsFieldValue.selection
+    val rewriteVisible = !selection.collapsed &&
+        !showBottomSheet &&
+        !pendingAssistantSheet &&
+        !modalOpen &&
+        !viewModel.hasActiveRewrite
+    val activeEditorText = if (viewModel.hasActiveRewrite) {
+        viewModel.inlineRewriteText
+    } else {
+        viewModel.lyrics
+    }
+    val activeEditorRange = if (viewModel.hasActiveRewrite) {
+        viewModel.inlineRewriteRange ?: TextRange(viewModel.cursorPosition, viewModel.cursorPosition)
+    } else {
+        selection
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -444,9 +470,24 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                val keyboardScrollSpace = keyboardAwareBottomPadding(
-                    extra = DesignTokens.Spacing.golden
-                ) + DesignTokens.Touch.minTarget
+                val activeRewriteSurfaceHeightPx = when {
+                    rewriteReviewVisible -> rewriteReviewBarHeightPx
+                    rewriteVisible -> rewriteChipBarHeightPx
+                    else -> 0
+                }
+                val activeRewriteSurfaceHeight = with(density) {
+                    activeRewriteSurfaceHeightPx.toDp()
+                }
+                val bottomActionPadding = keyboardAwareBottomPadding(
+                    extra = DesignTokens.Spacing.lg
+                )
+                val bottomObstruction = bottomActionPadding +
+                    activeRewriteSurfaceHeight +
+                    DesignTokens.Spacing.md
+                val keyboardScrollSpace = maxOf(
+                    keyboardAwareBottomPadding(extra = DesignTokens.Spacing.golden) + DesignTokens.Touch.minTarget,
+                    bottomObstruction + DesignTokens.Spacing.golden
+                )
                 val trailingScrollSpace = if (keyboardVisible) {
                     keyboardScrollSpace
                 } else {
@@ -458,14 +499,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 }
                 val estimatedCharsPerLine = (editorWidthPx / with(density) { 8.5.dp.roundToPx() })
                     .coerceAtLeast(1)
+                val activeRangeStart = activeEditorRange.start.coerceIn(0, activeEditorText.length)
+                val activeRangeEnd = activeEditorRange.end.coerceIn(0, activeEditorText.length)
                 val cursorVisualLine = remember(
-                    viewModel.lyrics,
-                    viewModel.cursorPosition,
+                    activeEditorText,
+                    activeRangeStart,
                     estimatedCharsPerLine
                 ) {
                     estimateCursorVisualLine(
-                        text = viewModel.lyrics,
-                        cursor = viewModel.cursorPosition,
+                        text = activeEditorText,
+                        cursor = activeRangeStart,
                         charsPerLine = estimatedCharsPerLine
                     )
                 }
@@ -473,35 +516,49 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     (DesignTokens.Spacing.lg + DesignTokens.Spacing.xl).roundToPx()
                 } + titleHeightPx
                 val lineHeightPx = with(density) { 28.dp.roundToPx() }
-                val cursorOffset = viewModel.cursorPosition.coerceIn(0, viewModel.lyrics.length)
-                val cursorTopInLyricsPx = lyricsTextLayout
-                    ?.takeIf { it.layoutInput.text.text == viewModel.lyrics }
-                    ?.getCursorRect(cursorOffset)
-                    ?.top
-                    ?.roundToInt()
-                    ?: cursorVisualLine * lineHeightPx
-                val cursorContentY = lyricsTopPx + cursorTopInLyricsPx
-                val minCursorTopPx = with(density) { DesignTokens.Sheet.handleArea.roundToPx() }
-                val keyboardScrollSpacePx = with(density) { keyboardScrollSpace.roundToPx() }
-                val maxCursorTopPx = (viewportHeightPx - keyboardScrollSpacePx - lineHeightPx)
-                    .coerceAtLeast(minCursorTopPx + lineHeightPx)
+                val activeRangeInLyricsPx = selectedTextVerticalRange(
+                    textLayoutResult = lyricsTextLayout,
+                    text = activeEditorText,
+                    range = TextRange(activeRangeStart, activeRangeEnd),
+                    fallbackTopPx = cursorVisualLine * lineHeightPx,
+                    lineHeightPx = lineHeightPx
+                )
+                val activeRangeContentTopY = lyricsTopPx + activeRangeInLyricsPx.top
+                val activeRangeContentBottomY = lyricsTopPx + activeRangeInLyricsPx.bottom
+                val minSafeTopPx = with(density) {
+                    (DesignTokens.Sheet.handleArea + DesignTokens.Spacing.md).roundToPx()
+                }
+                val bottomObstructionPx = with(density) { bottomObstruction.roundToPx() }
+                val maxSafeBottomPx = (viewportHeightPx - bottomObstructionPx)
+                    .coerceAtLeast(minSafeTopPx + lineHeightPx)
 
                 LaunchedEffect(
                     keyboardVisible,
                     lyricsFocused,
-                    cursorContentY,
+                    viewModel.hasActiveRewrite,
+                    activeRangeStart,
+                    activeRangeEnd,
+                    activeRangeContentTopY,
+                    activeRangeContentBottomY,
+                    activeRewriteSurfaceHeightPx,
+                    bottomObstructionPx,
+                    scrollState.maxValue,
                     viewportHeightPx,
-                    maxCursorTopPx,
+                    maxSafeBottomPx,
                     lineHeightPx
                 ) {
-                    if (!keyboardVisible || !lyricsFocused) return@LaunchedEffect
+                    if (!lyricsFocused) return@LaunchedEffect
+                    if (!keyboardVisible && activeRangeStart == activeRangeEnd && !viewModel.hasActiveRewrite) {
+                        return@LaunchedEffect
+                    }
 
-                    val cursorTopOnScreen = cursorContentY - scrollState.value
+                    val rangeTopOnScreen = activeRangeContentTopY - scrollState.value
+                    val rangeBottomOnScreen = activeRangeContentBottomY - scrollState.value
                     val targetScroll = when {
-                        cursorTopOnScreen > maxCursorTopPx -> cursorContentY - maxCursorTopPx
-                        cursorTopOnScreen < minCursorTopPx -> cursorContentY - minCursorTopPx
+                        rangeBottomOnScreen > maxSafeBottomPx -> activeRangeContentBottomY - maxSafeBottomPx
+                        rangeTopOnScreen < minSafeTopPx -> activeRangeContentTopY - minSafeTopPx
                         else -> null
-                    }?.coerceAtLeast(0)
+                    }?.coerceIn(0, scrollState.maxValue)
 
                     if (targetScroll != null && abs(targetScroll - scrollState.value) > lineHeightPx / 2) {
                         scrollState.scrollTo(targetScroll)
@@ -679,14 +736,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
 
-        val modalOpen = viewModel.showSettingsDialog ||
-            viewModel.showProjectsDialog ||
-            viewModel.showExportSheet
-        val rewriteReviewVisible = viewModel.hasActiveRewrite &&
-            !showBottomSheet &&
-            !pendingAssistantSheet &&
-            !modalOpen
-
         // UnBlock FAB — visible only when the editor is unobstructed.
         AnimatedVisibility(
             visible = !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite,
@@ -736,12 +785,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
 
         // Rewrite chip bar — shown when text is selected and no other UI is open
-        val selection = viewModel.lyricsFieldValue.selection
-        val rewriteVisible = !selection.collapsed &&
-            !showBottomSheet &&
-            !pendingAssistantSheet &&
-            !modalOpen &&
-            !viewModel.hasActiveRewrite
         AnimatedVisibility(
             visible = rewriteVisible,
             enter = fadeIn(
@@ -778,7 +821,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 extra = DesignTokens.Spacing.lg
             ) {
                 RewriteChipBar(
-                    onAction = { viewModel.requestRewrite(it) }
+                    onAction = { viewModel.requestRewrite(it) },
+                    modifier = Modifier.onSizeChanged { rewriteChipBarHeightPx = it.height }
                 )
             }
         }
@@ -826,7 +870,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         error = viewModel.rewriteError,
                         onApply = { viewModel.applyRewrite() },
                         onCancel = { viewModel.dismissRewrite() },
-                        onRetry = { viewModel.retryRewrite() }
+                        onRetry = { viewModel.retryRewrite() },
+                        modifier = Modifier.onSizeChanged { rewriteReviewBarHeightPx = it.height }
                     )
                 }
             }
@@ -890,6 +935,44 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
     }
+}
+
+private data class TextVerticalRangePx(
+    val top: Int,
+    val bottom: Int
+)
+
+private fun selectedTextVerticalRange(
+    textLayoutResult: TextLayoutResult?,
+    text: String,
+    range: TextRange,
+    fallbackTopPx: Int,
+    lineHeightPx: Int
+): TextVerticalRangePx {
+    val fallbackBottomPx = fallbackTopPx + lineHeightPx
+    val layout = textLayoutResult?.takeIf { it.layoutInput.text.text == text }
+        ?: return TextVerticalRangePx(fallbackTopPx, fallbackBottomPx)
+    if (text.isEmpty()) return TextVerticalRangePx(fallbackTopPx, fallbackBottomPx)
+
+    val textLength = text.length
+    val start = range.min.coerceIn(0, textLength)
+    val end = range.max.coerceIn(0, textLength)
+    if (start >= end) {
+        val cursor = layout.getCursorRect(start)
+        val top = cursor.top.roundToInt()
+        return TextVerticalRangePx(
+            top = top,
+            bottom = cursor.bottom.roundToInt().coerceAtLeast(top + lineHeightPx)
+        )
+    }
+
+    val startLine = layout.getLineForOffset(start)
+    val endOffset = (end - 1).coerceIn(start, textLength - 1)
+    val endLine = layout.getLineForOffset(endOffset)
+    return TextVerticalRangePx(
+        top = layout.getLineTop(startLine).roundToInt(),
+        bottom = layout.getLineBottom(endLine).roundToInt()
+    )
 }
 
 private fun Modifier.inlineRewriteHighlight(

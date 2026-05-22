@@ -600,8 +600,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onLyricsChanged(newValue: TextFieldValue) {
         if (hasActiveRewrite) return
+        val previousText = lyricsFieldValue.text
         lyricsFieldValue = newValue.withValidRanges()
-        triggerAutoSave()
+        if (lyricsFieldValue.text != previousText) {
+            triggerAutoSave()
+        }
     }
 
     fun onThemeChanged(newTheme: String) {
