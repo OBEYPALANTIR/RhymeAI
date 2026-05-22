@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.rhymeai.app.data.model.SongProject
+import com.rhymeai.app.data.model.TrashedSongProject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
@@ -18,6 +19,7 @@ class ProjectRepository(private val context: Context) {
 
     companion object {
         private val PROJECTS_KEY = stringPreferencesKey("projects_json")
+        private val TRASHED_PROJECTS_KEY = stringPreferencesKey("trashed_projects_json")
         private val CURRENT_PROJECT_ID_KEY = stringPreferencesKey("current_project_id")
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
@@ -40,9 +42,20 @@ class ProjectRepository(private val context: Context) {
         prefs[CURRENT_PROJECT_ID_KEY]
     }
 
+    val trashedProjectsFlow: Flow<List<TrashedSongProject>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[TRASHED_PROJECTS_KEY] ?: "[]"
+        try { json.decodeFromString<List<TrashedSongProject>>(raw) } catch (_: Exception) { emptyList() }
+    }
+
     suspend fun saveProjects(projects: List<SongProject>) {
         context.dataStore.edit { prefs ->
             prefs[PROJECTS_KEY] = json.encodeToString(projects)
+        }
+    }
+
+    suspend fun saveTrashedProjects(projects: List<TrashedSongProject>) {
+        context.dataStore.edit { prefs ->
+            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(projects)
         }
     }
 

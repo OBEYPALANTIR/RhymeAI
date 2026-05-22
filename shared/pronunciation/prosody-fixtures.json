@@ -1,0 +1,24 @@
+[
+  {
+    "text": "yellow music",
+    "syllables": 4,
+    "stress": [1, 0, 1, 0],
+    "feet": "ˈDA da | ˈDA da"
+  },
+  {
+    "word": "music",
+    "phones": "M Y UW1 Z IH0 K",
+    "ipa": "ˈmjuzɪk",
+    "syllables": 2
+  },
+  {
+    "word": "Scottys",
+    "fallback": true,
+    "syllables": 2,
+    "stress": [1, 0]
+  },
+  {
+    "rhymePair": ["road", "glowed"],
+    "sharedKey": "OW D"
+  }
+]

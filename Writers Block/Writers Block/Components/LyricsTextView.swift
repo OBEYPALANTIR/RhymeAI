@@ -1,11 +1,21 @@
 import SwiftUI
 import UIKit
 
+struct LyricsRewriteHighlight: Equatable {
+    let range: NSRange
+    let isLoading: Bool
+    let isError: Bool
+}
+
 struct LyricsTextView: UIViewRepresentable {
     @Binding var text: String
+    var displayText: String? = nil
+    var rewriteHighlight: LyricsRewriteHighlight? = nil
     var onCursorChange: (Int) -> Void
     var onSelectionChange: ((NSRange) -> Void)? = nil
+    var onEditingChange: ((Bool) -> Void)? = nil
     var isTransparentText: Bool = false
+    var isEditable: Bool = true
     var placeholder: String = "Start writing your lyrics here..."
 
     func makeUIView(context: Context) -> UITextView {
@@ -21,23 +31,29 @@ struct LyricsTextView: UIViewRepresentable {
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.accessibilityIdentifier = "lyricsEditor"
         context.coordinator.attach(to: textView)
-        context.coordinator.updatePlaceholder(textView, text: text)
+        context.coordinator.updatePlaceholder(textView, text: renderedText)
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.parent = self
-        if textView.text != text {
+        let currentRenderedText = renderedText
+        if textView.text != currentRenderedText {
             let selectedRange = textView.selectedRange
-            textView.text = text
+            textView.text = currentRenderedText
             // Restore selection if still valid
-            if selectedRange.location <= text.utf16.count {
+            if selectedRange.location <= currentRenderedText.utf16.count {
                 textView.selectedRange = selectedRange
             }
         }
+        textView.isEditable = isEditable
+        textView.isSelectable = isEditable
         textView.textColor = isTransparentText ? .clear : UIColor.label.withAlphaComponent(0.9)
-        context.coordinator.updatePlaceholder(textView, text: text)
+        textView.tintColor = isEditable ? UIColor(Color.indigo) : .clear
+        context.coordinator.updatePlaceholder(textView, text: currentRenderedText)
+        context.coordinator.updateRewriteHighlight(textView, highlight: rewriteHighlight)
         context.coordinator.scheduleKeepCursorVisible()
     }
 
@@ -45,9 +61,14 @@ struct LyricsTextView: UIViewRepresentable {
         Coordinator(self)
     }
 
+    private var renderedText: String {
+        displayText ?? text
+    }
+
     class Coordinator: NSObject, UITextViewDelegate {
         var parent: LyricsTextView
         private var placeholderLabel: UILabel?
+        private var rewriteHighlightView: RewriteHighlightOverlayView?
         private weak var textView: UITextView?
         private var isObservingKeyboard = false
         private var keyboardFrameInScreen: CGRect = .zero
@@ -63,6 +84,20 @@ struct LyricsTextView: UIViewRepresentable {
 
         func attach(to textView: UITextView) {
             self.textView = textView
+            if rewriteHighlightView == nil {
+                let view = RewriteHighlightOverlayView()
+                view.backgroundColor = .clear
+                view.isUserInteractionEnabled = false
+                view.translatesAutoresizingMaskIntoConstraints = false
+                textView.addSubview(view)
+                NSLayoutConstraint.activate([
+                    view.topAnchor.constraint(equalTo: textView.topAnchor),
+                    view.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
+                    view.trailingAnchor.constraint(equalTo: textView.trailingAnchor),
+                    view.bottomAnchor.constraint(equalTo: textView.bottomAnchor)
+                ])
+                rewriteHighlightView = view
+            }
 
             guard !isObservingKeyboard else { return }
             isObservingKeyboard = true
@@ -111,6 +146,32 @@ struct LyricsTextView: UIViewRepresentable {
             parent.onCursorChange(textView.selectedRange.location)
             parent.onSelectionChange?(textView.selectedRange)
             scheduleKeepCursorVisible()
+        }
+
+        func updateRewriteHighlight(_ textView: UITextView, highlight: LyricsRewriteHighlight?) {
+            guard let rewriteHighlightView else { return }
+            guard let highlight, highlight.range.length > 0 else {
+                rewriteHighlightView.configure(rects: [], isLoading: false, isError: false)
+                return
+            }
+
+            DispatchQueue.main.async { [weak textView, weak rewriteHighlightView] in
+                guard let textView, let rewriteHighlightView else { return }
+                let rects = self.highlightRects(in: textView, range: highlight.range)
+                rewriteHighlightView.configure(
+                    rects: rects,
+                    isLoading: highlight.isLoading,
+                    isError: highlight.isError
+                )
+            }
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            parent.onEditingChange?(true)
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            parent.onEditingChange?(false)
         }
 
         @objc private func keyboardWillChangeFrame(_ notification: Notification) {
@@ -197,6 +258,117 @@ struct LyricsTextView: UIViewRepresentable {
 
             return max(0, insetAdjustedHeight - keyboardOverlap)
         }
+
+        private func highlightRects(in textView: UITextView, range: NSRange) -> [CGRect] {
+            let nsText = textView.text as NSString
+            guard range.location >= 0, range.location + range.length <= nsText.length else {
+                return []
+            }
+
+            let layoutManager = textView.layoutManager
+            let textContainer = textView.textContainer
+            layoutManager.ensureLayout(for: textContainer)
+
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            var rects: [CGRect] = []
+            layoutManager.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: glyphRange,
+                in: textContainer
+            ) { rect, _ in
+                let expanded = rect
+                    .insetBy(dx: -3, dy: -2)
+                    .offsetBy(
+                        dx: textView.textContainerInset.left,
+                        dy: textView.textContainerInset.top
+                    )
+                rects.append(expanded)
+            }
+            return rects
+        }
+    }
+}
+
+private final class RewriteHighlightOverlayView: UIView {
+    private var rects: [CGRect] = []
+    private var isLoading = false
+    private var isError = false
+    private var scanProgress: CGFloat = 0
+    private var displayLink: CADisplayLink?
+
+    deinit {
+        displayLink?.invalidate()
+    }
+
+    func configure(rects: [CGRect], isLoading: Bool, isError: Bool) {
+        self.rects = rects
+        self.isLoading = isLoading
+        self.isError = isError
+
+        if isLoading && !rects.isEmpty {
+            startScan()
+        } else {
+            stopScan()
+        }
+        setNeedsDisplay()
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext(), !rects.isEmpty else { return }
+
+        let fillColor = isError
+            ? UIColor.systemRed.withAlphaComponent(0.20)
+            : UIColor.systemIndigo.withAlphaComponent(0.22)
+        let strokeColor = isError
+            ? UIColor.systemRed.withAlphaComponent(0.60)
+            : UIColor.systemTeal.withAlphaComponent(0.70)
+
+        context.setFillColor(fillColor.cgColor)
+        context.setStrokeColor(strokeColor.cgColor)
+        context.setLineWidth(1.0)
+
+        for highlightRect in rects {
+            let path = UIBezierPath(roundedRect: highlightRect, cornerRadius: 5)
+            context.addPath(path.cgPath)
+            context.drawPath(using: .fillStroke)
+        }
+
+        guard isLoading else { return }
+
+        context.setStrokeColor(UIColor.white.withAlphaComponent(0.82).cgColor)
+        context.setLineWidth(2.0)
+        context.setLineCap(.round)
+
+        for highlightRect in rects {
+            let x = highlightRect.minX + highlightRect.width * scanProgress
+            context.move(to: CGPoint(x: x, y: highlightRect.minY + 1))
+            context.addLine(to: CGPoint(x: x, y: highlightRect.maxY - 1))
+            context.strokePath()
+        }
+    }
+
+    private func startScan() {
+        guard displayLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(stepScan))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    private func stopScan() {
+        displayLink?.invalidate()
+        displayLink = nil
+        scanProgress = 0
+    }
+
+    @objc private func stepScan() {
+        scanProgress += 0.018
+        if scanProgress > 1 {
+            scanProgress = 0
+        }
+        setNeedsDisplay()
     }
 }
 

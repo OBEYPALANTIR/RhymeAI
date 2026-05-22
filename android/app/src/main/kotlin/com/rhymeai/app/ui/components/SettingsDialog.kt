@@ -72,6 +72,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
+import com.rhymeai.app.ui.theme.DesignTokens
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -287,7 +288,8 @@ fun SettingsDialog(
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(DesignTokens.Spacing.lg)
+                .bottomSafeActionPadding(extra = DesignTokens.Spacing.lg),
             contentAlignment = Alignment.Center
         ) {
             val dialogMaxHeight = maxHeight.coerceAtMost(640.dp)

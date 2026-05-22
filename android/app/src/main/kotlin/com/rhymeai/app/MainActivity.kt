@@ -1,10 +1,12 @@
 package com.rhymeai.app
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
 import com.rhymeai.app.ui.components.ProjectsDrawer
@@ -13,10 +15,20 @@ import com.rhymeai.app.ui.components.TemplatesDialog
 import com.rhymeai.app.ui.navigation.RhymeNavGraph
 import com.rhymeai.app.ui.navigation.Routes
 import com.rhymeai.app.ui.theme.RhymeAITheme
+import com.rhymeai.app.util.PronunciationDictionary
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                assets.open("cmudict-rhymeai.tsv").use(PronunciationDictionary::initialize)
+            }.onFailure { error ->
+                Log.w("RhymeAI", "Falling back to heuristic syllable counts; CMU dictionary failed to load.", error)
+            }
+        }
         enableEdgeToEdge()
         setContent {
             RhymeAITheme {
@@ -36,6 +48,7 @@ class MainActivity : ComponentActivity() {
                 if (viewModel.showProjectsDialog) {
                     ProjectsDrawer(
                         projects = viewModel.projects,
+                        trashedProjects = viewModel.trashedProjects,
                         currentProjectId = viewModel.currentProjectId,
                         onLoadProject = { project ->
                             viewModel.loadProject(project)
@@ -49,7 +62,10 @@ class MainActivity : ComponentActivity() {
                                 popUpTo(0) { inclusive = true }
                             }
                         },
-                        onDeleteProject = { viewModel.deleteProject(it) },
+                        onDeleteProject = { viewModel.moveProjectToTrash(it) },
+                        onRestoreProject = { viewModel.restoreTrashedProject(it) },
+                        onPermanentlyDeleteProject = { viewModel.permanentlyDeleteTrashedProject(it) },
+                        onPurgeExpiredTrash = { viewModel.purgeExpiredTrashedProjects() },
                         onImportProject = { project ->
                             viewModel.importProject(project)
                             navController.navigate(Routes.EDITOR) {

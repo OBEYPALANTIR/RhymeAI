@@ -5,7 +5,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -14,6 +19,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,12 +31,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -38,11 +42,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.CircularProgressIndicator
@@ -62,9 +70,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -76,10 +84,13 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -87,32 +98,42 @@ import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.SaveStatus
 import com.rhymeai.app.data.model.ExportFormat
+import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.ui.components.AssistantPanel
 import com.rhymeai.app.ui.components.ExportSheet
+import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
-import com.rhymeai.app.ui.components.RewriteDialog
 import com.rhymeai.app.ui.components.RhymeHighlightedText
+import com.rhymeai.app.ui.components.buildSyllableUnderlineSpans
+import com.rhymeai.app.ui.components.bottomSafeActionPadding
+import com.rhymeai.app.ui.components.keyboardAwareBottomPadding
 import com.rhymeai.app.ui.components.syllableUnderlines
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.util.LyricsExporter
 import com.rhymeai.app.util.SyllableCounter
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private data class LyricStats(
+    val wordCount: Int,
+    val syllableCount: Int
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
-    val rhymeContext = remember(viewModel.lyrics, viewModel.cursorPosition, viewModel.activeRhymeScheme) {
-        viewModel.computeRhymeContext()
-    }
     var showBottomSheet by remember { mutableStateOf(false) }
     var lyricsFocused by remember { mutableStateOf(false) }
     var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var titleHeightPx by remember { mutableIntStateOf(0) }
+    var analyzedLyrics by remember { mutableStateOf(viewModel.lyrics) }
+    var lyricStats by remember { mutableStateOf(LyricStats(0, 0)) }
 
     val colorScheme = MaterialTheme.colorScheme
     val configuration = LocalConfiguration.current
@@ -126,6 +147,19 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     var assistantSheetDragOffsetPx by remember { mutableFloatStateOf(0f) }
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
     var pendingAssistantSheet by remember { mutableStateOf(false) }
+
+    LaunchedEffect(viewModel.lyrics) {
+        val lyricsSnapshot = viewModel.lyrics
+        delay(180)
+        val stats = withContext(Dispatchers.Default) {
+            LyricStats(
+                wordCount = SyllableCounter.wordCount(lyricsSnapshot),
+                syllableCount = SyllableCounter.countText(lyricsSnapshot)
+            )
+        }
+        analyzedLyrics = lyricsSnapshot
+        lyricStats = stats
+    }
 
     fun beginAssistantSheetPresentation() {
         assistantSheetDragOffsetPx = fullSheetHeightPx
@@ -297,12 +331,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background)
-            .imePadding()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Top bar — always visible
-            val wordCount = remember(viewModel.lyrics) { SyllableCounter.wordCount(viewModel.lyrics) }
-            val syllableCount = remember(viewModel.lyrics) { SyllableCounter.countText(viewModel.lyrics) }
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = { viewModel.showProjectsDialog = true }) {
@@ -364,12 +395,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         modifier = Modifier.padding(end = 4.dp)
                     ) {
                         Text(
-                            "$wordCount words",
+                            "${lyricStats.wordCount} words",
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant
                         )
                         Text(
-                            "$syllableCount syllables",
+                            "${lyricStats.syllableCount} syllables",
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant
                         )
@@ -413,8 +444,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     .weight(1f)
                     .fillMaxWidth()
             ) {
+                val keyboardScrollSpace = keyboardAwareBottomPadding(
+                    extra = DesignTokens.Spacing.golden
+                ) + DesignTokens.Touch.minTarget
                 val trailingScrollSpace = if (keyboardVisible) {
-                    DesignTokens.Editor.keyboardOffset
+                    keyboardScrollSpace
                 } else {
                     DesignTokens.Editor.bottomRest
                 }
@@ -448,8 +482,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     ?: cursorVisualLine * lineHeightPx
                 val cursorContentY = lyricsTopPx + cursorTopInLyricsPx
                 val minCursorTopPx = with(density) { DesignTokens.Sheet.handleArea.roundToPx() }
-                val maxCursorTopPx = (viewportHeightPx * 0.45f)
-                    .roundToInt()
+                val keyboardScrollSpacePx = with(density) { keyboardScrollSpace.roundToPx() }
+                val maxCursorTopPx = (viewportHeightPx - keyboardScrollSpacePx - lineHeightPx)
                     .coerceAtLeast(minCursorTopPx + lineHeightPx)
 
                 LaunchedEffect(
@@ -457,22 +491,20 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     lyricsFocused,
                     cursorContentY,
                     viewportHeightPx,
-                    maxCursorTopPx
+                    maxCursorTopPx,
+                    lineHeightPx
                 ) {
                     if (!keyboardVisible || !lyricsFocused) return@LaunchedEffect
 
-                    val minScroll = (cursorContentY - maxCursorTopPx).coerceAtLeast(0)
-                    val maxScroll = (cursorContentY - minCursorTopPx).coerceAtLeast(0)
-                    val initialClampedScroll = scrollState.value.coerceIn(minScroll, maxScroll)
-                    if (initialClampedScroll != scrollState.value) {
-                        scrollState.scrollTo(initialClampedScroll)
-                    }
+                    val cursorTopOnScreen = cursorContentY - scrollState.value
+                    val targetScroll = when {
+                        cursorTopOnScreen > maxCursorTopPx -> cursorContentY - maxCursorTopPx
+                        cursorTopOnScreen < minCursorTopPx -> cursorContentY - minCursorTopPx
+                        else -> null
+                    }?.coerceAtLeast(0)
 
-                    snapshotFlow { scrollState.value }.collect { currentScroll ->
-                        val clampedScroll = currentScroll.coerceIn(minScroll, maxScroll)
-                        if (clampedScroll != currentScroll) {
-                            scrollState.scrollTo(clampedScroll)
-                        }
+                    if (targetScroll != null && abs(targetScroll - scrollState.value) > lineHeightPx / 2) {
+                        scrollState.scrollTo(targetScroll)
                     }
                 }
 
@@ -494,6 +526,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         cursorBrush = SolidColor(colorScheme.primary),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .testTag("songTitleEditor")
                             .onSizeChanged { titleHeightPx = it.height },
                         decorationBox = { innerTextField ->
                             Box {
@@ -511,9 +544,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
                     Spacer(Modifier.height(DesignTokens.Spacing.xl))
 
-                    // Lyrics editor with overlay (syllable or rhyme coloring)
-                    val overlayActive = (viewModel.isSyllableColoringEnabled ||
-                        viewModel.isRhymeHighlightEnabled) && viewModel.lyrics.isNotEmpty()
+                    // Expensive lyric analysis waits until typing pauses so editor redraws stay stable.
+                    val lyricAnalysisReady = analyzedLyrics == viewModel.lyrics
+                    // Rhyme colors need a text overlay; keep it off mid-edit so the real field remains visible.
+                    val rhymeOverlayActive = viewModel.isRhymeHighlightEnabled &&
+                        viewModel.lyrics.isNotEmpty() &&
+                        !viewModel.hasActiveRewrite &&
+                        lyricAnalysisReady
+                    val syllableUnderlineActive = viewModel.isSyllableColoringEnabled &&
+                        viewModel.lyrics.isNotEmpty() &&
+                        !viewModel.hasActiveRewrite &&
+                        lyricAnalysisReady
                     val lyricsTextStyle = TextStyle(
                         fontSize = 16.sp,
                         lineHeight = 28.sp,
@@ -521,31 +562,68 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     )
                     val syllableUnderlineGap = with(density) { 2.dp.toPx() }
                     val syllableUnderlineWidth = with(density) { 3.dp.toPx() }
+                    val syllableUnderlineSpans = remember(analyzedLyrics, syllableUnderlineActive) {
+                        buildSyllableUnderlineSpans(
+                            text = analyzedLyrics,
+                            enabled = syllableUnderlineActive
+                        )
+                    }
+                    val inlineRewriteRange = viewModel.inlineRewriteRange
+                    val inlineRewriteText = viewModel.inlineRewriteText
+                    val inlineRewriteValue = remember(
+                        viewModel.hasActiveRewrite,
+                        inlineRewriteText,
+                        inlineRewriteRange
+                    ) {
+                        TextFieldValue(
+                            text = inlineRewriteText,
+                            selection = inlineRewriteRange ?: TextRange(
+                                viewModel.cursorPosition.coerceIn(0, inlineRewriteText.length)
+                            )
+                        )
+                    }
+                    val rewriteScanProgress = if (viewModel.hasActiveRewrite && viewModel.rewriteLoading) {
+                        val animatedProgress by rememberInfiniteTransition(
+                            label = "rewriteScan"
+                        ).animateFloat(
+                            initialValue = 0f,
+                            targetValue = 1f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(
+                                    durationMillis = 1200,
+                                    easing = LinearEasing
+                                ),
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "rewriteScanProgress"
+                        )
+                        animatedProgress
+                    } else {
+                        0f
+                    }
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        // Colored overlay (behind)
-                        if (overlayActive) {
-                            if (viewModel.isRhymeHighlightEnabled) {
-                                RhymeHighlightedText(
-                                    text = viewModel.lyrics,
-                                    enabled = true,
-                                    style = lyricsTextStyle
-                                )
-                            } else {
-                                Text(
-                                    text = viewModel.lyrics,
-                                    style = lyricsTextStyle,
-                                    color = colorScheme.onBackground.copy(alpha = 0.9f)
-                                )
-                            }
+                        // Colored overlay behind the transparent field only when rhyme coloring is active.
+                        if (rhymeOverlayActive) {
+                            RhymeHighlightedText(
+                                text = analyzedLyrics,
+                                enabled = true,
+                                style = lyricsTextStyle
+                            )
                         }
 
-                        // Actual text field (on top, transparent if coloring is on)
+                        // Actual text field. Keep it visible for syllable underlines so editing does not redraw through
+                        // a second text layer on every delete/backspace.
                         BasicTextField(
-                            value = viewModel.lyricsFieldValue,
-                            onValueChange = { viewModel.onLyricsChanged(it) },
+                            value = if (viewModel.hasActiveRewrite) inlineRewriteValue else viewModel.lyricsFieldValue,
+                            onValueChange = {
+                                if (!viewModel.hasActiveRewrite) {
+                                    viewModel.onLyricsChanged(it)
+                                }
+                            },
                             onTextLayout = { lyricsTextLayout = it },
+                            readOnly = viewModel.hasActiveRewrite,
                             textStyle = lyricsTextStyle.copy(
-                                color = if (overlayActive)
+                                color = if (rhymeOverlayActive)
                                     Color.Transparent
                                 else
                                     colorScheme.onBackground.copy(alpha = 0.9f)
@@ -553,9 +631,27 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             cursorBrush = SolidColor(colorScheme.primary),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .testTag("lyricsEditor")
+                                .inlineRewriteHighlight(
+                                    textLayoutResult = lyricsTextLayout,
+                                    range = inlineRewriteRange,
+                                    loading = viewModel.rewriteLoading,
+                                    error = viewModel.rewriteError != null,
+                                    scanProgress = rewriteScanProgress,
+                                    highlightColor = if (viewModel.rewriteError != null) {
+                                        colorScheme.error.copy(alpha = 0.22f)
+                                    } else {
+                                        colorScheme.primary.copy(alpha = 0.20f)
+                                    },
+                                    strokeColor = if (viewModel.rewriteError != null) {
+                                        colorScheme.error.copy(alpha = 0.70f)
+                                    } else {
+                                        colorScheme.tertiary.copy(alpha = 0.78f)
+                                    },
+                                    scanColor = colorScheme.onPrimary.copy(alpha = 0.86f)
+                                )
                                 .syllableUnderlines(
-                                    text = viewModel.lyrics,
-                                    enabled = overlayActive && viewModel.isSyllableColoringEnabled,
+                                    spans = syllableUnderlineSpans,
                                     textLayoutResult = lyricsTextLayout,
                                     underlineGap = syllableUnderlineGap,
                                     strokeWidth = syllableUnderlineWidth
@@ -585,12 +681,15 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
         val modalOpen = viewModel.showSettingsDialog ||
             viewModel.showProjectsDialog ||
-            viewModel.showExportSheet ||
-            viewModel.rewriteAction != null
+            viewModel.showExportSheet
+        val rewriteReviewVisible = viewModel.hasActiveRewrite &&
+            !showBottomSheet &&
+            !pendingAssistantSheet &&
+            !modalOpen
 
         // UnBlock FAB — visible only when the editor is unobstructed.
         AnimatedVisibility(
-            visible = !showBottomSheet && !pendingAssistantSheet && !modalOpen,
+            visible = !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite,
             enter = fadeIn(
                 animationSpec = tween(
                     durationMillis = DesignTokens.Motion.assistantPresentMillis,
@@ -617,18 +716,22 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .navigationBarsPadding()
-                .padding(DesignTokens.Spacing.xl)
         ) {
-            ExtendedFloatingActionButton(
-                onClick = { openAssistantSheet() },
-                containerColor = colorScheme.primary,
-                contentColor = colorScheme.onPrimary,
-                shape = RoundedCornerShape(DesignTokens.Radius.pill)
+            KeyboardSafeActionArea(
+                modifier = Modifier.padding(end = DesignTokens.Spacing.xl),
+                extra = DesignTokens.Spacing.xxl,
+                horizontalAlignment = Alignment.End
             ) {
-                Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                UnBlockWordmark()
+                ExtendedFloatingActionButton(
+                    onClick = { openAssistantSheet() },
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary,
+                    shape = RoundedCornerShape(DesignTokens.Radius.pill)
+                ) {
+                    Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    UnBlockWordmark()
+                }
             }
         }
 
@@ -638,7 +741,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             !showBottomSheet &&
             !pendingAssistantSheet &&
             !modalOpen &&
-            viewModel.rewriteAction == null
+            !viewModel.hasActiveRewrite
         AnimatedVisibility(
             visible = rewriteVisible,
             enter = fadeIn(
@@ -667,12 +770,66 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             ),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.md)
         ) {
-            RewriteChipBar(
-                onAction = { viewModel.requestRewrite(it) }
-            )
+            KeyboardSafeActionArea(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = DesignTokens.Spacing.lg),
+                extra = DesignTokens.Spacing.lg
+            ) {
+                RewriteChipBar(
+                    onAction = { viewModel.requestRewrite(it) }
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = rewriteReviewVisible,
+            enter = fadeIn(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.standardMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                )
+            ) + slideInVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.standardMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                ),
+                initialOffsetY = { it }
+            ),
+            exit = fadeOut(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                )
+            ) + slideOutVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                ),
+                targetOffsetY = { it }
+            ),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+        ) {
+            viewModel.rewriteAction?.let { action ->
+                KeyboardSafeActionArea(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = DesignTokens.Spacing.lg),
+                    extra = DesignTokens.Spacing.lg
+                ) {
+                    InlineRewriteReviewBar(
+                        action = action,
+                        loading = viewModel.rewriteLoading,
+                        preview = viewModel.rewritePreview,
+                        error = viewModel.rewriteError,
+                        onApply = { viewModel.applyRewrite() },
+                        onCancel = { viewModel.dismissRewrite() },
+                        onRetry = { viewModel.retryRewrite() }
+                    )
+                }
+            }
         }
 
         // Export sheet
@@ -683,21 +840,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             )
         }
 
-        // Rewrite preview dialog
-        viewModel.rewriteAction?.let { action ->
-            RewriteDialog(
-                action = action,
-                original = viewModel.rewriteOriginal.orEmpty(),
-                preview = viewModel.rewritePreview,
-                loading = viewModel.rewriteLoading,
-                error = viewModel.rewriteError,
-                onApply = { viewModel.applyRewrite() },
-                onDismiss = { viewModel.dismissRewrite() }
-            )
-        }
-
         // Bottom sheet for assistant
         if (showBottomSheet) {
+            val rhymeContext = remember(viewModel.lyrics, viewModel.cursorPosition, viewModel.activeRhymeScheme) {
+                viewModel.computeRhymeContext()
+            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -738,12 +885,151 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .navigationBarsPadding()
-                        .padding(bottom = DesignTokens.Spacing.lg)
+                        .bottomSafeActionPadding(extra = DesignTokens.Spacing.lg)
                 )
             }
         }
     }
+}
+
+private fun Modifier.inlineRewriteHighlight(
+    textLayoutResult: TextLayoutResult?,
+    range: TextRange?,
+    loading: Boolean,
+    error: Boolean,
+    scanProgress: Float,
+    highlightColor: Color,
+    strokeColor: Color,
+    scanColor: Color
+): Modifier {
+    if (range == null) return this
+
+    return drawBehind {
+        val layout = textLayoutResult ?: return@drawBehind
+        val textLength = layout.layoutInput.text.text.length
+        val start = range.min.coerceIn(0, textLength)
+        val end = range.max.coerceIn(0, textLength)
+        if (start >= end) return@drawBehind
+
+        val path = layout.getPathForRange(start, end)
+        drawPath(path = path, color = highlightColor)
+        drawPath(path = path, color = strokeColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()))
+
+        if (loading && !error) {
+            val bounds = path.getBounds()
+            if (bounds.width > 0f && bounds.height > 0f) {
+                val x = bounds.left + bounds.width * scanProgress
+                drawLine(
+                    color = scanColor,
+                    start = Offset(x, bounds.top),
+                    end = Offset(x, bounds.bottom),
+                    strokeWidth = 2.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineRewriteReviewBar(
+    action: RewriteAction,
+    loading: Boolean,
+    preview: String?,
+    error: String?,
+    onApply: () -> Unit,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.sheet))
+            .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.sheet))
+            .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                color = colorScheme.primary,
+                strokeWidth = 2.dp
+            )
+        } else {
+            Icon(
+                if (error == null) Icons.Default.AutoAwesome else Icons.Default.ErrorOutline,
+                contentDescription = null,
+                tint = if (error == null) colorScheme.primary else colorScheme.error,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+
+        Text(
+            text = inlineRewriteStatusText(action, loading, preview, error),
+            color = if (error == null) colorScheme.onSurface else colorScheme.error,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+
+        if (error != null) {
+            Button(
+                onClick = onRetry,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary
+                ),
+                shape = RoundedCornerShape(DesignTokens.Radius.pill)
+            ) {
+                Text("Retry", fontSize = 12.sp)
+            }
+        } else if (preview != null && !loading) {
+            Button(
+                onClick = onApply,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary
+                ),
+                shape = RoundedCornerShape(DesignTokens.Radius.pill)
+            ) {
+                Text("Apply", fontSize = 12.sp)
+            }
+        }
+
+        Button(
+            onClick = onCancel,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = colorScheme.surfaceContainer,
+                contentColor = colorScheme.onSurfaceVariant
+            ),
+            shape = RoundedCornerShape(DesignTokens.Radius.pill)
+        ) {
+            Text("Cancel", fontSize = 12.sp)
+        }
+    }
+}
+
+private fun inlineRewriteStatusText(
+    action: RewriteAction,
+    loading: Boolean,
+    preview: String?,
+    error: String?
+): String {
+    if (!error.isNullOrBlank()) {
+        return if (error.contains("No API key", ignoreCase = true)) {
+            "API key missing"
+        } else {
+            error
+        }
+    }
+    if (loading) return "${action.label}..."
+    if (preview != null) return "Previewing ${action.label}"
+    return action.label
 }
 
 @Composable

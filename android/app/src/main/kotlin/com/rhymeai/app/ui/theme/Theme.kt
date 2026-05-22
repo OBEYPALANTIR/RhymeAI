@@ -1,6 +1,7 @@
 package com.rhymeai.app.ui.theme
 
 import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -50,6 +51,9 @@ private val LightColorScheme = lightColorScheme(
     background = Color(0xFFFBFBFE),
     surface = Color(0xFFFBFBFE),
     surfaceVariant = Color(0xFFF0F0F5),
+    surfaceContainerLow = Color(0xFFFFFFFF),
+    surfaceContainer = Color(0xFFF3F2F8),
+    surfaceContainerHigh = Color(0xFFEDEBF2),
     onBackground = Color(0xFF1B1B1F),
     onSurface = Color(0xFF1B1B1F),
     onSurfaceVariant = Color(0xFF46464F),
@@ -59,7 +63,7 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun RhymeAITheme(
-    darkTheme: Boolean = true,
+    darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
@@ -67,6 +71,10 @@ fun RhymeAITheme(
         dynamicColor && darkTheme && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             dynamicDarkColorScheme(context)
+        }
+        dynamicColor && !darkTheme && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            val context = LocalContext.current
+            dynamicLightColorScheme(context)
         }
         darkTheme -> DarkColorScheme
         else -> LightColorScheme

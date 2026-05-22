@@ -5,6 +5,7 @@ import com.google.ai.client.generativeai.type.generationConfig
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
+import com.rhymeai.app.data.model.SongSection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -83,6 +84,7 @@ class AIService {
         rhymeType: RhymeType,
         rhymeScheme: String,
         currentLetter: String,
+        currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
         useWholeSongContext: Boolean
     ): String {
@@ -113,6 +115,8 @@ ${"\"\"\""}
 
 The user needs a line that follows the current lyrics.
 The current stanza follows a "$rhymeScheme" rhyme scheme, and the next line corresponds to the letter "$currentLetter".
+Current song section: ${currentSection.displayName}.
+${currentSection.promptHint}
 $rhymeInstruction
 $songContextInstruction
 
@@ -137,6 +141,7 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         rhymeType: RhymeType,
         rhymeScheme: String,
         currentLetter: String,
+        currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity = RhymeComplexity.MODERATE,
         useWholeSongContext: Boolean = false
     ): List<String> {
@@ -152,12 +157,13 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
                 rhymeType = rhymeType,
                 rhymeScheme = rhymeScheme,
                 currentLetter = currentLetter,
+                currentSection = currentSection,
                 complexity = complexity,
                 useWholeSongContext = useWholeSongContext
             )
             callLocal(localPrompt, lyrics)
         } else {
-            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, complexity, useWholeSongContext)
+            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext)
             when (provider) {
                 AIProvider.GEMINI -> callGemini(apiKey, modelId, prompt)
                 AIProvider.OPENAI -> callOpenAI(apiKey, modelId, prompt)
@@ -173,7 +179,8 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         modelId: String,
         action: RewriteAction,
         fullLyrics: String,
-        selection: String
+        selection: String,
+        currentSection: SongSection = SongSection.UNKNOWN
     ): String {
         if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
@@ -183,10 +190,10 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         }
 
         return if (provider == AIProvider.LOCAL) {
-            val prompt = buildLocalRewritePrompt(action, fullLyrics, selection)
+            val prompt = buildLocalRewritePrompt(action, fullLyrics, selection, currentSection)
             callLocalRewrite(prompt, selection)
         } else {
-            val prompt = buildRewritePrompt(action, fullLyrics, selection)
+            val prompt = buildRewritePrompt(action, fullLyrics, selection, currentSection)
             val raw = when (provider) {
                 AIProvider.GEMINI -> callGeminiRaw(apiKey, modelId, prompt)
                 AIProvider.OPENAI -> callOpenAIRaw(apiKey, modelId, prompt)
@@ -198,7 +205,12 @@ Respond ONLY with a JSON array of $SUGGESTION_COUNT strings. No markdown, no cod
         }
     }
 
-    private fun buildRewritePrompt(action: RewriteAction, lyrics: String, selection: String): String =
+    private fun buildRewritePrompt(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection = SongSection.UNKNOWN
+    ): String =
         """
 You are an expert songwriter helping the user rewrite a portion of their song.
 
@@ -212,6 +224,9 @@ ${"\"\"\""}
 $selection
 ${"\"\"\""}
 
+Current song section: ${currentSection.displayName}.
+${currentSection.promptHint}
+
 Action: ${action.label}
 Instruction: ${action.instruction}
 
@@ -223,12 +238,19 @@ Rules:
 Respond ONLY with a JSON object of the form {"rewrite": "..."}. No code fences.
 """.trimIndent()
 
-    private fun buildLocalRewritePrompt(action: RewriteAction, lyrics: String, selection: String): String {
+    private fun buildLocalRewritePrompt(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection = SongSection.UNKNOWN
+    ): String {
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext = false)
         val userPrompt = """
 You are RhymeAI's on-device songwriting assistant.
 
 Task: rewrite the selected passage from the user's song.
+Current song section: ${currentSection.displayName}.
+${currentSection.promptHint}
 Action: ${action.label}.
 Instruction: ${action.instruction}
 
@@ -271,6 +293,9 @@ Rules:
                 })
             })
             put("temperature", 0.7)
+            put("response_format", buildJsonObject {
+                put("type", "json_object")
+            })
         }
         val responseText = httpPost(
             url = "https://api.openai.com/v1/chat/completions",
@@ -438,6 +463,7 @@ Rules:
         rhymeType: RhymeType,
         rhymeScheme: String,
         currentLetter: String,
+        currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
         useWholeSongContext: Boolean
     ): String {
@@ -463,6 +489,8 @@ You are RhymeAI's on-device songwriting assistant.
 Task: write exactly $SUGGESTION_COUNT next-line options for the song.
 Theme: $effectiveTheme
 Rhyme scheme: "$rhymeScheme"; next line is "$currentLetter".
+Current song section: ${currentSection.displayName}.
+${currentSection.promptHint}
 $rhymeHint
 $songContextInstruction
 Complexity: ${complexity.label}. ${complexity.promptHint}

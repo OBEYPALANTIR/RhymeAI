@@ -8,7 +8,7 @@ struct WelcomeView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(UIColor.systemBackground).ignoresSafeArea()
 
             // Background gradient
             LinearGradient(
@@ -29,11 +29,11 @@ struct WelcomeView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
                     )
                     .shadow(color: .indigo.opacity(0.32), radius: 22, y: 10)
                     .padding(10)
-                    .liquidGlassSurface(cornerRadius: 30, tint: .white.opacity(0.04))
+                    .liquidGlassSurface(cornerRadius: 30, tint: .indigo.opacity(0.06))
                 .padding(.bottom, RhymeAITokens.Spacing.xl)
 
                 // Title
@@ -77,7 +77,6 @@ struct WelcomeView: View {
                 Spacer()
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     @ViewBuilder

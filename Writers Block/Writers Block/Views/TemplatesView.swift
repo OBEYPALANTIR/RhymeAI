@@ -56,7 +56,6 @@ struct TemplatesView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 

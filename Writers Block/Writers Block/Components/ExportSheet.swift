@@ -17,13 +17,10 @@ struct ExportSheet: View {
                         onPick(format)
                     } label: {
                         HStack(spacing: 12) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.indigo.opacity(0.12))
-                                    .frame(width: 36, height: 36)
-                                Image(systemName: format.iconSystemName)
-                                    .foregroundStyle(.indigo)
-                            }
+                            Image(systemName: format.iconSystemName)
+                                .foregroundStyle(.indigo)
+                                .frame(width: 36, height: 36)
+                                .liquidGlassSurface(cornerRadius: 8, tint: .indigo.opacity(0.14), fallbackOpacity: 0.08)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(format.label)
                                     .font(.body.weight(.medium))
@@ -38,11 +35,7 @@ struct ExportSheet: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                        )
+                        .liquidGlassSurface(cornerRadius: 12, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
                     }
                     .buttonStyle(.plain)
                 }
@@ -50,6 +43,8 @@ struct ExportSheet: View {
                 Spacer()
             }
             .padding(20)
+            .liquidGlassGroup(spacing: 16)
+            .background(Color(UIColor.systemBackground))
             .navigationTitle("Export Song")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -58,6 +53,5 @@ struct ExportSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }

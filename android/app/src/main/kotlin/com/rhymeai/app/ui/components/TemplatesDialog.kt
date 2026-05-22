@@ -47,7 +47,8 @@ fun TemplatesDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(DesignTokens.Spacing.xl),
+                .padding(DesignTokens.Spacing.xl)
+                .bottomSafeActionPadding(extra = DesignTokens.Spacing.lg),
             contentAlignment = Alignment.Center
         ) {
             Surface(

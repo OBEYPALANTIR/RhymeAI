@@ -1,20 +1,39 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Writers Block
 
-# Run and deploy your AI Studio app
+Writers Block is the native RhymeAI songwriting assistant for writing lyrics, managing songs, analyzing rhyme context, counting syllables, previewing stress/IPA, and generating AI rewrite suggestions.
 
-This contains everything you need to run your app locally.
+The active targets are:
 
-View your app in AI Studio: https://ai.studio/apps/98debd52-fa96-4102-8509-3709530633fc
+- Android: `android/`
+- iOS: `Writers Block/`
+- Desktop: planned
 
-## Run Locally
+The old React/Vite web variant has been removed. Shared pronunciation/prosody data stays in `shared/`, with generation tooling in `scripts/`, because Android and iOS both consume those assets.
 
-**Prerequisites:**  Node.js
+## Android
 
+Run from `/Users/tylermanring/Documents/RhymeAI/android`:
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```sh
+./gradlew :app:assembleDebug
+./gradlew :app:testDebugUnitTest
+./gradlew :app:lintDebug
+./gradlew :app:connectedDebugAndroidTest
+```
+
+## iOS
+
+Use Xcode with:
+
+```sh
+Writers Block/Writers Block.xcodeproj
+```
+
+Or inspect schemes and destinations from the repo root:
+
+```sh
+xcodebuild -list -project "Writers Block/Writers Block.xcodeproj"
+xcrun simctl list devices
+```
+
+Then build or test with the confirmed scheme and simulator destination.

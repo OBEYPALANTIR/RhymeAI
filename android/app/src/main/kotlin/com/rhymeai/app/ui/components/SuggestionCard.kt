@@ -2,6 +2,7 @@ package com.rhymeai.app.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -35,6 +36,7 @@ private val lastWordPattern = Regex("(.*?)(\\b\\w+\\b)([^\\w]*)\$")
 fun SuggestionCard(
     suggestion: String,
     highlightRhyme: Boolean,
+    showProsody: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -56,7 +58,7 @@ fun SuggestionCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(DesignTokens.Spacing.lg),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
         // Suggestion text with optional rhyme highlight
@@ -93,13 +95,20 @@ fun SuggestionCard(
             }
         }
 
-        Text(
-            text = annotated,
-            fontFamily = FontFamily.Serif,
-            fontSize = 14.sp,
-            lineHeight = 20.sp,
-            modifier = Modifier.weight(1f)
-        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+        ) {
+            Text(
+                text = annotated,
+                fontFamily = FontFamily.Serif,
+                fontSize = 14.sp,
+                lineHeight = 20.sp
+            )
+            if (showProsody) {
+                ProsodyPreview(text = suggestion)
+            }
+        }
 
         Row(
             verticalAlignment = Alignment.CenterVertically,

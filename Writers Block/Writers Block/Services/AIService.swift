@@ -37,6 +37,7 @@ struct AIService {
         rhymeType: RhymeType,
         rhymeScheme: String,
         currentLetter: String,
+        currentSection: SongSection = .unknown,
         complexity: RhymeComplexity,
         useWholeSongContext: Bool
     ) async throws -> [String] {
@@ -48,6 +49,7 @@ struct AIService {
                     targetRhymeLine: targetRhymeLine,
                     rhymeType: rhymeType,
                     currentLetter: currentLetter,
+                    currentSection: currentSection,
                     useWholeSongContext: useWholeSongContext
                 )
                 return try await callLocal(prompt: prompt)
@@ -66,6 +68,7 @@ struct AIService {
             rhymeType: rhymeType,
             rhymeScheme: rhymeScheme,
             currentLetter: currentLetter,
+            currentSection: currentSection,
             complexity: complexity,
             useWholeSongContext: useWholeSongContext
         )
@@ -91,6 +94,7 @@ struct AIService {
         rhymeType: RhymeType,
         rhymeScheme: String,
         currentLetter: String,
+        currentSection: SongSection = .unknown,
         complexity: RhymeComplexity,
         useWholeSongContext: Bool
     ) -> String {
@@ -126,6 +130,8 @@ struct AIService {
 
         The user needs a line that follows the current lyrics.
         The current stanza follows a "\(rhymeScheme)" rhyme scheme, and the next line corresponds to the letter "\(currentLetter)".
+        Current song section: \(currentSection.displayName).
+        \(currentSection.promptHint)
         \(rhymeInstruction)
         \(songContextInstruction)
 
@@ -249,6 +255,7 @@ struct AIService {
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         currentLetter: String,
+        currentSection: SongSection = .unknown,
         useWholeSongContext: Bool
     ) -> String {
         let rhymeHint: String
@@ -264,6 +271,8 @@ struct AIService {
 
         return """
         Write \(Self.suggestionCount) next lines for this song\(themeClause).
+        Current song section: \(currentSection.displayName).
+        \(currentSection.promptHint)
         \(rhymeHint)
         \(songContextInstruction)
 
@@ -318,7 +327,8 @@ struct AIService {
         modelId: String,
         action: RewriteAction,
         fullLyrics: String,
-        selection: String
+        selection: String,
+        currentSection: SongSection = .unknown
     ) async throws -> String {
         guard !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AIServiceError.invalidResponse
@@ -326,7 +336,7 @@ struct AIService {
 
         if provider == .local {
             if #available(iOS 26.0, *) {
-                let prompt = buildLocalRewritePrompt(action: action, lyrics: fullLyrics, selection: selection)
+                let prompt = buildLocalRewritePrompt(action: action, lyrics: fullLyrics, selection: selection, currentSection: currentSection)
                 return try await callLocalRewrite(prompt: prompt)
             }
             throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence rewrites require iOS 26 or later.")
@@ -336,7 +346,7 @@ struct AIService {
             throw AIServiceError.noApiKey(provider: provider.displayName)
         }
 
-        let prompt = buildRewritePrompt(action: action, lyrics: fullLyrics, selection: selection)
+        let prompt = buildRewritePrompt(action: action, lyrics: fullLyrics, selection: selection, currentSection: currentSection)
         let raw: String
         switch provider {
         case .gemini:
@@ -356,7 +366,12 @@ struct AIService {
         throw AIServiceError.decodingError
     }
 
-    private func buildRewritePrompt(action: RewriteAction, lyrics: String, selection: String) -> String {
+    private func buildRewritePrompt(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection = .unknown
+    ) -> String {
         return """
         You are an expert songwriter helping the user rewrite a portion of their song.
 
@@ -370,6 +385,9 @@ struct AIService {
         \(selection)
         \"""
 
+        Current song section: \(currentSection.displayName).
+        \(currentSection.promptHint)
+
         Action: \(action.label)
         Instruction: \(action.instruction)
 
@@ -382,9 +400,16 @@ struct AIService {
         """
     }
 
-    private func buildLocalRewritePrompt(action: RewriteAction, lyrics: String, selection: String) -> String {
+    private func buildLocalRewritePrompt(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection = .unknown
+    ) -> String {
         return """
         Rewrite the selected passage from this song.
+        Current song section: \(currentSection.displayName).
+        \(currentSection.promptHint)
         Action: \(action.label).
         Instruction: \(action.instruction)
 

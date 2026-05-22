@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct RhymeHighlightedText: View {
+struct RhymeHighlightedText: View, Equatable {
     let text: String
     let enabled: Bool
     let syllablesEnabled: Bool
@@ -9,6 +9,12 @@ struct RhymeHighlightedText: View {
         self.text = text
         self.enabled = enabled
         self.syllablesEnabled = syllablesEnabled
+    }
+
+    static func == (lhs: RhymeHighlightedText, rhs: RhymeHighlightedText) -> Bool {
+        lhs.text == rhs.text
+            && lhs.enabled == rhs.enabled
+            && lhs.syllablesEnabled == rhs.syllablesEnabled
     }
 
     private static let palette: [Color] = [

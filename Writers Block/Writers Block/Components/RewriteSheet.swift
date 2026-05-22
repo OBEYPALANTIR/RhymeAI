@@ -67,6 +67,5 @@ struct RewriteSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
