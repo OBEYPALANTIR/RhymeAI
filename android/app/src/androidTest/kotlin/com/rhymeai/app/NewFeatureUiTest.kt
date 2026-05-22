@@ -2,19 +2,25 @@ package com.rhymeai.app
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextInputSelection
+import androidx.compose.ui.text.TextRange
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.rhymeai.app.util.PronunciationDictionary
+import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -70,6 +76,29 @@ class NewFeatureUiTest {
 
         composeRule.onNodeWithText("ˈDA da | ˈDA da").performScrollTo().assertIsDisplayed()
         composeRule.onNode(hasText("jɛloʊ", substring = true)).performScrollTo().assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun selectedRewriteDockIsVisibleAndRootSafe() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val lyrics = (1..12).joinToString("\n") { line ->
+            "Testing selected rewrite placement line $line"
+        }
+        val selectionStart = lyrics.indexOf("line 12")
+        val selectionEnd = selectionStart + "line 12".length
+
+        composeRule.onNodeWithTag("lyricsEditor").performClick()
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
+        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(
+            TextRange(selectionStart, selectionEnd)
+        )
+
+        composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        val rewriteBounds = composeRule.onNodeWithTag("rewriteChipBar").getUnclippedBoundsInRoot()
+        val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
+        assertTrue("Rewrite dock must stay within the visible root", rewriteBounds.bottom <= rootBounds.bottom)
     }
 
     private fun createSavedSong(title: String) {
