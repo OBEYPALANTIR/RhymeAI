@@ -14,6 +14,7 @@ struct LyricsTextView: UIViewRepresentable {
     var onCursorChange: (Int) -> Void
     var onSelectionChange: ((NSRange) -> Void)? = nil
     var onEditingChange: ((Bool) -> Void)? = nil
+    var bottomOverlayHeight: CGFloat = 0
     var isTransparentText: Bool = false
     var isEditable: Bool = true
     var placeholder: String = "Start writing your lyrics here..."
@@ -200,23 +201,31 @@ struct LyricsTextView: UIViewRepresentable {
         }
 
         private func keepCursorVisible(_ textView: UITextView, animated: Bool) {
-            guard isKeyboardVisible, textView.isFirstResponder else { return }
+            guard textView.isFirstResponder else { return }
+            guard isKeyboardVisible || parent.bottomOverlayHeight > 0 || textView.selectedRange.length > 0 else { return }
             guard let scrollView = parentScrollView(for: textView) else { return }
             guard let selectedTextRange = textView.selectedTextRange else { return }
 
             textView.layoutIfNeeded()
             scrollView.layoutIfNeeded()
 
-            let caretInTextView = textView.caretRect(for: selectedTextRange.start)
-            let caretInScrollView = textView.convert(caretInTextView, to: scrollView)
+            let selectedRectInTextView = selectedTextRect(in: textView, selectedTextRange: selectedTextRange)
+            let selectedRectInScrollView = textView.convert(selectedRectInTextView, to: scrollView)
             let visibleHeight = visibleHeightAboveKeyboard(in: scrollView)
             let lineHeight = textView.font?.lineHeight ?? 24
-            let minCursorTop: CGFloat = 64
-            let maxCursorTop = max(minCursorTop + lineHeight, visibleHeight * 0.45)
+            let isRangeSelection = textView.selectedRange.length > 0
+            let minSelectionTop: CGFloat = isRangeSelection ? 104 : 64
+            let selectionBottomClearance: CGFloat = isRangeSelection ? 20 : 12
+            let maxSelectionBottom = max(
+                minSelectionTop + lineHeight,
+                visibleHeight - selectionBottomClearance
+            )
 
-            let minAllowedOffset = caretInScrollView.minY - maxCursorTop
-            let maxAllowedOffset = caretInScrollView.minY - minCursorTop
-            let clampedOffset = scrollView.contentOffset.y.clamped(to: minAllowedOffset...maxAllowedOffset)
+            let minAllowedOffset = selectedRectInScrollView.maxY - maxSelectionBottom
+            let maxAllowedOffset = selectedRectInScrollView.minY - minSelectionTop
+            let allowedLowerOffset = min(minAllowedOffset, maxAllowedOffset)
+            let allowedUpperOffset = max(minAllowedOffset, maxAllowedOffset)
+            let clampedOffset = scrollView.contentOffset.y.clamped(to: allowedLowerOffset...allowedUpperOffset)
             let minContentOffset = -scrollView.adjustedContentInset.top
             let maxContentOffset = max(
                 minContentOffset,
@@ -229,6 +238,30 @@ struct LyricsTextView: UIViewRepresentable {
                 CGPoint(x: scrollView.contentOffset.x, y: boundedOffset),
                 animated: animated
             )
+        }
+
+        private func selectedTextRect(in textView: UITextView, selectedTextRange: UITextRange) -> CGRect {
+            guard textView.selectedRange.length > 0 else {
+                return textView.caretRect(for: selectedTextRange.start)
+            }
+
+            let rects = textView.selectionRects(for: selectedTextRange)
+                .map(\.rect)
+                .filter { rect in
+                    !rect.isNull &&
+                        !rect.isEmpty &&
+                        rect.origin.x.isFinite &&
+                        rect.origin.y.isFinite &&
+                        rect.size.width.isFinite &&
+                        rect.size.height.isFinite
+                }
+            guard let first = rects.first else {
+                return textView.caretRect(for: selectedTextRange.start)
+            }
+
+            return rects.dropFirst().reduce(first) { partial, rect in
+                partial.union(rect)
+            }
         }
 
         private func parentScrollView(for view: UIView) -> UIScrollView? {
@@ -256,7 +289,7 @@ struct LyricsTextView: UIViewRepresentable {
             let scrollFrameInWindow = scrollView.convert(scrollView.bounds, to: window)
             let keyboardOverlap = max(0, scrollFrameInWindow.maxY - keyboardFrameInWindow.minY)
 
-            return max(0, insetAdjustedHeight - keyboardOverlap)
+            return max(0, insetAdjustedHeight - keyboardOverlap - parent.bottomOverlayHeight)
         }
 
         private func highlightRects(in textView: UITextView, range: NSRange) -> [CGRect] {
