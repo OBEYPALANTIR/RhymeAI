@@ -14,6 +14,7 @@ struct EditorView: View {
     @State private var fileExporterPresented: Bool = false
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
+    @State private var rewriteAccessoryHeight: CGFloat = 0
 
     var body: some View {
         Group {
@@ -311,6 +312,15 @@ struct EditorView: View {
         }
         .animation(RhymeAITokens.Motion.state, value: shouldShowRewriteChipBar)
         .animation(RhymeAITokens.Motion.state, value: viewModel.hasActiveRewrite)
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(key: RewriteAccessoryHeightPreferenceKey.self, value: proxy.size.height)
+            }
+        }
+        .onPreferenceChange(RewriteAccessoryHeightPreferenceKey.self) { height in
+            rewriteAccessoryHeight = height
+        }
     }
 
     private var shouldShowRewriteChipBar: Bool {
@@ -368,6 +378,7 @@ struct EditorView: View {
                         onEditingChange: { isEditing in
                             lyricsEditorIsFocused = isEditing
                         },
+                        bottomOverlayHeight: selectionAvoidanceInset,
                         isTransparentText: overlayActive && !viewModel.hasActiveRewrite && !viewModel.lyrics.isEmpty,
                         isEditable: !viewModel.hasActiveRewrite
                     )
@@ -384,6 +395,11 @@ struct EditorView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Color(UIColor.systemBackground))
+    }
+
+    private var selectionAvoidanceInset: CGFloat {
+        guard shouldShowRewriteChipBar || viewModel.hasActiveRewrite else { return 0 }
+        return rewriteAccessoryHeight + RhymeAITokens.Spacing.md
     }
 
     private var overlayActive: Bool {
@@ -472,6 +488,14 @@ struct EditorView: View {
         .overlay(
             Divider(), alignment: .bottom
         )
+    }
+}
+
+private struct RewriteAccessoryHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
