@@ -27,6 +27,7 @@ enum AIProvider: String, CaseIterable, Codable {
 
 enum AIModel: String, CaseIterable, Codable, Identifiable {
     // Gemini
+    case gemini35Flash = "gemini-3.5-flash"
     case gemini31Pro = "gemini-3.1-pro-preview"
     case gemini3Flash = "gemini-3-flash-preview"
     case gemini31FlashLite = "gemini-3.1-flash-lite-preview"
@@ -53,6 +54,7 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
 
     var displayName: String {
         switch self {
+        case .gemini35Flash: return "Gemini 3.5 Flash"
         case .gemini31Pro: return "Gemini 3.1 Pro"
         case .gemini3Flash: return "Gemini 3 Flash"
         case .gemini31FlashLite: return "Gemini 3.1 Flash Lite"
@@ -76,7 +78,7 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
 
     var provider: AIProvider {
         switch self {
-        case .gemini31Pro, .gemini3Flash, .gemini31FlashLite,
+        case .gemini35Flash, .gemini31Pro, .gemini3Flash, .gemini31FlashLite,
              .gemini25Pro, .gemini25Flash, .gemini25FlashLite:
             return .gemini
         case .gpt55, .gpt55Pro, .gpt54, .gpt54Mini, .gpt54Nano,
@@ -89,7 +91,7 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
         }
     }
 
-    static let `default`: AIModel = .gemini3Flash
+    static let `default`: AIModel = .gemini35Flash
 
     static func models(for provider: AIProvider) -> [AIModel] {
         AIModel.allCases.filter { $0.provider == provider }
