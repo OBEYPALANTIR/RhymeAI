@@ -85,11 +85,11 @@ class NewFeatureUiTest {
     fun selectedRewriteDockPreservesNativeSelectionAndRootSafe() {
         composeRule.onNodeWithText("New Song").performClick()
 
-        val lyrics = (1..12).joinToString("\n") { line ->
+        val lyrics = (1..20).joinToString("\n") { line ->
             "Testing selected rewrite placement line $line"
         }
-        val selectionStart = lyrics.indexOf("line 12")
-        val selectionEnd = selectionStart + "line 12".length
+        val selectionStart = lyrics.indexOf("line 20")
+        val selectionEnd = selectionStart + "line 20".length
 
         composeRule.onNodeWithTag("lyricsEditor").performClick()
         composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
