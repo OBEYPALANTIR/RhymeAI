@@ -15,6 +15,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextInputSelection
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextRange
@@ -112,6 +114,20 @@ class NewFeatureUiTest {
         val rewriteBounds = composeRule.onNodeWithTag("rewriteChipBar").getUnclippedBoundsInRoot()
         val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
         assertTrue("Rewrite dock must stay within the visible root", rewriteBounds.bottom <= rootBounds.bottom)
+
+        composeRule.onNodeWithTag("editorScrollContainer").performTouchInput {
+            swipeUp()
+        }
+        composeRule.waitUntil(timeoutMillis = 3_000) {
+            !lyricsEditorFocused()
+        }
+    }
+
+    private fun lyricsEditorFocused(): Boolean {
+        return composeRule.onNodeWithTag("lyricsEditor")
+            .fetchSemanticsNode()
+            .config
+            .getOrNull(SemanticsProperties.Focused) == true
     }
 
     private fun createSavedSong(title: String) {

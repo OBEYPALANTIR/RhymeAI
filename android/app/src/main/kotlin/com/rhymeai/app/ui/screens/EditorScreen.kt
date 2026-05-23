@@ -78,6 +78,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
@@ -485,20 +488,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 val activeRewriteSurfaceHeight = with(density) {
                     activeRewriteSurfaceHeightPx.toDp()
                 }
-                val activeRangeStart = activeEditorRange.min.coerceIn(0, activeEditorText.length)
-                val activeRangeEnd = activeEditorRange.max.coerceIn(0, activeEditorText.length)
-                val rangeSelectionActive = activeRangeStart != activeRangeEnd || viewModel.hasActiveRewrite
-                val selectionHandleClearance = if (keyboardVisible && rangeSelectionActive) {
-                    DesignTokens.Editor.keyboardOffset
-                } else {
-                    0.dp
-                }
                 val bottomActionPadding = keyboardAwareBottomPadding(
                     extra = DesignTokens.Spacing.lg
                 )
                 val bottomObstruction = bottomActionPadding +
                     activeRewriteSurfaceHeight +
-                    selectionHandleClearance +
                     DesignTokens.Spacing.md
                 val keyboardScrollSpace = maxOf(
                     keyboardAwareBottomPadding(extra = DesignTokens.Spacing.golden) + DesignTokens.Touch.minTarget,
@@ -515,6 +509,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 }
                 val estimatedCharsPerLine = (editorWidthPx / with(density) { 8.5.dp.roundToPx() })
                     .coerceAtLeast(1)
+                val activeRangeStart = activeEditorRange.min.coerceIn(0, activeEditorText.length)
+                val activeRangeEnd = activeEditorRange.max.coerceIn(0, activeEditorText.length)
                 val cursorVisualLine = remember(
                     activeEditorText,
                     activeRangeStart,
@@ -545,6 +541,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 val bottomObstructionPx = with(density) { bottomObstruction.roundToPx() }
                 val maxSafeBottomPx = (viewportHeightPx - bottomObstructionPx)
                     .coerceAtLeast(minSafeTopPx + lineHeightPx)
+                val rangeSelectionActive = activeRangeStart != activeRangeEnd || viewModel.hasActiveRewrite
                 val selectedRangeSafeBottomPx = if (rangeSelectionActive) {
                     val safeHeightPx = (maxSafeBottomPx - minSafeTopPx).coerceAtLeast(lineHeightPx)
                     val goldenBandBottomPx = minSafeTopPx + (safeHeightPx * DesignTokens.Phi.inverse).roundToInt()
@@ -552,7 +549,20 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 } else {
                     maxSafeBottomPx
                 }
-                val selectionScrollValue = if (rangeSelectionActive) scrollState.value else 0
+                val collapseKeyboardOnScrollConnection = remember(
+                    keyboardVisible,
+                    lyricsFocused,
+                    focusManager
+                ) {
+                    object : NestedScrollConnection {
+                        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                            if (source == NestedScrollSource.UserInput && keyboardVisible && lyricsFocused) {
+                                focusManager.clearFocus(force = true)
+                            }
+                            return Offset.Zero
+                        }
+                    }
+                }
 
                 LaunchedEffect(
                     keyboardVisible,
@@ -565,7 +575,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     activeRewriteSurfaceHeightPx,
                     bottomObstructionPx,
                     scrollState.maxValue,
-                    selectionScrollValue,
                     viewportHeightPx,
                     selectedRangeSafeBottomPx,
                     lineHeightPx
@@ -592,6 +601,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxSize()
                         .testTag("editorScrollContainer")
+                        .nestedScroll(collapseKeyboardOnScrollConnection)
                         .verticalScroll(scrollState)
                         .padding(horizontal = DesignTokens.Editor.horizontalPadding)
                 ) {
