@@ -394,6 +394,7 @@ struct EditorView: View {
             .frame(maxWidth: RhymeAITokens.Layout.editorMaxWidth)
             .frame(maxWidth: .infinity)
         }
+        .scrollDismissesKeyboard(.immediately)
         .background(Color(UIColor.systemBackground))
     }
 

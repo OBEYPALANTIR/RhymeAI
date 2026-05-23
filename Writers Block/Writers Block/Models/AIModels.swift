@@ -43,9 +43,13 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
     case gpt41 = "gpt-4.1"
     case gpt41Mini = "gpt-4.1-mini"
     case gpt41Nano = "gpt-4.1-nano"
+    case gpt4o = "gpt-4o"
+    case gpt4oMini = "gpt-4o-mini"
     // Claude
     case claudeOpus47 = "claude-opus-4-7"
     case claudeSonnet46 = "claude-sonnet-4-6"
+    case claudeOpus4 = "claude-opus-4-20250514"
+    case claudeSonnet4 = "claude-sonnet-4-20250514"
     case claudeHaiku45 = "claude-haiku-4-5-20251001"
     // Local on-device
     case localModel = "local-model"
@@ -69,6 +73,10 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
         case .gpt41: return "GPT-4.1"
         case .gpt41Mini: return "GPT-4.1 Mini"
         case .gpt41Nano: return "GPT-4.1 Nano"
+        case .gpt4o: return "GPT-4o"
+        case .gpt4oMini: return "GPT-4o Mini"
+        case .claudeOpus4: return "Claude Opus 4"
+        case .claudeSonnet4: return "Claude Sonnet 4"
         case .claudeOpus47: return "Claude Opus 4.7"
         case .claudeSonnet46: return "Claude Sonnet 4.6"
         case .claudeHaiku45: return "Claude Haiku 4.5"
@@ -82,9 +90,9 @@ enum AIModel: String, CaseIterable, Codable, Identifiable {
              .gemini25Pro, .gemini25Flash, .gemini25FlashLite:
             return .gemini
         case .gpt55, .gpt55Pro, .gpt54, .gpt54Mini, .gpt54Nano,
-             .gpt41, .gpt41Mini, .gpt41Nano:
+             .gpt41, .gpt41Mini, .gpt41Nano, .gpt4o, .gpt4oMini:
             return .openai
-        case .claudeOpus47, .claudeSonnet46, .claudeHaiku45:
+        case .claudeOpus47, .claudeSonnet46, .claudeOpus4, .claudeSonnet4, .claudeHaiku45:
             return .claude
         case .localModel:
             return .local

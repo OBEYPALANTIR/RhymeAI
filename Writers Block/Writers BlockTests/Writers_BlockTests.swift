@@ -57,16 +57,20 @@ struct Writers_BlockTests {
             "gpt-5.4-mini",
             "gpt-5.4-nano"
         ])
+        #expect(modelIDs.contains("gpt-4o"))
+        #expect(modelIDs.contains("gpt-4o-mini"))
     }
 
     @Test func claudeModelPickerUsesCurrentClaudeModels() {
         let modelIDs = AIModel.models(for: .claude).map(\.id)
 
-        #expect(modelIDs == [
+        #expect(Array(modelIDs.prefix(2)) == [
             "claude-opus-4-7",
-            "claude-sonnet-4-6",
-            "claude-haiku-4-5-20251001"
+            "claude-sonnet-4-6"
         ])
+        #expect(modelIDs.contains("claude-opus-4-20250514"))
+        #expect(modelIDs.contains("claude-sonnet-4-20250514"))
+        #expect(modelIDs.contains("claude-haiku-4-5-20251001"))
     }
 
     @Test func prosodyAnalyzerCountsDictionaryStress() {
