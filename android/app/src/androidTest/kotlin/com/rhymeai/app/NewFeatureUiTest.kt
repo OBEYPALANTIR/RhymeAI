@@ -15,6 +15,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextInputSelection
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextRange
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.core.app.ActivityScenario
@@ -96,6 +98,14 @@ class NewFeatureUiTest {
         )
 
         composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        val fieldSelection = composeRule.onNodeWithTag("lyricsEditor")
+            .fetchSemanticsNode()
+            .config
+            .getOrNull(SemanticsProperties.TextSelectionRange)
+        assertTrue(
+            "Native text selection must collapse after rewrite selection is captured",
+            fieldSelection?.collapsed == true
+        )
         val rewriteBounds = composeRule.onNodeWithTag("rewriteChipBar").getUnclippedBoundsInRoot()
         val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
         assertTrue("Rewrite dock must stay within the visible root", rewriteBounds.bottom <= rootBounds.bottom)

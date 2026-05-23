@@ -107,6 +107,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var rewritePreview by mutableStateOf<String?>(null)
     var rewriteOriginal by mutableStateOf<String?>(null)
     var rewriteError by mutableStateOf<String?>(null)
+    var pendingRewriteRange by mutableStateOf<TextRange?>(null)
+        private set
     private var rewriteRange: TextRange? = null
     private var rewriteJob: Job? = null
     private var suggestionsJob: Job? = null
@@ -281,12 +283,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun requestRewrite(action: RewriteAction) {
-        val selection = lyricsFieldValue.selection
-        if (selection.collapsed) return
-        val start = selection.min
-        val end = selection.max
+        val selection = pendingRewriteRange ?: lyricsFieldValue.selection
+        val start = selection.min.coerceIn(0, lyrics.length)
+        val end = selection.max.coerceIn(0, lyrics.length)
+        if (start >= end) return
         val original = lyrics.substring(start, end)
-        if (original.isBlank()) return
+        if (original.isBlank()) {
+            clearPendingRewriteSelection()
+            return
+        }
 
         beginRewrite(action, TextRange(start, end), original)
     }
@@ -300,6 +305,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun beginRewrite(action: RewriteAction, range: TextRange, original: String) {
         rewriteJob?.cancel()
+        pendingRewriteRange = null
         rewriteAction = action
         rewriteOriginal = original
         rewriteRange = range
@@ -353,6 +359,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissRewrite() {
         rewriteJob?.cancel()
         rewriteJob = null
+        pendingRewriteRange = null
         rewriteAction = null
         rewriteLoading = false
         rewritePreview = null
@@ -376,6 +383,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun newProject() {
+        pendingRewriteRange = null
         title = ""
         lyricsFieldValue = TextFieldValue("")
         theme = ""
@@ -390,6 +398,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadProject(project: SongProject) {
+        pendingRewriteRange = null
         title = project.title
         lyricsFieldValue = TextFieldValue(project.lyrics)
         theme = project.theme
@@ -490,6 +499,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun clearEditorAfterProjectDelete() {
         autoSaveJob?.cancel()
+        pendingRewriteRange = null
         title = ""
         lyricsFieldValue = TextFieldValue("")
         theme = ""
@@ -500,6 +510,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun importProject(imported: SongProject) {
+        pendingRewriteRange = null
         val newId = java.util.UUID.randomUUID().toString()
         val project = imported.copy(
             id = newId,
@@ -532,6 +543,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String) {
+        pendingRewriteRange = null
         title = "Untitled $name"
         theme = templateTheme
         lyricsFieldValue = TextFieldValue(templateLyrics)
@@ -601,9 +613,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun onLyricsChanged(newValue: TextFieldValue) {
         if (hasActiveRewrite) return
         val previousText = lyricsFieldValue.text
-        lyricsFieldValue = newValue.withValidRanges()
-        if (lyricsFieldValue.text != previousText) {
+        val nextValue = newValue.withValidRanges()
+        if (nextValue.text != previousText) {
+            pendingRewriteRange = null
+            lyricsFieldValue = nextValue
             triggerAutoSave()
+            return
+        }
+
+        val nextSelection = nextValue.selection
+        if (!nextSelection.collapsed) {
+            val start = nextSelection.min.coerceIn(0, nextValue.text.length)
+            val end = nextSelection.max.coerceIn(0, nextValue.text.length)
+            val selectedText = nextValue.text.substring(start, end)
+            pendingRewriteRange = if (start < end && selectedText.isNotBlank()) {
+                TextRange(start, end)
+            } else {
+                null
+            }
+            lyricsFieldValue = nextValue.copy(selection = TextRange(end))
+            return
+        }
+
+        pendingRewriteRange?.let { pendingRange ->
+            if (nextSelection.start != pendingRange.max) {
+                pendingRewriteRange = null
+            }
+        }
+        lyricsFieldValue = nextValue
+    }
+
+    fun clearPendingRewriteSelection() {
+        pendingRewriteRange = null
+        val selection = lyricsFieldValue.selection
+        if (!selection.collapsed) {
+            lyricsFieldValue = lyricsFieldValue.copy(selection = TextRange(selection.max))
         }
     }
 

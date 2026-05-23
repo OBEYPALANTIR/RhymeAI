@@ -336,8 +336,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         !showBottomSheet &&
         !pendingAssistantSheet &&
         !modalOpen
+    val pendingRewriteRange = viewModel.pendingRewriteRange
     val selection = viewModel.lyricsFieldValue.selection
-    val rewriteVisible = !selection.collapsed &&
+    val rewriteVisible = pendingRewriteRange != null &&
         !showBottomSheet &&
         !pendingAssistantSheet &&
         !modalOpen &&
@@ -350,7 +351,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val activeEditorRange = if (viewModel.hasActiveRewrite) {
         viewModel.inlineRewriteRange ?: TextRange(viewModel.cursorPosition, viewModel.cursorPosition)
     } else {
-        selection
+        pendingRewriteRange ?: selection
+    }
+
+    LaunchedEffect(showBottomSheet, pendingAssistantSheet, modalOpen) {
+        if (showBottomSheet || pendingAssistantSheet || modalOpen) {
+            viewModel.clearPendingRewriteSelection()
+        }
     }
 
     Box(
@@ -499,8 +506,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 }
                 val estimatedCharsPerLine = (editorWidthPx / with(density) { 8.5.dp.roundToPx() })
                     .coerceAtLeast(1)
-                val activeRangeStart = activeEditorRange.start.coerceIn(0, activeEditorText.length)
-                val activeRangeEnd = activeEditorRange.end.coerceIn(0, activeEditorText.length)
+                val activeRangeStart = activeEditorRange.min.coerceIn(0, activeEditorText.length)
+                val activeRangeEnd = activeEditorRange.max.coerceIn(0, activeEditorText.length)
                 val cursorVisualLine = remember(
                     activeEditorText,
                     activeRangeStart,
@@ -634,6 +641,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         )
                     }
                     val inlineRewriteRange = viewModel.inlineRewriteRange
+                    val rewriteHighlightRange = if (viewModel.hasActiveRewrite) {
+                        inlineRewriteRange
+                    } else {
+                        pendingRewriteRange
+                    }
                     val inlineRewriteText = viewModel.inlineRewriteText
                     val inlineRewriteValue = remember(
                         viewModel.hasActiveRewrite,
@@ -699,16 +711,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 .testTag("lyricsEditor")
                                 .inlineRewriteHighlight(
                                     textLayoutResult = lyricsTextLayout,
-                                    range = inlineRewriteRange,
-                                    loading = viewModel.rewriteLoading,
-                                    error = viewModel.rewriteError != null,
+                                    range = rewriteHighlightRange,
+                                    loading = viewModel.hasActiveRewrite && viewModel.rewriteLoading,
+                                    error = viewModel.hasActiveRewrite && viewModel.rewriteError != null,
                                     scanProgress = rewriteScanProgress,
-                                    highlightColor = if (viewModel.rewriteError != null) {
+                                    highlightColor = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
                                         colorScheme.error.copy(alpha = 0.22f)
                                     } else {
                                         colorScheme.primary.copy(alpha = 0.20f)
                                     },
-                                    strokeColor = if (viewModel.rewriteError != null) {
+                                    strokeColor = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
                                         colorScheme.error.copy(alpha = 0.70f)
                                     } else {
                                         colorScheme.tertiary.copy(alpha = 0.78f)
