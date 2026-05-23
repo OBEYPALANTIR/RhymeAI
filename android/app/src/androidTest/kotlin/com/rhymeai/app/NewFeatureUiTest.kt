@@ -82,7 +82,7 @@ class NewFeatureUiTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test
-    fun selectedRewriteDockIsVisibleAndRootSafe() {
+    fun selectedRewriteDockPreservesNativeSelectionAndRootSafe() {
         composeRule.onNodeWithText("New Song").performClick()
 
         val lyrics = (1..12).joinToString("\n") { line ->
@@ -103,8 +103,11 @@ class NewFeatureUiTest {
             .config
             .getOrNull(SemanticsProperties.TextSelectionRange)
         assertTrue(
-            "Native text selection must collapse after rewrite selection is captured",
-            fieldSelection?.collapsed == true
+            "Native text selection must stay expanded so both selection handles remain available",
+            fieldSelection != null &&
+                !fieldSelection.collapsed &&
+                fieldSelection.start == selectionStart &&
+                fieldSelection.end == selectionEnd
         )
         val rewriteBounds = composeRule.onNodeWithTag("rewriteChipBar").getUnclippedBoundsInRoot()
         val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()

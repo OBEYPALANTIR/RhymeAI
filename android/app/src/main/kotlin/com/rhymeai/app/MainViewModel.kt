@@ -631,12 +631,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 null
             }
-            lyricsFieldValue = nextValue.copy(selection = TextRange(end))
+            lyricsFieldValue = nextValue
             return
         }
 
         pendingRewriteRange?.let { pendingRange ->
-            if (nextSelection.start != pendingRange.max) {
+            if (nextSelection.start != pendingRange.min && nextSelection.start != pendingRange.max) {
                 pendingRewriteRange = null
             }
         }
