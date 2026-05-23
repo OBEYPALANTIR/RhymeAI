@@ -488,7 +488,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     keyboardAwareBottomPadding(extra = DesignTokens.Spacing.golden) + DesignTokens.Touch.minTarget,
                     bottomObstruction + DesignTokens.Spacing.golden
                 )
-                val trailingScrollSpace = if (keyboardVisible) {
+                val trailingScrollSpace = if (keyboardVisible || rewriteVisible || rewriteReviewVisible) {
                     keyboardScrollSpace
                 } else {
                     DesignTokens.Editor.bottomRest
@@ -531,6 +531,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 val bottomObstructionPx = with(density) { bottomObstruction.roundToPx() }
                 val maxSafeBottomPx = (viewportHeightPx - bottomObstructionPx)
                     .coerceAtLeast(minSafeTopPx + lineHeightPx)
+                val rangeSelectionActive = activeRangeStart != activeRangeEnd || viewModel.hasActiveRewrite
+                val selectedRangeSafeBottomPx = if (rangeSelectionActive) {
+                    val safeHeightPx = (maxSafeBottomPx - minSafeTopPx).coerceAtLeast(lineHeightPx)
+                    val goldenBandBottomPx = minSafeTopPx + (safeHeightPx * DesignTokens.Phi.inverse).roundToInt()
+                    minOf(maxSafeBottomPx, goldenBandBottomPx)
+                } else {
+                    maxSafeBottomPx
+                }
 
                 LaunchedEffect(
                     keyboardVisible,
@@ -544,7 +552,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     bottomObstructionPx,
                     scrollState.maxValue,
                     viewportHeightPx,
-                    maxSafeBottomPx,
+                    selectedRangeSafeBottomPx,
                     lineHeightPx
                 ) {
                     if (!lyricsFocused) return@LaunchedEffect
@@ -555,7 +563,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val rangeTopOnScreen = activeRangeContentTopY - scrollState.value
                     val rangeBottomOnScreen = activeRangeContentBottomY - scrollState.value
                     val targetScroll = when {
-                        rangeBottomOnScreen > maxSafeBottomPx -> activeRangeContentBottomY - maxSafeBottomPx
+                        rangeBottomOnScreen > selectedRangeSafeBottomPx -> activeRangeContentBottomY - selectedRangeSafeBottomPx
                         rangeTopOnScreen < minSafeTopPx -> activeRangeContentTopY - minSafeTopPx
                         else -> null
                     }?.coerceIn(0, scrollState.maxValue)
