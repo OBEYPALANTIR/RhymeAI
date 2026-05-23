@@ -16,6 +16,8 @@ final class Writers_BlockUITests: XCTestCase {
 
     @MainActor
     func testUnBlockButtonHidesWhenAssistantSheetOpens() throws {
+        try requirePhone()
+
         let app = XCUIApplication()
         app.launch()
 
@@ -34,6 +36,8 @@ final class Writers_BlockUITests: XCTestCase {
 
     @MainActor
     func testUnBlockButtonHidesWhileEditingLyrics() throws {
+        try requirePhone()
+
         let app = XCUIApplication()
         app.launch()
 
@@ -77,6 +81,8 @@ final class Writers_BlockUITests: XCTestCase {
 
     @MainActor
     func testBackSwipeClosesAssistantSheetWithoutReturningToMenu() throws {
+        try requirePhone()
+
         let app = XCUIApplication()
         app.launch()
 
@@ -101,6 +107,8 @@ final class Writers_BlockUITests: XCTestCase {
 
     @MainActor
     func testPullDownClosesAssistantSheetWithoutLockingEditor() throws {
+        try requirePhone()
+
         let app = XCUIApplication()
         app.launch()
 
@@ -321,6 +329,13 @@ final class Writers_BlockUITests: XCTestCase {
         let simulatorName = ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? ""
         guard UIDevice.current.userInterfaceIdiom == .pad || simulatorName.localizedCaseInsensitiveContains("iPad") else {
             throw XCTSkip("iPad-only audit test")
+        }
+    }
+
+    private func requirePhone() throws {
+        let simulatorName = ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? ""
+        guard UIDevice.current.userInterfaceIdiom == .phone && !simulatorName.localizedCaseInsensitiveContains("iPad") else {
+            throw XCTSkip("Phone-only assistant sheet test")
         }
     }
 }
