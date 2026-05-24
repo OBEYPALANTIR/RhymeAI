@@ -2,6 +2,7 @@ package com.rhymeai.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -60,16 +64,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
+import com.rhymeai.app.R
 import com.rhymeai.app.RhymeContext
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
-import com.rhymeai.app.ui.theme.RhymePalette
 import com.rhymeai.app.ui.theme.DesignTokens
-import com.rhymeai.app.ui.theme.SyllableBlue
-import com.rhymeai.app.ui.theme.SyllableEmerald
-import com.rhymeai.app.ui.theme.SyllablePurple
-import com.rhymeai.app.ui.theme.SyllableRose
+import com.rhymeai.app.ui.theme.rhymePalette
+import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.SyllableCounter
 
@@ -138,7 +140,7 @@ fun AssistantPanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp)
-                    .height(100.dp),
+                    .heightIn(min = 100.dp),
                 colors = textFieldColors,
                 shape = RoundedCornerShape(DesignTokens.Radius.lg),
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
@@ -246,7 +248,7 @@ fun AssistantPanel(
                             readOnly = true,
                             modifier = Modifier
                                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                                .width(130.dp),
+                                .widthIn(min = 130.dp),
                             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = colorScheme.onSurface),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                             colors = textFieldColors,
@@ -511,16 +513,16 @@ fun AssistantPanel(
             ) {
                 if (viewModel.isLoading) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
                         color = colorScheme.onPrimary,
                         strokeWidth = 2.dp
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text("Stop", fontWeight = FontWeight.Medium)
+                    Text(stringResource(R.string.assistant_stop), fontWeight = FontWeight.Medium)
                 } else {
                     Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Suggest Next Line", fontWeight = FontWeight.Medium)
+                    Text(stringResource(R.string.assistant_suggest_next_line), fontWeight = FontWeight.Medium)
                 }
             }
 
@@ -532,7 +534,13 @@ fun AssistantPanel(
             // Suggestions
             if (viewModel.suggestions.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                    Text("Suggestions", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.assistant_suggestions_header), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                    Text(
+                        stringResource(R.string.assistant_suggestions_caveat),
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        fontStyle = FontStyle.Italic
+                    )
                     viewModel.suggestions.forEach { suggestion ->
                         SuggestionCard(
                             suggestion = suggestion,
@@ -738,17 +746,19 @@ private fun FeatureHelpDialog(
 
 @Composable
 private fun SyllableLegend() {
+    val isDark = isSystemInDarkTheme()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Underline colors", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
-        LegendRow(color = SyllableEmerald, label = "1 syllable")
-        LegendRow(color = SyllableBlue, label = "2 syllables")
-        LegendRow(color = SyllablePurple, label = "3 syllables")
-        LegendRow(color = SyllableRose, label = "4+ syllables")
+        LegendRow(color = syllableColor(1, isDark), label = "1 syllable")
+        LegendRow(color = syllableColor(2, isDark), label = "2 syllables")
+        LegendRow(color = syllableColor(3, isDark), label = "3 syllables")
+        LegendRow(color = syllableColor(4, isDark), label = "4+ syllables")
     }
 }
 
 @Composable
 private fun RhymeLegend() {
+    val palette = rhymePalette(isSystemInDarkTheme())
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Rhyme colors", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
         Text(
@@ -758,7 +768,7 @@ private fun RhymeLegend() {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            RhymePalette.take(6).forEach { color ->
+            palette.take(6).forEach { color ->
                 Box(
                     modifier = Modifier
                         .size(18.dp)

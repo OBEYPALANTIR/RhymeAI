@@ -17,7 +17,7 @@ struct ContentView: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: viewModel.showWelcome)
+        .rhymeAnimation(.easeInOut(duration: 0.3), value: viewModel.showWelcome)
         .onAppear {
             viewModel.modelContext = modelContext
         }

@@ -83,6 +83,8 @@ fun RhymeAITheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = RhymeTypography,
-        content = content
+        content = {
+            ProvideAccessibleAnimations(content = content)
+        }
     )
 }

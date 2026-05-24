@@ -4,6 +4,8 @@ struct SyllableColoredText: View {
     let text: String
     let enabled: Bool
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         if enabled && !text.isEmpty {
             Text(coloredAttributedString)
@@ -40,7 +42,7 @@ struct SyllableColoredText: View {
             segment.foregroundColor = .primary.opacity(0.9)
             segment.underlineStyle = Text.LineStyle(
                 pattern: .solid,
-                color: Self.syllableColor(for: count)
+                color: syllableColor(for: count)
             )
             result += segment
 
@@ -57,12 +59,25 @@ struct SyllableColoredText: View {
         return result
     }
 
-    static func syllableColor(for count: Int) -> Color {
-        switch count {
-        case 1: return Color(red: 110.0 / 255, green: 231.0 / 255, blue: 183.0 / 255) // Emerald
-        case 2: return Color(red: 147.0 / 255, green: 197.0 / 255, blue: 253.0 / 255) // Blue
-        case 3: return Color(red: 216.0 / 255, green: 180.0 / 255, blue: 254.0 / 255) // Purple
-        default: return Color(red: 253.0 / 255, green: 164.0 / 255, blue: 175.0 / 255) // Rose
+    private func syllableColor(for count: Int) -> Color {
+        Self.syllableColor(for: count, scheme: colorScheme)
+    }
+
+    static func syllableColor(for count: Int, scheme: ColorScheme) -> Color {
+        if scheme == .dark {
+            switch count {
+            case 1: return Color(red: 110.0 / 255, green: 231.0 / 255, blue: 183.0 / 255) // Emerald-300
+            case 2: return Color(red: 147.0 / 255, green: 197.0 / 255, blue: 253.0 / 255) // Blue-300
+            case 3: return Color(red: 216.0 / 255, green: 180.0 / 255, blue: 254.0 / 255) // Purple-300
+            default: return Color(red: 253.0 / 255, green: 164.0 / 255, blue: 175.0 / 255) // Rose-300
+            }
+        } else {
+            switch count {
+            case 1: return Color(red:   4 / 255.0, green: 120 / 255.0, blue:  87 / 255.0) // emerald-700
+            case 2: return Color(red:   3 / 255.0, green: 105 / 255.0, blue: 161 / 255.0) // sky-700
+            case 3: return Color(red: 126 / 255.0, green:  34 / 255.0, blue: 206 / 255.0) // purple-700
+            default: return Color(red: 185 / 255.0, green:  28 / 255.0, blue:  28 / 255.0) // rose-700
+            }
         }
     }
 }

@@ -1,4 +1,74 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Writers Block</string>
+
+    <!-- Editor top bar -->
+    <string name="editor_saving">Saving…</string>
+    <string name="editor_saved">Saved</string>
+    <string name="editor_open_songs_drawer">Open songs drawer</string>
+    <string name="editor_export">Export</string>
+    <string name="editor_settings">Settings</string>
+    <string name="editor_untitled">Untitled</string>
+    <string name="editor_placeholder">Start writing your lyrics here…</string>
+
+    <!-- AssistantPanel -->
+    <string name="assistant_suggestions_header">Suggestions</string>
+    <string name="assistant_suggestions_caveat">AI-generated · review before use</string>
+    <string name="assistant_suggest_next_line">Suggest Next Line</string>
+    <string name="assistant_stop">Stop</string>
+    <string name="assistant_underline_colors">Underline colors</string>
+    <string name="assistant_rhyme_colors">Rhyme colors</string>
+    <string name="assistant_rhyme_colors_caption">Matching colors belong to the same rhyme family. New rhyme families get the next available color.</string>
+    <string name="assistant_syllable_one">1 syllable</string>
+    <string name="assistant_syllable_two">2 syllables</string>
+    <string name="assistant_syllable_three">3 syllables</string>
+    <string name="assistant_syllable_four_plus">4+ syllables</string>
+
+    <!-- Rewrite -->
+    <string name="rewrite_thinking">Thinking…</string>
+    <string name="rewrite_apply">Apply</string>
+    <string name="rewrite_regenerate">Regenerate</string>
+    <string name="rewrite_regenerate_a11y">Regenerate rewrite</string>
+    <string name="rewrite_cancel">Cancel</string>
+    <string name="rewrite_retry">Retry</string>
+    <string name="rewrite_original_label">Original</string>
+    <string name="rewrite_label">Rewrite</string>
+    <string name="rewrite_close_a11y">Close</string>
+
+    <!-- Projects/Trash -->
+    <string name="projects_search">Search songs</string>
+    <string name="projects_create_new">Create New Song</string>
+    <string name="projects_import_from_file">Import From File</string>
+    <string name="projects_choose_template">Choose a Template</string>
+    <string name="projects_move_to_trash">Move to Trash</string>
+    <string name="projects_delete">Delete</string>
+    <string name="projects_delete_forever">Delete Forever</string>
+    <string name="projects_delete_confirm_title">Delete forever?</string>
+    <string name="projects_delete_confirm_body_one">1 selected song will be permanently deleted. This cannot be undone.</string>
+    <string name="projects_delete_confirm_body_many">%1$d selected songs will be permanently deleted. This cannot be undone.</string>
+    <string name="projects_restore">Restore</string>
+    <string name="projects_song_about_prompt">What is this song about?</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_ai_provider">AI Provider</string>
+    <string name="settings_model">Model</string>
+    <string name="settings_api_key_placeholder">Paste your API key here…</string>
+    <string name="settings_recommended_downloads">Recommended Downloads</string>
+    <string name="settings_on_device_model">On-Device Model</string>
+    <string name="settings_choose_model_file">Choose Model File</string>
+    <string name="settings_copying_file">Copying file…</string>
+    <string name="settings_loading_model">Loading model…</string>
+    <string name="settings_model_loaded">Model loaded</string>
+    <string name="settings_unload_model">Unload Model</string>
+    <string name="settings_try_again">Try again</string>
+
+    <!-- Rhyme scheme presets -->
+    <string name="rhyme_complexity_simple">Simple</string>
+    <string name="rhyme_complexity_moderate">Moderate</string>
+    <string name="rhyme_complexity_complex">Complex</string>
+    <string name="rhyme_scheme_example">e.g. AABBCC</string>
+
+    <!-- Misc -->
+    <string name="dialog_got_it">Got it</string>
 </resources>

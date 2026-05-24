@@ -18,10 +18,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import com.rhymeai.app.ui.theme.SyllableBlue
-import com.rhymeai.app.ui.theme.SyllableEmerald
-import com.rhymeai.app.ui.theme.SyllablePurple
-import com.rhymeai.app.ui.theme.SyllableRose
+import androidx.compose.foundation.isSystemInDarkTheme
+import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.SyllableCounter
 
 private val wordPattern = Regex("[a-zA-Z0-9']+")
@@ -33,14 +31,7 @@ data class SyllableUnderlineSpan(
     val color: Color
 )
 
-fun syllableColor(count: Int): Color = when (count) {
-    1 -> SyllableEmerald
-    2 -> SyllableBlue
-    3 -> SyllablePurple
-    else -> SyllableRose
-}
-
-fun buildSyllableUnderlineSpans(text: String, enabled: Boolean): List<SyllableUnderlineSpan> {
+fun buildSyllableUnderlineSpans(text: String, enabled: Boolean, isDark: Boolean): List<SyllableUnderlineSpan> {
     if (!enabled || text.isEmpty()) return emptyList()
 
     return wordPattern.findAll(text)
@@ -48,7 +39,7 @@ fun buildSyllableUnderlineSpans(text: String, enabled: Boolean): List<SyllableUn
             SyllableUnderlineSpan(
                 start = match.range.first,
                 endExclusive = match.range.last + 1,
-                color = syllableColor(SyllableCounter.count(match.value))
+                color = syllableColor(SyllableCounter.count(match.value), isDark)
             )
         }
         .toList()
@@ -62,11 +53,12 @@ fun SyllableColoredText(
     style: TextStyle = TextStyle.Default
 ) {
     val baseTextColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f)
+    val isDark = isSystemInDarkTheme()
     var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     val density = LocalDensity.current
     val strokeWidth = with(density) { 3.dp.toPx() }
     val underlineGap = with(density) { 2.dp.toPx() }
-    val spans = remember(text, enabled) { buildSyllableUnderlineSpans(text, enabled) }
+    val spans = remember(text, enabled, isDark) { buildSyllableUnderlineSpans(text, enabled, isDark) }
 
     Text(
         text = text,

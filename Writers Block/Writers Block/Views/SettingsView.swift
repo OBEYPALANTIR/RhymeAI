@@ -37,6 +37,7 @@ private let providerSectionAnimation = Animation.spring(response: 0.34, dampingF
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var editingKeys: [String: String] = [:]
     @State private var showKey: Bool = false
@@ -122,7 +123,7 @@ struct SettingsView: View {
             modelSection
             saveSection
         }
-        .animation(providerSectionAnimation, value: viewModel.selectedProvider)
+        .rhymeAnimation(providerSectionAnimation, value: viewModel.selectedProvider)
     }
 
     private var providerSection: some View {
@@ -132,7 +133,7 @@ struct SettingsView: View {
             Picker("AI Provider", selection: Binding(
                 get: { viewModel.selectedProvider },
                 set: { provider in
-                    withAnimation(providerSectionAnimation) {
+                    withRhymeAnimation(providerSectionAnimation, reduceMotion: reduceMotion) {
                         viewModel.saveProvider(provider)
                     }
                 }

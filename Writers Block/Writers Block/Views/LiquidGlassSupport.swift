@@ -58,16 +58,43 @@ enum RhymeAITokens {
 }
 
 struct RhymeAIPressButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .opacity(configuration.isPressed ? 0.86 : 1)
-            .animation(RhymeAITokens.Motion.feedback, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : RhymeAITokens.Motion.feedback, value: configuration.isPressed)
     }
 }
 
 extension ButtonStyle where Self == RhymeAIPressButtonStyle {
     static var rhymePress: RhymeAIPressButtonStyle { RhymeAIPressButtonStyle() }
+}
+
+private struct GatedAnimationModifier<V: Equatable>: ViewModifier {
+    let animation: Animation?
+    let value: V
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.animation(reduceMotion ? nil : animation, value: value)
+    }
+}
+
+extension View {
+    /// `.animation(_, value:)` that respects the OS reduce-motion setting.
+    func rhymeAnimation<V: Equatable>(_ animation: Animation?, value: V) -> some View {
+        modifier(GatedAnimationModifier(animation: animation, value: value))
+    }
+}
+
+/// `withAnimation` wrapper that honours reduce-motion. Pass the environment value from the call site.
+func withRhymeAnimation<Result>(_ animation: Animation?, reduceMotion: Bool, _ body: () throws -> Result) rethrows -> Result {
+    if reduceMotion {
+        return try body()
+    }
+    return try withAnimation(animation, body)
 }
 
 

@@ -1,5 +1,6 @@
 package com.rhymeai.app.ui.components
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -10,7 +11,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
-import com.rhymeai.app.ui.theme.RhymePalette
+import com.rhymeai.app.ui.theme.rhymePalette
 import com.rhymeai.app.util.RhymePhonetics
 import kotlin.math.absoluteValue
 
@@ -26,6 +27,7 @@ fun RhymeHighlightedText(
     style: TextStyle = TextStyle.Default
 ) {
     val baseTextColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f)
+    val palette = rhymePalette(isSystemInDarkTheme())
 
     if (!enabled || text.isEmpty()) {
         Text(text = text, modifier = modifier, style = style, color = baseTextColor)
@@ -59,7 +61,7 @@ fun RhymeHighlightedText(
             if (familyKey != null) {
                 withStyle(
                     SpanStyle(
-                        color = colorFor(familyKey),
+                        color = colorFor(familyKey, palette),
                         fontWeight = FontWeight.SemiBold
                     )
                 ) {
@@ -82,7 +84,7 @@ fun RhymeHighlightedText(
     Text(text = annotated, modifier = modifier, style = style)
 }
 
-private fun colorFor(familyKey: String): Color {
-    val idx = (familyKey.hashCode().absoluteValue) % RhymePalette.size
-    return RhymePalette[idx]
+private fun colorFor(familyKey: String, palette: List<Color>): Color {
+    val idx = (familyKey.hashCode().absoluteValue) % palette.size
+    return palette[idx]
 }

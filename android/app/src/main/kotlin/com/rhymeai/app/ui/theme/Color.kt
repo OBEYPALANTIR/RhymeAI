@@ -16,7 +16,13 @@ val SyllableBlue = Color(0xFF93C5FD)
 val SyllablePurple = Color(0xFFD8B4FE)
 val SyllableRose = Color(0xFFFDA4AF)
 
-val RhymePalette = listOf(
+val SyllableEmeraldOnLight = Color(0xFF047857) // emerald-700
+val SyllableBlueOnLight = Color(0xFF0369A1) // sky-700
+val SyllablePurpleOnLight = Color(0xFF7E22CE) // purple-700
+val SyllableRoseOnLight = Color(0xFFB91C1C) // rose-700
+
+// Pastels: WCAG-passing on dark surface.
+val RhymePaletteDark = listOf(
     Color(0xFFFCA5A5), // rose
     Color(0xFFFCD34D), // amber
     Color(0xFF86EFAC), // green
@@ -30,6 +36,45 @@ val RhymePalette = listOf(
     Color(0xFFFEF08A), // yellow
     Color(0xFFBEF264)  // lime
 )
+
+// Tailwind *-700: WCAG-passing on light surface.
+val RhymePaletteLight = listOf(
+    Color(0xFFB91C1C), // rose
+    Color(0xFFB45309), // amber
+    Color(0xFF15803D), // green
+    Color(0xFF0369A1), // sky
+    Color(0xFF6D28D9), // violet
+    Color(0xFFBE185D), // pink
+    Color(0xFFC2410C), // orange
+    Color(0xFF0E7490), // cyan
+    Color(0xFF047857), // emerald
+    Color(0xFF7E22CE), // purple
+    Color(0xFFA16207), // yellow
+    Color(0xFF4D7C0F)  // lime
+)
+
+@Deprecated("Use rhymePalette(isDark) so contrast adapts to theme.", ReplaceWith("RhymePaletteDark"))
+val RhymePalette: List<Color> = RhymePaletteDark
+
+fun rhymePalette(isDark: Boolean): List<Color> =
+    if (isDark) RhymePaletteDark else RhymePaletteLight
+
+fun syllableColor(count: Int, isDark: Boolean): Color =
+    if (isDark) {
+        when (count) {
+            1 -> SyllableEmerald
+            2 -> SyllableBlue
+            3 -> SyllablePurple
+            else -> SyllableRose
+        }
+    } else {
+        when (count) {
+            1 -> SyllableEmeraldOnLight
+            2 -> SyllableBlueOnLight
+            3 -> SyllablePurpleOnLight
+            else -> SyllableRoseOnLight
+        }
+    }
 
 val WhiteHigh = Color(0xFFE5E5E5)
 val WhiteMedium = Color(0xFFB3B3B3)

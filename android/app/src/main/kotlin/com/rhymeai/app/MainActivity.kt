@@ -5,9 +5,21 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
+import com.rhymeai.app.ui.components.LocalImeBottom
+import com.rhymeai.app.ui.components.LocalNavBottom
+import com.rhymeai.app.ui.components.LocalStatusBarTop
 import com.rhymeai.app.ui.components.ProjectsDrawer
 import com.rhymeai.app.ui.components.SettingsDialog
 import com.rhymeai.app.ui.components.TemplatesDialog
@@ -31,78 +43,104 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             RhymeAITheme {
-                val viewModel: MainViewModel = viewModel()
-                val navController = rememberNavController()
-
-                // Determine start destination
-                val startDest = if (viewModel.showStartMenu) Routes.WELCOME else Routes.EDITOR
-
-                RhymeNavGraph(
-                    navController = navController,
-                    viewModel = viewModel,
-                    startDestination = startDest
-                )
-
-                // Handle dialog navigation from welcome screen
-                if (viewModel.showProjectsDialog) {
-                    ProjectsDrawer(
-                        projects = viewModel.projects,
-                        trashedProjects = viewModel.trashedProjects,
-                        currentProjectId = viewModel.currentProjectId,
-                        onLoadProject = { project ->
-                            viewModel.loadProject(project)
-                            navController.navigate(Routes.EDITOR) {
-                                popUpTo(0) { inclusive = true }
-                            }
-                        },
-                        onNewProject = {
-                            viewModel.newProject()
-                            navController.navigate(Routes.EDITOR) {
-                                popUpTo(0) { inclusive = true }
-                            }
-                        },
-                        onDeleteProject = { viewModel.moveProjectToTrash(it) },
-                        onRestoreProject = { viewModel.restoreTrashedProject(it) },
-                        onPermanentlyDeleteProject = { viewModel.permanentlyDeleteTrashedProject(it) },
-                        onPurgeExpiredTrash = { viewModel.purgeExpiredTrashedProjects() },
-                        onImportProject = { project ->
-                            viewModel.importProject(project)
-                            navController.navigate(Routes.EDITOR) {
-                                popUpTo(0) { inclusive = true }
-                            }
-                        },
-                        onDismiss = { viewModel.showProjectsDialog = false }
-                    )
+                val density = LocalDensity.current
+                val navigationBars = WindowInsets.navigationBars
+                val imeInsets = WindowInsets.ime
+                val statusBars = WindowInsets.statusBars
+                val navBottom by remember(density, navigationBars) {
+                    derivedStateOf {
+                        with(density) { navigationBars.getBottom(density).toDp() }
+                    }
+                }
+                val imeBottom by remember(density, imeInsets) {
+                    derivedStateOf {
+                        with(density) { imeInsets.getBottom(density).toDp() }
+                    }
+                }
+                val topInset by remember(density, statusBars) {
+                    derivedStateOf {
+                        with(density) { statusBars.getTop(density).toDp() }
+                    }
                 }
 
-                if (viewModel.showTemplatesDialog) {
-                    TemplatesDialog(
-                        onSelectTemplate = { name, theme, lyrics ->
-                            viewModel.applyTemplate(name, theme, lyrics)
-                            navController.navigate(Routes.EDITOR) {
-                                popUpTo(0) { inclusive = true }
-                            }
-                        },
-                        onDismiss = { viewModel.showTemplatesDialog = false }
-                    )
-                }
+                CompositionLocalProvider(
+                    LocalNavBottom provides navBottom,
+                    LocalImeBottom provides imeBottom,
+                    LocalStatusBarTop provides topInset
+                ) {
+                    val viewModel: MainViewModel = viewModel()
+                    val navController = rememberNavController()
 
-                if (viewModel.showSettingsDialog) {
-                    SettingsDialog(
-                        apiKeys = viewModel.apiKeys,
-                        currentProvider = viewModel.selectedProvider,
-                        currentModel = viewModel.selectedModel,
-                        localModelLoading = viewModel.localModelLoading,
-                        localModelLoaded = viewModel.localModelLoaded,
-                        localModelPath = viewModel.localModelPath,
-                        localModelError = viewModel.localModelError,
-                        onSaveApiKey = { provider, key -> viewModel.saveApiKey(provider, key) },
-                        onSaveProvider = { viewModel.saveProvider(it) },
-                        onSaveModel = { viewModel.saveModel(it) },
-                        onLoadLocalModel = { viewModel.loadLocalModel(it) },
-                        onUnloadLocalModel = { viewModel.unloadLocalModel() },
-                        onDismiss = { viewModel.showSettingsDialog = false }
+                    // Determine start destination
+                    val startDest = if (viewModel.showStartMenu) Routes.WELCOME else Routes.EDITOR
+
+                    RhymeNavGraph(
+                        navController = navController,
+                        viewModel = viewModel,
+                        startDestination = startDest
                     )
+
+                    // Handle dialog navigation from welcome screen
+                    if (viewModel.showProjectsDialog) {
+                        ProjectsDrawer(
+                            projects = viewModel.projects,
+                            trashedProjects = viewModel.trashedProjects,
+                            currentProjectId = viewModel.currentProjectId,
+                            onLoadProject = { project ->
+                                viewModel.loadProject(project)
+                                navController.navigate(Routes.EDITOR) {
+                                    popUpTo(0) { inclusive = true }
+                                }
+                            },
+                            onNewProject = {
+                                viewModel.newProject()
+                                navController.navigate(Routes.EDITOR) {
+                                    popUpTo(0) { inclusive = true }
+                                }
+                            },
+                            onDeleteProject = { viewModel.moveProjectToTrash(it) },
+                            onRestoreProject = { viewModel.restoreTrashedProject(it) },
+                            onPermanentlyDeleteProject = { viewModel.permanentlyDeleteTrashedProject(it) },
+                            onPurgeExpiredTrash = { viewModel.purgeExpiredTrashedProjects() },
+                            onImportProject = { project ->
+                                viewModel.importProject(project)
+                                navController.navigate(Routes.EDITOR) {
+                                    popUpTo(0) { inclusive = true }
+                                }
+                            },
+                            onDismiss = { viewModel.showProjectsDialog = false }
+                        )
+                    }
+
+                    if (viewModel.showTemplatesDialog) {
+                        TemplatesDialog(
+                            onSelectTemplate = { name, theme, lyrics ->
+                                viewModel.applyTemplate(name, theme, lyrics)
+                                navController.navigate(Routes.EDITOR) {
+                                    popUpTo(0) { inclusive = true }
+                                }
+                            },
+                            onDismiss = { viewModel.showTemplatesDialog = false }
+                        )
+                    }
+
+                    if (viewModel.showSettingsDialog) {
+                        SettingsDialog(
+                            apiKeys = viewModel.apiKeys,
+                            currentProvider = viewModel.selectedProvider,
+                            currentModel = viewModel.selectedModel,
+                            localModelLoading = viewModel.localModelLoading,
+                            localModelLoaded = viewModel.localModelLoaded,
+                            localModelPath = viewModel.localModelPath,
+                            localModelError = viewModel.localModelError,
+                            onSaveApiKey = { provider, key -> viewModel.saveApiKey(provider, key) },
+                            onSaveProvider = { viewModel.saveProvider(it) },
+                            onSaveModel = { viewModel.saveModel(it) },
+                            onLoadLocalModel = { viewModel.loadLocalModel(it) },
+                            onUnloadLocalModel = { viewModel.unloadLocalModel() },
+                            onDismiss = { viewModel.showSettingsDialog = false }
+                        )
+                    }
                 }
             }
         }

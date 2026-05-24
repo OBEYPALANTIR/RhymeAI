@@ -231,7 +231,7 @@ fun ProjectsDrawer(
                     contentColor = colorScheme.onSurface,
                     tonalElevation = 8.dp
                 ) {
-                    val bottomActionClearance = navigationBarBottomPadding(DesignTokens.Spacing.golden)
+                    val bottomActionClearance = navigationBarBottomPadding()
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -295,7 +295,7 @@ fun ProjectsDrawer(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(top = DesignTokens.Spacing.md)
-                                    .height(56.dp),
+                                    .heightIn(min = 56.dp),
                                 shape = RoundedCornerShape(DesignTokens.Radius.xl),
                                 border = BorderStroke(1.dp, colorScheme.outline)
                             ) {
@@ -356,11 +356,11 @@ fun ProjectsDrawer(
                             }
                         }
 
-                        BottomSafeActionArea(
+                        Column(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .fillMaxSize()
                                 .align(Alignment.BottomCenter),
-                            extra = DesignTokens.Spacing.golden
+                            verticalArrangement = Arrangement.Bottom
                         ) {
                             Row(
                                 modifier = Modifier
@@ -382,7 +382,7 @@ fun ProjectsDrawer(
                                 ) {
                                     Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(DesignTokens.Spacing.sm))
-                                    Text("Import From File", fontWeight = FontWeight.Medium)
+                                    Text("Import Files", fontWeight = FontWeight.Medium)
                                 }
 
                                 OutlinedIconButton(
@@ -404,6 +404,7 @@ fun ProjectsDrawer(
                                     )
                                 }
                             }
+                            Spacer(Modifier.height(bottomActionClearance))
                         }
                     }
                 }
@@ -606,7 +607,7 @@ private fun TrashBinPage(
     val selectedCount = selectedIds.size
     val hasSelection = selectedCount > 0
     val allSelected = sortedTrashedProjects.isNotEmpty() && selectedIds.containsAll(trashIds)
-    val bottomActionClearance = navigationBarBottomPadding(DesignTokens.Spacing.xxl)
+    val bottomActionClearance = navigationBarBottomPadding()
     val bottomActionBarHeight = DesignTokens.Touch.minTarget + DesignTokens.Spacing.md + DesignTokens.Spacing.md
     val contentBottomPadding = bottomActionClearance + bottomActionBarHeight + DesignTokens.Spacing.xl
 
@@ -683,17 +684,17 @@ private fun TrashBinPage(
                 }
             }
 
-            BottomSafeActionArea(
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth(),
-                extra = DesignTokens.Spacing.xxl
+                    .fillMaxWidth()
             ) {
                 TrashBottomActionBar(
                     selectedCount = selectedCount,
                     onRestoreSelected = ::restoreSelected,
                     onRequestDeleteSelected = { confirmPermanentDelete = true }
                 )
+                Spacer(Modifier.height(bottomActionClearance))
             }
         }
     }
@@ -733,7 +734,7 @@ private fun TrashTopBar(onDismiss: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(80.dp)
+            .heightIn(min = 80.dp)
             .padding(horizontal = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically
     ) {

@@ -307,6 +307,10 @@ struct AssistantPanelView: View {
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
 
+                    Text("AI-generated · review before use")
+                        .font(.caption2.italic())
+                        .foregroundStyle(.secondary.opacity(0.8))
+
                     ForEach(Array(viewModel.suggestions.enumerated()), id: \.offset) { _, suggestion in
                         SuggestionCardView(
                             suggestion: suggestion,
@@ -502,15 +506,17 @@ private struct FeatureHelpSheet: View {
 }
 
 private struct SyllableLegendView: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             Text("Underline colors")
                 .font(.subheadline.weight(.semibold))
 
-            SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 1), label: "1 syllable")
-            SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 2), label: "2 syllables")
-            SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 3), label: "3 syllables")
-            SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 4), label: "4+ syllables")
+            SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 1, scheme: colorScheme), label: "1 syllable")
+            SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 2, scheme: colorScheme), label: "2 syllables")
+            SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 3, scheme: colorScheme), label: "3 syllables")
+            SyllableLegendRow(color: SyllableColoredText.syllableColor(for: 4, scheme: colorScheme), label: "4+ syllables")
         }
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
@@ -534,14 +540,29 @@ private struct SyllableLegendRow: View {
 }
 
 private struct RhymeLegendView: View {
-    private let palette: [Color] = [
+    @Environment(\.colorScheme) private var colorScheme
+
+    private let palettePastel: [Color] = [
         Color(red: 252/255, green: 165/255, blue: 165/255),
-        Color(red: 252/255, green: 211/255, blue: 77/255),
+        Color(red: 252/255, green: 211/255, blue:  77/255),
         Color(red: 134/255, green: 239/255, blue: 172/255),
         Color(red: 125/255, green: 211/255, blue: 252/255),
         Color(red: 196/255, green: 181/255, blue: 253/255),
         Color(red: 249/255, green: 168/255, blue: 212/255)
     ]
+
+    private let paletteDark: [Color] = [
+        Color(red: 185/255, green:  28/255, blue:  28/255),
+        Color(red: 180/255, green:  83/255, blue:   9/255),
+        Color(red:  21/255, green: 128/255, blue:  61/255),
+        Color(red:   3/255, green: 105/255, blue: 161/255),
+        Color(red: 109/255, green:  40/255, blue: 217/255),
+        Color(red: 190/255, green:  24/255, blue:  93/255)
+    ]
+
+    private var palette: [Color] {
+        colorScheme == .dark ? palettePastel : paletteDark
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {

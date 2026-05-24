@@ -52,6 +52,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -152,6 +153,7 @@ fun SettingsDialog(
     var downloadingModel by remember { mutableStateOf<GemmaDownload?>(null) }
     var downloadProgress by remember { mutableStateOf<Float?>(null) }
     var downloadError by remember { mutableStateOf<String?>(null) }
+    var lastDownloadAttempt by remember { mutableStateOf<GemmaDownload?>(null) }
     var downloadRevision by remember { mutableStateOf(0) }
     val coroutineScope = rememberCoroutineScope()
 
@@ -176,6 +178,7 @@ fun SettingsDialog(
         downloadProgress = 0f
         downloadError = null
         copyError = null
+        lastDownloadAttempt = model
 
         coroutineScope.launch(Dispatchers.IO) {
             val destFile = File(context.filesDir, model.fileName)
@@ -490,7 +493,7 @@ fun SettingsDialog(
                                 Button(
                                     onClick = { filePicker.launch(arrayOf("*/*")) },
                                     enabled = !localModelLoading && !copyingFile && downloadingModel == null,
-                                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = colorScheme.primary,
@@ -522,9 +525,36 @@ fun SettingsDialog(
                             }
 
                             val displayError = copyError ?: downloadError ?: localModelError
-                            displayError?.let {
+                            displayError?.let { errorText ->
                                 Spacer(Modifier.height(8.dp))
-                                Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error, lineHeight = 16.sp)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        errorText,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.error,
+                                        lineHeight = 16.sp,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    val retryTarget = lastDownloadAttempt
+                                    when {
+                                        downloadError != null && retryTarget != null -> {
+                                            TextButton(onClick = { startGemmaDownload(retryTarget) }) {
+                                                Text("Retry")
+                                            }
+                                        }
+                                        copyError != null -> {
+                                            TextButton(onClick = {
+                                                copyError = null
+                                                filePicker.launch(arrayOf("*/*"))
+                                            }) {
+                                                Text("Try again")
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             // Cloud API key section
@@ -645,7 +675,7 @@ fun SettingsDialog(
                         }
                         saved = true
                     },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colorScheme.primary,

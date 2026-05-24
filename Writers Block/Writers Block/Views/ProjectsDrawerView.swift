@@ -16,6 +16,7 @@ struct ProjectsDrawerView: View {
     @State private var isClosing = false
     @State private var pendingDeleteProject: SongProject?
     @State private var trashBinPresented = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var filteredProjects: [SongProject] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -47,13 +48,13 @@ struct ProjectsDrawerView: View {
                         .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
                         .offset(x: drawerVisible ? 0 : -drawerWidth)
                 }
-                .animation(RhymeAITokens.Motion.presentation, value: drawerVisible)
+                .rhymeAnimation(RhymeAITokens.Motion.presentation, value: drawerVisible)
             }
             .ignoresSafeArea()
 
             if trashBinPresented {
                 TrashBinView(onDismiss: {
-                    withAnimation(RhymeAITokens.Motion.dismiss) {
+                    withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
                         trashBinPresented = false
                     }
                 })
@@ -295,7 +296,7 @@ struct ProjectsDrawerView: View {
     private func closeDrawer() {
         guard !isClosing else { return }
         isClosing = true
-        withAnimation(RhymeAITokens.Motion.dismiss) {
+        withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
             drawerVisible = false
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + projectDrawerAnimationDuration) {

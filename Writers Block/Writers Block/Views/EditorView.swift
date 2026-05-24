@@ -7,6 +7,7 @@ struct EditorView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var keyboardIsVisible = false
     @State private var keyboardHeight: CGFloat = 0
     @State private var assistantSheetDragOffset: CGFloat = 0
@@ -123,9 +124,9 @@ struct EditorView: View {
             assistantSheetOverlay
                 .zIndex(2)
         }
-        .animation(RhymeAITokens.Motion.presentation, value: viewModel.showAssistantSheet)
-        .animation(RhymeAITokens.Motion.state, value: keyboardIsVisible)
-        .animation(RhymeAITokens.Motion.state, value: lyricsEditorIsFocused)
+        .rhymeAnimation(RhymeAITokens.Motion.presentation, value: viewModel.showAssistantSheet)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: keyboardIsVisible)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: lyricsEditorIsFocused)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
@@ -233,7 +234,7 @@ struct EditorView: View {
         let closeThreshold = min(180, max(96, sheetHeight * 0.18))
 
         if dragDistance >= closeThreshold || projectedDistance >= closeThreshold {
-            withAnimation(RhymeAITokens.Motion.dismiss) {
+            withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
                 assistantSheetDragOffset = sheetHeight
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + RhymeAITokens.Motion.feedbackDuration) {
@@ -241,7 +242,7 @@ struct EditorView: View {
                 assistantSheetDragOffset = 0
             }
         } else {
-            withAnimation(RhymeAITokens.Motion.settle) {
+            withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                 assistantSheetDragOffset = 0
             }
         }
@@ -261,7 +262,7 @@ struct EditorView: View {
 
     private func showAssistantSheetWithAnimation() {
         assistantSheetDragOffset = 0
-        withAnimation(RhymeAITokens.Motion.presentation) {
+        withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
             viewModel.showAssistantSheet = true
         }
     }
@@ -280,7 +281,7 @@ struct EditorView: View {
 
     private func dismissAssistantSheetWithAnimation() {
         assistantSheetDragOffset = 0
-        withAnimation(RhymeAITokens.Motion.dismiss) {
+        withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
             viewModel.showAssistantSheet = false
         }
     }
@@ -310,8 +311,8 @@ struct EditorView: View {
                 }
             }
         }
-        .animation(RhymeAITokens.Motion.state, value: shouldShowRewriteChipBar)
-        .animation(RhymeAITokens.Motion.state, value: viewModel.hasActiveRewrite)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: shouldShowRewriteChipBar)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.hasActiveRewrite)
         .background {
             GeometryReader { proxy in
                 Color.clear
@@ -541,6 +542,16 @@ private struct InlineRewriteReviewBar: View {
                     .frame(minWidth: 72, minHeight: RhymeAITokens.Touch.minimum)
                     .background(.indigo, in: Capsule())
                     .buttonStyle(.rhymePress)
+                Button {
+                    onRetry()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(.indigo)
+                .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                .buttonStyle(.rhymePress)
+                .accessibilityLabel("Regenerate rewrite")
             }
 
             Button("Cancel", action: onCancel)

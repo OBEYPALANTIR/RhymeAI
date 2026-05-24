@@ -19,6 +19,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +49,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -88,6 +90,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.rhymeai.app.R
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
@@ -375,7 +381,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     IconButton(onClick = { viewModel.showProjectsDialog = true }) {
                         Icon(
                             Icons.Default.Menu,
-                            contentDescription = "Open songs drawer",
+                            contentDescription = stringResource(R.string.editor_open_songs_drawer),
                             tint = colorScheme.onSurfaceVariant
                         )
                     }
@@ -387,12 +393,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
+                                modifier = Modifier.size(DesignTokens.Indicator.spinnerSm),
                                 strokeWidth = 2.dp,
                                 color = colorScheme.onSurfaceVariant
                             )
                             Text(
-                                "Saving...",
+                                stringResource(R.string.editor_saving),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = colorScheme.onSurfaceVariant,
                                 maxLines = 1
@@ -409,7 +415,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 tint = colorScheme.tertiary
                             )
                             Text(
-                                "Saved",
+                                stringResource(R.string.editor_saved),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = colorScheme.tertiary,
                                 maxLines = 1
@@ -447,7 +453,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     ) {
                         Icon(
                             Icons.Default.IosShare,
-                            contentDescription = "Export",
+                            contentDescription = stringResource(R.string.editor_export),
                             tint = if (viewModel.lyrics.isNotBlank())
                                 colorScheme.onSurfaceVariant
                             else
@@ -457,7 +463,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     IconButton(onClick = { viewModel.showSettingsDialog = true }) {
                         Icon(
                             Icons.Default.Settings,
-                            contentDescription = "Settings",
+                            contentDescription = stringResource(R.string.editor_settings),
                             tint = colorScheme.onSurfaceVariant
                         )
                     }
@@ -653,10 +659,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     )
                     val syllableUnderlineGap = with(density) { 2.dp.toPx() }
                     val syllableUnderlineWidth = with(density) { 3.dp.toPx() }
-                    val syllableUnderlineSpans = remember(analyzedLyrics, syllableUnderlineActive) {
+                    val syllableIsDark = isSystemInDarkTheme()
+                    val syllableUnderlineSpans = remember(analyzedLyrics, syllableUnderlineActive, syllableIsDark) {
                         buildSyllableUnderlineSpans(
                             text = analyzedLyrics,
-                            enabled = syllableUnderlineActive
+                            enabled = syllableUnderlineActive,
+                            isDark = syllableIsDark
                         )
                     }
                     val inlineRewriteRange = viewModel.inlineRewriteRange
@@ -1120,6 +1128,17 @@ private fun InlineRewriteReviewBar(
                 shape = RoundedCornerShape(DesignTokens.Radius.pill)
             ) {
                 Text("Apply", fontSize = 12.sp)
+            }
+            IconButton(
+                onClick = onRetry,
+                modifier = Modifier.semantics { contentDescription = "Regenerate rewrite" }
+            ) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = null,
+                    tint = colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
 

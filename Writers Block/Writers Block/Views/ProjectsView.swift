@@ -111,12 +111,12 @@ struct ProjectsView: View {
                             dismiss()
                         } label: {
                             HStack {
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
                                     Text(project.title.isEmpty ? "Untitled Song" : project.title)
                                         .font(.headline)
                                         .foregroundStyle(.primary)
 
-                                    HStack(spacing: 8) {
+                                    HStack(spacing: RhymeAITokens.Spacing.xs) {
                                         Text(project.updatedAt, style: .date)
                                         Text("·")
                                         Text("\(SyllableCounter.wordCount(project.lyrics)) words")
@@ -132,7 +132,7 @@ struct ProjectsView: View {
                                         .foregroundStyle(.indigo)
                                 }
                             }
-                            .padding(.vertical, 4)
+                            .padding(.vertical, RhymeAITokens.Spacing.xxs)
                         }
                         .listRowBackground(
                             viewModel.currentProjectId == project.id

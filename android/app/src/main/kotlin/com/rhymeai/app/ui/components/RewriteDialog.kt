@@ -32,7 +32,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.window.Dialog
+import com.rhymeai.app.R
 import com.rhymeai.app.data.model.RewriteAction
 
 @Composable
@@ -43,7 +45,8 @@ fun RewriteDialog(
     loading: Boolean,
     error: String?,
     onApply: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onRegenerate: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
@@ -80,7 +83,7 @@ fun RewriteDialog(
                 IconButton(onClick = onDismiss) {
                     Icon(
                         Icons.Default.Close,
-                        contentDescription = "Close",
+                        contentDescription = stringResource(R.string.rewrite_close_a11y),
                         tint = colorScheme.onSurfaceVariant
                     )
                 }
@@ -89,7 +92,7 @@ fun RewriteDialog(
             Spacer(Modifier.height(12.dp))
 
             Text(
-                "Original",
+                stringResource(R.string.rewrite_original_label),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = colorScheme.onSurfaceVariant
@@ -112,7 +115,7 @@ fun RewriteDialog(
             Spacer(Modifier.height(16.dp))
 
             Text(
-                "Rewrite",
+                stringResource(R.string.rewrite_label),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = colorScheme.primary
@@ -139,7 +142,7 @@ fun RewriteDialog(
                                 strokeWidth = 2.dp
                             )
                             Text(
-                                "Thinking...",
+                                stringResource(R.string.rewrite_thinking),
                                 fontSize = 13.sp,
                                 color = colorScheme.onSurfaceVariant
                             )
@@ -178,17 +181,27 @@ fun RewriteDialog(
                     onClick = onDismiss,
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp),
+                        .heightIn(min = 48.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("Cancel", fontWeight = FontWeight.Medium)
+                    Text(stringResource(R.string.rewrite_cancel), fontWeight = FontWeight.Medium)
+                }
+                OutlinedButton(
+                    onClick = onRegenerate,
+                    enabled = !loading,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(stringResource(R.string.rewrite_regenerate), fontWeight = FontWeight.Medium)
                 }
                 Button(
                     onClick = onApply,
                     enabled = preview != null && !loading,
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp),
+                        .heightIn(min = 48.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colorScheme.primary,
@@ -197,7 +210,7 @@ fun RewriteDialog(
                         disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     )
                 ) {
-                    Text("Apply", fontWeight = FontWeight.Medium)
+                    Text(stringResource(R.string.rewrite_apply), fontWeight = FontWeight.Medium)
                 }
             }
         }

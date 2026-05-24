@@ -50,27 +50,30 @@ struct Writers_BlockTests {
     @Test func openAIModelPickerStartsWithCurrentGPT5Models() {
         let modelIDs = AIModel.models(for: .openai).map(\.id)
 
-        #expect(Array(modelIDs.prefix(5)) == [
+        #expect(modelIDs == [
             "gpt-5.5",
             "gpt-5.5-pro",
             "gpt-5.4",
             "gpt-5.4-mini",
-            "gpt-5.4-nano"
+            "gpt-5.4-nano",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-4o",
+            "gpt-4o-mini"
         ])
-        #expect(modelIDs.contains("gpt-4o"))
-        #expect(modelIDs.contains("gpt-4o-mini"))
     }
 
     @Test func claudeModelPickerUsesCurrentClaudeModels() {
         let modelIDs = AIModel.models(for: .claude).map(\.id)
 
-        #expect(Array(modelIDs.prefix(2)) == [
+        #expect(modelIDs == [
             "claude-opus-4-7",
-            "claude-sonnet-4-6"
+            "claude-sonnet-4-6",
+            "claude-opus-4-20250514",
+            "claude-sonnet-4-20250514",
+            "claude-haiku-4-5-20251001"
         ])
-        #expect(modelIDs.contains("claude-opus-4-20250514"))
-        #expect(modelIDs.contains("claude-sonnet-4-20250514"))
-        #expect(modelIDs.contains("claude-haiku-4-5-20251001"))
     }
 
     @Test func prosodyAnalyzerCountsDictionaryStress() {

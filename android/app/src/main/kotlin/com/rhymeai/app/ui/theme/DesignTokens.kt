@@ -29,6 +29,11 @@ object DesignTokens {
         val minTarget = 48.dp
     }
 
+    object Indicator {
+        val spinnerSm = 14.dp
+        val spinnerMd = 16.dp
+    }
+
     object Editor {
         val horizontalPadding = 24.dp
         val bottomRest = 300.dp
