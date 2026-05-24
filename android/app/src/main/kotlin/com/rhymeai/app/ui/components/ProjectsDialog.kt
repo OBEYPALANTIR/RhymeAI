@@ -91,6 +91,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 private val DrawerAnimationMillis: Int get() = DesignTokens.Motion.drawerPresentMillis
+private val DialogBottomActionMinClearance = 120.dp
 private const val MillisPerDay = 24L * 60L * 60L * 1000L
 
 @Composable
@@ -231,7 +232,10 @@ fun ProjectsDrawer(
                     contentColor = colorScheme.onSurface,
                     tonalElevation = 8.dp
                 ) {
-                    val bottomActionClearance = navigationBarBottomPadding()
+                    val bottomActionClearance = maxOf(
+                        navigationBarBottomPadding(),
+                        DialogBottomActionMinClearance
+                    )
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -607,7 +611,10 @@ private fun TrashBinPage(
     val selectedCount = selectedIds.size
     val hasSelection = selectedCount > 0
     val allSelected = sortedTrashedProjects.isNotEmpty() && selectedIds.containsAll(trashIds)
-    val bottomActionClearance = navigationBarBottomPadding()
+    val bottomActionClearance = maxOf(
+        navigationBarBottomPadding(),
+        DialogBottomActionMinClearance
+    )
     val bottomActionBarHeight = DesignTokens.Touch.minTarget + DesignTokens.Spacing.md + DesignTokens.Spacing.md
     val contentBottomPadding = bottomActionClearance + bottomActionBarHeight + DesignTokens.Spacing.xl
 
