@@ -35,7 +35,7 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
-    func testUnBlockButtonHidesWhileEditingLyrics() throws {
+    func testUnBlockButtonStaysVisibleWhileEditingLyrics() throws {
         try requirePhone()
 
         let app = XCUIApplication()
@@ -53,7 +53,11 @@ final class Writers_BlockUITests: XCTestCase {
         lyricsEditor.tap()
         lyricsEditor.typeText("Testing keyboard overlap")
 
-        XCTAssertFalse(unblockButton.exists)
+        // Button rides above the keyboard instead of hiding — matches Android.
+        XCTAssertTrue(unblockButton.exists)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(unblockButton.frame.maxY, keyboard.frame.minY + 4)
     }
 
     @MainActor
