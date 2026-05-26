@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
     <path
         android:fillColor="@color/splash_mark"
-        android:pathData="M6,28 H19 L27,63 L37,28 H48 L58,63 L66,28 H78 L65,82 H53 L42,47 L31,82 H19 Z" />
+        android:pathData="M72,117 H91.5 L103.5,169.5 L118.5,117 H135 L150,169.5 L162,117 H180 L160.5,198 H142.5 L126,145.5 L109.5,198 H91.5 Z" />
     <path
         android:fillColor="@color/splash_mark"
         android:fillType="evenOdd"
-        android:pathData="M75,28 H91 C101,28 107,34 107,43 C107,50 103,55 96,58 C104,60 108,66 108,74 C108,85 101,92 90,92 H75 Z M88,39 V53 H91 C96,53 99,50 99,46 C99,42 96,39 91,39 Z M88,65 V81 H91 C97,81 100,78 100,73 C100,68 97,65 91,65 Z" />
+        android:pathData="M175.5,117 H199.5 C214.5,117 223.5,126 223.5,139.5 C223.5,150 217.5,157.5 207,162 C219,165 225,174 225,186 C225,202.5 214.5,213 198,213 H175.5 Z M195,133.5 V154.5 H199.5 C207,154.5 211.5,150 211.5,144 C211.5,138 207,133.5 199.5,133.5 Z M195,172.5 V196.5 H199.5 C208.5,196.5 213,192 213,184.5 C213,177 208.5,172.5 199.5,172.5 Z" />
 </vector>
