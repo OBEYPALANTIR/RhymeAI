@@ -5,8 +5,11 @@ coverage/
 .DS_Store
 *.log
 .env*
+*.apk
 artifacts/
 compass_artifact_*.md
+.playwright-mcp/
+app-icon.png
 
 # Android
 android/build/

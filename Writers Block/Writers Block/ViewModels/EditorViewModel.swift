@@ -463,10 +463,6 @@ final class EditorViewModel: ObservableObject {
         showProjectsSheet = false
     }
 
-    func deleteProject(_ project: SongProject) {
-        moveProjectToTrash(project)
-    }
-
     func moveProjectToTrash(_ project: SongProject) {
         guard let context = modelContext else { return }
         autoSaveTask?.cancel()

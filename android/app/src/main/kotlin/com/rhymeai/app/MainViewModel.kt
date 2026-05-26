@@ -412,10 +412,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteProject(id: String) {
-        moveProjectToTrash(id)
-    }
-
     fun moveProjectToTrash(id: String) {
         val project = projects.firstOrNull { it.id == id } ?: return
         val now = System.currentTimeMillis()
