@@ -5,10 +5,17 @@
     android:viewportWidth="288"
     android:viewportHeight="288">
     <path
-        android:fillColor="@color/splash_mark"
-        android:pathData="M72,117 H91.5 L103.5,169.5 L118.5,117 H135 L150,169.5 L162,117 H180 L160.5,198 H142.5 L126,145.5 L109.5,198 H91.5 Z" />
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/splash_mark"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="17"
+        android:pathData="M66,96 L89,205 L116,139 L143,205 L169,96 L169,214" />
     <path
-        android:fillColor="@color/splash_mark"
-        android:fillType="evenOdd"
-        android:pathData="M175.5,117 H199.5 C214.5,117 223.5,126 223.5,139.5 C223.5,150 217.5,157.5 207,162 C219,165 225,174 225,186 C225,202.5 214.5,213 198,213 H175.5 Z M195,133.5 V154.5 H199.5 C207,154.5 211.5,150 211.5,144 C211.5,138 207,133.5 199.5,133.5 Z M195,172.5 V196.5 H199.5 C208.5,196.5 213,192 213,184.5 C213,177 208.5,172.5 199.5,172.5 Z" />
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/splash_mark"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="17"
+        android:pathData="M169,100 H195 C214,100 225,112 225,130 C225,148 211,160 194,160 H169 M169,160 H199 C219,160 232,173 232,193 C232,212 217,224 196,224 H169" />
 </vector>
