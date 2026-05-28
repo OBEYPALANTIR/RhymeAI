@@ -197,14 +197,25 @@ final class EditorViewModel: ObservableObject {
         rhymeContext = computeRhymeContext()
     }
 
+    /// `cursorPosition` is reported by the text view in UTF-16 units
+    /// (`UITextView.selectedRange.location`). Convert it to a `String.Index`,
+    /// clamped to valid bounds, so the Character-based indexing below stays
+    /// correct for lyrics containing multi-UTF-16-unit characters (emoji, many
+    /// non-Latin scripts). Treating the offset as a Character index previously
+    /// corrupted rhyme parsing and could trap past `endIndex`.
+    private func cursorIndex(in text: String) -> String.Index {
+        let clamped = min(max(cursorPosition, 0), (text as NSString).length)
+        return Range(NSRange(location: 0, length: clamped), in: text)?.upperBound ?? text.endIndex
+    }
+
     func computeRhymeContext() -> RhymeContext {
         guard !lyrics.isEmpty else {
             return RhymeContext.emptyContext(currentLetter: String(activeRhymeScheme.first ?? Character("A")))
         }
 
-        let pos = min(max(cursorPosition, 0), lyrics.count)
+        let textIndex = cursorIndex(in: lyrics)
+        let pos = lyrics.distance(from: lyrics.startIndex, to: textIndex)
         let currentSection = currentSongSection(in: lyrics, cursorPosition: pos)
-        let textIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
         let textBeforeCursor = String(lyrics.prefix(pos))
         let textAfterCursor = String(lyrics.suffix(lyrics.count - pos))
 
@@ -338,7 +349,7 @@ final class EditorViewModel: ObservableObject {
         let range = selectedRange
         guard range.length > 0 else { return }
         let ns = lyrics as NSString
-        guard range.location + range.length <= ns.length else { return }
+        guard range.location >= 0, range.location + range.length <= ns.length else { return }
         let original = ns.substring(with: range)
         guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
@@ -421,8 +432,7 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Suggestion Insertion
 
     func insertSuggestion(_ suggestion: String) {
-        let pos = min(cursorPosition, lyrics.count)
-        let beforeIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
+        let beforeIndex = cursorIndex(in: lyrics)
         let before = String(lyrics[lyrics.startIndex..<beforeIndex])
         let after = String(lyrics[beforeIndex..<lyrics.endIndex])
 
@@ -430,7 +440,8 @@ final class EditorViewModel: ObservableObject {
         let insertText = (needsNewline ? "\n" : "") + suggestion + "\n"
 
         lyrics = before + insertText + after
-        cursorPosition = pos + insertText.count
+        // Keep cursorPosition in UTF-16 units to match the text view.
+        cursorPosition = ((before + insertText) as NSString).length
         suggestions = []
         triggerAutoSave()
     }
@@ -438,6 +449,9 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Project Management
 
     func newProject() {
+        // Cancel any armed autosave so it can't wake up and write the new,
+        // empty editor over the project the user was just editing.
+        autoSaveTask?.cancel()
         title = ""
         lyrics = ""
         theme = ""
@@ -451,6 +465,9 @@ final class EditorViewModel: ObservableObject {
     }
 
     func loadProject(_ project: SongProject) {
+        // Cancel any armed autosave so a pending write from the previous
+        // project can't fire after we've switched the editor's contents.
+        autoSaveTask?.cancel()
         title = project.title
         lyrics = project.lyrics
         theme = project.theme
@@ -608,6 +625,9 @@ final class EditorViewModel: ObservableObject {
 
     func importProject(_ exported: SongProjectExport) {
         guard let context = modelContext else { return }
+        // Cancel any armed autosave so a pending write from the previous
+        // project can't fire after we've switched to the imported one.
+        autoSaveTask?.cancel()
         let project = SongProject(
             id: UUID().uuidString,
             title: exported.title.isEmpty ? "Imported Song" : exported.title,

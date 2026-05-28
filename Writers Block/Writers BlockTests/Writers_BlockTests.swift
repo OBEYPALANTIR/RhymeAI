@@ -100,6 +100,23 @@ struct Writers_BlockTests {
         #expect(prosody.isFallback)
     }
 
+    @Test func prosodyFallbackKeepsSyllabicLeWithoutDoubleDecrement() {
+        // "les"/"le" preceded by a consonant is its own syllable and must not
+        // be decremented twice by the silent-"e" and plural-"es" heuristics.
+        #expect(ProsodyAnalyzer.analyzeWord("obstacles", dictionary: Self.fixtureDictionary).syllableCount == 3)
+        #expect(ProsodyAnalyzer.analyzeWord("candles", dictionary: Self.fixtureDictionary).syllableCount == 2)
+        #expect(ProsodyAnalyzer.analyzeWord("tables", dictionary: Self.fixtureDictionary).syllableCount == 2)
+        #expect(ProsodyAnalyzer.analyzeWord("candle", dictionary: Self.fixtureDictionary).syllableCount == 2)
+    }
+
+    @Test func prosodyFallbackStillReducesSilentEAndPluralEs() {
+        // "le"/"les" preceded by a vowel is not syllabic, so the silent-"e"
+        // reduction still applies.
+        #expect(ProsodyAnalyzer.analyzeWord("cake", dictionary: Self.fixtureDictionary).syllableCount == 1)
+        #expect(ProsodyAnalyzer.analyzeWord("mile", dictionary: Self.fixtureDictionary).syllableCount == 1)
+        #expect(ProsodyAnalyzer.analyzeWord("miles", dictionary: Self.fixtureDictionary).syllableCount == 1)
+    }
+
     @Test func prosodyAnalyzerUsesCmuPhonesForRhymeKeys() {
         let roadKeys = ProsodyAnalyzer.rhymeKeys(for: "road", dictionary: Self.fixtureDictionary)
         let glowedKeys = ProsodyAnalyzer.rhymeKeys(for: "glowed", dictionary: Self.fixtureDictionary)

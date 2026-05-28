@@ -148,7 +148,11 @@ struct EditorView: View {
 
     @ViewBuilder
     private var assistantFloatingButton: some View {
-        if !viewModel.showAssistantSheet && !keyboardIsVisible && !lyricsEditorIsFocused {
+        // Hide the UnBlock FAB whenever the select-to-rhyme chip bar or the
+        // inline rewrite review bar is showing, otherwise the FAB sits behind
+        // that accessory bar (zIndex 1 vs 1.5) instead of disappearing.
+        if !viewModel.showAssistantSheet && !keyboardIsVisible && !lyricsEditorIsFocused
+            && !shouldShowRewriteChipBar && !viewModel.hasActiveRewrite {
             VStack {
                 Spacer()
                 HStack {

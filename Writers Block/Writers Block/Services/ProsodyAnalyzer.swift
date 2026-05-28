@@ -303,9 +303,27 @@ nonisolated enum ProsodyAnalyzer {
             previousWasVowel = isVowel
         }
 
-        if w.hasSuffix("e"), !w.hasSuffix("le"), count > 1 { count -= 1 }
-        if w.hasSuffix("les"), w.count > 4, count > 1 { count -= 1 }
-        if w.hasSuffix("es"), !w.hasSuffix("ses"), !w.hasSuffix("zes"), count > 1 { count -= 1 }
+        // A consonant immediately before a trailing "le"/"les" forms its own
+        // syllable (table, candles, obstacles), so the silent-"e"/"es" rules
+        // must not also fire for those words. Previously both the "les" and
+        // "es" branches ran, double-decrementing words like "obstacles" to 1.
+        let syllabicLe: Bool = {
+            if w.hasSuffix("le"), w.count >= 3 {
+                return !vowels.contains(w[w.index(w.endIndex, offsetBy: -3)])
+            }
+            if w.hasSuffix("les"), w.count >= 4 {
+                return !vowels.contains(w[w.index(w.endIndex, offsetBy: -4)])
+            }
+            return false
+        }()
+
+        if !syllabicLe {
+            if w.hasSuffix("e"), count > 1 {
+                count -= 1
+            } else if w.hasSuffix("es"), !w.hasSuffix("ses"), !w.hasSuffix("zes"), count > 1 {
+                count -= 1
+            }
+        }
         if w.hasSuffix("ed"), !w.hasSuffix("ted"), !w.hasSuffix("ded"), count > 1 { count -= 1 }
 
         return max(count, 1)
