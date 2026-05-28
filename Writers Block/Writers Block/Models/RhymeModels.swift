@@ -116,14 +116,6 @@ struct RhymeContext {
     let currentLineIndex: Int
     let currentSection: SongSection
 
-    static let empty = RhymeContext(
-        targetLine: nil,
-        currentLetter: "A",
-        stanzaLines: [],
-        currentLineIndex: 0,
-        currentSection: .unknown
-    )
-
     static func emptyContext(currentLetter: String = "A", currentSection: SongSection = .unknown) -> RhymeContext {
         RhymeContext(
             targetLine: nil,
