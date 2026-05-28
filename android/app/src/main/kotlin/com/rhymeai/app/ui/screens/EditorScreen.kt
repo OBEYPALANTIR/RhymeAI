@@ -41,6 +41,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.OutputTransformation
+import androidx.compose.foundation.text.input.TextFieldDecorator
+import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -99,7 +102,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -346,7 +348,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         !pendingAssistantSheet &&
         !modalOpen
     val pendingRewriteRange = viewModel.pendingRewriteRange
-    val selection = viewModel.lyricsFieldValue.selection
+    val selection = viewModel.lyricsState.selection
     val rewriteVisible = pendingRewriteRange != null &&
         !showBottomSheet &&
         !pendingAssistantSheet &&
@@ -673,19 +675,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     } else {
                         pendingRewriteRange
                     }
-                    val inlineRewriteText = viewModel.inlineRewriteText
-                    val inlineRewriteValue = remember(
-                        viewModel.hasActiveRewrite,
-                        inlineRewriteText,
-                        inlineRewriteRange
-                    ) {
-                        TextFieldValue(
-                            text = inlineRewriteText,
-                            selection = inlineRewriteRange ?: TextRange(
-                                viewModel.cursorPosition.coerceIn(0, inlineRewriteText.length)
-                            )
-                        )
-                    }
                     val rewriteScanProgress = if (viewModel.hasActiveRewrite && viewModel.rewriteLoading) {
                         val animatedProgress by rememberInfiniteTransition(
                             label = "rewriteScan"
@@ -716,16 +705,30 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
 
                         // Actual text field. Keep it visible for syllable underlines so editing does not redraw through
-                        // a second text layer on every delete/backspace.
-                        BasicTextField(
-                            value = if (viewModel.hasActiveRewrite) inlineRewriteValue else viewModel.lyricsFieldValue,
-                            onValueChange = {
-                                if (!viewModel.hasActiveRewrite) {
-                                    viewModel.onLyricsChanged(it)
+                        // a second text layer on every delete/backspace. During an active rewrite the preview is shown
+                        // via OutputTransformation so the underlying state (and viewModel.lyrics) keep the real text.
+                        val rewriteOutputTransformation = if (viewModel.hasActiveRewrite) {
+                            val outputRange = viewModel.rewriteOutputRange
+                            val replacement = viewModel.rewriteOutputReplacement
+                            if (outputRange != null && replacement != null) {
+                                OutputTransformation {
+                                    val start = outputRange.min.coerceIn(0, length)
+                                    val end = outputRange.max.coerceIn(start, length)
+                                    replace(start, end, replacement)
                                 }
-                            },
-                            onTextLayout = { lyricsTextLayout = it },
+                            } else {
+                                null
+                            }
+                        } else {
+                            null
+                        }
+
+                        BasicTextField(
+                            state = viewModel.lyricsState,
                             readOnly = viewModel.hasActiveRewrite,
+                            lineLimits = TextFieldLineLimits.MultiLine(),
+                            outputTransformation = rewriteOutputTransformation,
+                            onTextLayout = { _, getResult -> lyricsTextLayout = getResult() },
                             textStyle = lyricsTextStyle.copy(
                                 color = if (rhymeOverlayActive)
                                     Color.Transparent
@@ -761,7 +764,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     strokeWidth = syllableUnderlineWidth
                                 )
                                 .onFocusChanged { lyricsFocused = it.isFocused },
-                            decorationBox = { innerTextField ->
+                            decorator = TextFieldDecorator { innerTextField ->
                                 Box {
                                     if (viewModel.lyrics.isEmpty()) {
                                         Text(
