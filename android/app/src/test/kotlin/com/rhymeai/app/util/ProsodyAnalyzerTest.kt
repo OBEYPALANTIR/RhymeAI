@@ -43,6 +43,25 @@ class ProsodyAnalyzerTest {
     }
 
     @Test
+    fun fallbackKeepsSyllabicLeWithoutDoubleDecrement() {
+        // "les"/"le" preceded by a consonant is its own syllable and must not
+        // be decremented twice by the silent-"e" and plural-"es" heuristics.
+        assertEquals(3, ProsodyAnalyzer.analyzeWord("obstacles", dictionary).syllableCount)
+        assertEquals(2, ProsodyAnalyzer.analyzeWord("candles", dictionary).syllableCount)
+        assertEquals(2, ProsodyAnalyzer.analyzeWord("tables", dictionary).syllableCount)
+        assertEquals(2, ProsodyAnalyzer.analyzeWord("candle", dictionary).syllableCount)
+    }
+
+    @Test
+    fun fallbackStillReducesSilentEAndPluralEs() {
+        // "le"/"les" preceded by a vowel is not syllabic, so the silent-"e"
+        // reduction still applies.
+        assertEquals(1, ProsodyAnalyzer.analyzeWord("cake", dictionary).syllableCount)
+        assertEquals(1, ProsodyAnalyzer.analyzeWord("mile", dictionary).syllableCount)
+        assertEquals(1, ProsodyAnalyzer.analyzeWord("miles", dictionary).syllableCount)
+    }
+
+    @Test
     fun rhymeKeysUseCmuPhones() {
         val roadKeys = ProsodyAnalyzer.rhymeKeys("road", dictionary = dictionary)
         val glowedKeys = ProsodyAnalyzer.rhymeKeys("glowed", dictionary = dictionary)

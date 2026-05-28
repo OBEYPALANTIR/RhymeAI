@@ -134,10 +134,9 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
 
     var localModelService: LocalModelService? = null
 
-    suspend fun getSuggestions(
-        provider: AIProvider,
-        apiKey: String,
-        modelId: String,
+    // Cloud providers stream their suggestions through streamSuggestions(); only
+    // the on-device LOCAL model uses this non-streaming path.
+    private suspend fun localSuggestions(
         theme: String,
         lyrics: String,
         targetRhymeLine: String?,
@@ -148,32 +147,18 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
         complexity: RhymeComplexity = RhymeComplexity.MODERATE,
         useWholeSongContext: Boolean = false
     ): List<String> {
-        if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
-            throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
-        }
-
-        return if (provider == AIProvider.LOCAL) {
-            val localPrompt = buildLocalPrompt(
-                theme = theme,
-                lyrics = lyrics,
-                targetRhymeLine = targetRhymeLine,
-                rhymeType = rhymeType,
-                rhymeScheme = rhymeScheme,
-                currentLetter = currentLetter,
-                currentSection = currentSection,
-                complexity = complexity,
-                useWholeSongContext = useWholeSongContext
-            )
-            callLocal(localPrompt, lyrics)
-        } else {
-            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext)
-            when (provider) {
-                AIProvider.GEMINI -> callGemini(apiKey, modelId, prompt)
-                AIProvider.OPENAI -> callOpenAI(apiKey, modelId, prompt)
-                AIProvider.CLAUDE -> callClaude(apiKey, modelId, prompt)
-                AIProvider.LOCAL -> error("unreachable")
-            }
-        }
+        val localPrompt = buildLocalPrompt(
+            theme = theme,
+            lyrics = lyrics,
+            targetRhymeLine = targetRhymeLine,
+            rhymeType = rhymeType,
+            rhymeScheme = rhymeScheme,
+            currentLetter = currentLetter,
+            currentSection = currentSection,
+            complexity = complexity,
+            useWholeSongContext = useWholeSongContext
+        )
+        return callLocal(localPrompt, lyrics)
     }
 
     fun streamSuggestions(
@@ -209,7 +194,7 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
             }
             AIProvider.LOCAL -> {
                 // Local model already streams tokens internally; needs its own Flow surface (follow-up).
-                getSuggestions(provider, apiKey, modelId, theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext)
+                localSuggestions(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext)
                     .forEach { emit(it) }
             }
         }
@@ -562,85 +547,6 @@ Rules:
         } catch (_: Exception) {
             null
         }
-    }
-
-    private suspend fun callGemini(apiKey: String, modelId: String, prompt: String): List<String> {
-        val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
-        val response = model.generateContent(prompt)
-        val text = response.text?.trim() ?: return emptyList()
-        return parseSuggestionList(text)
-    }
-
-    private suspend fun callOpenAI(apiKey: String, modelId: String, prompt: String): List<String> {
-        val body = buildJsonObject {
-            put("model", modelId)
-            put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "user")
-                    put("content", prompt)
-                })
-            })
-            put("temperature", 0.8)
-        }
-
-        val responseText = httpPost(
-            url = "https://api.openai.com/v1/chat/completions",
-            headers = mapOf(
-                "Authorization" to "Bearer $apiKey",
-                "Content-Type" to "application/json"
-            ),
-            body = body.toString()
-        )
-
-        val responseJson = json.parseToJsonElement(responseText).jsonObject
-        val content = responseJson["choices"]?.jsonArray
-            ?.firstOrNull()?.jsonObject
-            ?.get("message")?.jsonObject
-            ?.get("content")?.jsonPrimitive?.content ?: return emptyList()
-
-        return parseSuggestionList(content)
-    }
-
-    private suspend fun callClaude(apiKey: String, modelId: String, prompt: String): List<String> {
-        val body = buildJsonObject {
-            put("model", modelId)
-            put("max_tokens", 1024)
-            put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "user")
-                    put("content", prompt)
-                })
-            })
-        }
-
-        val responseText = httpPost(
-            url = "https://api.anthropic.com/v1/messages",
-            headers = mapOf(
-                "x-api-key" to apiKey,
-                "anthropic-version" to "2023-06-01",
-                "Content-Type" to "application/json"
-            ),
-            body = body.toString()
-        )
-
-        val responseJson = json.parseToJsonElement(responseText).jsonObject
-        val content = responseJson["content"]?.jsonArray
-            ?.firstOrNull()?.jsonObject
-            ?.get("text")?.jsonPrimitive?.content ?: return emptyList()
-
-        return parseSuggestionList(content)
-    }
-
-    private fun parseSuggestionList(raw: String): List<String> {
-        val parsed = parseJsonArray(raw).ifEmpty { parseLines(raw) }
-        val seen = mutableSetOf<String>()
-        return parsed
-            .mapNotNull { cleanLocalSuggestionLine(it) }
-            .filter {
-                val key = normalizeSuggestionKey(it)
-                key.isNotEmpty() && seen.add(key)
-            }
-            .take(SUGGESTION_COUNT)
     }
 
     private fun buildLocalPrompt(

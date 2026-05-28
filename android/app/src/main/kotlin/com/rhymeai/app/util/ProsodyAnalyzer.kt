@@ -272,9 +272,20 @@ object ProsodyAnalyzer {
             prevVowel = isVowel
         }
 
-        if (w.endsWith("e") && !w.endsWith("le") && count > 1) count--
-        if (w.endsWith("les") && w.length > 4 && count > 1) count--
-        if (w.endsWith("es") && !w.endsWith("ses") && !w.endsWith("zes") && count > 1) count--
+        // A consonant immediately before a trailing "le"/"les" forms its own
+        // syllable (table, candles, obstacles), so the silent-"e"/"es" rules
+        // must not also fire for those words. Previously both the "les" and
+        // "es" branches ran, double-decrementing words like "obstacles" to 1.
+        val syllabicLe = (w.endsWith("le") && w.length >= 3 && w[w.length - 3] !in vowelLetters) ||
+            (w.endsWith("les") && w.length >= 4 && w[w.length - 4] !in vowelLetters)
+
+        if (!syllabicLe) {
+            if (w.endsWith("e") && count > 1) {
+                count--
+            } else if (w.endsWith("es") && !w.endsWith("ses") && !w.endsWith("zes") && count > 1) {
+                count--
+            }
+        }
         if (w.endsWith("ed") && !w.endsWith("ted") && !w.endsWith("ded") && count > 1) count--
 
         return maxOf(count, 1)
