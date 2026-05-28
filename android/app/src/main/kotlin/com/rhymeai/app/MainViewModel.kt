@@ -4,8 +4,10 @@ import android.app.Application
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.text.input.TextFieldBuffer
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rhymeai.app.data.model.RewriteAction
@@ -24,7 +26,6 @@ import com.rhymeai.app.service.LocalModelService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -52,14 +53,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     private val aiService = AIService().also { it.localModelService = localModelService }
 
-    // Editor state
+    // Editor state. The lyrics editor uses the state-based BasicTextField API:
+    // it owns text + selection and coordinates selection gestures with scrolling,
+    // which the old value-based field did not (long-press over-selected).
     var title by mutableStateOf("")
-    var lyricsFieldValue by mutableStateOf(TextFieldValue(""))
+    val lyricsState = TextFieldState()
     var theme by mutableStateOf("")
 
-    val lyrics: String get() = lyricsFieldValue.text
+    // Last lyrics text the change-observer processed, so programmatic edits
+    // (load / apply rewrite / insert suggestion) are not mistaken for user typing.
+    private var lastObservedLyrics: String = ""
+
+    val lyrics: String get() = lyricsState.text.toString()
     val cursorPosition: Int
-        get() = lyricsFieldValue.selection.start.coerceIn(0, lyricsFieldValue.text.length)
+        get() = lyricsState.selection.start.coerceIn(0, lyricsState.text.length)
 
     // UI state
     var suggestions by mutableStateOf<List<String>>(emptyList())
@@ -139,6 +146,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return TextRange(start, end)
         }
 
+    // Drives the editor's OutputTransformation during an active rewrite: the
+    // displayed text shows the preview in place of the selection while the
+    // underlying TextFieldState (and `lyrics`) keep the real, unedited text.
+    val rewriteOutputRange: TextRange?
+        get() = rewriteRange
+    val rewriteOutputReplacement: String?
+        get() = rewriteRange?.let { rewritePreview ?: rewriteOriginal }
+
     private var autoSaveJob: Job? = null
     private var trashSchedulerJob: Job? = null
 
@@ -166,7 +181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Load editor state
             val (savedTitle, savedLyrics, savedTheme) = repo.editorStateFlow().first()
             title = savedTitle
-            lyricsFieldValue = TextFieldValue(savedLyrics)
+            setLyrics(savedLyrics)
             theme = savedTheme
 
             // Always show start menu on fresh launch
@@ -180,6 +195,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 repo.trashedProjectsFlow.collect {
                     trashedProjects = it
                     scheduleTrashPurge()
+                }
+            }
+        }
+
+        // React to lyrics text/selection changes from the text field. Replaces
+        // the old onValueChange callback now that the field mutates state directly.
+        viewModelScope.launch {
+            snapshotFlow { lyricsState.text.toString() to lyricsState.selection }
+                .collect { (text, selection) -> onLyricsStateChanged(text, selection) }
+        }
+    }
+
+    private fun onLyricsStateChanged(text: String, selection: TextRange) {
+        if (hasActiveRewrite) {
+            lastObservedLyrics = text
+            return
+        }
+        if (text != lastObservedLyrics) {
+            lastObservedLyrics = text
+            pendingRewriteRange = null
+            triggerAutoSave()
+            return
+        }
+
+        // Selection-only change: maintain the "select to rhyme" pending range.
+        if (!selection.collapsed) {
+            val start = selection.min.coerceIn(0, text.length)
+            val end = selection.max.coerceIn(0, text.length)
+            val selectedText = if (start < end) text.substring(start, end) else ""
+            pendingRewriteRange = if (start < end && selectedText.isNotBlank()) {
+                TextRange(start, end)
+            } else {
+                null
+            }
+        } else {
+            pendingRewriteRange?.let { pendingRange ->
+                if (selection.start != pendingRange.min && selection.start != pendingRange.max) {
+                    pendingRewriteRange = null
                 }
             }
         }
@@ -283,7 +336,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun requestRewrite(action: RewriteAction) {
-        val selection = pendingRewriteRange ?: lyricsFieldValue.selection
+        val selection = pendingRewriteRange ?: lyricsState.selection
         val start = selection.min.coerceIn(0, lyrics.length)
         val end = selection.max.coerceIn(0, lyrics.length)
         if (start >= end) return
@@ -351,8 +404,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val after = text.substring(range.end)
         val newText = before + preview + after
         val newCursor = (range.start + preview.length).coerceAtMost(newText.length)
-        lyricsFieldValue = TextFieldValue(newText, TextRange(newCursor))
         dismissRewrite()
+        setLyrics(newText, newCursor)
         triggerAutoSave()
     }
 
@@ -377,15 +430,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val insertText = (if (needsNewline) "\n" else "") + suggestion + "\n"
         val newText = before + insertText + after
         val newPos = pos + insertText.length
-        lyricsFieldValue = TextFieldValue(newText, TextRange(newPos))
+        setLyrics(newText, newPos)
         suggestions = emptyList()
         triggerAutoSave()
     }
 
     fun newProject() {
-        pendingRewriteRange = null
         title = ""
-        lyricsFieldValue = TextFieldValue("")
+        setLyrics("")
         theme = ""
         currentProjectId = null
         suggestions = emptyList()
@@ -398,9 +450,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadProject(project: SongProject) {
-        pendingRewriteRange = null
         title = project.title
-        lyricsFieldValue = TextFieldValue(project.lyrics)
+        setLyrics(project.lyrics)
         theme = project.theme
         currentProjectId = project.id
         suggestions = emptyList()
@@ -495,9 +546,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun clearEditorAfterProjectDelete() {
         autoSaveJob?.cancel()
-        pendingRewriteRange = null
         title = ""
-        lyricsFieldValue = TextFieldValue("")
+        setLyrics("")
         theme = ""
         currentProjectId = null
         suggestions = emptyList()
@@ -506,7 +556,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun importProject(imported: SongProject) {
-        pendingRewriteRange = null
         val newId = java.util.UUID.randomUUID().toString()
         val project = imported.copy(
             id = newId,
@@ -515,7 +564,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         projects = listOf(project) + projects
         title = project.title
-        lyricsFieldValue = TextFieldValue(project.lyrics)
+        setLyrics(project.lyrics)
         theme = project.theme
         currentProjectId = project.id
         suggestions = emptyList()
@@ -539,10 +588,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String) {
-        pendingRewriteRange = null
         title = "Untitled $name"
         theme = templateTheme
-        lyricsFieldValue = TextFieldValue(templateLyrics)
+        setLyrics(templateLyrics)
         currentProjectId = null
         showTemplatesDialog = false
         showStartMenu = false
@@ -606,44 +654,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         triggerAutoSave()
     }
 
-    fun onLyricsChanged(newValue: TextFieldValue) {
-        if (hasActiveRewrite) return
-        val previousText = lyricsFieldValue.text
-        val nextValue = newValue.withValidRanges()
-        if (nextValue.text != previousText) {
-            pendingRewriteRange = null
-            lyricsFieldValue = nextValue
-            triggerAutoSave()
-            return
+    // Programmatically replaces the editor text and places the cursor. Updates
+    // lastObservedLyrics first so the change-observer treats this as a
+    // programmatic edit (no autosave / pending-rewrite side effects); callers
+    // that need a save (apply rewrite, insert, template) call triggerAutoSave.
+    private fun setLyrics(text: String, cursor: Int = 0) {
+        lastObservedLyrics = text
+        pendingRewriteRange = null
+        lyricsState.edit {
+            replace(0, this.length, text)
+            placeCursorAt(cursor)
         }
+    }
 
-        val nextSelection = nextValue.selection
-        if (!nextSelection.collapsed) {
-            val start = nextSelection.min.coerceIn(0, nextValue.text.length)
-            val end = nextSelection.max.coerceIn(0, nextValue.text.length)
-            val selectedText = nextValue.text.substring(start, end)
-            pendingRewriteRange = if (start < end && selectedText.isNotBlank()) {
-                TextRange(start, end)
-            } else {
-                null
-            }
-            lyricsFieldValue = nextValue
-            return
+    private fun TextFieldBuffer.placeCursorAt(offset: Int) {
+        when {
+            this.length == 0 -> placeCursorAtEnd()
+            offset <= 0 -> placeCursorBeforeCharAt(0)
+            offset >= this.length -> placeCursorAtEnd()
+            else -> placeCursorBeforeCharAt(offset)
         }
-
-        pendingRewriteRange?.let { pendingRange ->
-            if (nextSelection.start != pendingRange.min && nextSelection.start != pendingRange.max) {
-                pendingRewriteRange = null
-            }
-        }
-        lyricsFieldValue = nextValue
     }
 
     fun clearPendingRewriteSelection() {
         pendingRewriteRange = null
-        val selection = lyricsFieldValue.selection
+        val selection = lyricsState.selection
         if (!selection.collapsed) {
-            lyricsFieldValue = lyricsFieldValue.copy(selection = TextRange(selection.max))
+            lyricsState.edit { placeCursorAt(selection.max) }
         }
     }
 
@@ -654,25 +691,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun goToStartMenu() {
         showStartMenu = true
-    }
-
-    private fun TextFieldValue.withValidRanges(): TextFieldValue {
-        val textLength = text.length
-        val safeSelection = TextRange(
-            selection.start.coerceIn(0, textLength),
-            selection.end.coerceIn(0, textLength)
-        )
-        val safeComposition = composition?.let { range ->
-            TextRange(
-                range.start.coerceIn(0, textLength),
-                range.end.coerceIn(0, textLength)
-            )
-        }
-        return if (safeSelection == selection && safeComposition == composition) {
-            this
-        } else {
-            copy(selection = safeSelection, composition = safeComposition)
-        }
     }
 
     fun saveApiKey(provider: AIProvider, key: String) {
