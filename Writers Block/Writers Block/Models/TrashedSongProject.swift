@@ -5,13 +5,16 @@ let trashRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
 
 @Model
 final class TrashedSongProject {
-    @Attribute(.unique) var id: String
-    var title: String
-    var lyrics: String
-    var theme: String
-    var updatedAt: Date
-    var deletedAt: Date
-    var deleteAfter: Date
+    // See SongProject.swift — CloudKit-backed SwiftData stores cannot use
+    // @Attribute(.unique) and require property-level defaults. Uniqueness is
+    // enforced by the trash-move logic.
+    var id: String = ""
+    var title: String = ""
+    var lyrics: String = ""
+    var theme: String = ""
+    var updatedAt: Date = Date()
+    var deletedAt: Date = Date()
+    var deleteAfter: Date = Date()
 
     init(
         id: String,

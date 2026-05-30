@@ -11,7 +11,16 @@ struct Writers_BlockApp: App {
             TrashedSongProject.self,
         ])
         let isUITestInMemoryStore = ProcessInfo.processInfo.arguments.contains("--ui-test-in-memory-store")
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: isUITestInMemoryStore)
+        let modelConfiguration: ModelConfiguration
+        if isUITestInMemoryStore {
+            modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        } else {
+            modelConfiguration = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: false,
+                cloudKitDatabase: .private("iCloud.ShaydeTree.Writers-Block")
+            )
+        }
 
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
