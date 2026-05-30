@@ -364,7 +364,7 @@ private final class RewriteHighlightOverlayView: UIView {
         context.setLineWidth(1.0)
 
         for highlightRect in rects {
-            let path = UIBezierPath(roundedRect: highlightRect, cornerRadius: 5)
+            let path = UIBezierPath(roundedRect: highlightRect, cornerRadius: RhymeAITokens.Radius.xs)
             context.addPath(path.cgPath)
             context.drawPath(using: .fillStroke)
         }

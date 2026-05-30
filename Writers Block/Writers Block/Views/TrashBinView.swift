@@ -142,7 +142,7 @@ struct TrashBinView: View {
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
-                .frame(width: 56, height: 56)
+                .frame(width: RhymeAITokens.Touch.comfortable, height: RhymeAITokens.Touch.comfortable)
 
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
                     Text(project.title.isEmpty ? "Untitled Song" : project.title)

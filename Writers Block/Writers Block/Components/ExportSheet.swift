@@ -6,11 +6,11 @@ struct ExportSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
                 Text("Pick a format. Save anywhere — Drive, Files, local — via the system picker.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, RhymeAITokens.Spacing.xxs)
 
                 ForEach(ExportFormat.allCases) { format in
                     Button {
@@ -33,17 +33,17 @@ struct ExportSheet: View {
                             Image(systemName: "chevron.right")
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 12)
-                        .liquidGlassSurface(cornerRadius: 12, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+                        .padding(.horizontal, RhymeAITokens.Spacing.sm)
+                        .padding(.vertical, RhymeAITokens.Spacing.sm)
+                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
                     }
                     .buttonStyle(.plain)
                 }
 
                 Spacer()
             }
-            .padding(20)
-            .liquidGlassGroup(spacing: 16)
+            .padding(RhymeAITokens.Spacing.md)
+            .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
             .background(Color(UIColor.systemBackground))
             .navigationTitle("Export Song")
             .navigationBarTitleDisplayMode(.inline)

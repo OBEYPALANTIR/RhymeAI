@@ -11,17 +11,17 @@ struct RhymeSchemeDisplayView: View {
             EmptyView()
         } else {
             ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.hairline) {
                     ForEach(Array(rhymeContext.stanzaLines.enumerated()), id: \.offset) { index, line in
                         let letter = String(schemeLetters[index % schemeLetters.count])
                         let isCurrent = index == rhymeContext.currentLineIndex
 
-                        HStack(spacing: 12) {
+                        HStack(spacing: RhymeAITokens.Spacing.sm) {
                             Text(letter)
                                 .font(.system(.caption, design: .monospaced))
                                 .fontWeight(.bold)
                                 .foregroundColor(isCurrent ? .indigo : .secondary.opacity(0.4))
-                                .frame(width: 16, alignment: .leading)
+                                .frame(width: RhymeAITokens.Spacing.md, alignment: .leading)
 
                             if line.trimmingCharacters(in: .whitespaces).isEmpty && isCurrent {
                                 Text("Typing here...")
@@ -38,17 +38,17 @@ struct RhymeSchemeDisplayView: View {
 
                             Spacer()
                         }
-                        .padding(.vertical, 1)
+                        .padding(.vertical, RhymeAITokens.Spacing.hairline)
                     }
                 }
-                .padding(12)
+                .padding(RhymeAITokens.Spacing.sm)
             }
             .frame(maxHeight: 160)
             .background(Color(UIColor.secondarySystemBackground).opacity(0.72))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md)
+                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: RhymeAITokens.Spacing.hairline)
             )
         }
     }

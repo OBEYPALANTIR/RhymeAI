@@ -12,16 +12,16 @@ struct RewriteSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
                     Text("Original")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Text(original)
                         .font(.system(.body, design: .serif))
                         .foregroundStyle(.primary.opacity(0.8))
-                        .padding(12)
+                        .padding(RhymeAITokens.Spacing.sm)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .liquidGlassSurface(cornerRadius: 8, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
+                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
 
                     Text("Rewrite")
                         .font(.caption.weight(.semibold))
@@ -29,7 +29,7 @@ struct RewriteSheet: View {
 
                     Group {
                         if loading {
-                            HStack(spacing: 8) {
+                            HStack(spacing: RhymeAITokens.Spacing.xs) {
                                 ProgressView().scaleEffect(0.8)
                                 Text("Thinking...").foregroundStyle(.secondary)
                             }
@@ -47,11 +47,11 @@ struct RewriteSheet: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .liquidGlassSurface(cornerRadius: 8, tint: .indigo.opacity(0.10), fallbackOpacity: 0.08)
+                    .padding(RhymeAITokens.Spacing.sm)
+                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm, tint: .indigo.opacity(0.10), fallbackOpacity: 0.08)
                 }
-                .padding(20)
-                .liquidGlassGroup(spacing: 16)
+                .padding(RhymeAITokens.Spacing.md)
+                .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
             }
             .background(Color(UIColor.systemBackground))
             .navigationTitle(action.label)

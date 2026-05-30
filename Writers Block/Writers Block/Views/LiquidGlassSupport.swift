@@ -6,6 +6,7 @@ enum RhymeAITokens {
     static let phiSquared: CGFloat = 2.618
 
     enum Spacing {
+        static let hairline: CGFloat = 1
         static let xxs: CGFloat = 4
         static let xs: CGFloat = 8
         static let sm: CGFloat = 12
@@ -17,6 +18,8 @@ enum RhymeAITokens {
 
     enum Touch {
         static let minimum: CGFloat = 44
+        static let comfortable: CGFloat = 56
+        static let prominent: CGFloat = 82
     }
 
     enum Radius {

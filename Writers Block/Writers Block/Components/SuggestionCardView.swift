@@ -91,7 +91,7 @@ private struct SuggestionProsodyPreviewView: View {
 
     var body: some View {
         if prosody.syllableCount > 0 {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.hairline) {
                 if !prosody.feet.isEmpty {
                     Text(prosody.feet)
                 }

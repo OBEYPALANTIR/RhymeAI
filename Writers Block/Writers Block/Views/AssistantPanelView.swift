@@ -109,7 +109,7 @@ struct AssistantPanelView: View {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                            .padding(.vertical, 3)
+                            .padding(.vertical, RhymeAITokens.Spacing.xxs)
                             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, fallbackOpacity: 0.08)
                     }
                 }
@@ -363,7 +363,7 @@ struct AssistantPanelView: View {
         } label: {
             ZStack {
                 Image(systemName: "questionmark.circle")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum, alignment: .center)
@@ -448,7 +448,7 @@ private struct AssistantProsodyPreviewView: View {
 
     var body: some View {
         if prosody.syllableCount > 0 {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.hairline) {
                 if !prosody.feet.isEmpty {
                     Text(prosody.feet)
                 }
@@ -577,10 +577,10 @@ private struct RhymeLegendView: View {
                 ForEach(Array(palette.enumerated()), id: \.offset) { _, color in
                     Circle()
                         .fill(color)
-                        .frame(width: 20, height: 20)
+                        .frame(width: RhymeAITokens.Spacing.md, height: RhymeAITokens.Spacing.md)
                         .overlay(
                             Circle()
-                                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+                                .strokeBorder(.white.opacity(0.18), lineWidth: RhymeAITokens.Spacing.hairline)
                         )
                 }
             }
