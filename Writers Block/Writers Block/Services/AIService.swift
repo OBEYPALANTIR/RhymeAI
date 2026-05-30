@@ -207,7 +207,7 @@ struct AIService {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):streamGenerateContent?alt=sse&key=\(apiKey)"
+                    let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):streamGenerateContent?alt=sse"
                     guard let url = URL(string: urlString) else {
                         throw AIServiceError.invalidResponse
                     }
@@ -216,7 +216,10 @@ struct AIService {
                     ]
                     let payloads = httpPostStream(
                         url: url,
-                        headers: ["Content-Type": "application/json"],
+                        headers: [
+                            "Content-Type": "application/json",
+                            "x-goog-api-key": apiKey
+                        ],
                         body: try JSONSerialization.data(withJSONObject: body)
                     )
                     for try await payload in payloads {
@@ -344,10 +347,14 @@ struct AIService {
                         throw AIServiceError.invalidResponse
                     }
                     if !(200...299).contains(httpResponse.statusCode) {
-                        var errorData = Data()
-                        for try await byte in bytes { errorData.append(byte) }
-                        let bodyText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
-                        throw AIServiceError.apiError(statusCode: httpResponse.statusCode, message: bodyText)
+                        // Drain the response so the connection cleans up, but do not
+                        // surface the body — provider error payloads can echo back
+                        // the request URL or the API key into user-visible text.
+                        for try await _ in bytes {}
+                        throw AIServiceError.apiError(
+                            statusCode: httpResponse.statusCode,
+                            message: AIService.userFacingStatusMessage(for: httpResponse.statusCode)
+                        )
                     }
                     for try await line in bytes.lines {
                         if line.isEmpty || line.hasPrefix(":") { continue }
@@ -452,7 +459,7 @@ struct AIService {
     // MARK: - Gemini
 
     private func callGemini(apiKey: String, modelId: String, prompt: String) async throws -> [String] {
-        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):generateContent?key=\(apiKey)"
+        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):generateContent"
         guard let url = URL(string: urlString) else { throw AIServiceError.invalidResponse }
 
         let body: [String: Any] = [
@@ -463,7 +470,10 @@ struct AIService {
 
         let data = try await httpPost(
             url: url,
-            headers: ["Content-Type": "application/json"],
+            headers: [
+                "Content-Type": "application/json",
+                "x-goog-api-key": apiKey
+            ],
             body: try JSONSerialization.data(withJSONObject: body)
         )
 
@@ -620,6 +630,118 @@ struct AIService {
         }
     }
 
+    // MARK: - Synonyms
+
+    func getSynonyms(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        word: String,
+        lineContext: String,
+        limit: Int = 8
+    ) async throws -> [String] {
+        let target = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else { return [] }
+
+        if provider == .local {
+            if #available(iOS 26.0, *) {
+                let prompt = buildSynonymsPrompt(word: target, lineContext: lineContext, limit: limit)
+                let raw = try await callLocalRaw(prompt: prompt, instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object.")
+                return extractSynonyms(raw, exclude: target, limit: limit)
+            }
+            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence synonyms require iOS 26 or later.")
+        }
+
+        guard !apiKey.isEmpty else {
+            throw AIServiceError.noApiKey(provider: provider.displayName)
+        }
+
+        let prompt = buildSynonymsPrompt(word: target, lineContext: lineContext, limit: limit)
+        let raw: String
+        switch provider {
+        case .gemini:
+            raw = try await callGeminiRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
+        case .openai:
+            raw = try await callOpenAIRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
+        case .claude:
+            raw = try await callClaudeRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
+        case .local:
+            throw AIServiceError.invalidResponse
+        }
+        return extractSynonyms(raw, exclude: target, limit: limit)
+    }
+
+    private func buildSynonymsPrompt(word: String, lineContext: String, limit: Int) -> String {
+        let trimmedContext = lineContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        let contextLine = String(trimmedContext.prefix(240))
+        let contextBlock = contextLine.isEmpty ? "(no surrounding line)" : contextLine
+        return """
+        You are RhymeAI's word inspector. Given a target word and the lyric line it appears in, return synonyms that could replace the target while preserving meaning, register, and roughly the same syllable count.
+
+        Target word: "\(word)"
+        Lyric line: "\(contextBlock)"
+
+        Rules:
+        - Provide up to \(limit) synonyms.
+        - No multi-word phrases unless they would naturally read as a single concept.
+        - No duplicates. Never include the target word itself.
+        - Match the tone of the line (slang stays slang, formal stays formal).
+
+        Respond ONLY with a JSON object of the form {"synonyms": ["..."]}. No code fences, no commentary.
+        """
+    }
+
+    private func extractSynonyms(_ raw: String, exclude: String, limit: Int) -> [String] {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```json") { cleaned = String(cleaned.dropFirst(7)) }
+        if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
+        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return [] }
+        let excludeKey = exclude.lowercased()
+
+        var collected: [String] = []
+        if let data = cleaned.data(using: .utf8) {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let arr = obj["synonyms"] as? [String] {
+                collected = arr
+            } else if let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
+                collected = arr
+            }
+        }
+
+        if collected.isEmpty {
+            collected = cleaned
+                .components(separatedBy: .newlines)
+                .map { line in
+                    line.trimmingCharacters(in: CharacterSet(charactersIn: " \t\"',-*•"))
+                }
+                .filter { !$0.isEmpty }
+        }
+
+        var seen = Set<String>()
+        var result: [String] = []
+        for candidate in collected {
+            let word = candidate.trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
+            guard !word.isEmpty, word.count <= 32 else { continue }
+            let key = word.lowercased()
+            if key == excludeKey || !seen.insert(key).inserted { continue }
+            result.append(word)
+            if result.count >= limit { break }
+        }
+        return result
+    }
+
+    @available(iOS 26.0, *)
+    private func callLocalRaw(prompt: String, instructions: String) async throws -> String {
+        let model = SystemLanguageModel.default
+        guard model.isAvailable else {
+            throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
+        }
+        let session = LanguageModelSession(model: model, instructions: instructions)
+        return try await session.respond(to: prompt).content
+    }
+
     // MARK: - Rewrite
 
     func getRewrite(
@@ -725,7 +847,7 @@ struct AIService {
     }
 
     private func callGeminiRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
-        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):generateContent?key=\(apiKey)"
+        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):generateContent"
         guard let url = URL(string: urlString) else { throw AIServiceError.invalidResponse }
 
         let body: [String: Any] = [
@@ -734,7 +856,10 @@ struct AIService {
         ]
         let data = try await httpPost(
             url: url,
-            headers: ["Content-Type": "application/json"],
+            headers: [
+                "Content-Type": "application/json",
+                "x-goog-api-key": apiKey
+            ],
             body: try JSONSerialization.data(withJSONObject: body)
         )
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -844,10 +969,27 @@ struct AIService {
             throw AIServiceError.invalidResponse
         }
         guard (200...299).contains(httpResponse.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw AIServiceError.apiError(statusCode: httpResponse.statusCode, message: body)
+            throw AIServiceError.apiError(
+                statusCode: httpResponse.statusCode,
+                message: AIService.userFacingStatusMessage(for: httpResponse.statusCode)
+            )
         }
         return data
+    }
+
+    static func userFacingStatusMessage(for statusCode: Int) -> String {
+        switch statusCode {
+        case 401, 403:
+            return "Provider rejected the request — check your API key in Settings."
+        case 404:
+            return "Provider could not find the requested model — pick another in Settings."
+        case 429:
+            return "Provider rate limit reached — wait a moment and retry."
+        case 500...599:
+            return "Provider service error — try again shortly."
+        default:
+            return "Provider request failed (status \(statusCode))."
+        }
     }
 
     // MARK: - Parsing

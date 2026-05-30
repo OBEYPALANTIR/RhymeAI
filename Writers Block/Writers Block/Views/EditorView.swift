@@ -62,6 +62,42 @@ struct EditorView: View {
         ) { _ in
             pendingExport = nil
         }
+        .sheet(
+            isPresented: Binding(
+                get: { viewModel.showInspector },
+                set: { newValue in if !newValue { viewModel.dismissInspector() } }
+            )
+        ) {
+            if let word = viewModel.inspectorWord {
+                if #available(iOS 16.0, *) {
+                    WordInspectorSheetView(
+                        word: word,
+                        prosody: viewModel.inspectorProsody,
+                        matches: viewModel.inspectorMatches,
+                        synonyms: viewModel.inspectorSynonyms,
+                        synonymsLoading: viewModel.inspectorSynonymsLoading,
+                        synonymsError: viewModel.inspectorSynonymsError,
+                        onReplace: { viewModel.applyInspectorReplacement($0) },
+                        onRetrySynonyms: { viewModel.retryInspectorSynonyms() },
+                        onDismiss: { viewModel.dismissInspector() }
+                    )
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                } else {
+                    WordInspectorSheetView(
+                        word: word,
+                        prosody: viewModel.inspectorProsody,
+                        matches: viewModel.inspectorMatches,
+                        synonyms: viewModel.inspectorSynonyms,
+                        synonymsLoading: viewModel.inspectorSynonymsLoading,
+                        synonymsError: viewModel.inspectorSynonymsError,
+                        onReplace: { viewModel.applyInspectorReplacement($0) },
+                        onRetrySynonyms: { viewModel.retryInspectorSynonyms() },
+                        onDismiss: { viewModel.dismissInspector() }
+                    )
+                }
+            }
+        }
     }
 
     private func suggestedFilename(format: ExportFormat) -> String {
@@ -146,9 +182,16 @@ struct EditorView: View {
         .simultaneousGesture(assistantBackSwipeGesture, including: viewModel.showAssistantSheet ? .all : .subviews)
     }
 
+    private var assistantModalOpen: Bool {
+        viewModel.showSettingsSheet || viewModel.showExportSheet || projectDrawerOpen
+    }
+
     @ViewBuilder
     private var assistantFloatingButton: some View {
-        if !viewModel.showAssistantSheet && !keyboardIsVisible && !lyricsEditorIsFocused {
+        // Matches Android: hidden only when assistant sheet is up, a modal is up,
+        // or an inline rewrite is being reviewed. Keyboard does NOT hide the
+        // button — it rides above the keyboard instead.
+        if !viewModel.showAssistantSheet && !assistantModalOpen && !viewModel.hasActiveRewrite {
             VStack {
                 Spacer()
                 HStack {
@@ -156,7 +199,7 @@ struct EditorView: View {
                     Button {
                         presentAssistantSheet()
                     } label: {
-                        HStack(spacing: 8) {
+                        HStack(spacing: RhymeAITokens.Spacing.xs) {
                             Image(systemName: "pencil")
                                 .font(.body.weight(.semibold))
                             UnBlockWordmark()
@@ -166,11 +209,13 @@ struct EditorView: View {
                         .padding(.vertical, RhymeAITokens.Spacing.sm)
                         .frame(minHeight: RhymeAITokens.Touch.minimum)
                         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo, interactive: true, fallbackOpacity: 0.35)
-                        .shadow(color: .indigo.opacity(0.26), radius: 12, y: 4)
+                        .shadow(color: .indigo.opacity(0.26), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
                     }
                     .accessibilityIdentifier("unblockButton")
                     .padding(.trailing, RhymeAITokens.Spacing.md)
-                    .padding(.bottom, RhymeAITokens.Spacing.md)
+                    .padding(.bottom, keyboardIsVisible
+                             ? keyboardHeight + RhymeAITokens.Spacing.sm
+                             : RhymeAITokens.Spacing.md)
                 }
             }
             .transition(.scale(scale: 0.92, anchor: .bottomTrailing).combined(with: .opacity))
@@ -231,6 +276,7 @@ struct EditorView: View {
     ) {
         let dragDistance = max(0, translation)
         let projectedDistance = max(0, predictedTranslation)
+        // Gesture threshold — tuned by feel, not derived from the φ scale.
         let closeThreshold = min(180, max(96, sheetHeight * 0.18))
 
         if dragDistance >= closeThreshold || projectedDistance >= closeThreshold {
@@ -268,6 +314,7 @@ struct EditorView: View {
     }
 
     private var assistantBackSwipeGesture: some Gesture {
+        // Gesture thresholds — tuned for back-swipe feel, intentionally off the φ scale.
         DragGesture(minimumDistance: 18, coordinateSpace: .local)
             .onEnded { value in
                 guard viewModel.showAssistantSheet else { return }
@@ -304,9 +351,12 @@ struct EditorView: View {
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 } else if shouldShowRewriteChipBar {
-                    RewriteChipBar { action in
-                        viewModel.requestRewrite(action)
-                    }
+                    RewriteChipBar(
+                        onAction: { viewModel.requestRewrite($0) },
+                        onInspect: viewModel.singleWordSelection != nil
+                            ? { viewModel.openInspectorForSelection() }
+                            : nil
+                    )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -327,6 +377,7 @@ struct EditorView: View {
     private var shouldShowRewriteChipBar: Bool {
         (viewModel.selectedRange.length > 0 || forceRewriteChipBarForUITests)
             && viewModel.rewriteAction == nil
+            && !viewModel.showInspector
             && !viewModel.showAssistantSheet
     }
 
@@ -420,20 +471,20 @@ struct EditorView: View {
     // MARK: - Top Bar
 
     private var topBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: RhymeAITokens.Spacing.sm) {
             Button {
                 projectDrawerOpen = true
             } label: {
                 Image(systemName: "line.3.horizontal")
                     .font(.body)
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
             }
             .accessibilityLabel("Open songs drawer")
 
             // Save status
             if viewModel.saveStatus == .saving {
-                HStack(spacing: 4) {
+                HStack(spacing: RhymeAITokens.Spacing.xxs) {
                     ProgressView()
                         .scaleEffect(0.6)
                     Text("Saving...")
@@ -441,7 +492,7 @@ struct EditorView: View {
                 }
                 .foregroundStyle(.secondary)
             } else if viewModel.saveStatus == .saved {
-                HStack(spacing: 4) {
+                HStack(spacing: RhymeAITokens.Spacing.xxs) {
                     Image(systemName: "checkmark")
                         .font(.caption)
                     Text("Saved")
@@ -469,7 +520,7 @@ struct EditorView: View {
                 Image(systemName: "square.and.arrow.up")
                     .font(.body)
                     .foregroundStyle(Color.secondary.opacity(viewModel.lyrics.isEmpty ? 0.4 : 1.0))
-                    .frame(width: 44, height: 44)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
             }
             .disabled(viewModel.lyrics.isEmpty)
 
@@ -481,7 +532,7 @@ struct EditorView: View {
                 Image(systemName: "gearshape")
                     .font(.body)
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
             }
         }
         .padding(.horizontal, RhymeAITokens.Spacing.xs)
@@ -557,7 +608,7 @@ private struct InlineRewriteReviewBar: View {
             Button("Cancel", action: onCancel)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(minWidth: 72, minHeight: RhymeAITokens.Touch.minimum)
+                .frame(minWidth: RhymeAITokens.Spacing.xxl, minHeight: RhymeAITokens.Touch.minimum)
                 .buttonStyle(.rhymePress)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.sm)

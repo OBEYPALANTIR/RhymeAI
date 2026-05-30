@@ -1,0 +1,270 @@
+import SwiftUI
+import UIKit
+
+struct WordInspectorSheetView: View {
+    let word: String
+    let prosody: WordProsody?
+    let matches: RhymeMatches?
+    let synonyms: [String]
+    let synonymsLoading: Bool
+    let synonymsError: String?
+    let onReplace: (String) -> Void
+    let onRetrySynonyms: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+            header
+
+            wordHero
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+                    ResultsSection(
+                        title: "Perfect rhymes",
+                        empty: "No perfect rhymes in dictionary.",
+                        items: matches?.perfect ?? [],
+                        onTap: onReplace
+                    )
+
+                    ResultsSection(
+                        title: "Multi-syllabic rhymes",
+                        empty: "No multi-syllabic matches.",
+                        items: matches?.multi ?? [],
+                        onTap: onReplace
+                    )
+
+                    ResultsSection(
+                        title: "Near rhymes",
+                        empty: "No near rhymes found.",
+                        items: matches?.near ?? [],
+                        onTap: onReplace
+                    )
+
+                    synonymsSection
+                }
+                .padding(.bottom, RhymeAITokens.Spacing.md)
+            }
+        }
+        .padding(RhymeAITokens.Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("wordInspectorSheet")
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        HStack {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.indigo)
+                Text("Word inspector")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(Color.primary.opacity(0.7))
+            }
+            Spacer()
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.primary.opacity(0.7))
+                    .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Close")
+        }
+    }
+
+    @ViewBuilder
+    private var wordHero: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(word)
+                .font(.system(.largeTitle, design: .serif, weight: .bold))
+
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                if let ipa = prosody?.ipa, !ipa.isEmpty {
+                    Text("/\(ipa)/")
+                        .font(.system(.footnote, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                if let count = prosody?.syllableCount, count > 0 {
+                    Text("\(count) \(count == 1 ? "syllable" : "syllables")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let stress = prosody?.stressPattern, !stress.isEmpty {
+                    StressDots(pattern: stress)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var synonymsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Synonyms")
+                    .font(.footnote.weight(.semibold))
+                Spacer()
+                if synonymsLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if synonymsError != nil {
+                    Button(action: onRetrySynonyms) {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                            .font(.caption.weight(.semibold))
+                    }
+                }
+            }
+
+            if let error = synonymsError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else if synonyms.isEmpty, !synonymsLoading {
+                Text("No synonyms yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if !synonyms.isEmpty {
+                FlowChips(items: synonyms, onTap: onReplace)
+            }
+        }
+    }
+}
+
+private struct ResultsSection: View {
+    let title: String
+    let empty: String
+    let items: [String]
+    let onTap: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.footnote.weight(.semibold))
+            if items.isEmpty {
+                Text(empty)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                FlowChips(items: items, onTap: onTap)
+            }
+        }
+    }
+}
+
+private struct FlowChips: View {
+    let items: [String]
+    let onTap: (String) -> Void
+
+    var body: some View {
+        FlowLayout(spacing: 6) {
+            ForEach(items, id: \.self) { item in
+                ChipButton(label: item, onTap: { onTap(item) })
+            }
+        }
+    }
+}
+
+private struct ChipButton: View {
+    let label: String
+    let onTap: () -> Void
+    @State private var copyFlash = false
+
+    var body: some View {
+        Text(label)
+            .font(.callout)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.pill, style: .continuous)
+                    .fill(Color.secondary.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.pill, style: .continuous)
+                    .stroke(copyFlash ? Color.green.opacity(0.6) : Color.indigo.opacity(0.24), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
+            .onLongPressGesture(minimumDuration: 0.4) {
+                UIPasteboard.general.string = label
+                let generator = UIImpactFeedbackGenerator(style: .light)
+                generator.impactOccurred()
+                copyFlash = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { copyFlash = false }
+            }
+            .animation(.easeInOut(duration: 0.2), value: copyFlash)
+    }
+}
+
+private struct StressDots: View {
+    let pattern: [Int]
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(pattern.enumerated()), id: \.offset) { _, stress in
+                let (size, alpha): (CGFloat, Double) = {
+                    switch stress {
+                    case 1: return (8, 1.0)
+                    case 2: return (6, 0.7)
+                    default: return (4, 0.4)
+                    }
+                }()
+                Circle()
+                    .fill(Color.indigo.opacity(alpha))
+                    .frame(width: size, height: size)
+            }
+        }
+    }
+}
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rows: [[CGSize]] = [[]]
+        var currentRowWidth: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var currentRowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if !rows[rows.count - 1].isEmpty, currentRowWidth + spacing + size.width > maxWidth {
+                rows.append([])
+                totalHeight += currentRowHeight + spacing
+                currentRowWidth = 0
+                currentRowHeight = 0
+            }
+            if !rows[rows.count - 1].isEmpty { currentRowWidth += spacing }
+            rows[rows.count - 1].append(size)
+            currentRowWidth += size.width
+            currentRowHeight = max(currentRowHeight, size.height)
+        }
+        totalHeight += currentRowHeight
+        return CGSize(width: maxWidth.isFinite ? maxWidth : currentRowWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let maxWidth = bounds.width
+        var x: CGFloat = bounds.minX
+        var y: CGFloat = bounds.minY
+        var rowHeight: CGFloat = 0
+        var firstInRow = true
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if !firstInRow, x + spacing + size.width > bounds.maxX {
+                y += rowHeight + spacing
+                x = bounds.minX
+                rowHeight = 0
+                firstInRow = true
+            }
+            if !firstInRow { x += spacing }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: size.width, height: size.height))
+            x += size.width
+            rowHeight = max(rowHeight, size.height)
+            firstInRow = false
+            _ = maxWidth
+        }
+    }
+}

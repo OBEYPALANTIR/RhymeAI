@@ -49,4 +49,26 @@ class ProsodyAnalyzerTest {
 
         assertTrue(roadKeys.intersect(glowedKeys.toSet()).isNotEmpty())
     }
+
+    @Test
+    fun findRhymesReturnsPerfectMatchesFromDictionary() {
+        val matches = ProsodyAnalyzer.findRhymes("road", dictionary = dictionary)
+
+        assertTrue(matches.perfect.contains("glowed"), "expected glowed as a perfect rhyme for road")
+        assertFalse(matches.perfect.contains("road"), "perfect bucket should exclude the query word")
+    }
+
+    @Test
+    fun findRhymesIsEmptyForStopwords() {
+        val matches = ProsodyAnalyzer.findRhymes("the", dictionary = dictionary)
+
+        assertTrue(matches.isEmpty)
+    }
+
+    @Test
+    fun findRhymesIsEmptyForUnknownVeryShortWord() {
+        val matches = ProsodyAnalyzer.findRhymes("a", dictionary = dictionary)
+
+        assertTrue(matches.isEmpty)
+    }
 }

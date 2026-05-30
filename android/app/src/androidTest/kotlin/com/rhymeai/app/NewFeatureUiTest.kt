@@ -120,6 +120,26 @@ class NewFeatureUiTest {
         // (performTextInput bypasses the soft keyboard). Manual QA covers it.
     }
 
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun singleWordSelectionShowsRewriteChipWithLookupIntoInspector() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        composeRule.onNodeWithTag("lyricsEditor").performClick()
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput("Yellow mellow fellow")
+        // Select just the single word "Yellow".
+        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(TextRange(0, 6))
+
+        // A single-word selection raises the punch-up/rewrite chip together with
+        // the leading look-up (magnifying glass) button.
+        composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        composeRule.onNodeWithTag("inspectAction").assertIsDisplayed()
+
+        // Tapping look-up opens the Word Inspector sheet.
+        composeRule.onNodeWithTag("inspectAction").performClick()
+        composeRule.onNodeWithTag("wordInspectorSheet").assertIsDisplayed()
+    }
+
     private fun lyricsEditorFocused(): Boolean {
         return composeRule.onNodeWithTag("lyricsEditor")
             .fetchSemanticsNode()

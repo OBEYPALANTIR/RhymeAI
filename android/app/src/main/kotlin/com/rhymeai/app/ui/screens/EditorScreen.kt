@@ -114,6 +114,7 @@ import com.rhymeai.app.ui.components.ExportSheet
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.RhymeHighlightedText
+import com.rhymeai.app.ui.components.WordInspectorSheet
 import com.rhymeai.app.ui.components.buildSyllableUnderlineSpans
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.components.keyboardAwareBottomPadding
@@ -340,13 +341,19 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     val modalOpen = viewModel.showSettingsDialog ||
         viewModel.showProjectsDialog ||
-        viewModel.showExportSheet
+        viewModel.showExportSheet ||
+        viewModel.showInspector
     val rewriteReviewVisible = viewModel.hasActiveRewrite &&
         !showBottomSheet &&
         !pendingAssistantSheet &&
         !modalOpen
     val pendingRewriteRange = viewModel.pendingRewriteRange
     val selection = viewModel.lyricsFieldValue.selection
+    val singleWordSelection = viewModel.singleWordSelection
+    // Any selection raises the rewrite/punch-up chip. A single-word selection
+    // additionally exposes a look-up button into the Word Inspector; the chip
+    // itself is the same. showInspector is folded into showBottomSheet, so the
+    // chip yields while the inspector sheet is open.
     val rewriteVisible = pendingRewriteRange != null &&
         !showBottomSheet &&
         !pendingAssistantSheet &&
@@ -869,6 +876,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             ) {
                 RewriteChipBar(
                     onAction = { viewModel.requestRewrite(it) },
+                    onInspect = singleWordSelection?.let { { viewModel.openInspectorForSelection() } },
                     modifier = Modifier.onSizeChanged { rewriteChipBarHeightPx = it.height }
                 )
             }
@@ -930,6 +938,24 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 onPick = { launchExport(it) },
                 onDismiss = { viewModel.showExportSheet = false }
             )
+        }
+
+        // Word inspector
+        if (viewModel.showInspector) {
+            val inspectorWord = viewModel.inspectorWord
+            if (inspectorWord != null) {
+                WordInspectorSheet(
+                    word = inspectorWord,
+                    prosody = viewModel.inspectorProsody,
+                    matches = viewModel.inspectorMatches,
+                    synonyms = viewModel.inspectorSynonyms,
+                    synonymsLoading = viewModel.inspectorSynonymsLoading,
+                    synonymsError = viewModel.inspectorSynonymsError,
+                    onReplace = { replacement -> viewModel.applyInspectorReplacement(replacement) },
+                    onRetrySynonyms = { viewModel.retryInspectorSynonyms() },
+                    onDismiss = { viewModel.dismissInspector() }
+                )
+            }
         }
 
         // Bottom sheet for assistant

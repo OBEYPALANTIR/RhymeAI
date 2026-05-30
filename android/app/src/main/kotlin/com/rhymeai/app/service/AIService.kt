@@ -76,6 +76,14 @@ class AIService {
         const val LOCAL_RECENT_CONTEXT_CHARS = 2600
         const val LOCAL_WHOLE_SONG_HEAD_CHARS = 900
         const val LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
+
+        fun userFacingStatusMessage(code: Int): String = when (code) {
+            401, 403 -> "Provider rejected the request — check your API key in Settings."
+            404 -> "Provider could not find the requested model — pick another in Settings."
+            429 -> "Provider rate limit reached — wait a moment and retry."
+            in 500..599 -> "Provider service error — try again shortly."
+            else -> "Provider request failed (status $code)."
+        }
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -332,8 +340,11 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
 
             val code = connection.responseCode
             if (code !in 200..299) {
-                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                throw RuntimeException("API error ($code): $errorBody")
+                // Drain the error stream so the connection can clean up, but do not
+                // surface the body — provider error payloads can echo back the
+                // request URL or the API key into user-visible text.
+                connection.errorStream?.bufferedReader()?.use { it.readText() }
+                throw RuntimeException(userFacingStatusMessage(code))
             }
 
             connection.inputStream.bufferedReader().use { reader ->
@@ -353,6 +364,89 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
             connection.disconnect()
         }
     }.flowOn(Dispatchers.IO)
+
+    suspend fun getSynonyms(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        word: String,
+        lineContext: String,
+        limit: Int = 8
+    ): List<String> {
+        val target = word.trim()
+        if (target.isBlank()) return emptyList()
+        if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
+            throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
+        }
+
+        val prompt = buildSynonymsPrompt(target, lineContext, limit)
+        val raw = when (provider) {
+            AIProvider.GEMINI -> callGeminiRaw(apiKey, modelId, prompt)
+            AIProvider.OPENAI -> callOpenAIRaw(apiKey, modelId, prompt)
+            AIProvider.CLAUDE -> callClaudeRaw(apiKey, modelId, prompt)
+            AIProvider.LOCAL -> {
+                val service = localModelService
+                    ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
+                if (!service.isLoaded) {
+                    throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
+                }
+                service.generateResponse(gemmaInstructionPrompt(prompt))
+            }
+        }
+        return extractSynonyms(raw, exclude = target).take(limit)
+    }
+
+    private fun buildSynonymsPrompt(word: String, lineContext: String, limit: Int): String {
+        val contextLine = lineContext.trim().take(240)
+        val contextBlock = if (contextLine.isEmpty()) {
+            "(no surrounding line)"
+        } else {
+            contextLine
+        }
+        return """
+You are RhymeAI's word inspector. Given a target word and the lyric line it appears in, return synonyms that could replace the target while preserving meaning, register, and roughly the same syllable count.
+
+Target word: "$word"
+Lyric line: "$contextBlock"
+
+Rules:
+- Provide up to $limit synonyms.
+- No multi-word phrases unless they would naturally read as a single concept.
+- No duplicates. No the target word itself.
+- Match the tone of the line (slang stays slang, formal stays formal).
+
+Respond ONLY with a JSON object of the form {"synonyms": ["..."]}. No code fences, no commentary.
+""".trimIndent()
+    }
+
+    private fun extractSynonyms(raw: String, exclude: String): List<String> {
+        val cleaned = raw.trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        if (cleaned.isEmpty()) return emptyList()
+        val excludeKey = exclude.lowercase()
+        val tryObject = runCatching {
+            val obj = json.parseToJsonElement(cleaned).jsonObject
+            obj["synonyms"]?.jsonArray?.mapNotNull { it.jsonPrimitive.content.trim().takeIf(String::isNotEmpty) }
+        }.getOrNull()
+        val tryArray = if (tryObject == null) runCatching {
+            json.decodeFromString<List<String>>(cleaned)
+        }.getOrNull() else null
+        val candidates = tryObject ?: tryArray ?: cleaned
+            .lines()
+            .map { line -> line.trim().trim('"', '\'', ',', '-', '*', '•', ' ') }
+            .filter { it.isNotEmpty() }
+
+        val seen = mutableSetOf<String>()
+        return candidates.mapNotNull { raw ->
+            val word = raw.trim().trim('"', '\'').trim()
+            if (word.isEmpty() || word.length > 32) return@mapNotNull null
+            val key = word.lowercase()
+            if (key == excludeKey || !seen.add(key)) null else word
+        }
+    }
 
     suspend fun getRewrite(
         provider: AIProvider,
@@ -751,7 +845,9 @@ Rules:
                 val response = stream.bufferedReader().use { it.readText() }
 
                 if (code !in 200..299) {
-                    throw RuntimeException("API error ($code): $response")
+                    // Drop the response body — provider error payloads can echo
+                    // back the request URL or the API key.
+                    throw RuntimeException(userFacingStatusMessage(code))
                 }
                 response
             } finally {

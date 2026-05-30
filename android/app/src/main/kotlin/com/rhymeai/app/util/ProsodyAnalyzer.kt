@@ -19,10 +19,28 @@ data class LineProsody(
     val ipa: String
 )
 
+data class RhymeMatches(
+    val perfect: List<String>,
+    val near: List<String>,
+    val multi: List<String>
+) {
+    val isEmpty: Boolean get() = perfect.isEmpty() && near.isEmpty() && multi.isEmpty()
+
+    companion object {
+        val EMPTY = RhymeMatches(emptyList(), emptyList(), emptyList())
+    }
+}
+
 class PronunciationDictionary private constructor(
     private val entries: Map<String, List<List<String>>>
 ) {
     fun pronunciations(normalizedWord: String): List<List<String>> = entries[normalizedWord].orEmpty()
+
+    val wordCount: Int get() = entries.size
+
+    fun forEachEntry(action: (String, List<List<String>>) -> Unit) {
+        entries.forEach { (word, variants) -> action(word, variants) }
+    }
 
     companion object {
         @Volatile
@@ -198,6 +216,82 @@ object ProsodyAnalyzer {
         return variants
             .flatMap { rhymeKeysForPhones(it, maxDepth) }
             .distinct()
+    }
+
+    @Volatile private var indexBuiltFor: PronunciationDictionary? = null
+    @Volatile private var perfectByKey: Map<String, List<String>> = emptyMap()
+    @Volatile private var multiByKey: Map<String, List<String>> = emptyMap()
+    @Volatile private var nearByVowel: Map<String, List<String>> = emptyMap()
+    private val indexLock = Any()
+
+    fun findRhymes(
+        word: String,
+        perfectLimit: Int = 60,
+        nearLimit: Int = 30,
+        multiLimit: Int = 30,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+    ): RhymeMatches {
+        val normalized = normalizeWord(word)
+        if (normalized.length < 2 || normalized in stopwords) return RhymeMatches.EMPTY
+        if (dictionary.wordCount == 0) return RhymeMatches.EMPTY
+
+        val keys = rhymeKeys(word, maxDepth = 2, dictionary = dictionary)
+        if (keys.isEmpty()) return RhymeMatches.EMPTY
+        val k0 = keys[0]
+        val k1 = keys.getOrNull(1)
+        val vowel0 = k0.split(' ').firstOrNull().orEmpty()
+        if (vowel0.isBlank()) return RhymeMatches.EMPTY
+
+        ensureIndex(dictionary)
+        val perfectAll = (perfectByKey[k0] ?: emptyList()).filter { it != normalized }
+        val multiAll = if (k1 != null) {
+            (multiByKey[k1] ?: emptyList()).filter { it != normalized && it !in perfectAll }
+        } else emptyList()
+        val perfectSet = perfectAll.toSet()
+        val multiSet = multiAll.toSet()
+        val nearAll = (nearByVowel[vowel0] ?: emptyList())
+            .filter { it != normalized && it !in perfectSet && it !in multiSet }
+
+        return RhymeMatches(
+            perfect = perfectAll.take(perfectLimit),
+            near = nearAll.take(nearLimit),
+            multi = multiAll.take(multiLimit)
+        )
+    }
+
+    private fun ensureIndex(dictionary: PronunciationDictionary) {
+        if (indexBuiltFor === dictionary) return
+        synchronized(indexLock) {
+            if (indexBuiltFor === dictionary) return
+            val perfectBuild = HashMap<String, MutableList<String>>(32_768)
+            val multiBuild = HashMap<String, MutableList<String>>(32_768)
+            val nearBuild = HashMap<String, MutableList<String>>(64)
+            dictionary.forEachEntry { word, variants ->
+                if (word.length < 2 || word in stopwords) return@forEachEntry
+                val seenK0 = HashSet<String>(2)
+                val seenK1 = HashSet<String>(2)
+                val seenVowel = HashSet<String>(2)
+                for (phones in variants) {
+                    val ks = rhymeKeysForPhones(phones, maxDepth = 2)
+                    val k0 = ks.getOrNull(0) ?: continue
+                    if (seenK0.add(k0)) {
+                        perfectBuild.getOrPut(k0) { ArrayList(8) }.add(word)
+                    }
+                    val v0 = k0.split(' ').firstOrNull().orEmpty()
+                    if (v0.isNotBlank() && seenVowel.add(v0)) {
+                        nearBuild.getOrPut(v0) { ArrayList(256) }.add(word)
+                    }
+                    val k1 = ks.getOrNull(1) ?: continue
+                    if (seenK1.add(k1)) {
+                        multiBuild.getOrPut(k1) { ArrayList(4) }.add(word)
+                    }
+                }
+            }
+            perfectByKey = perfectBuild
+            multiByKey = multiBuild
+            nearByVowel = nearBuild
+            indexBuiltFor = dictionary
+        }
     }
 
     fun metricFeet(stressPattern: List<Int>): String {

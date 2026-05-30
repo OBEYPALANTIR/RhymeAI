@@ -21,12 +21,17 @@ import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
+import com.rhymeai.app.util.ProsodyAnalyzer
+import com.rhymeai.app.util.RhymeMatches
+import com.rhymeai.app.util.WordProsody
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class SaveStatus { IDLE, SAVING, SAVED }
 
@@ -86,11 +91,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Settings
     var selectedProvider by mutableStateOf(AIProvider.GEMINI)
-    var apiKeys by mutableStateOf(mapOf<String, String>())
     var selectedModel by mutableStateOf(AIModel.DEFAULT)
     var showSettingsDialog by mutableStateOf(false)
+    /**
+     * Surfaces whether each provider has any key stored. The actual key values
+     * never live in observable state — they are pulled from the secure store on
+     * demand at request time so they cannot leak via heap dumps, Compose state
+     * snapshots, or test fixtures.
+     */
+    var apiKeyPresence by mutableStateOf<Map<String, Boolean>>(emptyMap())
+        private set
 
-    val currentApiKey: String get() = apiKeys[selectedProvider.name] ?: ""
+    val currentApiKey: String get() = repo.getApiKey(selectedProvider.name)
+
+    fun apiKey(provider: AIProvider): String = repo.getApiKey(provider.name)
+
+    fun apiKeySnapshot(): Map<String, String> = repo.apiKeySnapshot()
 
     // Local model state
     var localModelPath by mutableStateOf<String?>(null)
@@ -112,6 +128,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var rewriteRange: TextRange? = null
     private var rewriteJob: Job? = null
     private var suggestionsJob: Job? = null
+
+    // Word inspector state
+    var inspectorWord by mutableStateOf<String?>(null)
+        private set
+    var inspectorRange by mutableStateOf<TextRange?>(null)
+        private set
+    var inspectorProsody by mutableStateOf<WordProsody?>(null)
+        private set
+    var inspectorMatches by mutableStateOf<RhymeMatches?>(null)
+        private set
+    var inspectorSynonyms by mutableStateOf<List<String>>(emptyList())
+        private set
+    var inspectorSynonymsLoading by mutableStateOf(false)
+        private set
+    var inspectorSynonymsError by mutableStateOf<String?>(null)
+        private set
+    private var inspectorSynonymsJob: Job? = null
+
+    val showInspector: Boolean get() = inspectorWord != null
+
+    val singleWordSelection: Pair<String, TextRange>?
+        get() {
+            val range = pendingRewriteRange ?: return null
+            val text = lyrics
+            if (range.min < 0 || range.max > text.length || range.min >= range.max) return null
+            val word = text.substring(range.min, range.max)
+            if (word.length < 2) return null
+            if (word.any { !it.isLetter() && it != '\'' }) return null
+            return word to range
+        }
 
     val hasActiveRewrite: Boolean
         get() = rewriteAction != null
@@ -156,8 +202,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             scheduleTrashPurge()
             currentProjectId = repo.currentProjectIdFlow.first()
 
-            // Load API keys, provider, and model
-            apiKeys = repo.allApiKeysFlow().first()
+            // Load API keys, provider, and model. The key values themselves are
+            // never copied into Compose state — we only record which providers
+            // have a non-empty key so the UI can show a "configured" badge.
+            repo.ensureApiKeysMigrated()
+            apiKeyPresence = repo.apiKeySnapshot().mapValues { it.value.isNotEmpty() }
             val savedProvider = repo.selectedProviderFlow.first()
             selectedProvider = AIProvider.fromName(savedProvider)
             val savedModelId = repo.modelIdFlow.first()
@@ -366,6 +415,96 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rewriteOriginal = null
         rewriteError = null
         rewriteRange = null
+    }
+
+    fun openInspectorForSelection() {
+        val (word, range) = singleWordSelection ?: return
+        openInspector(word, range)
+    }
+
+    fun openInspector(word: String, range: TextRange) {
+        inspectorSynonymsJob?.cancel()
+        inspectorWord = word
+        inspectorRange = range
+        inspectorSynonyms = emptyList()
+        inspectorSynonymsError = null
+
+        viewModelScope.launch {
+            val prosodyResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.analyzeWord(word) }
+            val matchesResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.findRhymes(word) }
+            inspectorProsody = prosodyResult
+            inspectorMatches = matchesResult
+        }
+
+        fetchInspectorSynonyms(word, range)
+    }
+
+    fun retryInspectorSynonyms() {
+        val word = inspectorWord ?: return
+        val range = inspectorRange ?: return
+        fetchInspectorSynonyms(word, range)
+    }
+
+    private fun fetchInspectorSynonyms(word: String, range: TextRange) {
+        inspectorSynonymsJob?.cancel()
+        inspectorSynonymsError = null
+        inspectorSynonymsLoading = true
+        val lineContext = currentLineForRange(range)
+        inspectorSynonymsJob = viewModelScope.launch {
+            try {
+                val results = aiService.getSynonyms(
+                    provider = selectedProvider,
+                    apiKey = currentApiKey,
+                    modelId = selectedModel.id,
+                    word = word,
+                    lineContext = lineContext
+                )
+                inspectorSynonyms = results
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                inspectorSynonymsError = e.message ?: "Failed to load synonyms"
+            } finally {
+                inspectorSynonymsLoading = false
+            }
+        }
+    }
+
+    private fun currentLineForRange(range: TextRange): String {
+        val text = lyrics
+        val start = range.min.coerceIn(0, text.length)
+        val end = range.max.coerceIn(0, text.length)
+        val lineStart = text.lastIndexOf('\n', (start - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        val newlineAfter = text.indexOf('\n', end)
+        val lineEnd = if (newlineAfter < 0) text.length else newlineAfter
+        return text.substring(lineStart, lineEnd).trim()
+    }
+
+    fun applyInspectorReplacement(replacement: String) {
+        val range = inspectorRange ?: return
+        val text = lyrics
+        if (range.min < 0 || range.max > text.length) {
+            dismissInspector()
+            return
+        }
+        val newText = text.replaceRange(range.min, range.max, replacement)
+        val newCursor = (range.min + replacement.length).coerceAtMost(newText.length)
+        lyricsFieldValue = TextFieldValue(newText, TextRange(newCursor))
+        dismissInspector()
+        triggerAutoSave()
+    }
+
+    fun dismissInspector() {
+        inspectorSynonymsJob?.cancel()
+        inspectorSynonymsJob = null
+        inspectorWord = null
+        inspectorRange = null
+        inspectorProsody = null
+        inspectorMatches = null
+        inspectorSynonyms = emptyList()
+        inspectorSynonymsLoading = false
+        inspectorSynonymsError = null
+        pendingRewriteRange = null
     }
 
     fun insertSuggestion(suggestion: String) {
@@ -676,7 +815,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveApiKey(provider: AIProvider, key: String) {
-        apiKeys = apiKeys + (provider.name to key)
+        apiKeyPresence = apiKeyPresence + (provider.name to key.isNotEmpty())
         viewModelScope.launch {
             repo.saveApiKey(provider.name, key)
         }

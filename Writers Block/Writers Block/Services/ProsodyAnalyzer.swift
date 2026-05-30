@@ -17,6 +17,115 @@ struct LineProsody: Equatable, Sendable {
     let ipa: String
 }
 
+nonisolated struct RhymeMatches: Equatable, Sendable {
+    let perfect: [String]
+    let near: [String]
+    let multi: [String]
+
+    var isEmpty: Bool { perfect.isEmpty && near.isEmpty && multi.isEmpty }
+
+    static let empty = RhymeMatches(perfect: [], near: [], multi: [])
+}
+
+nonisolated final class RhymeIndex: @unchecked Sendable {
+    static let shared = RhymeIndex()
+
+    nonisolated private let lock = NSLock()
+    nonisolated(unsafe) private var builtForWordCount: Int = -1
+    nonisolated(unsafe) private var perfectByKey: [String: [String]] = [:]
+    nonisolated(unsafe) private var multiByKey: [String: [String]] = [:]
+    nonisolated(unsafe) private var nearByVowel: [String: [String]] = [:]
+
+    nonisolated func find(
+        word: String,
+        perfectLimit: Int = 60,
+        nearLimit: Int = 30,
+        multiLimit: Int = 30,
+        dictionary: PronunciationDictionary = .shared
+    ) -> RhymeMatches {
+        let normalized = ProsodyAnalyzer.normalizeWord(word)
+        guard normalized.count >= 2 else { return .empty }
+        guard dictionary.wordCount > 0 else { return .empty }
+
+        let keys = ProsodyAnalyzer.rhymeKeys(for: word, maxDepth: 2, dictionary: dictionary)
+        guard let k0 = keys.first else { return .empty }
+        let k1 = keys.count > 1 ? keys[1] : nil
+        let vowel0 = k0.split(separator: " ").first.map(String.init) ?? ""
+        guard !vowel0.isEmpty else { return .empty }
+
+        ensureBuilt(dictionary: dictionary)
+        lock.lock()
+        let perfectMap = perfectByKey
+        let multiMap = multiByKey
+        let nearMap = nearByVowel
+        lock.unlock()
+
+        let perfectAll = (perfectMap[k0] ?? []).filter { $0 != normalized }
+        let multiAll: [String]
+        if let k1 {
+            let perfectSet = Set(perfectAll)
+            multiAll = (multiMap[k1] ?? []).filter { $0 != normalized && !perfectSet.contains($0) }
+        } else {
+            multiAll = []
+        }
+        let exclude = Set(perfectAll).union(multiAll)
+        let nearAll = (nearMap[vowel0] ?? []).filter { $0 != normalized && !exclude.contains($0) }
+
+        return RhymeMatches(
+            perfect: Array(perfectAll.prefix(perfectLimit)),
+            near: Array(nearAll.prefix(nearLimit)),
+            multi: Array(multiAll.prefix(multiLimit))
+        )
+    }
+
+    nonisolated private func ensureBuilt(dictionary: PronunciationDictionary) {
+        lock.lock()
+        if builtForWordCount == dictionary.wordCount {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
+        var perfectBuild: [String: [String]] = [:]
+        var multiBuild: [String: [String]] = [:]
+        var nearBuild: [String: [String]] = [:]
+        perfectBuild.reserveCapacity(32_768)
+        multiBuild.reserveCapacity(32_768)
+        nearBuild.reserveCapacity(64)
+
+        dictionary.forEachEntry { word, variants in
+            guard word.count >= 2 else { return }
+            var seenK0 = Set<String>()
+            var seenK1 = Set<String>()
+            var seenVowel = Set<String>()
+            for phones in variants {
+                let ks = ProsodyAnalyzer.rhymeKeysForPhonesPublic(phones, maxDepth: 2)
+                guard let k0 = ks.first else { continue }
+                if seenK0.insert(k0).inserted {
+                    perfectBuild[k0, default: []].append(word)
+                }
+                let vowel0 = k0.split(separator: " ").first.map(String.init) ?? ""
+                if !vowel0.isEmpty, seenVowel.insert(vowel0).inserted {
+                    nearBuild[vowel0, default: []].append(word)
+                }
+                if ks.count > 1 {
+                    let k1 = ks[1]
+                    if seenK1.insert(k1).inserted {
+                        multiBuild[k1, default: []].append(word)
+                    }
+                }
+            }
+        }
+
+        lock.lock()
+        perfectByKey = perfectBuild
+        multiByKey = multiBuild
+        nearByVowel = nearBuild
+        builtForWordCount = dictionary.wordCount
+        lock.unlock()
+    }
+}
+
 private final class PronunciationBundleMarker: NSObject {}
 
 nonisolated struct PronunciationDictionary: Sendable {
@@ -30,6 +139,12 @@ nonisolated struct PronunciationDictionary: Sendable {
 
     func pronunciations(for normalizedWord: String) -> [[String]] {
         entries[normalizedWord] ?? []
+    }
+
+    var wordCount: Int { entries.count }
+
+    func forEachEntry(_ action: (String, [[String]]) -> Void) {
+        for (word, variants) in entries { action(word, variants) }
     }
 
     static func fromLines<S: Sequence>(_ lines: S) -> PronunciationDictionary where S.Element == String {
@@ -200,6 +315,26 @@ nonisolated enum ProsodyAnalyzer {
 
     static func countText(_ text: String) -> Int {
         analyzeLine(text).syllableCount
+    }
+
+    static func findRhymes(
+        for word: String,
+        perfectLimit: Int = 60,
+        nearLimit: Int = 30,
+        multiLimit: Int = 30,
+        dictionary: PronunciationDictionary = .shared
+    ) -> RhymeMatches {
+        RhymeIndex.shared.find(
+            word: word,
+            perfectLimit: perfectLimit,
+            nearLimit: nearLimit,
+            multiLimit: multiLimit,
+            dictionary: dictionary
+        )
+    }
+
+    static func rhymeKeysForPhonesPublic(_ phones: [String], maxDepth: Int) -> [String] {
+        rhymeKeysForPhones(phones, maxDepth: maxDepth)
     }
 
     static func rhymeKeys(

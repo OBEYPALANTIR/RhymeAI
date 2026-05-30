@@ -12,10 +12,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -34,6 +33,7 @@ import com.rhymeai.app.ui.theme.DesignTokens
 @Composable
 fun RewriteChipBar(
     onAction: (RewriteAction) -> Unit,
+    onInspect: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -48,25 +48,28 @@ fun RewriteChipBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
     ) {
-        Row(
-            modifier = Modifier.width(DesignTokens.Touch.minTarget * DesignTokens.Phi.major),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
-        ) {
-            Icon(
-                Icons.Default.AutoAwesome,
-                contentDescription = null,
-                tint = colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-            )
-            Text(
-                text = "Rewrite",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+        if (onInspect != null) {
+            // Single-word selection: the leading affordance is a look-up button
+            // into the Word Inspector. Multi-word selections omit it (look-up is
+            // per-word), letting the rewrite actions fill the bar.
+            Surface(
+                modifier = Modifier
+                    .size(DesignTokens.Touch.minTarget)
+                    .testTag("inspectAction")
+                    .clickable(onClick = onInspect),
+                shape = RoundedCornerShape(DesignTokens.Radius.pill),
+                color = colorScheme.primary.copy(alpha = 0.12f),
+                contentColor = colorScheme.primary,
+                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.3f))
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = "Look up word",
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
         }
 
         RewriteAction.entries.forEach { action ->

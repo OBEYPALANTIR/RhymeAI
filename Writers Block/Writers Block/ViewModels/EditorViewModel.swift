@@ -62,6 +62,32 @@ final class EditorViewModel: ObservableObject {
     private var rewriteTask: Task<Void, Never>?
     private var suggestionsTask: Task<Void, Never>?
 
+    // MARK: - Word Inspector
+
+    @Published var inspectorWord: String?
+    @Published var inspectorRange: NSRange?
+    @Published var inspectorProsody: WordProsody?
+    @Published var inspectorMatches: RhymeMatches?
+    @Published var inspectorSynonyms: [String] = []
+    @Published var inspectorSynonymsLoading: Bool = false
+    @Published var inspectorSynonymsError: String?
+    private var inspectorSynonymsTask: Task<Void, Never>?
+
+    var showInspector: Bool { inspectorWord != nil }
+
+    var singleWordSelection: (word: String, range: NSRange)? {
+        let range = selectedRange
+        guard range.length > 0 else { return nil }
+        let ns = lyrics as NSString
+        guard range.location >= 0, range.location + range.length <= ns.length else { return nil }
+        let word = ns.substring(with: range)
+        guard word.count >= 2 else { return nil }
+        for ch in word {
+            if !ch.isLetter, ch != "'" { return nil }
+        }
+        return (word, range)
+    }
+
     // MARK: - Export
 
     @Published var showExportSheet: Bool = false
@@ -83,7 +109,11 @@ final class EditorViewModel: ObservableObject {
 
     @Published var selectedProvider: AIProvider = .gemini
     @Published var selectedModel: AIModel = .default
-    @Published var apiKeys: [String: String] = [:]
+    /// Surfaces whether each provider has any key stored. The actual key values
+    /// never live in observable state — they are pulled from the Keychain on
+    /// demand at request time so they cannot leak via heap dumps, SwiftUI
+    /// snapshots, or test fixtures.
+    @Published private(set) var apiKeyPresence: [String: Bool] = [:]
 
     // MARK: - Internal
 
@@ -94,6 +124,7 @@ final class EditorViewModel: ObservableObject {
         }
     }
     private let aiService = AIService()
+    private let keychainStore: KeychainStore
     private var autoSaveTask: Task<Void, Never>?
     private var trashSchedulerTask: Task<Void, Never>?
     private var didSeedTrashProjectForUITests = false
@@ -112,7 +143,15 @@ final class EditorViewModel: ObservableObject {
     }
 
     var currentApiKey: String {
-        apiKeys[selectedProvider.rawValue] ?? ""
+        apiKey(for: selectedProvider)
+    }
+
+    func apiKey(for provider: AIProvider) -> String {
+        keychainStore.getKey(provider: provider.rawValue)
+    }
+
+    func hasApiKey(for provider: AIProvider) -> Bool {
+        apiKeyPresence[provider.rawValue] ?? false
     }
 
     var hasActiveRewrite: Bool {
@@ -156,7 +195,12 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Init
 
-    init() {
+    init(keychainStore: KeychainStore? = nil) {
+        let runningUITestInMemory = ProcessInfo.processInfo.arguments.contains("--ui-test-in-memory-store")
+        let resolvedStore: KeychainStore = keychainStore
+            ?? (runningUITestInMemory ? InMemoryKeychainStore() : SystemKeychainStore())
+        self.keychainStore = resolvedStore
+
         let providerRaw = UserDefaults.standard.string(forKey: "selectedProvider") ?? AIProvider.gemini.rawValue
         selectedProvider = AIProvider(rawValue: providerRaw) ?? .gemini
         let modelRaw = UserDefaults.standard.string(forKey: "selectedModel") ?? AIModel.default.rawValue
@@ -166,8 +210,10 @@ final class EditorViewModel: ObservableObject {
             selectedModel = AIModel.models(for: selectedProvider).first ?? .default
         }
 
+        _ = ApiKeyMigration.apply(legacyDefaults: .standard, secure: resolvedStore)
+        let secured = resolvedStore.allKeys()
         for provider in AIProvider.allCases {
-            apiKeys[provider.rawValue] = UserDefaults.standard.string(forKey: "apiKey_\(provider.rawValue)") ?? ""
+            apiKeyPresence[provider.rawValue] = (secured[provider.rawValue] ?? "").isEmpty == false
         }
 
         if ProcessInfo.processInfo.arguments.contains("--ui-test-seed-prosody-song") {
@@ -416,6 +462,126 @@ final class EditorViewModel: ObservableObject {
         rewriteOriginal = nil
         rewriteError = nil
         rewriteRange = nil
+    }
+
+    // MARK: - Word Inspector
+
+    func openInspectorForSelection() {
+        guard let pick = singleWordSelection else { return }
+        openInspector(word: pick.word, range: pick.range)
+    }
+
+    func openInspector(word: String, range: NSRange) {
+        inspectorSynonymsTask?.cancel()
+        inspectorWord = word
+        inspectorRange = range
+        inspectorSynonyms = []
+        inspectorSynonymsError = nil
+
+        Task { @MainActor in
+            let prosody = await Task.detached(priority: .userInitiated) {
+                ProsodyAnalyzer.analyzeWord(word)
+            }.value
+            let matches = await Task.detached(priority: .userInitiated) {
+                ProsodyAnalyzer.findRhymes(for: word)
+            }.value
+            guard inspectorWord == word else { return }
+            inspectorProsody = prosody
+            inspectorMatches = matches
+        }
+
+        fetchInspectorSynonyms(word: word, range: range)
+    }
+
+    func retryInspectorSynonyms() {
+        guard let word = inspectorWord, let range = inspectorRange else { return }
+        fetchInspectorSynonyms(word: word, range: range)
+    }
+
+    private func fetchInspectorSynonyms(word: String, range: NSRange) {
+        inspectorSynonymsTask?.cancel()
+        inspectorSynonymsError = nil
+        inspectorSynonymsLoading = true
+        let lineContext = currentLine(for: range)
+        let provider = selectedProvider
+        let apiKey = currentApiKey
+        let modelId = selectedModel.id
+        inspectorSynonymsTask = Task { @MainActor in
+            defer { self.inspectorSynonymsLoading = false }
+            do {
+                let results = try await aiService.getSynonyms(
+                    provider: provider,
+                    apiKey: apiKey,
+                    modelId: modelId,
+                    word: word,
+                    lineContext: lineContext
+                )
+                guard !Task.isCancelled, self.inspectorWord == word else { return }
+                self.inspectorSynonyms = results
+            } catch is CancellationError {
+                // ignored
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.inspectorSynonymsError = error.localizedDescription
+            }
+        }
+    }
+
+    private func currentLine(for range: NSRange) -> String {
+        let ns = lyrics as NSString
+        guard range.location <= ns.length else { return "" }
+        let safeLoc = min(range.location, ns.length)
+        let safeEnd = min(range.location + range.length, ns.length)
+        let prefix = ns.substring(with: NSRange(location: 0, length: safeLoc))
+        let lineStartOffset: Int
+        if let lastNewline = prefix.range(of: "\n", options: .backwards)?.upperBound {
+            lineStartOffset = prefix.distance(from: prefix.startIndex, to: lastNewline)
+        } else {
+            lineStartOffset = 0
+        }
+        let lineEndOffset: Int
+        if safeEnd >= ns.length {
+            lineEndOffset = ns.length
+        } else {
+            let suffix = ns.substring(with: NSRange(location: safeEnd, length: ns.length - safeEnd))
+            if let nextNewline = suffix.range(of: "\n")?.lowerBound {
+                lineEndOffset = safeEnd + suffix.distance(from: suffix.startIndex, to: nextNewline)
+            } else {
+                lineEndOffset = ns.length
+            }
+        }
+        guard lineStartOffset <= lineEndOffset, lineEndOffset <= ns.length else { return "" }
+        return ns.substring(with: NSRange(location: lineStartOffset, length: lineEndOffset - lineStartOffset))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func applyInspectorReplacement(_ replacement: String) {
+        guard let range = inspectorRange else { return }
+        let ns = lyrics as NSString
+        guard range.location + range.length <= ns.length else {
+            dismissInspector()
+            return
+        }
+        let updated = ns.replacingCharacters(in: range, with: replacement)
+        lyrics = updated
+        let newCursor = range.location + (replacement as NSString).length
+        cursorPosition = newCursor
+        selectedRange = NSRange(location: newCursor, length: 0)
+        dismissInspector()
+        triggerAutoSave()
+    }
+
+    func dismissInspector() {
+        inspectorSynonymsTask?.cancel()
+        inspectorSynonymsTask = nil
+        inspectorWord = nil
+        inspectorRange = nil
+        inspectorProsody = nil
+        inspectorMatches = nil
+        inspectorSynonyms = []
+        inspectorSynonymsLoading = false
+        inspectorSynonymsError = nil
+        selectedRange = NSRange(location: selectedRange.location + selectedRange.length, length: 0)
     }
 
     // MARK: - Suggestion Insertion
@@ -702,8 +868,12 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Settings
 
     func saveApiKey(provider: AIProvider, key: String) {
-        apiKeys[provider.rawValue] = key
-        UserDefaults.standard.set(key, forKey: "apiKey_\(provider.rawValue)")
+        if key.isEmpty {
+            keychainStore.deleteKey(provider: provider.rawValue)
+        } else {
+            keychainStore.setKey(provider: provider.rawValue, key: key)
+        }
+        apiKeyPresence[provider.rawValue] = !key.isEmpty
     }
 
     func saveProvider(_ provider: AIProvider) {
