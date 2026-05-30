@@ -353,7 +353,7 @@ struct SettingsView: View {
 
     private func loadSettingsState() {
         for provider in AIProvider.allCases {
-            editingKeys[provider.rawValue] = viewModel.apiKeys[provider.rawValue] ?? ""
+            editingKeys[provider.rawValue] = viewModel.apiKey(for: provider)
         }
         refreshInstalledModels()
     }

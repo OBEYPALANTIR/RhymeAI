@@ -1,4 +1,3 @@
-import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -6,14 +5,6 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
-}
-
-fun loadLocalProperty(key: String): String {
-    val localProps = rootProject.file("local.properties")
-    if (!localProps.exists()) return ""
-    val props = Properties()
-    props.load(localProps.inputStream())
-    return props.getProperty(key, "")
 }
 
 android {
@@ -28,7 +19,6 @@ android {
         versionName = "0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "GEMINI_API_KEY", "\"${loadLocalProperty("GEMINI_API_KEY")}\"")
     }
 
     buildFeatures {
@@ -80,6 +70,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
 

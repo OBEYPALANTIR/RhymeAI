@@ -128,7 +128,7 @@ class MainActivity : ComponentActivity() {
 
                     if (viewModel.showSettingsDialog) {
                         SettingsDialog(
-                            apiKeys = viewModel.apiKeys,
+                            apiKeys = viewModel.apiKeySnapshot(),
                             currentProvider = viewModel.selectedProvider,
                             currentModel = viewModel.selectedModel,
                             localModelLoading = viewModel.localModelLoading,

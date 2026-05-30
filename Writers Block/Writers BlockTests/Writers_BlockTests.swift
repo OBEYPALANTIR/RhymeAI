@@ -5,6 +5,7 @@
 //  Created by Tyler Manring on 4/6/26.
 //
 
+import Foundation
 import Testing
 @testable import Writers_Block
 
@@ -105,6 +106,55 @@ struct Writers_BlockTests {
         let glowedKeys = ProsodyAnalyzer.rhymeKeys(for: "glowed", dictionary: Self.fixtureDictionary)
 
         #expect(!Set(roadKeys).intersection(glowedKeys).isEmpty)
+    }
+
+    @Test func inMemoryKeychainRoundTripsKey() {
+        let store: KeychainStore = InMemoryKeychainStore()
+
+        store.setKey(provider: "GEMINI", key: "abc")
+        store.setKey(provider: "OPENAI", key: "xyz")
+
+        #expect(store.getKey(provider: "GEMINI") == "abc")
+        #expect(store.getKey(provider: "OPENAI") == "xyz")
+        #expect(store.getKey(provider: "CLAUDE") == "")
+
+        store.deleteKey(provider: "GEMINI")
+        #expect(store.getKey(provider: "GEMINI") == "")
+    }
+
+    @Test func migrationMovesPopulatedLegacyKeysFromUserDefaults() {
+        let suiteName = "rhymeai.test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("gem-1", forKey: "apiKey_GEMINI")
+        defaults.set("cla-1", forKey: "apiKey_CLAUDE")
+
+        let store: KeychainStore = InMemoryKeychainStore()
+        let migrated = ApiKeyMigration.apply(legacyDefaults: defaults, secure: store)
+
+        #expect(migrated)
+        #expect(store.getKey(provider: "GEMINI") == "gem-1")
+        #expect(store.getKey(provider: "OPENAI") == "")
+        #expect(store.getKey(provider: "CLAUDE") == "cla-1")
+        #expect(defaults.string(forKey: "apiKey_GEMINI") == nil)
+        #expect(defaults.string(forKey: "apiKey_CLAUDE") == nil)
+    }
+
+    @Test func migrationIsIdempotentAndDoesNotOverwriteSecureKey() {
+        let suiteName = "rhymeai.test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("stale-plaintext", forKey: "apiKey_GEMINI")
+
+        let store: KeychainStore = InMemoryKeychainStore()
+        store.setKey(provider: "GEMINI", key: "already-in-secure")
+
+        let migrated = ApiKeyMigration.apply(legacyDefaults: defaults, secure: store)
+
+        #expect(!migrated)
+        #expect(store.getKey(provider: "GEMINI") == "already-in-secure")
+        // Legacy entry still wiped even though we didn't overwrite the secure value.
+        #expect(defaults.string(forKey: "apiKey_GEMINI") == nil)
     }
 
     private static let fixtureDictionary = PronunciationDictionary.fromLines([

@@ -9,13 +9,17 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "rhymeai_prefs")
 
-class ProjectRepository(private val context: Context) {
+class ProjectRepository(
+    private val context: Context,
+    private val secureKeyStore: SecureKeyStore = EncryptedPrefsKeyStore(context)
+) {
 
     companion object {
         private val PROJECTS_KEY = stringPreferencesKey("projects_json")
@@ -83,14 +87,22 @@ class ProjectRepository(private val context: Context) {
     }
 
     suspend fun saveApiKey(provider: String, key: String) {
-        context.dataStore.edit { prefs ->
-            when (provider) {
-                "GEMINI" -> prefs[GEMINI_API_KEY] = key
-                "OPENAI" -> prefs[OPENAI_API_KEY] = key
-                "CLAUDE" -> prefs[CLAUDE_API_KEY] = key
-            }
-        }
+        secureKeyStore.setKey(provider, key)
     }
+
+    /**
+     * Synchronous read of a single provider's key. Backed by the encrypted store,
+     * which is an in-memory `SharedPreferences` instance after the first access,
+     * so this is cheap to call from the request hot path.
+     */
+    fun getApiKey(provider: String): String = secureKeyStore.getKey(provider)
+
+    /**
+     * One-shot snapshot for UI flows that need to display the existing key
+     * (e.g. seeding the Settings dialog's editing fields). The returned map is
+     * not retained; callers should not stash it in long-lived state.
+     */
+    fun apiKeySnapshot(): Map<String, String> = secureKeyStore.allKeys()
 
     val selectedProviderFlow: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[SELECTED_PROVIDER_KEY] ?: "GEMINI"
@@ -112,11 +124,25 @@ class ProjectRepository(private val context: Context) {
         }
     }
 
-    fun allApiKeysFlow(): Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
-        mapOf(
+    /**
+     * Move any plaintext API keys still living in DataStore (from app versions
+     * before 0.3) into the encrypted store, then wipe the originals. Idempotent:
+     * subsequent calls find no legacy entries and do nothing.
+     */
+    suspend fun ensureApiKeysMigrated() {
+        val prefs = context.dataStore.data.first()
+        val legacy = mapOf(
             "GEMINI" to (prefs[GEMINI_API_KEY] ?: ""),
             "OPENAI" to (prefs[OPENAI_API_KEY] ?: ""),
             "CLAUDE" to (prefs[CLAUDE_API_KEY] ?: "")
         )
+        val migrated = ApiKeyMigration.apply(legacy, secureKeyStore)
+        if (migrated) {
+            context.dataStore.edit {
+                it.remove(GEMINI_API_KEY)
+                it.remove(OPENAI_API_KEY)
+                it.remove(CLAUDE_API_KEY)
+            }
+        }
     }
 }
