@@ -54,6 +54,6 @@ xcrun simctl list devices
 ## Working Rules
 
 - Preserve native parity when changing prompts, rhyme context, prosody, trash, or provider/model behavior.
-- Keep API keys out of source. Android reads `android/local.properties`; iOS uses runtime settings.
+- Keep API keys out of source. Android stores runtime keys through `SecureKeyStore`/EncryptedSharedPreferences; iOS stores runtime keys in Keychain. `android/local.properties` is local SDK configuration only.
 - Check `DESIGN.md` before UI changes.
 - Do not commit screenshots, simulator captures, APKs, or files under `artifacts/`.
