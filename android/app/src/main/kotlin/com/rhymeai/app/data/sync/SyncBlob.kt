@@ -31,9 +31,10 @@ data class SyncBlob(
 /**
  * Pure merge logic: takes the local snapshot and the remote snapshot and
  * produces the canonical post-merge snapshot using last-writer-wins keyed on
- * `updatedAt`. Trash entries follow the same rule on `deletedAt`. Application
- * order is local-first so that a missing remote degrades gracefully to local
- * data.
+ * `updatedAt`. Trash entries follow the same rule on `deletedAt`; active-vs-trash
+ * conflicts compare those two timestamps so a later restore can beat stale
+ * trash. Application order is local-first so that a missing remote degrades
+ * gracefully to local data.
  *
  * Pure function, no IO, no side effects. Tested without Android.
  */
@@ -42,14 +43,12 @@ object SyncMerger {
         val mergedProjects = mergeProjects(local.projects, remote.projects)
         val mergedTrashed = mergeTrash(local.trashed, remote.trashed)
 
-        // Anything in trash should not also live in projects.
-        val trashIds = mergedTrashed.map { it.project.id }.toSet()
-        val cleanProjects = mergedProjects.filterNot { it.id in trashIds }
+        val (cleanProjects, cleanTrashed) = resolveActiveTrashConflicts(mergedProjects, mergedTrashed)
 
         return SyncBlob(
             version = maxOf(local.version, remote.version),
             projects = cleanProjects.sortedByDescending { it.updatedAt },
-            trashed = mergedTrashed.sortedByDescending { it.deletedAt },
+            trashed = cleanTrashed.sortedByDescending { it.deletedAt },
             savedAt = System.currentTimeMillis(),
             savedByClientId = local.savedByClientId
         )
@@ -87,5 +86,27 @@ object SyncMerger {
             }
         }
         return byId.values.toList()
+    }
+
+    private fun resolveActiveTrashConflicts(
+        projects: List<SongProject>,
+        trashed: List<TrashedSongProject>
+    ): Pair<List<SongProject>, List<TrashedSongProject>> {
+        val activeById = projects.associateBy { it.id }
+        val restoredIds = trashed
+            .filter { trash ->
+                val activeProject = activeById[trash.project.id]
+                activeProject != null && activeProject.updatedAt > trash.deletedAt
+            }
+            .mapTo(mutableSetOf()) { it.project.id }
+
+        val trashIds = trashed
+            .filterNot { it.project.id in restoredIds }
+            .mapTo(mutableSetOf()) { it.project.id }
+
+        val cleanProjects = projects.filter { it.id !in trashIds }
+        val cleanTrashed = trashed.filter { it.project.id !in restoredIds }
+
+        return cleanProjects to cleanTrashed
     }
 }
