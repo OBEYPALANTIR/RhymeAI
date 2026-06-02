@@ -48,6 +48,22 @@ struct Writers_BlockTests {
         #expect(context.currentSection == .bridge)
     }
 
+    @Test func rhymeContextUsesFirstActiveSchemeLetterForEmptyLyrics() {
+        let viewModel = EditorViewModel()
+        viewModel.rhymeScheme = .custom
+        viewModel.customRhymeScheme = "BABA"
+        viewModel.lyrics = ""
+        viewModel.cursorPosition = 100
+
+        let context = viewModel.computeRhymeContext()
+
+        #expect(context.currentLetter == "B")
+        #expect(context.targetLine == nil)
+        #expect(context.stanzaLines.isEmpty)
+        #expect(context.currentLineIndex == 0)
+        #expect(context.currentSection == .unknown)
+    }
+
     @Test func openAIModelPickerStartsWithCurrentGPT5Models() {
         let modelIDs = AIModel.models(for: .openai).map(\.id)
 
