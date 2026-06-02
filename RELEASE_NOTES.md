@@ -31,6 +31,8 @@ the remaining known issues are closed.
   gate for suggestions, rewrites, and streaming.
 - iOS CloudKit readiness has a scriptable static gate and a live two-device
   checklist for final sync verification.
+- The latest final sign-off command evidence is recorded in
+  `docs/FINAL_SIGNOFF_STATUS.md`.
 
 ## Verification Commands
 

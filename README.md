@@ -33,6 +33,8 @@ The status script verifies tracked key hygiene and required release docs, then
 reports the remaining live gates. Set `RUN_VERIFY=1`, `RUN_PROVIDER_LIVE=1`,
 `RUN_LOCAL_GGUF=1`, or `RUN_CLOUDKIT_READINESS=1` to execute the matching gates
 when the required external keys, model file, devices, or account state exist.
+The latest sign-off evidence is tracked in
+`docs/FINAL_SIGNOFF_STATUS.md`.
 
 ## Features
 

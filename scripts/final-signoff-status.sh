@@ -31,7 +31,7 @@ run_optional() {
 
 cd "$ROOT_DIR"
 
-for file in BUGS.md KNOWN_ISSUES.md PARITY.md README.md RELEASE_NOTES.md; do
+for file in BUGS.md KNOWN_ISSUES.md PARITY.md README.md RELEASE_NOTES.md docs/FINAL_SIGNOFF_STATUS.md; do
   if [[ -s "$file" ]]; then
     pass "$file exists"
   else
