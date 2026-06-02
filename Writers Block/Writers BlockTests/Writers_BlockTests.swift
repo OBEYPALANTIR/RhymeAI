@@ -157,6 +157,39 @@ struct Writers_BlockTests {
         #expect(defaults.string(forKey: "apiKey_GEMINI") == nil)
     }
 
+    @Test func suggestionParserSanitizesProviderLineResponses() {
+        let raw = """
+        1. "Yellow lights keep pulling me home"
+        * Yellow lights keep pulling me home
+        - Static in the choir of the road
+        model_response>
+        You are RhymeAI's on-device songwriting assistant.
+        This line is deliberately far too long to be a usable lyric suggestion because it keeps going past the expected single-line length limit for the assistant surface.
+        2) I trade the dark for a borrowed glow
+        """
+
+        let suggestions = AIService().parseSuggestionList(raw)
+
+        #expect(suggestions == [
+            "Yellow lights keep pulling me home",
+            "Static in the choir of the road",
+            "I trade the dark for a borrowed glow"
+        ])
+    }
+
+    @Test func suggestionParserAcceptsJsonArrayAndObjectWrappers() {
+        let service = AIService()
+
+        #expect(service.parseSuggestionList(#"["1. First clean line", "\"Second clean line\"", "First clean line"]"#) == [
+            "First clean line",
+            "Second clean line"
+        ])
+        #expect(service.parseSuggestionList(#"{"suggestions":["- First wrapped line","2) Second wrapped line"]}"#) == [
+            "First wrapped line",
+            "Second wrapped line"
+        ])
+    }
+
     @MainActor
     @Test func geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey() async throws {
         let apiKey = Self.geminiTestKey
@@ -182,16 +215,18 @@ struct Writers_BlockTests {
         #expect(!suggestions.isEmpty, "Gemini returned no suggestions")
         #expect(suggestions.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
 
-        let rewrite = try await service.getRewrite(
-            provider: .gemini,
-            apiKey: apiKey,
-            modelId: AIModel.default.id,
-            action: .rephrase,
-            fullLyrics: lyrics,
-            selection: "I keep the melody close",
-            currentSection: .verse
-        )
-        #expect(!rewrite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Gemini returned no rewrite")
+        for action in RewriteAction.allCases {
+            let rewrite = try await service.getRewrite(
+                provider: .gemini,
+                apiKey: apiKey,
+                modelId: AIModel.default.id,
+                action: action,
+                fullLyrics: lyrics,
+                selection: "I keep the melody close",
+                currentSection: .verse
+            )
+            #expect(!rewrite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Gemini returned no \(action.label) rewrite")
+        }
 
         var streamed: [String] = []
         for try await line in service.streamSuggestions(

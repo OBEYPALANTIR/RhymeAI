@@ -380,6 +380,15 @@ struct AIService {
         if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleaned.isEmpty { return nil }
+        let markerOnly = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|<[^>]+>|user|model|assistant)\s*$"#
+        if cleaned.range(of: markerOnly, options: [.regularExpression, .caseInsensitive]) != nil {
+            return nil
+        }
+        let markerPrefix = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<start_of_turn>\w+|<end_of_turn>)\s*"#
+        if let range = cleaned.range(of: markerPrefix, options: [.regularExpression, .caseInsensitive]) {
+            cleaned = String(cleaned[range.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if let range = cleaned.range(of: #"^(?:[-*]\s+|\d+[.)]\s*)"#, options: .regularExpression) {
             cleaned = String(cleaned[range.upperBound...])
         }
@@ -387,6 +396,13 @@ struct AIService {
             cleaned = String(cleaned.dropFirst().dropLast())
         }
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        let promptEcho = #"^(?:task:|theme:|rhyme scheme:|lyrics context:|rules:|return exactly|one suggestion|no numbering|keep each|you are rhymeai)"#
+        if cleaned.range(of: promptEcho, options: [.regularExpression, .caseInsensitive]) != nil {
+            return nil
+        }
+        if cleaned.range(of: "response>", options: .caseInsensitive) != nil {
+            return nil
+        }
         if cleaned.isEmpty || cleaned.count > 140 { return nil }
         return cleaned
     }
@@ -485,8 +501,7 @@ struct AIService {
             throw AIServiceError.decodingError
         }
 
-        let results = parseJsonArray(text)
-        return results.isEmpty ? parseLines(text) : results
+        return parseSuggestionList(text)
     }
 
     // MARK: - OpenAI
@@ -519,8 +534,7 @@ struct AIService {
             throw AIServiceError.decodingError
         }
 
-        let results = parseJsonArray(content)
-        return results.isEmpty ? parseLines(content) : results
+        return parseSuggestionList(content)
     }
 
     // MARK: - Claude
@@ -554,8 +568,7 @@ struct AIService {
             throw AIServiceError.decodingError
         }
 
-        let results = parseJsonArray(text)
-        return results.isEmpty ? parseLines(text) : results
+        return parseSuggestionList(text)
     }
 
     // MARK: - Local
@@ -606,8 +619,7 @@ struct AIService {
             instructions: "You are an expert songwriter and lyricist. Return concise lyric line suggestions only."
         )
         let response = try await session.respond(to: prompt)
-        let results = parseJsonArray(response.content)
-        let parsed = results.isEmpty ? parseLines(response.content) : results
+        let parsed = parseSuggestionList(response.content)
         guard !parsed.isEmpty else {
             throw AIServiceError.decodingError
         }
@@ -994,6 +1006,22 @@ struct AIService {
 
     // MARK: - Parsing
 
+    func parseSuggestionList(_ text: String) -> [String] {
+        let parsed = parseJsonArray(text)
+        let candidates = parsed.isEmpty ? parseLines(text) : parsed
+        var seen = Set<String>()
+        var result: [String] = []
+
+        for candidate in candidates {
+            guard let cleaned = cleanSuggestionLine(candidate) else { continue }
+            let key = normalizeSuggestionKey(cleaned)
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(cleaned)
+            if result.count >= Self.suggestionCount { break }
+        }
+        return result
+    }
+
     private func parseJsonArray(_ text: String) -> [String] {
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Strip code fences
@@ -1022,21 +1050,6 @@ struct AIService {
     }
 
     private func parseLines(_ text: String) -> [String] {
-        let lines = text.components(separatedBy: .newlines)
-            .map { line in
-                // Strip numbering like "1. " or "1) "
-                var cleaned = line.trimmingCharacters(in: .whitespaces)
-                if let range = cleaned.range(of: #"^\d+[.)]\s*"#, options: .regularExpression) {
-                    cleaned = String(cleaned[range.upperBound...])
-                }
-                // Strip surrounding quotes
-                if cleaned.hasPrefix("\"") && cleaned.hasSuffix("\"") && cleaned.count > 2 {
-                    cleaned = String(cleaned.dropFirst().dropLast())
-                }
-                return cleaned
-            }
-            .filter { !$0.isEmpty }
-
-        return Array(lines.prefix(Self.suggestionCount))
+        text.components(separatedBy: .newlines)
     }
 }
