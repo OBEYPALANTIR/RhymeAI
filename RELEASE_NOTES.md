@@ -39,7 +39,6 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 
 - Run Android local GGUF smoke with an actual model file.
 - Run CloudKit live two-simulator/device matrix with an iCloud account.
-- Run the Android release walkthrough on an attached emulator/device, then cover
-  live Gemini suggestion/rewrite on signed release and the broader iOS
-  light/dark/iPad human release pass before moving any non-blocking friction
+- Cover live Gemini suggestion/rewrite on signed Android release and the broader
+  iOS light/dark/iPad human release pass before moving any non-blocking friction
   into `KNOWN_ISSUES.md`.

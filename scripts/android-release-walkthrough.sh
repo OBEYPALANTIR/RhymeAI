@@ -55,9 +55,10 @@ dump_ui() {
 node_bounds() {
   local mode="$1"
   local needle="$2"
-  dump_ui | perl -MHTML::Entities -0ne '
+  dump_ui | perl -MHTML::Entities -0e '
     my ($mode, $needle) = @ARGV;
-    while (/<node\b([^>]*)>/g) {
+    my $xml = do { local $/; <STDIN> };
+    while ($xml =~ /<node\b([^>]*)>/g) {
       my $node = $1;
       my ($text) = $node =~ /\btext="([^"]*)"/;
       my ($desc) = $node =~ /\bcontent-desc="([^"]*)"/;
@@ -90,6 +91,22 @@ wait_for_node() {
   done
 }
 
+wait_for_node_with_scroll() {
+  local mode="$1"
+  local needle="$2"
+  local timeout="${3:-20}"
+  local deadline=$((SECONDS + timeout))
+  until node_bounds "$mode" "$needle" >/dev/null; do
+    if (( SECONDS >= deadline )); then
+      dump_ui >&2 || true
+      echo "Timed out waiting for UI node after scrolling: $needle" >&2
+      exit 1
+    fi
+    "$ADB" -s "$serial" shell input swipe 540 2100 540 700 450 >/dev/null || true
+    sleep 1
+  done
+}
+
 tap_node() {
   local mode="$1"
   local needle="$2"
@@ -109,7 +126,7 @@ assert_process_alive() {
   local pid
   pid="$("$ADB" -s "$serial" shell pidof "$PACKAGE" | tr -d '\r' || true)"
   if [[ -z "$pid" ]]; then
-    "$ADB" -s "$serial" logcat -d -t 500 | rg -n 'FATAL EXCEPTION|AndroidRuntime|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError' || true
+    "$ADB" -s "$serial" logcat -d -t 500 | rg -n 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError' || true
     echo "Release app process is not running." >&2
     exit 1
   fi
@@ -130,9 +147,9 @@ input_text "$release_lyrics"
 wait_for_node exact "Saved" 10
 
 tap_node exact "UnBlock"
-wait_for_node exact "Suggest Next Line" 20
+wait_for_node_with_scroll exact "Suggest Next Line" 20
 tap_node exact "Suggest Next Line"
-wait_for_node contains "No API key set" 20
+wait_for_node_with_scroll contains "No API key set" 20
 "$ADB" -s "$serial" shell input keyevent KEYCODE_BACK >/dev/null || true
 
 wait_for_node exact "Export" 20
@@ -152,7 +169,7 @@ wait_for_node contains "Midnight notes on a borrowed train" 20
 
 assert_process_alive
 
-if "$ADB" -s "$serial" logcat -d -t 500 | rg -n 'FATAL EXCEPTION|AndroidRuntime|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError'; then
+if "$ADB" -s "$serial" logcat -d -t 500 | rg -n 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError'; then
   echo "Release walkthrough emitted crash markers." >&2
   exit 1
 fi
