@@ -28,10 +28,14 @@ This tracks behavior that must stay aligned between Android and iOS.
 - JSON export: Android and iOS unit-verified for project field round trip. Platform timestamp encodings differ by model type (`Long` on Android, ISO-8601 `Date` on iOS), but each export remains re-importable on its source platform.
 - PDF export: iOS unit-verified to produce PDF bytes from a long lyric sheet. Android PDF formatting remains a device/instrumentation follow-up because local JVM unit tests cannot honestly exercise `android.graphics.pdf.PdfDocument`.
 
+## Trash and persistence checks
+
+- Android sync merge: Unit-verified that active project changes merge by `updatedAt`, trash entries merge by `deletedAt`, newer trash removes stale active copies, and newer restored active projects are not deleted by stale trash entries.
+
 ## Open parity checks
 
 - Gemini UI cancel behavior: Pending emulator/simulator UI verification.
 - Gemini timeout/offline and blocked-response behavior: Pending emulator/simulator/network-condition verification.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.
-- Rhyme context, prosody, trash, Android PDF export, and persistence: Pending hardening pass.
+- Rhyme context, prosody, Android PDF export, and iOS trash/persistence lifecycle: Pending hardening pass.

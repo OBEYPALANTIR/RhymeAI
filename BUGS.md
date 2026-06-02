@@ -41,3 +41,10 @@
 - Root cause: Android trimmed only trailing whitespace for formatted exports, while iOS trimmed both leading and trailing spaces/tabs before LRC/PDF rendering.
 - Fix commit: `76fe468` (Android parity coverage), `9e4ad12` (iOS export alignment).
 - Re-verify: Passed on 2026-06-02 with `./gradlew :app:testDebugUnitTest --tests 'com.rhymeai.app.util.LyricsExporterTest'` and `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -only-testing:"Writers BlockTests/LyricsExporterTests"`.
+
+## BUG-007: Android sync could let stale trash delete restored projects
+
+- Repro: Merge a local active project restored at `updatedAt=300` with a remote trash entry for the same project deleted at `deletedAt=200`.
+- Root cause: `SyncMerger` merged active projects and trash independently, then always removed active projects whose IDs appeared in trash instead of comparing the active update timestamp against the trash deletion timestamp.
+- Fix commit: `519daf8`.
+- Re-verify: Passed on 2026-06-02 with `./gradlew :app:testDebugUnitTest --tests 'com.rhymeai.app.data.sync.SyncMergerTest'`.
