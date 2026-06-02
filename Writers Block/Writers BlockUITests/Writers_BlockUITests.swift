@@ -237,6 +237,29 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssistantStopCancelsSuggestionRequest() throws {
+        guard let geminiTestKey = ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"],
+              !geminiTestKey.isEmpty else {
+            throw XCTSkip("GEMINI_TEST_KEY is required for live assistant cancel UI verification")
+        }
+
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song",
+            "--ui-test-open-assistant"
+        ])
+        app.launchEnvironment["GEMINI_TEST_KEY"] = geminiTestKey
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        app.buttons["Suggest Next Line"].tap()
+        XCTAssertTrue(app.buttons["Stop"].waitForExistence(timeout: 5))
+
+        app.buttons["Stop"].tap()
+
+        XCTAssertTrue(app.buttons["Suggest Next Line"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testIPadSplitEditorShowsInlineAssistantAndProsody() throws {
         try requireIPad()
 
