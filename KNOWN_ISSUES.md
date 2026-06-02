@@ -2,13 +2,20 @@
 
 Current non-critical items remaining before final production-ready sign-off.
 
-## Local GGUF inference smoke needs a model file
+## Local GGUF inference smoke has current emulator evidence
 
-- Status: Open.
+- Status: Closed for scriptable Android local inference coverage.
 - Scope: Android local provider.
-- Evidence: `scripts/android-local-model-smoke.sh` and `LocalModelInstrumentedTest`
-  are wired, but no local `.gguf` file was present during the latest pass.
-- Next verification: attach an emulator/device and run:
+- Evidence: on 2026-06-02,
+  `LOCAL_GGUF_PATH="$PWD/artifacts/local-model-smoke/tinyllama-1.1b-chat-v0.6.q2_k.gguf" ANDROID_SERIAL=emulator-5554 ./scripts/android-local-model-smoke.sh`
+  passed with an ignored 482143168-byte GGUF fixture. The run verified the GGUF
+  header, built and installed the debug app plus test APK, pushed the model,
+  loaded it through `LocalModelService`, and passed `LocalModelInstrumentedTest`
+  with nonblank generation output.
+- Note: keep the app-recommended Gemma downloads as the user-facing default;
+  TinyLlama is only a smoke fixture.
+- Next verification for future release candidates: attach an emulator/device and
+  run:
 
 ```sh
 LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke.sh

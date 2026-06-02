@@ -25,8 +25,8 @@ the remaining known issues are closed.
 - iOS Release visual walkthrough captures and reviews welcome, populated editor,
   export sheet, assistant panel, no-key assistant error, and no-key rewrite error
   screenshots.
-- Android local GGUF inference has a dedicated emulator/device smoke gate that
-  requires a real model path.
+- Android local GGUF inference has a dedicated emulator/device smoke gate with
+  passing evidence from a real ignored GGUF fixture.
 - OpenAI and Claude happy paths have a BYO-key cross-platform provider smoke
   gate for suggestions, rewrites, and streaming.
 - iOS CloudKit readiness has a scriptable static gate and a live two-device
@@ -55,6 +55,5 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 
 ## Remaining Before Final Sign-Off
 
-- Run Android local GGUF smoke with an actual model file.
 - Run CloudKit live two-simulator/device matrix with an iCloud account.
 - Run `scripts/provider-live-smoke.sh` with supplied OpenAI and Claude keys.

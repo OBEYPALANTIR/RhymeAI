@@ -1,6 +1,6 @@
 # Final Sign-Off Status
 
-Last updated: 2026-06-02 04:39 America/New_York.
+Last updated: 2026-06-02 04:48 America/New_York.
 
 ## Current Local Evidence
 
@@ -22,18 +22,24 @@ Passed:
 - `./scripts/ios-cloudkit-readiness.sh` passed static CloudKit readiness:
   private container wiring, entitlements, remote-notification background mode,
   build output, and `TrashLifecycleTests`.
+- Android local GGUF inference passed on `emulator-5554` with:
+
+```sh
+LOCAL_GGUF_PATH="$PWD/artifacts/local-model-smoke/tinyllama-1.1b-chat-v0.6.q2_k.gguf" ANDROID_SERIAL=emulator-5554 ./scripts/android-local-model-smoke.sh
+```
+
+  The ignored smoke fixture was 482143168 bytes with a valid GGUF header, and
+  `LocalModelInstrumentedTest` passed after loading the model and producing
+  nonblank generation output.
 
 ## Remaining External Gates
 
-The status command exited `2` because final sign-off still needs current live
-evidence for:
+Final sign-off still needs current live evidence for:
 
 - OpenAI/Claude provider happy paths: run `./scripts/provider-live-smoke.sh`
   with `OPENAI_TEST_KEY` and `CLAUDE_TEST_KEY` or `ANTHROPIC_TEST_KEY`.
-- Android local GGUF inference: run `./scripts/android-local-model-smoke.sh`
-  with `LOCAL_GGUF_PATH` set to a readable `.gguf` model file.
 - CloudKit live sync: complete `docs/CLOUDKIT_SYNC_CHECKLIST.md` on two
   iCloud-signed-in simulators/devices.
 
-Do not mark production sign-off complete until all three live gates above have
+Do not mark production sign-off complete until both live gates above have
 current passing evidence.

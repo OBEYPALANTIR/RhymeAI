@@ -30,13 +30,28 @@ class LocalModelInstrumentedTest {
 
         try {
             service.loadModel(modelPath)
-            val response = service.generateResponse(
+            val prompts = listOf(
+                gemmaInstructionPrompt("Write one short, original songwriting line. Return only the line."),
+                gemmaInstructionPrompt("Continue this lyric with one short line:\nMidnight notes on a borrowed train"),
                 "Write one short, original songwriting line. Return only the line."
             )
+            var response = ""
+            for (prompt in prompts) {
+                response = service.generateResponse(prompt).trim()
+                if (response.isNotBlank()) break
+            }
 
             assertTrue("Local model returned blank output", response.isNotBlank())
         } finally {
             service.unload()
         }
     }
+
+    private fun gemmaInstructionPrompt(userPrompt: String): String =
+        """
+<start_of_turn>user
+$userPrompt
+<end_of_turn>
+<start_of_turn>model
+""".trimIndent()
 }

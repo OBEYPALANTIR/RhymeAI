@@ -50,16 +50,45 @@ fi
 
 device_model_path="${DEVICE_GGUF_PATH:-/data/local/tmp/rhymeai-local-model-smoke.gguf}"
 
+install_apk() {
+  local apk="$1"
+  local output
+  if output="$("$ADB" -s "$serial" install -r "$apk" 2>&1)"; then
+    printf '%s\n' "$output"
+    return 0
+  fi
+
+  if [[ "$output" == *"INSTALL_FAILED_UPDATE_INCOMPATIBLE"* ]]; then
+    echo "$output" >&2
+    echo "Existing RhymeAI install has a different signature; uninstalling app/test packages and retrying." >&2
+    "$ADB" -s "$serial" uninstall com.rhymeai.app >/dev/null 2>&1 || true
+    "$ADB" -s "$serial" uninstall com.rhymeai.app.test >/dev/null 2>&1 || true
+    "$ADB" -s "$serial" install -r "$apk"
+    return 0
+  fi
+
+  echo "$output" >&2
+  return 1
+}
+
+"$ADB" -s "$serial" shell rm -f "$device_model_path" >/dev/null 2>&1 || true
+
 cd "$ANDROID_DIR"
 ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
 
-"$ADB" -s "$serial" install -r app/build/outputs/apk/debug/app-debug.apk
-"$ADB" -s "$serial" install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+install_apk app/build/outputs/apk/debug/app-debug.apk
+install_apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 "$ADB" -s "$serial" push "$LOCAL_GGUF_PATH" "$device_model_path"
 
-"$ADB" -s "$serial" shell am instrument -w \
+instrumentation_output="$("$ADB" -s "$serial" shell am instrument -w \
   -e class com.rhymeai.app.LocalModelInstrumentedTest \
   -e localModelPath "$device_model_path" \
-  com.rhymeai.app.test/androidx.test.runner.AndroidJUnitRunner
+  com.rhymeai.app.test/androidx.test.runner.AndroidJUnitRunner 2>&1)"
+printf '%s\n' "$instrumentation_output"
+
+if [[ "$instrumentation_output" == *"FAILURES!!!"* || "$instrumentation_output" != *"OK ("* ]]; then
+  echo "Android local GGUF instrumentation failed." >&2
+  exit 1
+fi
 
 echo "Android local GGUF load and inference smoke passed on $serial."
