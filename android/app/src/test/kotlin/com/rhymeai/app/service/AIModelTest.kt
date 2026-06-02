@@ -43,6 +43,15 @@ class AIModelTest {
     }
 
     @Test
+    fun localModelPickerUsesOnDeviceModelOnly() {
+        val models = AIModel.modelsForProvider(AIProvider.LOCAL)
+
+        assertEquals(listOf(AIModel.LOCAL_MODEL), models)
+        assertEquals("local-model", models.single().id)
+        assertEquals("On-Device Model", models.single().displayName)
+    }
+
+    @Test
     fun fromIdRestoresNewProviderModels() {
         assertEquals(AIModel.GPT_55, AIModel.fromId("gpt-5.5"))
         assertEquals(AIModel.GPT_54_MINI, AIModel.fromId("gpt-5.4-mini"))

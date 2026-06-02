@@ -90,6 +90,70 @@ class AIServiceFailureTest {
     }
 
     @Test
+    fun localProviderSurfacesNoModelInsteadOfApiKeyError() = runBlocking {
+        val service = AIService()
+
+        val suggestionError = assertFailsWith<IllegalStateException> {
+            service.getSuggestions(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                theme = "",
+                lyrics = "one line",
+                targetRhymeLine = null,
+                rhymeType = RhymeType.PERFECT,
+                rhymeScheme = "AABB",
+                currentLetter = "A",
+                currentSection = SongSection.UNKNOWN,
+                complexity = RhymeComplexity.MODERATE,
+                useWholeSongContext = false
+            )
+        }
+        val streamError = assertFailsWith<IllegalStateException> {
+            service.streamSuggestions(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                theme = "",
+                lyrics = "one line",
+                targetRhymeLine = null,
+                rhymeType = RhymeType.PERFECT,
+                rhymeScheme = "AABB",
+                currentLetter = "A",
+                currentSection = SongSection.UNKNOWN,
+                complexity = RhymeComplexity.MODERATE,
+                useWholeSongContext = false
+            ).toList()
+        }
+        val rewriteError = assertFailsWith<IllegalStateException> {
+            service.getRewrite(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                action = RewriteAction.REPHRASE,
+                fullLyrics = "one line",
+                selection = "one line",
+                currentSection = SongSection.UNKNOWN
+            )
+        }
+        val synonymsError = assertFailsWith<IllegalStateException> {
+            service.getSynonyms(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                word = "line",
+                lineContext = "one line"
+            )
+        }
+
+        val expected = "No local model loaded. Go to Settings to load a model file."
+        assertEquals(expected, suggestionError.message)
+        assertEquals(expected, streamError.message)
+        assertEquals(expected, rewriteError.message)
+        assertEquals(expected, synonymsError.message)
+    }
+
+    @Test
     fun providerStatusMessagesAreUserFacing() {
         val service = AIService()
 
