@@ -147,7 +147,16 @@ final class EditorViewModel: ObservableObject {
     }
 
     func apiKey(for provider: AIProvider) -> String {
-        keychainStore.getKey(provider: provider.rawValue)
+        let storedKey = keychainStore.getKey(provider: provider.rawValue)
+        guard storedKey.isEmpty, provider == .gemini else {
+            return storedKey
+        }
+
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"] ?? ""
+        #else
+        return ""
+        #endif
     }
 
     func hasApiKey(for provider: AIProvider) -> Bool {
@@ -200,6 +209,15 @@ final class EditorViewModel: ObservableObject {
         let resolvedStore: KeychainStore = keychainStore
             ?? (runningUITestInMemory ? InMemoryKeychainStore() : SystemKeychainStore())
         self.keychainStore = resolvedStore
+
+        #if DEBUG
+        if runningUITestInMemory,
+           let geminiTestKey = ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"],
+           !geminiTestKey.isEmpty,
+           resolvedStore.getKey(provider: AIProvider.gemini.rawValue).isEmpty {
+            resolvedStore.setKey(provider: AIProvider.gemini.rawValue, key: geminiTestKey)
+        }
+        #endif
 
         let providerRaw = UserDefaults.standard.string(forKey: "selectedProvider") ?? AIProvider.gemini.rawValue
         selectedProvider = AIProvider(rawValue: providerRaw) ?? .gemini
