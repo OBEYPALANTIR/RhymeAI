@@ -101,8 +101,9 @@ the first available AVD when no device is attached:
 ```
 
 The audit builds and key-scans the minified release artifacts, installs the
-release APK, captures phone launch screenshots in light, dark, and 1.3 font
-scale profiles, then captures populated editor, assistant panel, and export
+release APK, classifies the attached target as phone or tablet from its actual
+screen size and density, captures launch screenshots in light, dark, and 1.3
+font scale profiles, then captures populated editor, assistant panel, and export
 sheet screenshots without entering an API key. Screenshots and a report are
 written under `artifacts/android-release-visual-audit/`.
 

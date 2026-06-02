@@ -15,8 +15,9 @@ the full release walkthrough and remaining known issues are closed.
 - Android release builds are minified, can be signed through ignored
   `android/keystore.properties`, and have a release smoke gate for signing,
   release artifact key scanning, install, and launch.
-- Android Release visual audit captures and reviews phone light/dark/large-font
-  launch screenshots plus populated editor, assistant, and export surfaces.
+- Android Release visual audit captures and reviews phone or tablet
+  light/dark/large-font launch screenshots plus populated editor, assistant, and
+  export surfaces.
 - iOS Release builds have a signed simulator build/launch smoke gate, archive
   creation, and release binary key scanning.
 - iOS Release visual audit captures and reviews light/dark iPhone and iPad

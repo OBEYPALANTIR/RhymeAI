@@ -46,7 +46,8 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
   phone light/dark/large-font screenshots plus populated editor, assistant
   panel, and export sheet screenshots; the 2026-06-02 screenshots were reviewed
   for blank, overlapping, keyboard-obstructed, and launch-blocking layout
-  failures.
+  failures. The script now classifies real phone/tablet targets from screen size
+  and density, so a tablet run will produce tablet-labeled evidence.
 - Remaining walkthrough: Android tablet visual coverage still needs a real
   tablet emulator/device. iOS still needs any remaining human-only release
   walkthrough beyond the captured launch screenshots.

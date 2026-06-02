@@ -38,6 +38,11 @@ mkdir -p "$SCREENSHOT_DIR"
 serial="${ANDROID_SERIAL:-}"
 owned_emulator=0
 original_font_scale=""
+device_class="phone"
+wm_size=""
+wm_density=""
+sdk_version=""
+model_name=""
 
 device_serial() {
   "$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1; exit }'
@@ -214,6 +219,24 @@ assert_no_crash_markers() {
   fi
 }
 
+classify_device() {
+  model_name="$("$ADB" -s "$serial" shell getprop ro.product.model | tr -d '\r')"
+  sdk_version="$("$ADB" -s "$serial" shell getprop ro.build.version.sdk | tr -d '\r')"
+  wm_size="$("$ADB" -s "$serial" shell wm size | tr -d '\r')"
+  wm_density="$("$ADB" -s "$serial" shell wm density | tr -d '\r')"
+
+  local size density smallest_dp
+  size="$(printf '%s\n' "$wm_size" | sed -n 's/.*: *\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' | tail -1)"
+  density="$(printf '%s\n' "$wm_density" | sed -n 's/.*: *\([0-9][0-9]*\).*/\1/p' | tail -1)"
+  if [[ -n "$size" && -n "$density" ]]; then
+    read -r width height <<<"$size"
+    smallest_dp="$(awk -v w="$width" -v h="$height" -v d="$density" 'BEGIN { s = w < h ? w : h; printf "%.0f", s * 160 / d }')"
+    if (( smallest_dp >= 600 )); then
+      device_class="tablet"
+    fi
+  fi
+}
+
 launch_profile() {
   local night_mode="$1"
   local font_scale="$2"
@@ -288,18 +311,24 @@ capture_populated_flow() {
 {
   echo "Android release visual audit"
   echo "Run: $RUN_ID"
+  classify_device
   echo "Device: $serial"
-  "$ADB" -s "$serial" shell getprop ro.product.model | tr -d '\r' | sed 's/^/Model: /'
-  "$ADB" -s "$serial" shell getprop ro.build.version.sdk | tr -d '\r' | sed 's/^/SDK: /'
-  "$ADB" -s "$serial" shell wm size | tr -d '\r'
-  "$ADB" -s "$serial" shell wm density | tr -d '\r'
-  echo "Tablet coverage: not exercised by this phone-profile audit; rerun with ANDROID_SERIAL or ANDROID_AVD_NAME pointed at a tablet emulator/device."
+  echo "Model: $model_name"
+  echo "SDK: $sdk_version"
+  echo "$wm_size"
+  echo "$wm_density"
+  echo "Classified profile: $device_class"
+  if [[ "$device_class" == "tablet" ]]; then
+    echo "Tablet coverage: exercised by this tablet-profile audit."
+  else
+    echo "Tablet coverage: not exercised by this phone-profile audit; rerun with ANDROID_SERIAL or ANDROID_AVD_NAME pointed at a tablet emulator/device."
+  fi
   echo
 } >"$REPORT"
 
-capture_launch_profile "phone-light" "no" "1.0"
-capture_launch_profile "phone-dark" "yes" "1.0"
-capture_launch_profile "phone-large-font" "no" "1.3"
+capture_launch_profile "$device_class-light" "no" "1.0"
+capture_launch_profile "$device_class-dark" "yes" "1.0"
+capture_launch_profile "$device_class-large-font" "no" "1.3"
 capture_populated_flow
 
 echo "Android release visual audit passed on $serial."
