@@ -39,6 +39,9 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
   suggestion/force-stop/relaunch persistence run.
   Android also has a passing `scripts/android-release-live-gemini.sh` run for
   release runtime key entry plus live Gemini suggestion/rewrite preview coverage.
+  iOS has a passing `scripts/ios-release-visual-audit.sh` run for Release
+  light/dark iPhone and iPad screenshot capture; the 2026-06-02 screenshots were
+  reviewed for blank, overlapping, and launch-blocking layout failures.
 - Remaining walkthrough: Android still needs light/dark and phone/tablet coverage
-  where available. iOS still needs the broader human light/dark and iPad release
-  pass.
+  where available. iOS still needs any remaining human-only release walkthrough
+  beyond the captured launch screenshots.

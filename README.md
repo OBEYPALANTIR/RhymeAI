@@ -127,12 +127,12 @@ To run the iOS Release gate from the repo root:
 ./scripts/ios-release-smoke.sh
 ```
 
-The script builds the Release simulator app, scans the compiled binary for the
-Gemini key pattern, installs/launches it on the default iPhone 17 Pro OS 26.5
+The script builds a signed Release simulator app, scans the compiled binary for
+the Gemini key pattern, installs/launches it on the default iPhone 17 Pro OS 26.5
 simulator when available, then produces a signed generic iOS archive and scans
-the archive binary. Archive output defaults to a temporary directory outside the
-iCloud-synced repo; override with `IOS_RELEASE_WORK_DIR`, `IOS_ARCHIVE_PATH`, or
-`SKIP_ARCHIVE=1` for targeted checks.
+the archive binary. Build and archive output defaults to a temporary directory
+outside the iCloud-synced repo; override with `IOS_RELEASE_WORK_DIR`,
+`IOS_ARCHIVE_PATH`, or `SKIP_ARCHIVE=1` for targeted checks.
 
 To run the iOS Release walkthrough gate:
 
@@ -143,6 +143,17 @@ To run the iOS Release walkthrough gate:
 The walkthrough builds and tests the app in Release configuration, then verifies
 song creation, save, export surface reachability, graceful no-key AI/rewrite
 handling, and relaunch persistence.
+
+To capture the iOS Release light/dark phone/iPad screenshot audit:
+
+```sh
+./scripts/ios-release-visual-audit.sh
+```
+
+The audit builds the signed Release simulator app from a temporary directory,
+installs it on iPhone 17 Pro and iPad Pro 13-inch OS 26.5 simulators in light
+and dark appearance, verifies the process stays alive, and writes screenshots
+under `artifacts/ios-release-visual-audit/` for human review.
 
 To verify CloudKit readiness before the live two-device sync matrix:
 

@@ -15,8 +15,10 @@ the full release walkthrough and remaining known issues are closed.
 - Android release builds are minified, can be signed through ignored
   `android/keystore.properties`, and have a release smoke gate for signing,
   release artifact key scanning, install, and launch.
-- iOS Release builds have a release smoke gate for simulator build/launch,
-  archive creation, and release binary key scanning.
+- iOS Release builds have a signed simulator build/launch smoke gate, archive
+  creation, and release binary key scanning.
+- iOS Release visual audit captures and reviews light/dark iPhone and iPad
+  simulator screenshots.
 - Android local GGUF inference has a dedicated emulator/device smoke gate that
   requires a real model path.
 - iOS CloudKit readiness has a scriptable static gate and a live two-device
@@ -31,6 +33,7 @@ the full release walkthrough and remaining known issues are closed.
 ./scripts/android-release-live-gemini.sh
 ./scripts/ios-release-smoke.sh
 ./scripts/ios-release-walkthrough.sh
+./scripts/ios-release-visual-audit.sh
 ./scripts/ios-cloudkit-readiness.sh
 ./scripts/ios-local-provider-smoke.sh
 LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke.sh
@@ -40,5 +43,6 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 
 - Run Android local GGUF smoke with an actual model file.
 - Run CloudKit live two-simulator/device matrix with an iCloud account.
-- Cover the broader iOS light/dark/iPad human release pass before moving any
-  non-blocking friction into `KNOWN_ISSUES.md`.
+- Finish any remaining human-only release walkthrough beyond the captured iOS
+  light/dark/iPad screenshots before moving non-blocking friction into
+  `KNOWN_ISSUES.md`.

@@ -19,6 +19,30 @@ scan_binary() {
   echo "Release binary key scan passed: $binary"
 }
 
+find_simulator() {
+  local name="$1"
+  local os="$2"
+  local simctl_json
+  simctl_json="$(xcrun simctl list devices available --json)"
+  SIMCTL_JSON="$simctl_json" /usr/bin/python3 - "$name" "$os" <<'PY'
+import json
+import os
+import sys
+
+name, os_name = sys.argv[1], sys.argv[2]
+runtime_suffix = os_name.replace("iOS ", "iOS-").replace(".", "-")
+data = json.loads(os.environ["SIMCTL_JSON"])
+for runtime, devices in data.get("devices", {}).items():
+    if runtime_suffix and runtime_suffix not in runtime:
+        continue
+    for device in devices:
+        if device.get("name") == name and device.get("isAvailable", False):
+            print(device["udid"])
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 rm -rf "$DERIVED_DATA"
 mkdir -p "$(dirname "$DERIVED_DATA")" "$(dirname "$ARCHIVE_PATH")"
 
@@ -32,7 +56,7 @@ xcodebuild build \
   -configuration Release \
   -destination "$DESTINATION" \
   -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGNING_ALLOWED=NO
+  CODE_SIGNING_ALLOWED="${IOS_SIM_CODE_SIGNING_ALLOWED:-YES}"
 
 SIM_APP="$DERIVED_DATA/Build/Products/Release-iphonesimulator/Writers Block.app"
 SIM_BINARY="$SIM_APP/Writers Block"
@@ -45,7 +69,11 @@ scan_binary "$SIM_BINARY"
 if [[ "${SKIP_SIM_LAUNCH:-0}" != "1" ]]; then
   simulator_id="${IOS_SIMULATOR_ID:-}"
   if [[ -z "$simulator_id" ]]; then
-    simulator_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone 17 Pro/ && /26.5/ { print $2; exit }')"
+    simulator_name="$(printf '%s\n' "$DESTINATION" | sed -n 's/.*name=\([^,]*\).*/\1/p')"
+    simulator_os="$(printf '%s\n' "$DESTINATION" | sed -n 's/.*OS=\([^,]*\).*/iOS \1/p')"
+    simulator_name="${simulator_name:-iPhone 17 Pro}"
+    simulator_os="${simulator_os:-iOS 26.5}"
+    simulator_id="$(find_simulator "$simulator_name" "$simulator_os" || true)"
   fi
   if [[ -z "$simulator_id" ]]; then
     if [[ "${REQUIRE_SIM:-0}" == "1" ]]; then
@@ -58,9 +86,11 @@ if [[ "${SKIP_SIM_LAUNCH:-0}" != "1" ]]; then
     xcrun simctl bootstatus "$simulator_id" -b
     xcrun simctl uninstall "$simulator_id" "$BUNDLE_ID" >/dev/null 2>&1 || true
     xcrun simctl install "$simulator_id" "$SIM_APP"
-    xcrun simctl launch "$simulator_id" "$BUNDLE_ID"
+    launch_output="$(xcrun simctl launch "$simulator_id" "$BUNDLE_ID")"
+    echo "$launch_output"
+    app_pid="${launch_output##*: }"
     sleep 3
-    if ! xcrun simctl spawn "$simulator_id" pgrep -f "Writers Block" >/dev/null 2>&1; then
+    if [[ -z "$app_pid" || ! "$app_pid" =~ ^[0-9]+$ ]] || ! ps -p "$app_pid" >/dev/null 2>&1; then
       echo "Release simulator app process did not stay alive after launch." >&2
       exit 1
     fi
