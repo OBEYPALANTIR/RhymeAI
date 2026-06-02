@@ -7,6 +7,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Android: API keys are read on demand through `MainViewModel.apiKey(provider)`. Debug builds may fall back to `BuildConfig.GEMINI_TEST_KEY` for Gemini only when the secure store is blank.
 - iOS: API keys are read on demand through `EditorViewModel.apiKey(for:)`. Debug builds may fall back to `GEMINI_TEST_KEY` for Gemini only when the Keychain is blank; UI tests can seed the existing in-memory keychain seam from the same environment variable.
 - Parity status: Aligned for debug-only Gemini test-key fallback. Release builds keep the fallback empty or compiled out.
+- Provider/model list parity: Android and iOS both list the same Gemini, OpenAI, Claude, and local model IDs in provider-picker order. OpenAI/Claude happy paths remain BYO-key manual smoke items.
 
 ## Gemini live checks
 
@@ -25,5 +26,5 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini UI cancel behavior: Pending emulator/simulator UI verification.
 - Gemini timeout/offline and blocked-response behavior: Pending emulator/simulator/network-condition verification.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
-- Provider/model list parity: Pending Day 3 review. iOS currently includes newer OpenAI/Claude IDs that Android does not list.
+- OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.
 - Rhyme context, prosody, trash, export, and persistence: Pending hardening pass.
