@@ -60,11 +60,17 @@ Then run:
 ```
 
 Without `keystore.properties`, Gradle still builds the minified release APK/AAB for
-R8 verification, but the APK output is unsigned. Release key hygiene check:
+R8 verification, but the APK output is unsigned. To run the release gate from the
+repo root:
 
 ```sh
-unzip -p app/build/outputs/apk/release/*.apk classes.dex | strings | rg 'AI[z]a'
+./scripts/android-release-smoke.sh
 ```
+
+The release-smoke script builds the minified APK/AAB, verifies APK signing, scans
+both release artifacts for the Gemini key pattern, and installs/launches the APK
+when an `adb` device is attached. Set `REQUIRE_DEVICE=1` to fail when no emulator
+or device is available, or `SKIP_INSTALL=1` for artifact-only verification.
 
 ## iOS
 
