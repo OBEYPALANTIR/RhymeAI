@@ -72,6 +72,17 @@ both release artifacts for the Gemini key pattern, and installs/launches the APK
 when an `adb` device is attached. Set `REQUIRE_DEVICE=1` to fail when no emulator
 or device is available, or `SKIP_INSTALL=1` for artifact-only verification.
 
+To run the Android Release walkthrough gate on an attached emulator/device:
+
+```sh
+./scripts/android-release-walkthrough.sh
+```
+
+The walkthrough builds and key-scans the minified release artifacts, installs the
+release APK, then drives create, save, graceful no-key suggestion handling,
+export surface reachability, force-stop/reopen, and persisted lyrics through
+the user-visible UI.
+
 To run the Android local GGUF inference smoke, attach an emulator or device and
 provide a real model file:
 
