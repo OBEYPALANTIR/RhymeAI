@@ -39,7 +39,8 @@ for file in BUGS.md KNOWN_ISSUES.md PARITY.md README.md RELEASE_NOTES.md; do
   fi
 done
 
-if git grep -n 'AIza' -- . ':!*.xcresult/**' ':!artifacts/**' >/tmp/rhymeai-final-signoff-key-scan.txt; then
+gemini_prefix='AI''za'
+if git grep -n "$gemini_prefix" -- . ':!*.xcresult/**' ':!artifacts/**' >/tmp/rhymeai-final-signoff-key-scan.txt; then
   cat /tmp/rhymeai-final-signoff-key-scan.txt >&2
   fail "tracked files contain a Gemini key prefix"
 else
