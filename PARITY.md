@@ -45,7 +45,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 ## Local model checks
 
 - Android Gemma GGUF download helpers are unit-verified for missing, incomplete, non-GGUF, valid GGUF, resumable partial download, HTTP failure, no-storage messaging, and progress formatting.
-- Android local provider/model handling is unit-verified: the Local picker exposes only `local-model`, and suggestions, streaming, rewrites, and synonyms surface the shared no-model-loaded message without requiring an API key.
+- Android local provider/model handling is unit-verified: the Local picker exposes only `local-model`, and suggestions, streaming, rewrites, and synonyms surface the shared no-model-loaded message without requiring an API key. A live `LocalModelInstrumentedTest` gate is wired through `scripts/android-local-model-smoke.sh` and requires `LOCAL_GGUF_PATH` to a real model file.
 - iOS local provider/model switching is unit-verified: the Local picker exposes only `local-model`, selecting Local moves the current model to the on-device model, and Local does not require an API key.
 
 ## Rhyme context checks
@@ -54,5 +54,5 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 ## Open parity checks
 
-- Local model live/inference path: Android GGUF model load and inference still need an emulator smoke with an actual model file; iOS local provider depends on Apple Foundation Models availability and still needs a simulator/device availability smoke.
+- Local model live/inference path: Android now has a runnable emulator/device smoke gate for GGUF load and generation, but the live run still needs an actual local model file supplied through `LOCAL_GGUF_PATH`; iOS local provider depends on Apple Foundation Models availability and still needs a simulator/device availability smoke.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.

@@ -72,6 +72,17 @@ both release artifacts for the Gemini key pattern, and installs/launches the APK
 when an `adb` device is attached. Set `REQUIRE_DEVICE=1` to fail when no emulator
 or device is available, or `SKIP_INSTALL=1` for artifact-only verification.
 
+To run the Android local GGUF inference smoke, attach an emulator or device and
+provide a real model file:
+
+```sh
+LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke.sh
+```
+
+The script verifies the GGUF header, builds and installs the debug app plus
+instrumented test APK, pushes the model to `/data/local/tmp/`, and runs
+`LocalModelInstrumentedTest` to prove the model loads and returns generated text.
+
 ## iOS
 
 Use Xcode with:
