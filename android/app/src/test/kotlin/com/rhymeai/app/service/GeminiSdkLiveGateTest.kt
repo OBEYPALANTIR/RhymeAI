@@ -6,10 +6,12 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -98,6 +100,33 @@ class GeminiSdkLiveGateTest {
         }
         assertTrue(streamed.isNotEmpty(), "Gemini stream emitted no suggestions")
         assertTrue(streamed.all { it.isNotBlank() })
+    }
+
+    @Test
+    fun geminiStreamingCanBeCancelledAfterFirstSuggestionWithDebugKey() = runBlocking {
+        if (skipWhenNoDebugKey()) return@runBlocking
+        val service = AIService()
+        val lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
+
+        val firstSuggestion = withTimeout(45_000) {
+            service.streamSuggestions(
+                provider = AIProvider.GEMINI,
+                apiKey = apiKey,
+                modelId = AIModel.DEFAULT.id,
+                theme = "late-night resolve",
+                lyrics = lyrics,
+                targetRhymeLine = null,
+                rhymeType = RhymeType.PERFECT,
+                rhymeScheme = "AABB",
+                currentLetter = "B",
+                currentSection = SongSection.VERSE,
+                complexity = RhymeComplexity.MODERATE,
+                useWholeSongContext = true
+            ).take(1).toList()
+        }
+
+        assertEquals(1, firstSuggestion.size)
+        assertTrue(firstSuggestion.single().isNotBlank())
     }
 
     @Test
