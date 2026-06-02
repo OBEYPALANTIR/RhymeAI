@@ -42,6 +42,11 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
   iOS has a passing `scripts/ios-release-visual-audit.sh` run for Release
   light/dark iPhone and iPad screenshot capture; the 2026-06-02 screenshots were
   reviewed for blank, overlapping, and launch-blocking layout failures.
-- Remaining walkthrough: Android still needs light/dark and phone/tablet coverage
-  where available. iOS still needs any remaining human-only release walkthrough
-  beyond the captured launch screenshots.
+  Android has a passing `scripts/android-release-visual-audit.sh` run for Release
+  phone light/dark/large-font screenshots plus populated editor, assistant
+  panel, and export sheet screenshots; the 2026-06-02 screenshots were reviewed
+  for blank, overlapping, keyboard-obstructed, and launch-blocking layout
+  failures.
+- Remaining walkthrough: Android tablet visual coverage still needs a real
+  tablet emulator/device. iOS still needs any remaining human-only release
+  walkthrough beyond the captured launch screenshots.

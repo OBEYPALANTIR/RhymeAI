@@ -93,6 +93,19 @@ The live gate reads `GEMINI_TEST_KEY` or gitignored `android/local.properties`
 `geminiTestKey`, enters it through the release app Settings UI, then exercises
 live Gemini suggestion and rewrite preview paths on the minified release APK.
 
+To capture the Android Release visual audit on an attached emulator/device, or
+the first available AVD when no device is attached:
+
+```sh
+./scripts/android-release-visual-audit.sh
+```
+
+The audit builds and key-scans the minified release artifacts, installs the
+release APK, captures phone launch screenshots in light, dark, and 1.3 font
+scale profiles, then captures populated editor, assistant panel, and export
+sheet screenshots without entering an API key. Screenshots and a report are
+written under `artifacts/android-release-visual-audit/`.
+
 To run the Android local GGUF inference smoke, attach an emulator or device and
 provide a real model file:
 
