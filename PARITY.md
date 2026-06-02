@@ -15,11 +15,12 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini streaming: Verified on Android and iOS through the same live tests.
 - Gemini invalid-key failure: Verified on Android and iOS; failures use user-facing messages and do not echo the invalid key.
 - Gemini suggestion response parsing: Aligned for line responses, JSON arrays, JSON object array wrappers, numbering/bullets, duplicate suggestions, prompt echo, provider markers, and overlong lines.
+- Gemini prompt shaping: Unit-verified on both platforms for immediate vs whole-song context, target-rhyme vs new-rhyme instructions, section hints, complexity, six-line output contract, and every rewrite action instruction.
+- Gemini empty suggestion stream: Android and iOS both surface `AI did not return suggestions. Try again.` instead of leaving a blank result.
 
 ## Open parity checks
 
 - Gemini cancel behavior: Pending emulator/simulator UI verification.
-- Prompt shaping: Pending deeper cross-platform review.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
 - Provider/model list parity: Pending Day 3 review. iOS currently includes newer OpenAI/Claude IDs that Android does not list.
 - Rhyme context, prosody, trash, export, and persistence: Pending hardening pass.

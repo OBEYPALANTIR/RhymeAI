@@ -13,3 +13,10 @@
 - Root cause: Android suggestion parsing already normalized and filtered provider debris, while iOS parsed plain lines before the shared sanitizer/dedupe rules.
 - Fix commit: `f2962da` (Android parity coverage), `8ee5269` (iOS parser hardening).
 - Re-verify: Passed on 2026-06-02 with `./gradlew :app:testDebugUnitTest --tests 'com.rhymeai.app.service.AIServiceParsingTest'` and `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -only-testing:"Writers BlockTests"`.
+
+## BUG-003: Empty Gemini suggestion streams could finish silently
+
+- Repro: Let a provider suggestion stream complete without emitting any usable suggestion lines.
+- Root cause: Both ViewModels cleared suggestions and stopped loading, but did not surface an error when the stream completed empty.
+- Fix commit: `cccc3d3` (Android), `d6ab06b` (iOS).
+- Re-verify: Passed on 2026-06-02 with `./gradlew :app:testDebugUnitTest --tests 'com.rhymeai.app.service.AIServicePromptTest' --tests 'com.rhymeai.app.service.AIServiceParsingTest'` and `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -only-testing:"Writers BlockTests"`.
