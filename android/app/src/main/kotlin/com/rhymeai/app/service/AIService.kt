@@ -496,7 +496,7 @@ Respond ONLY with a JSON object of the form {"synonyms": ["..."]}. No code fence
         }
     }
 
-    private fun buildRewritePrompt(
+    internal fun buildRewritePrompt(
         action: RewriteAction,
         lyrics: String,
         selection: String,

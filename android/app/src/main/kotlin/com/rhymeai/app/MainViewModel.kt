@@ -321,11 +321,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         isLoading = true
         suggestionsJob = viewModelScope.launch {
             try {
+                var emittedSuggestion = false
                 aiService.streamSuggestions(
                     selectedProvider, currentApiKey, selectedModel.id, theme, lyrics, context.targetLine,
                     rhymeType, activeRhymeScheme, context.currentLetter, context.currentSection, rhymeComplexity, useWholeSongContext
                 ).collect { line ->
+                    emittedSuggestion = true
                     suggestions = suggestions + line
+                }
+                if (!emittedSuggestion) {
+                    errorMessage = "AI did not return suggestions. Try again."
                 }
             } catch (e: CancellationException) {
                 throw e

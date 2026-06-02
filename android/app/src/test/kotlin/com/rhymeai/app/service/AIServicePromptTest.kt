@@ -1,0 +1,80 @@
+package com.rhymeai.app.service
+
+import com.rhymeai.app.data.model.RewriteAction
+import com.rhymeai.app.data.model.RhymeComplexity
+import com.rhymeai.app.data.model.RhymeType
+import com.rhymeai.app.data.model.SongSection
+import kotlin.test.Test
+import kotlin.test.assertContains
+import kotlin.test.assertEquals
+
+class AIServicePromptTest {
+
+    @Test
+    fun suggestionPromptShapesImmediateAndWholeSongContext() {
+        val service = AIService()
+        val immediatePrompt = service.buildPrompt(
+            theme = "late-night resolve",
+            lyrics = "[Verse]\nYellow lights on a midnight road",
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.VERSE,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false
+        )
+        val wholeSongPrompt = service.buildPrompt(
+            theme = "ignored when whole-song context is enabled",
+            lyrics = "[Verse]\nYellow lights\n\n[Chorus]\nKeep moving",
+            targetRhymeLine = null,
+            rhymeType = RhymeType.SLANT,
+            rhymeScheme = "ABAB",
+            currentLetter = "B",
+            currentSection = SongSection.CHORUS,
+            complexity = RhymeComplexity.COMPLEX,
+            useWholeSongContext = true
+        )
+
+        assertContains(immediatePrompt, "late-night resolve")
+        assertContains(immediatePrompt, "Prioritize the immediate writing context")
+        assertContains(immediatePrompt, "MUST end with a **Perfect Rhyme**")
+        assertContains(immediatePrompt, "Current song section: Verse.")
+        assertContains(immediatePrompt, "Complexity level: Moderate")
+        assertContains(immediatePrompt, "Respond with exactly 6 lines")
+
+        assertContains(wholeSongPrompt, "Whole song context enabled; infer the theme from the full lyrics.")
+        assertContains(wholeSongPrompt, "Analyze the whole song for story arc")
+        assertContains(wholeSongPrompt, "new rhyme sound (\"B\")")
+        assertContains(wholeSongPrompt, "Current song section: Chorus.")
+        assertContains(wholeSongPrompt, "Complexity level: Complex")
+    }
+
+    @Test
+    fun rewritePromptIncludesEveryActionContract() {
+        val service = AIService()
+
+        RewriteAction.entries.forEach { action ->
+            val prompt = service.buildRewritePrompt(
+                action = action,
+                lyrics = "[Bridge]\nI keep the melody close",
+                selection = "I keep the melody close",
+                currentSection = SongSection.BRIDGE
+            )
+
+            assertContains(prompt, "Current song section: Bridge.")
+            assertContains(prompt, "Action: ${action.label}")
+            assertContains(prompt, "Instruction: ${action.instruction}")
+            assertContains(prompt, "Preserve line breaks where present.")
+            assertContains(prompt, """{"rewrite": "..."}""")
+        }
+    }
+
+    @Test
+    fun emptySuggestionResponsesParseToEmptyList() {
+        val service = AIService()
+
+        assertEquals(emptyList(), service.parseSuggestionList(""))
+        assertEquals(emptyList(), service.parseSuggestionList("```json\n[]\n```"))
+    }
+}
