@@ -3,7 +3,7 @@
 ## Writers Block / RhymeAI 0.2 Readiness Draft
 
 This draft tracks the current production-readiness branch. It is not final until
-the full release walkthrough and remaining known issues are closed.
+the remaining known issues are closed.
 
 ## Highlights
 
@@ -22,6 +22,9 @@ the full release walkthrough and remaining known issues are closed.
   creation, and release binary key scanning.
 - iOS Release visual audit captures and reviews light/dark iPhone and iPad
   simulator screenshots.
+- iOS Release visual walkthrough captures and reviews welcome, populated editor,
+  export sheet, assistant panel, no-key assistant error, and no-key rewrite error
+  screenshots.
 - Android local GGUF inference has a dedicated emulator/device smoke gate that
   requires a real model path.
 - iOS CloudKit readiness has a scriptable static gate and a live two-device
@@ -37,6 +40,7 @@ the full release walkthrough and remaining known issues are closed.
 ./scripts/android-release-visual-audit.sh
 ./scripts/ios-release-smoke.sh
 ./scripts/ios-release-walkthrough.sh
+./scripts/ios-release-visual-walkthrough.sh
 ./scripts/ios-release-visual-audit.sh
 ./scripts/ios-cloudkit-readiness.sh
 ./scripts/ios-local-provider-smoke.sh
@@ -47,6 +51,4 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 
 - Run Android local GGUF smoke with an actual model file.
 - Run CloudKit live two-simulator/device matrix with an iCloud account.
-- Finish any remaining human-only release walkthrough beyond the captured
-  Android phone/tablet and iOS screenshots before moving non-blocking friction into
-  `KNOWN_ISSUES.md`.
+- Run OpenAI and Claude happy-path manual smokes with supplied keys.

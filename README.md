@@ -159,6 +159,18 @@ The walkthrough builds and tests the app in Release configuration, then verifies
 song creation, save, export surface reachability, graceful no-key AI/rewrite
 handling, and relaunch persistence.
 
+To capture the iOS Release visual walkthrough:
+
+```sh
+./scripts/ios-release-visual-walkthrough.sh
+```
+
+The visual walkthrough builds and tests the app in Release configuration on the
+default iPhone 17 Pro OS 26.5 simulator, then exports kept XCTest screenshots for
+welcome, populated editor plus keyboard/UnBlock placement, export sheet,
+assistant panel, graceful no-key assistant error, and graceful no-key rewrite
+error states under `artifacts/ios-release-visual-walkthrough/`.
+
 To capture the iOS Release light/dark phone/iPad screenshot audit:
 
 ```sh

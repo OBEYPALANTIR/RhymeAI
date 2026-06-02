@@ -515,6 +515,86 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testReleaseVisualWalkthroughCapturesScreenshots() throws {
+        let app = isolatedUITestApp()
+        app.launch()
+
+        attachScreenshot(app, name: "release-welcome")
+
+        createNewSong(in: app)
+
+        let titleEditor = app.textFields["songTitleEditor"]
+        XCTAssertTrue(titleEditor.waitForExistence(timeout: 5))
+        titleEditor.tap()
+        titleEditor.typeText("Release Visual Walkthrough")
+
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        lyricsEditor.tap()
+        lyricsEditor.typeText("[Verse]\nMidnight notes on a borrowed train\nI keep the hook alive through rain")
+        XCTAssertTrue(app.staticTexts["Saved"].waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "release-populated-editor")
+
+        app.buttons["Share"].tap()
+        XCTAssertTrue(app.staticTexts["Export Song"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Plain Text"))
+                .firstMatch
+                .waitForExistence(timeout: 5)
+        )
+        attachScreenshot(app, name: "release-export-sheet")
+        app.buttons["Cancel"].tap()
+
+        let unblockButton = app.buttons["unblockButton"]
+        XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        unblockButton.tap()
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "release-assistant-panel")
+        app.buttons["Close Assistant"].tap()
+
+        app.terminate()
+
+        let suggestionApp = isolatedUITestApp(arguments: [
+            "-selectedProvider",
+            "GEMINI",
+            "-selectedModel",
+            "gemini-3.5-flash",
+            "--ui-test-seed-prosody-song",
+            "--ui-test-open-assistant"
+        ])
+        suggestionApp.launch()
+        XCTAssertTrue(suggestionApp.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        suggestionApp.buttons["Suggest Next Line"].tap()
+        XCTAssertTrue(
+            suggestionApp.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
+                .firstMatch
+                .waitForExistence(timeout: 10)
+        )
+        suggestionApp.swipeUp()
+        attachScreenshot(suggestionApp, name: "release-assistant-no-key")
+        suggestionApp.terminate()
+
+        let rewriteApp = isolatedUITestApp(arguments: [
+            "-selectedProvider",
+            "GEMINI",
+            "-selectedModel",
+            "gemini-3.5-flash",
+            "--ui-test-seed-rewrite-selection",
+            "--ui-test-force-rewrite-bar"
+        ])
+        rewriteApp.launch()
+        XCTAssertTrue(rewriteApp.buttons["Rephrase"].waitForExistence(timeout: 5))
+        rewriteApp.buttons["Rephrase"].tap()
+        XCTAssertTrue(rewriteApp.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            rewriteApp.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
+                .firstMatch
+                .waitForExistence(timeout: 10)
+        )
+        attachScreenshot(rewriteApp, name: "release-rewrite-no-key")
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
@@ -557,6 +637,13 @@ final class Writers_BlockUITests: XCTestCase {
         let savedSongButton = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
         XCTAssertTrue(savedSongButton.waitForExistence(timeout: 5))
         savedSongButton.tap()
+    }
+
+    private func attachScreenshot(_ app: XCUIApplication, name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private var ipadAuditOrientations: [UIDeviceOrientation] {

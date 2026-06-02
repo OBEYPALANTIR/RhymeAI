@@ -27,13 +27,19 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 - Next verification: run `./scripts/ios-cloudkit-readiness.sh`, then execute
   `docs/CLOUDKIT_SYNC_CHECKLIST.md`.
 
-## Final release walkthrough is pending
+## Final release walkthrough evidence is captured
 
-- Status: Open.
+- Status: Closed for scriptable Android and iOS walkthrough coverage.
 - Scope: Android and iOS.
 - Evidence: Android and iOS release build gates exist and passed individually.
   iOS also has `scripts/ios-release-walkthrough.sh` for Release-configuration
   create/save/export surface/graceful no-key AI/rewrite/relaunch persistence.
+  iOS also has a passing `scripts/ios-release-visual-walkthrough.sh` run
+  (`20260602T081346Z`) for welcome, populated editor plus keyboard/UnBlock
+  placement, export sheet, assistant panel, graceful no-key assistant error, and
+  graceful no-key rewrite error screenshots. The 2026-06-02 screenshots were
+  reviewed for blank, overlapping, clipped, and keyboard-obstructed layout
+  failures.
   Android has `scripts/android-release-walkthrough.sh` for a passing minified
   release APK create/save/export surface/graceful no-key
   suggestion/force-stop/relaunch persistence run.
@@ -50,5 +56,3 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
   and density, and a 2026-06-02 tablet-profile run on a 2560x1600 / 320 dpi
   Android 36 emulator produced reviewed tablet-labeled evidence for the same
   surfaces.
-- Remaining walkthrough: iOS still needs any remaining human-only release
-  walkthrough beyond the captured launch screenshots.
