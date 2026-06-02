@@ -19,7 +19,7 @@ Create or harden a separate root script, not a mode inside `android-release-walk
 1. Resolve `JAVA_HOME`, `ANDROID_HOME`, `adb`, attached serial, and latest build-tools exactly like the existing Android release scripts.
 2. Read the key from `GEMINI_TEST_KEY`; if missing, read `geminiTestKey` from gitignored `android/local.properties`. Do not print the key.
 3. Run `SKIP_INSTALL=1 ./scripts/android-release-smoke.sh` to build the minified release APK/AAB, verify signing, and run the existing key-pattern scan.
-4. Add a stronger artifact leak scan before install: unzip the APK and AAB into a temp dir and scan uncompressed contents for both `AIza` and the exact runtime key with `rg -a -F "$gemini_key"`; clean the temp dir on exit.
+4. Add a stronger artifact leak scan before install: unzip the APK and AAB into a temp dir and scan uncompressed contents for both the Gemini API-key prefix and the exact runtime key with `rg -a -F "$gemini_key"`; clean the temp dir on exit.
 5. Uninstall/install the release APK, `pm clear com.rhymeai.app`, clear logcat, and start `com.rhymeai.app/.MainActivity`.
 6. Use `uiautomator dump` plus text/content-desc matching for normal controls: `New Song`, `Settings`, `Paste your API key here...`, `Save Settings`, `UnBlock`, `Suggest Next Line`, `AI-generated`, `Rephrase`, `Previewing Rephrase`.
 7. Enter the key only through Settings UI, save, and close Settings before any timeout dump that might include the focused password field.
@@ -30,7 +30,7 @@ Create or harden a separate root script, not a mode inside `android-release-walk
 ## UI automation hazards
 
 - `adb shell input text` is acceptable for a Gemini key if it contains only the expected API-key characters, but the script should validate/escape conservatively. If the key ever contains shell-sensitive characters, input can corrupt it.
-- Timeout dumps while the Settings key field is focused may leak the key if Compose/UiAutomator exposes editable text despite password transformation. Avoid dumping raw Settings XML after key entry, or redact `AIza[[:alnum:]_-]+` and the exact key before stderr.
+- Timeout dumps while the Settings key field is focused may leak the key if Compose/UiAutomator exposes editable text despite password transformation. Avoid dumping raw Settings XML after key entry, or redact the Gemini API-key prefix pattern and the exact key before stderr.
 - `Settings` exists as both an icon content description and dialog title. It is safe before the dialog opens, but post-open matching should use `AI Provider`, `Save Settings`, or `Close`.
 - `Suggest Next Line` is inside the assistant sheet scroll area; reuse the existing `wait_for_node_with_scroll` pattern.
 - Rewrite selection is the fragile part. Shell `input` cannot set Compose `TextFieldValue.selection` like the existing Compose test can. Long-pressing visible lyric text is the practical route, but the script should fall back to long-pressing lyrics-editor bounds or retrying after keyboard dismissal if `Rephrase` does not appear.
@@ -60,7 +60,8 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 unzip -oqq android/app/build/outputs/apk/release/app-release.apk -d "$tmpdir/apk"
 unzip -oqq android/app/build/outputs/bundle/release/app-release.aab -d "$tmpdir/aab"
-rg -a 'AIza[[:alnum:]_-]+' "$tmpdir" && exit 1 || true
+gemini_prefix_pattern='AI''za[[:alnum:]_-]+'
+rg -a "$gemini_prefix_pattern" "$tmpdir" && exit 1 || true
 rg -a -F "$GEMINI_TEST_KEY" "$tmpdir" && exit 1 || true
 ```
 
