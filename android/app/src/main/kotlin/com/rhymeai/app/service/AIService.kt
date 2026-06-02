@@ -436,18 +436,17 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
-        val prompt = buildSynonymsPrompt(target, lineContext, limit)
         val raw = when (provider) {
-            AIProvider.GEMINI -> callGeminiRaw(apiKey, modelId, prompt)
-            AIProvider.OPENAI -> callOpenAIRaw(apiKey, modelId, prompt)
-            AIProvider.CLAUDE -> callClaudeRaw(apiKey, modelId, prompt)
+            AIProvider.GEMINI -> callGeminiRaw(apiKey, modelId, buildSynonymsPrompt(target, lineContext, limit))
+            AIProvider.OPENAI -> callOpenAIRaw(apiKey, modelId, buildSynonymsPrompt(target, lineContext, limit))
+            AIProvider.CLAUDE -> callClaudeRaw(apiKey, modelId, buildSynonymsPrompt(target, lineContext, limit))
             AIProvider.LOCAL -> {
                 val service = localModelService
                     ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
                 if (!service.isLoaded) {
                     throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
                 }
-                service.generateResponse(gemmaInstructionPrompt(prompt))
+                service.generateResponse(buildLocalSynonymsPrompt(target, lineContext, limit))
             }
         }
         return extractSynonyms(raw, exclude = target).take(limit)
@@ -476,7 +475,29 @@ Respond ONLY with a JSON object of the form {"synonyms": ["..."]}. No code fence
 """.trimIndent()
     }
 
-    private fun extractSynonyms(raw: String, exclude: String): List<String> {
+    internal fun buildLocalSynonymsPrompt(word: String, lineContext: String, limit: Int): String {
+        val contextLine = lineContext.trim().take(180)
+        val contextBlock = if (contextLine.isEmpty()) {
+            "(no surrounding line)"
+        } else {
+            contextLine
+        }
+        val userPrompt = """
+You are RhymeAI's on-device word helper.
+
+Task: give up to $limit single-word replacements for "$word" in this lyric line:
+"$contextBlock"
+
+Rules:
+- Return only replacement words, one per line.
+- No JSON, bullets, numbering, labels, quotes, or commentary.
+- Do not include "$word".
+- Prefer words with similar tone and syllable count.
+""".trimIndent()
+        return gemmaInstructionPrompt(userPrompt)
+    }
+
+    internal fun extractSynonyms(raw: String, exclude: String): List<String> {
         val cleaned = raw.trim()
             .removePrefix("```json")
             .removePrefix("```")
@@ -493,6 +514,7 @@ Respond ONLY with a JSON object of the form {"synonyms": ["..."]}. No code fence
         }.getOrNull() else null
         val candidates = tryObject ?: tryArray ?: cleaned
             .lines()
+            .flatMap { it.split(",") }
             .map { line -> line.trim().trim('"', '\'', ',', '-', '*', '•', ' ') }
             .filter { it.isNotEmpty() }
 
@@ -690,10 +712,19 @@ Rules:
         return cleaned
     }
 
-    private fun cleanLocalRewrite(response: String): String {
-        val trimmed = response
+    internal fun cleanLocalRewrite(response: String): String {
+        val markerStripped = response
             .substringBefore("<end_of_turn>")
-            .substringBefore("<start_of_turn>")
+            .lines()
+            .map { markerPrefixPattern.replace(it, "").trim() }
+            .filterNot { line ->
+                line.isEmpty() ||
+                    markerOnlyPattern.matches(line) ||
+                    line.equals("```json", ignoreCase = true) ||
+                    line == "```"
+            }
+            .joinToString("\n")
+        val trimmed = markerStripped
             .trim()
             .removePrefix("```json")
             .removePrefix("```")
@@ -802,7 +833,7 @@ Rules:
             .take(SUGGESTION_COUNT)
     }
 
-    private fun buildLocalPrompt(
+    internal fun buildLocalPrompt(
         theme: String,
         lyrics: String,
         targetRhymeLine: String?,
@@ -849,9 +880,11 @@ ${"\"\"\""}
 Rules:
 - Return exactly $SUGGESTION_COUNT lines.
 - One suggestion per line.
+- Return only candidate lyric lines.
 - Do not copy any existing lyric line.
 - Do not repeat the same suggestion.
 - No numbering, bullets, quotes, markdown, labels, or explanation.
+- Do not apologize, explain limitations, or restate the rules.
 - Keep each suggestion under 16 words.
 """.trimIndent()
 
@@ -883,7 +916,7 @@ Rules:
         option = RegexOption.IGNORE_CASE
     )
     private val promptEchoPattern = Regex(
-        pattern = "^(?:task:|theme:|rhyme scheme:|lyrics context:|rules:|return exactly|one suggestion|no numbering|keep each|you are rhymeai)",
+        pattern = "^(?:task:|theme:|rhyme scheme:|lyrics context:|rules:|return exactly|return only|one suggestion|no numbering|do not|keep each|you are rhymeai|sure[, ]|here are|i can(?:not|'t)|as an ai)",
         option = RegexOption.IGNORE_CASE
     )
     private val normalizedLinePattern = Regex("[^a-z0-9]+")

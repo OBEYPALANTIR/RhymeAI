@@ -157,6 +157,17 @@ The script verifies the GGUF header, builds and installs the debug app plus
 instrumented test APK, pushes the model to `/data/local/tmp/`, and runs
 `LocalModelInstrumentedTest` to prove the model loads and returns generated text.
 
+To download and benchmark the recommended Android Gemma GGUF models:
+
+```sh
+./scripts/download-gemma-models.sh
+ANDROID_AVD_NAME=RhymeAI_Tablet_API_36_1 GEMMA_WIPE_AVD=1 EMULATOR_MEMORY_MB=8192 EMULATOR_PARTITION_SIZE_MB=12288 ./scripts/android-gemma-benchmark.sh
+```
+
+The benchmark runs the local provider through raw generation, suggestions,
+rewrite, and synonyms, then saves timing, disk, instrumentation, and logcat
+evidence under `artifacts/gemma-benchmarks/`.
+
 ## iOS
 
 Use Xcode with:

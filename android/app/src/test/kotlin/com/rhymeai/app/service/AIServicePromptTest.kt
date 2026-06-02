@@ -71,6 +71,50 @@ class AIServicePromptTest {
     }
 
     @Test
+    fun localSuggestionPromptUsesGemmaStyleBoundedContract() {
+        val service = AIService()
+
+        val prompt = service.buildLocalPrompt(
+            theme = "late-night resolve",
+            lyrics = "[Verse]\nYellow lights on a midnight road\nI hum the hook to keep it close",
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.SLANT,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.VERSE,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false
+        )
+
+        assertContains(prompt, "<start_of_turn>user")
+        assertContains(prompt, "Task: write exactly 6 next-line options for the song.")
+        assertContains(prompt, "End every suggestion with a slant rhyme")
+        assertContains(prompt, "Return only candidate lyric lines")
+        assertContains(prompt, "Do not apologize, explain limitations, or restate the rules")
+        assertContains(prompt, "Keep each suggestion under 16 words")
+    }
+
+    @Test
+    fun localRewriteCleanerAcceptsJsonAndDropsChatMarkers() {
+        val service = AIService()
+
+        assertEquals(
+            "I trade the dark for a borrowed glow",
+            service.cleanLocalRewrite("""{"rewrite":"I trade the dark for a borrowed glow"}""")
+        )
+        assertEquals(
+            "I trade the dark for a borrowed glow",
+            service.cleanLocalRewrite(
+                """
+                <start_of_turn>model
+                I trade the dark for a borrowed glow
+                <end_of_turn>
+                """.trimIndent()
+            )
+        )
+    }
+
+    @Test
     fun emptySuggestionResponsesParseToEmptyList() {
         val service = AIService()
 
