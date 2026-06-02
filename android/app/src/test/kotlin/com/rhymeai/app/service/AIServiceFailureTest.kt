@@ -6,6 +6,8 @@ import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -105,6 +107,30 @@ class AIServiceFailureTest {
         assertEquals(
             "Provider service error — try again shortly.",
             service.userFacingStatusMessageForStatus(503)
+        )
+    }
+
+    @Test
+    fun providerNetworkErrorsAreUserFacing() {
+        val service = AIService()
+
+        assertEquals(
+            "Provider request failed — check your connection and try again.",
+            service.userFacingProviderMessageForError(SocketTimeoutException("timeout"))
+        )
+        assertEquals(
+            "Provider request failed — check your connection and try again.",
+            service.userFacingProviderMessageForError(UnknownHostException())
+        )
+    }
+
+    @Test
+    fun blockedProviderResponsesAreUserFacing() {
+        val service = AIService()
+
+        assertEquals(
+            "Provider blocked the response for safety. Try adjusting the lyric or prompt.",
+            service.userFacingProviderMessageForError(RuntimeException("finishReason=SAFETY response blocked"))
         )
     }
 }

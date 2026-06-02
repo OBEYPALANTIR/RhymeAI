@@ -23,7 +23,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.UnknownHostException
 
 enum class AIProvider(val displayName: String) {
     GEMINI("Gemini"),
@@ -95,8 +97,21 @@ class AIService {
 
         fun userFacingProviderException(error: Throwable): RuntimeException {
             if (error is CancellationException) throw error
+            val rawMessage = error.message.orEmpty()
+            val blocked = listOf("blocked", "safety", "finishReason", "prohibited")
+                .any { rawMessage.contains(it, ignoreCase = true) }
+            if (blocked) {
+                return RuntimeException("Provider blocked the response for safety. Try adjusting the lyric or prompt.")
+            }
+            val networkFailure = error is SocketTimeoutException ||
+                error is UnknownHostException ||
+                listOf("timeout", "timed out", "Unable to resolve host", "UnknownHostException", "SocketTimeoutException")
+                    .any { rawMessage.contains(it, ignoreCase = true) }
+            if (networkFailure) {
+                return RuntimeException("Provider request failed — check your connection and try again.")
+            }
             val status = Regex("\\b(?:401|403|404|429|5\\d\\d)\\b")
-                .find(error.message.orEmpty())
+                .find(rawMessage)
                 ?.value
                 ?.toIntOrNull()
             val message = status?.let(::userFacingStatusMessage)
@@ -109,6 +124,9 @@ class AIService {
 
     internal fun userFacingStatusMessageForStatus(code: Int): String =
         userFacingStatusMessage(code)
+
+    internal fun userFacingProviderMessageForError(error: Throwable): String =
+        userFacingProviderException(error).message.orEmpty()
 
     fun buildPrompt(
         theme: String,
