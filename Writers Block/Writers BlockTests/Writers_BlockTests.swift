@@ -93,6 +93,14 @@ struct Writers_BlockTests {
         #expect(prosody.isFallback == false)
     }
 
+    @Test func prosodyAnalyzerRendersSecondaryStressInIpaPreview() {
+        let prosody = ProsodyAnalyzer.analyzeWord("radio", dictionary: Self.fixtureDictionary)
+
+        #expect(prosody.ipa == "ˈreɪdiˌoʊ")
+        #expect(prosody.stressPattern == [1, 0, 2])
+        #expect(prosody.isFallback == false)
+    }
+
     @Test func prosodyAnalyzerUsesFallbackForUnknownWords() {
         let prosody = ProsodyAnalyzer.analyzeWord("Scottys", dictionary: Self.fixtureDictionary)
 
@@ -101,11 +109,30 @@ struct Writers_BlockTests {
         #expect(prosody.isFallback)
     }
 
+    @Test func prosodyAnalyzerNormalizesPunctuationDigitsAndInternalApostrophes() {
+        #expect(ProsodyAnalyzer.normalizeWord("  'Don't!!42") == "don't")
+
+        let prosody = ProsodyAnalyzer.analyzeLine("Don't stop, road-99 glowed.", dictionary: Self.fixtureDictionary)
+
+        #expect(prosody.words.map(\.normalized) == ["don't", "stop", "road", "glowed"])
+        #expect(prosody.syllableCount == 4)
+        #expect(prosody.stressPattern == [1, 1, 1, 1])
+    }
+
     @Test func prosodyAnalyzerUsesCmuPhonesForRhymeKeys() {
         let roadKeys = ProsodyAnalyzer.rhymeKeys(for: "road", dictionary: Self.fixtureDictionary)
         let glowedKeys = ProsodyAnalyzer.rhymeKeys(for: "glowed", dictionary: Self.fixtureDictionary)
 
         #expect(!Set(roadKeys).intersection(glowedKeys).isEmpty)
+    }
+
+    @Test func prosodyAnalyzerRhymeKeysIncludeMultipleDictionaryPronunciations() {
+        let keys = ProsodyAnalyzer.rhymeKeys(for: "orange", dictionary: Self.fixtureDictionary)
+
+        #expect(keys == [
+            "AO R AH N JH",
+            "AO R IH N JH"
+        ])
     }
 
     @Test func inMemoryKeychainRoundTripsKey() {
@@ -465,6 +492,7 @@ struct Writers_BlockTests {
         "music\tM Y UW1 Z IH0 K",
         "road\tR OW1 D",
         "glowed\tG L OW1 D",
+        "radio\tR EY1 D IY0 OW2",
         "orange\tAO1 R AH0 N JH|AO1 R IH0 N JH"
     ])
 
