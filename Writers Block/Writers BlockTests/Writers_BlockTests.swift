@@ -256,6 +256,92 @@ struct Writers_BlockTests {
     }
 
     @MainActor
+    @Test func cloudSuggestionSurfacesNoKeyBeforeNetworkWork() async throws {
+        do {
+            _ = try await AIService().getSuggestions(
+                provider: .gemini,
+                apiKey: "",
+                modelId: AIModel.default.id,
+                theme: "",
+                lyrics: "one line",
+                targetRhymeLine: nil,
+                rhymeType: .perfect,
+                rhymeScheme: "AABB",
+                currentLetter: "A",
+                currentSection: .unknown,
+                complexity: .moderate,
+                useWholeSongContext: false
+            )
+            #expect(Bool(false), "Expected missing Gemini key to fail")
+        } catch {
+            #expect(error.localizedDescription == "No API key set. Go to Settings to add your Gemini API key.")
+        }
+    }
+
+    @MainActor
+    @Test func cloudStreamSurfacesNoKeyBeforeNetworkWork() async throws {
+        do {
+            for try await _ in AIService().streamSuggestions(
+                provider: .gemini,
+                apiKey: "",
+                modelId: AIModel.default.id,
+                theme: "",
+                lyrics: "one line",
+                targetRhymeLine: nil,
+                rhymeType: .perfect,
+                rhymeScheme: "AABB",
+                currentLetter: "A",
+                currentSection: .unknown,
+                complexity: .moderate,
+                useWholeSongContext: false
+            ) {}
+            #expect(Bool(false), "Expected missing Gemini key to fail")
+        } catch {
+            #expect(error.localizedDescription == "No API key set. Go to Settings to add your Gemini API key.")
+        }
+    }
+
+    @MainActor
+    @Test func cloudRewriteAndSynonymsSurfaceNoKeyBeforeNetworkWork() async throws {
+        let service = AIService()
+
+        do {
+            _ = try await service.getRewrite(
+                provider: .gemini,
+                apiKey: "",
+                modelId: AIModel.default.id,
+                action: .rephrase,
+                fullLyrics: "one line",
+                selection: "one line",
+                currentSection: .unknown
+            )
+            #expect(Bool(false), "Expected missing Gemini key to fail")
+        } catch {
+            #expect(error.localizedDescription.contains("No API key set"))
+        }
+
+        do {
+            _ = try await service.getSynonyms(
+                provider: .gemini,
+                apiKey: "",
+                modelId: AIModel.default.id,
+                word: "line",
+                lineContext: "one line"
+            )
+            #expect(Bool(false), "Expected missing Gemini key to fail")
+        } catch {
+            #expect(error.localizedDescription.contains("No API key set"))
+        }
+    }
+
+    @Test func providerStatusMessagesAreUserFacing() {
+        #expect(AIService.userFacingStatusMessage(for: 401) == "Provider rejected the request — check your API key in Settings.")
+        #expect(AIService.userFacingStatusMessage(for: 404) == "Provider could not find the requested model — pick another in Settings.")
+        #expect(AIService.userFacingStatusMessage(for: 429) == "Provider rate limit reached — wait a moment and retry.")
+        #expect(AIService.userFacingStatusMessage(for: 503) == "Provider service error — try again shortly.")
+    }
+
+    @MainActor
     @Test func geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey() async throws {
         let apiKey = Self.geminiTestKey
         if apiKey.isEmpty { return }
