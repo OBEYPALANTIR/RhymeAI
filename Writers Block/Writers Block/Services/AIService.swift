@@ -6,6 +6,8 @@ enum AIServiceError: LocalizedError {
     case localModelUnavailable(reason: String)
     case invalidResponse
     case apiError(statusCode: Int, message: String)
+    case networkUnavailable
+    case blockedResponse
     case decodingError
 
     var errorDescription: String? {
@@ -18,6 +20,10 @@ enum AIServiceError: LocalizedError {
             return "Invalid response from server."
         case .apiError(let code, let msg):
             return "API error (\(code)): \(msg)"
+        case .networkUnavailable:
+            return "Provider request failed — check your connection and try again."
+        case .blockedResponse:
+            return "Provider blocked the response for safety. Try adjusting the lyric or prompt."
         case .decodingError:
             return "Failed to parse AI response."
         }
@@ -493,13 +499,10 @@ struct AIService {
             body: try JSONSerialization.data(withJSONObject: body)
         )
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let candidates = json["candidates"] as? [[String: Any]],
-              let content = candidates.first?["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]],
-              let text = parts.first?["text"] as? String else {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw AIServiceError.decodingError
         }
+        let text = try Self.geminiText(from: json)
 
         return parseSuggestionList(text)
     }
@@ -874,14 +877,10 @@ struct AIService {
             ],
             body: try JSONSerialization.data(withJSONObject: body)
         )
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let candidates = json["candidates"] as? [[String: Any]],
-              let content = candidates.first?["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]],
-              let text = parts.first?["text"] as? String else {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw AIServiceError.decodingError
         }
-        return text
+        return try Self.geminiText(from: json)
     }
 
     private func callOpenAIRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
@@ -976,7 +975,15 @@ struct AIService {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch is URLError {
+            throw AIServiceError.networkUnavailable
+        }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AIServiceError.invalidResponse
         }
@@ -1002,6 +1009,30 @@ struct AIService {
         default:
             return "Provider request failed (status \(statusCode))."
         }
+    }
+
+    static func geminiText(from json: [String: Any]) throws -> String {
+        if let promptFeedback = json["promptFeedback"] as? [String: Any],
+           promptFeedback["blockReason"] != nil {
+            throw AIServiceError.blockedResponse
+        }
+
+        guard let candidates = json["candidates"] as? [[String: Any]],
+              let candidate = candidates.first else {
+            throw AIServiceError.decodingError
+        }
+
+        if let finishReason = candidate["finishReason"] as? String,
+           ["SAFETY", "RECITATION", "PROHIBITED_CONTENT", "SPII", "OTHER"].contains(finishReason) {
+            throw AIServiceError.blockedResponse
+        }
+
+        guard let content = candidate["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]],
+              let text = parts.first?["text"] as? String else {
+            throw AIServiceError.decodingError
+        }
+        return text
     }
 
     // MARK: - Parsing

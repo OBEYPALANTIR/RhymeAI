@@ -384,6 +384,40 @@ struct Writers_BlockTests {
         #expect(AIService.userFacingStatusMessage(for: 503) == "Provider service error — try again shortly.")
     }
 
+    @Test func providerNetworkAndBlockedMessagesAreUserFacing() {
+        #expect(AIServiceError.networkUnavailable.localizedDescription == "Provider request failed — check your connection and try again.")
+        #expect(AIServiceError.blockedResponse.localizedDescription == "Provider blocked the response for safety. Try adjusting the lyric or prompt.")
+    }
+
+    @Test func geminiBlockedResponsesSurfaceSafetyMessage() throws {
+        let promptBlocked: [String: Any] = [
+            "promptFeedback": [
+                "blockReason": "SAFETY"
+            ]
+        ]
+        let candidateBlocked: [String: Any] = [
+            "candidates": [
+                [
+                    "finishReason": "SAFETY"
+                ]
+            ]
+        ]
+
+        do {
+            _ = try AIService.geminiText(from: promptBlocked)
+            #expect(Bool(false), "Expected prompt block to fail")
+        } catch {
+            #expect(error.localizedDescription == "Provider blocked the response for safety. Try adjusting the lyric or prompt.")
+        }
+
+        do {
+            _ = try AIService.geminiText(from: candidateBlocked)
+            #expect(Bool(false), "Expected candidate block to fail")
+        } catch {
+            #expect(error.localizedDescription == "Provider blocked the response for safety. Try adjusting the lyric or prompt.")
+        }
+    }
+
     @MainActor
     @Test func geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey() async throws {
         let apiKey = Self.geminiTestKey
