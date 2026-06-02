@@ -27,6 +27,8 @@ the remaining known issues are closed.
   screenshots.
 - Android local GGUF inference has a dedicated emulator/device smoke gate that
   requires a real model path.
+- OpenAI and Claude happy paths have a BYO-key cross-platform provider smoke
+  gate for suggestions, rewrites, and streaming.
 - iOS CloudKit readiness has a scriptable static gate and a live two-device
   checklist for final sync verification.
 
@@ -44,6 +46,7 @@ the remaining known issues are closed.
 ./scripts/ios-release-visual-audit.sh
 ./scripts/ios-cloudkit-readiness.sh
 ./scripts/ios-local-provider-smoke.sh
+./scripts/provider-live-smoke.sh # requires exported OPENAI_TEST_KEY and CLAUDE_TEST_KEY or ANTHROPIC_TEST_KEY
 LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke.sh
 ```
 
@@ -51,4 +54,4 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 
 - Run Android local GGUF smoke with an actual model file.
 - Run CloudKit live two-simulator/device matrix with an iCloud account.
-- Run OpenAI and Claude happy-path manual smokes with supplied keys.
+- Run `scripts/provider-live-smoke.sh` with supplied OpenAI and Claude keys.

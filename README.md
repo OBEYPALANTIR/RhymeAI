@@ -93,6 +93,22 @@ The live gate reads `GEMINI_TEST_KEY` or gitignored `android/local.properties`
 `geminiTestKey`, enters it through the release app Settings UI, then exercises
 live Gemini suggestion and rewrite preview paths on the minified release APK.
 
+To run the cross-platform OpenAI and Claude provider live smoke from the repo root:
+
+```sh
+read -rsp "OpenAI test key: " OPENAI_TEST_KEY; echo
+read -rsp "Claude or Anthropic test key: " CLAUDE_TEST_KEY; echo
+export OPENAI_TEST_KEY CLAUDE_TEST_KEY
+./scripts/provider-live-smoke.sh
+```
+
+The provider live smoke runs Android and iOS service gates against the first
+configured OpenAI and Claude models, verifying suggestions, rewrites, and
+streaming without printing keys. `ANTHROPIC_TEST_KEY` may be used instead of
+`CLAUDE_TEST_KEY`; set `OPENAI_TEST_MODEL` or `CLAUDE_TEST_MODEL` to override
+the first configured provider model, and `SKIP_ANDROID=1` or `SKIP_IOS=1` for a
+platform-only run.
+
 To capture the Android Release visual audit on an attached emulator/device, or
 the first available AVD when no device is attached:
 

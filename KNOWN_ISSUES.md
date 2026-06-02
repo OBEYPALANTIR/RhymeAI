@@ -29,6 +29,26 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 - Next verification: execute `docs/CLOUDKIT_SYNC_CHECKLIST.md` on two
   iCloud-signed-in simulators/devices.
 
+## OpenAI and Claude live happy paths need BYO keys
+
+- Status: Open.
+- Scope: Android and iOS provider services.
+- Evidence: `ProviderLiveGateTest`, `ProviderLiveSmokeTests`, and
+  `scripts/provider-live-smoke.sh` are wired to verify suggestions, rewrites,
+  and streaming against the configured OpenAI and Claude models without printing
+  keys. No-key/status/error behavior remains unit-verified.
+- Next verification: run:
+
+```sh
+read -rsp "OpenAI test key: " OPENAI_TEST_KEY; echo
+read -rsp "Claude or Anthropic test key: " CLAUDE_TEST_KEY; echo
+export OPENAI_TEST_KEY CLAUDE_TEST_KEY
+./scripts/provider-live-smoke.sh
+```
+
+`ANTHROPIC_TEST_KEY` may be used instead of `CLAUDE_TEST_KEY`; `OPENAI_TEST_MODEL`
+and `CLAUDE_TEST_MODEL` may override the first configured provider models.
+
 ## Final release walkthrough evidence is captured
 
 - Status: Closed for scriptable Android and iOS walkthrough coverage.
