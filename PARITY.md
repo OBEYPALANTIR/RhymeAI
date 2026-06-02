@@ -21,10 +21,17 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini empty suggestion stream: Android and iOS both surface `AI did not return suggestions. Try again.` instead of leaving a blank result.
 - Gemini no-key and provider status failures: Unit-verified on both platforms for suggestions, streaming, rewrite, synonyms, rejected-key, missing-model, rate-limit, and service-error user messages before provider bodies can leak into UI text.
 
+## Export checks
+
+- TXT export: Android and iOS unit-verified for untitled fallback, optional theme header, and lyric text preservation.
+- LRC export: Android and iOS unit-verified for shared metadata headers, blank-line handling, leading lyric indentation preservation, and trailing horizontal whitespace trimming.
+- JSON export: Android and iOS unit-verified for project field round trip. Platform timestamp encodings differ by model type (`Long` on Android, ISO-8601 `Date` on iOS), but each export remains re-importable on its source platform.
+- PDF export: iOS unit-verified to produce PDF bytes from a long lyric sheet. Android PDF formatting remains a device/instrumentation follow-up because local JVM unit tests cannot honestly exercise `android.graphics.pdf.PdfDocument`.
+
 ## Open parity checks
 
 - Gemini UI cancel behavior: Pending emulator/simulator UI verification.
 - Gemini timeout/offline and blocked-response behavior: Pending emulator/simulator/network-condition verification.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.
-- Rhyme context, prosody, trash, export, and persistence: Pending hardening pass.
+- Rhyme context, prosody, trash, Android PDF export, and persistence: Pending hardening pass.

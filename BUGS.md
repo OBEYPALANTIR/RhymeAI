@@ -34,3 +34,10 @@
 - Root cause: The assistant floating button hid for active rewrites and modals, but not for the selection rewrite chip bar, so two bottom-anchored controls could compete for the same space.
 - Fix commit: `32d3a81`.
 - Re-verify: Passed on 2026-06-02 with `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -only-testing:"Writers BlockUITests/Writers_BlockUITests/testUnBlockButtonHidesWhenRewriteBarVisible"`.
+
+## BUG-006: iOS LRC/PDF exports stripped leading lyric indentation
+
+- Repro: Export lyrics containing leading spaces or tabs in LRC/PDF format on both platforms.
+- Root cause: Android trimmed only trailing whitespace for formatted exports, while iOS trimmed both leading and trailing spaces/tabs before LRC/PDF rendering.
+- Fix commit: `76fe468` (Android parity coverage), `9e4ad12` (iOS export alignment).
+- Re-verify: Passed on 2026-06-02 with `./gradlew :app:testDebugUnitTest --tests 'com.rhymeai.app.util.LyricsExporterTest'` and `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -only-testing:"Writers BlockTests/LyricsExporterTests"`.
