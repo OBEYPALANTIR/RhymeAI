@@ -51,7 +51,7 @@ enum LyricsExporter {
         sb += "[al:RhymeAI]\n"
         sb += "[length:00:00.00]\n\n"
         for raw in project.lyrics.components(separatedBy: "\n") {
-            let line = raw.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+            let line = trimmingTrailingHorizontalWhitespace(raw)
             if line.isEmpty {
                 sb += "\n"
             } else {
@@ -120,7 +120,7 @@ enum LyricsExporter {
             y += lineHeight
 
             for raw in project.lyrics.components(separatedBy: "\n") {
-                let line = raw.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+                let line = trimmingTrailingHorizontalWhitespace(raw)
                 if y > pageHeight - marginY {
                     ctx.beginPage()
                     y = marginY
@@ -152,5 +152,18 @@ enum LyricsExporter {
                 y += drawHeight
             }
         }
+    }
+
+    private static func trimmingTrailingHorizontalWhitespace(_ value: String) -> String {
+        var end = value.endIndex
+        while end > value.startIndex {
+            let previous = value.index(before: end)
+            if value[previous] == " " || value[previous] == "\t" {
+                end = previous
+            } else {
+                break
+            }
+        }
+        return String(value[..<end])
     }
 }
