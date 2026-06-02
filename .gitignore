@@ -28,3 +28,8 @@ DerivedData/
 
 # Claude
 .claude/
+
+# AgenTeam
+.agenteam/events/
+.agenteam/state/
+.codex/agents/
