@@ -115,6 +115,30 @@ class AIServicePromptTest {
     }
 
     @Test
+    fun localRewriteCleanerExtractsSingleWordReplacement() {
+        val service = AIService()
+
+        assertEquals("gleam", service.cleanLocalRewrite("glow -> gleam", selection = "glow"))
+        assertEquals("shine", service.cleanLocalRewrite("shine, gleam, radiance", selection = "glow"))
+        assertEquals("gleam", service.cleanLocalRewrite("The replacement is \"gleam\".", selection = "glow"))
+    }
+
+    @Test
+    fun localSingleWordRewritePromptRequiresDifferentReplacement() {
+        val prompt = AIService().buildLocalRewritePrompt(
+            action = RewriteAction.REPHRASE,
+            lyrics = "[Verse]\nStatic in the dashboard glow",
+            selection = "glow",
+            currentSection = SongSection.VERSE
+        )
+
+        assertContains(prompt, "Task: replace the selected word")
+        assertContains(prompt, "Return exactly one replacement word")
+        assertContains(prompt, "Do not return \"glow\"")
+        assertContains(prompt, "The replacement must be different from the selected word")
+    }
+
+    @Test
     fun emptySuggestionResponsesParseToEmptyList() {
         val service = AIService()
 

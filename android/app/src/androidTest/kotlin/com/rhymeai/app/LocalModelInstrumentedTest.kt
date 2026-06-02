@@ -110,6 +110,21 @@ class LocalModelInstrumentedTest {
         assertNoPromptEcho("rewrite", listOf(rewrite))
         assertFalse("Local rewrite should change the selected text", rewrite.trim() == "I hum the hook to keep it close")
 
+        val singleWordRewrite = timedEval(modelLabel, "single_word_rewrite") {
+            service.getRewrite(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                action = RewriteAction.REPHRASE,
+                fullLyrics = lyrics,
+                selection = "glow",
+                currentSection = SongSection.VERSE
+            )
+        }
+        assertTrue("Local single-word rewrite should return one replacement word", singleWordRewrite.matches(Regex("[\\p{L}\\p{N}'-]+")))
+        assertFalse("Local single-word rewrite should not return the selected word", singleWordRewrite.equals("glow", ignoreCase = true))
+        assertNoPromptEcho("single word rewrite", listOf(singleWordRewrite))
+
         val synonyms = timedEval(modelLabel, "synonyms") {
             service.getSynonyms(
                 provider = AIProvider.LOCAL,

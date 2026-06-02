@@ -592,17 +592,37 @@ Rules:
 Respond ONLY with a JSON object of the form {"rewrite": "..."}. No code fences.
 """.trimIndent()
 
-    private fun buildLocalRewritePrompt(
+    internal fun buildLocalRewritePrompt(
         action: RewriteAction,
         lyrics: String,
         selection: String,
         currentSection: SongSection = SongSection.UNKNOWN
     ): String {
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext = false)
+        val singleWord = isSingleWordSelection(selection)
+        val taskLine = if (singleWord) {
+            "Task: replace the selected word with a different word that fits the song."
+        } else {
+            "Task: rewrite the selected passage from the user's song."
+        }
+        val outputRules = if (singleWord) {
+            """
+- Return exactly one replacement word.
+- The replacement must be different from the selected word.
+- Do not return "$selection".
+- No quotes, no markdown, no labels, no commentary.
+""".trimIndent()
+        } else {
+            """
+- Output the rewritten passage only.
+- Preserve line breaks if the selection has multiple lines.
+- No quotes, no markdown, no labels, no commentary.
+""".trimIndent()
+        }
         val userPrompt = """
 You are RhymeAI's on-device songwriting assistant.
 
-Task: rewrite the selected passage from the user's song.
+$taskLine
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
 Action: ${action.label}.
@@ -619,12 +639,13 @@ $selection
 ${"\"\"\""}
 
 Rules:
-- Output the rewritten passage only.
-- Preserve line breaks if the selection has multiple lines.
-- No quotes, no markdown, no labels, no commentary.
+$outputRules
 """.trimIndent()
         return gemmaInstructionPrompt(userPrompt)
     }
+
+    private fun isSingleWordSelection(selection: String): Boolean =
+        selection.trim().matches(Regex("[\\p{L}\\p{N}'-]+"))
 
     private suspend fun callGeminiRaw(apiKey: String, modelId: String, prompt: String): String {
         return try {
@@ -705,14 +726,17 @@ Rules:
             throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         }
         val response = service.generateResponse(prompt)
-        val cleaned = cleanLocalRewrite(response)
+        val cleaned = cleanLocalRewrite(response, selection)
         if (cleaned.isBlank()) {
             throw RuntimeException("Local model returned no rewrite. Try a different model or use a cloud provider.")
+        }
+        if (normalizeSuggestionKey(cleaned) == normalizeSuggestionKey(selection)) {
+            throw RuntimeException("Local model returned the original text unchanged. Try again or use a cloud provider.")
         }
         return cleaned
     }
 
-    internal fun cleanLocalRewrite(response: String): String {
+    internal fun cleanLocalRewrite(response: String, selection: String? = null): String {
         val markerStripped = response
             .substringBefore("<end_of_turn>")
             .lines()
@@ -731,8 +755,67 @@ Rules:
             .removeSuffix("```")
             .trim()
         // If the model still emitted JSON, extract its rewrite field.
-        extractRewriteField(trimmed)?.let { return it }
-        return trimmed.removeSurrounding("\"").removeSurrounding("'").trim()
+        val extracted = extractRewriteField(trimmed) ?: trimmed
+        val cleaned = extracted.removeSurrounding("\"").removeSurrounding("'").trim()
+        return if (selection != null && isSingleWordSelection(selection)) {
+            cleanSingleWordRewrite(cleaned, selection)
+        } else {
+            cleaned
+        }
+    }
+
+    private fun cleanSingleWordRewrite(response: String, selection: String): String {
+        val originalKey = normalizeSuggestionKey(selection)
+        val labelTokens = setOf(
+            "a",
+            "an",
+            "as",
+            "be",
+            "i",
+            "instead",
+            "is",
+            "original",
+            "replace",
+            "replacement",
+            "rewrite",
+            "selected",
+            "suggest",
+            "the",
+            "try",
+            "use",
+            "with",
+            "word",
+            "would"
+        )
+        return response
+            .replace("=>", "->")
+            .replace(":", " ")
+            .lineSequence()
+            .flatMap { line -> line.split("->", ",", "/", "|").asSequence() }
+            .map { part ->
+                part.trim()
+                    .removePrefix("replacement")
+                    .removePrefix("Replacement")
+                    .removePrefix("rewrite")
+                    .removePrefix("Rewrite")
+                    .trim('"', '\'', '`', '.', '!', '?', ';', ':', '-', '*', '•', ' ')
+            }
+            .flatMap { part ->
+                if (part.any(Char::isWhitespace)) {
+                    part.split(Regex("\\s+")).asSequence()
+                } else {
+                    sequenceOf(part)
+                }
+            }
+            .map { it.trim('"', '\'', '`', '.', '!', '?', ';', ':', '-', '*', '•', ' ') }
+            .firstOrNull { token ->
+                val key = normalizeSuggestionKey(token)
+                key.isNotEmpty() &&
+                    key != originalKey &&
+                    token.length <= 32 &&
+                    key !in labelTokens
+            }
+            .orEmpty()
     }
 
     private fun extractRewriteField(text: String): String? {
