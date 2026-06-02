@@ -434,6 +434,87 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testReleaseWalkthroughCreatesExportsAndPersistsSong() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let title = "Release Walkthrough \(Int(Date().timeIntervalSince1970))"
+        let lyrics = "[Verse]\nMidnight notes on a borrowed train\nI keep the hook alive through rain"
+
+        createNewSong(in: app)
+
+        let titleEditor = app.textFields["songTitleEditor"]
+        XCTAssertTrue(titleEditor.waitForExistence(timeout: 5))
+        titleEditor.tap()
+        titleEditor.typeText(title)
+
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        lyricsEditor.tap()
+        lyricsEditor.typeText(lyrics)
+
+        XCTAssertTrue(app.staticTexts["Saved"].waitForExistence(timeout: 5))
+
+        app.buttons["Share"].tap()
+        XCTAssertTrue(app.staticTexts["Export Song"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Plain Text"))
+                .firstMatch
+                .waitForExistence(timeout: 5)
+        )
+        app.buttons["Cancel"].tap()
+
+        app.terminate()
+        app.launch()
+
+        openExistingSong(in: app, title: title)
+
+        XCTAssertTrue(app.textFields["songTitleEditor"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["songTitleEditor"].value as? String, title)
+        XCTAssertTrue(
+            ((app.textViews["lyricsEditor"].value as? String) ?? "")
+                .contains("Midnight notes on a borrowed train")
+        )
+    }
+
+    @MainActor
+    func testReleaseSuggestionNoKeyFailsGracefully() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song",
+            "--ui-test-open-assistant"
+        ])
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        app.buttons["Suggest Next Line"].tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
+                .firstMatch
+                .waitForExistence(timeout: 10)
+        )
+    }
+
+    @MainActor
+    func testReleaseRewriteNoKeyFailsGracefully() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-rewrite-selection",
+            "--ui-test-force-rewrite-bar"
+        ])
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
+        app.buttons["Rephrase"].tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
+                .firstMatch
+                .waitForExistence(timeout: 10)
+        )
+        app.buttons["Cancel"].tap()
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
@@ -445,6 +526,37 @@ final class Writers_BlockUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-in-memory-store"] + arguments
         return app
+    }
+
+    private func createNewSong(in app: XCUIApplication) {
+        let welcomeNewSong = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        if welcomeNewSong.waitForExistence(timeout: 2) {
+            welcomeNewSong.tap()
+            return
+        }
+
+        let openDrawerButton = app.buttons["Open songs drawer"]
+        XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
+        openDrawerButton.tap()
+
+        let createNewSongButton = app.buttons["Create New Song"]
+        XCTAssertTrue(createNewSongButton.waitForExistence(timeout: 5))
+        createNewSongButton.tap()
+    }
+
+    private func openExistingSong(in app: XCUIApplication, title: String) {
+        let loadSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Load Song")).firstMatch
+        if loadSongButton.waitForExistence(timeout: 2) {
+            loadSongButton.tap()
+        } else {
+            let openDrawerButton = app.buttons["Open songs drawer"]
+            XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
+            openDrawerButton.tap()
+        }
+
+        let savedSongButton = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+        XCTAssertTrue(savedSongButton.waitForExistence(timeout: 5))
+        savedSongButton.tap()
     }
 
     private var ipadAuditOrientations: [UIDeviceOrientation] {

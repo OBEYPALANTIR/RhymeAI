@@ -113,6 +113,16 @@ the archive binary. Archive output defaults to a temporary directory outside the
 iCloud-synced repo; override with `IOS_RELEASE_WORK_DIR`, `IOS_ARCHIVE_PATH`, or
 `SKIP_ARCHIVE=1` for targeted checks.
 
+To run the iOS Release walkthrough gate:
+
+```sh
+./scripts/ios-release-walkthrough.sh
+```
+
+The walkthrough builds and tests the app in Release configuration, then verifies
+song creation, save, export surface reachability, graceful no-key AI/rewrite
+handling, and relaunch persistence.
+
 To verify CloudKit readiness before the live two-device sync matrix:
 
 ```sh

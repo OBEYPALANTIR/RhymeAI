@@ -32,6 +32,9 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 - Status: Open.
 - Scope: Android and iOS.
 - Evidence: Android and iOS release build gates exist and passed individually.
-- Remaining walkthrough: run create song -> write lyrics -> Gemini suggestion ->
-  rewrite -> export -> background/kill -> reopen on release builds, including
-  light/dark and phone/tablet coverage where available.
+  iOS also has `scripts/ios-release-walkthrough.sh` for Release-configuration
+  create/save/export surface/graceful no-key AI/rewrite/relaunch persistence.
+- Remaining walkthrough: Android still needs create song -> write lyrics ->
+  Gemini suggestion -> rewrite -> export -> background/kill -> reopen on a
+  signed release build, including light/dark and phone/tablet coverage where
+  available. iOS still needs the broader human light/dark and iPad release pass.
