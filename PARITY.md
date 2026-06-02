@@ -32,6 +32,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 - Android sync merge: Unit-verified that active project changes merge by `updatedAt`, trash entries merge by `deletedAt`, newer trash removes stale active copies, and newer restored active projects are not deleted by stale trash entries.
 - iOS trash lifecycle: In-memory SwiftData unit-verified that moving the current project to trash clears editor state, creates a 30-day trash entry, restore replaces any stale active row with the same ID, and purge removes only expired trash.
+- Import/autosave persistence: Android instrumented-verified that imported projects and debounced autosaves persist projects, current project ID, and editor state through DataStore and restore through a fresh ViewModel. iOS in-memory SwiftData unit-verified that imported projects and debounced autosaves persist the expected project fields and select the imported/saved project for editing.
 
 ## Prosody checks
 
@@ -47,4 +48,3 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini timeout/offline and blocked-response behavior: Pending emulator/simulator/network-condition verification.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.
-- Broader autosave/import persistence: Pending hardening pass.
