@@ -6,6 +6,7 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
@@ -83,6 +84,17 @@ class AIService {
             429 -> "Provider rate limit reached — wait a moment and retry."
             in 500..599 -> "Provider service error — try again shortly."
             else -> "Provider request failed (status $code)."
+        }
+
+        fun userFacingProviderException(error: Throwable): RuntimeException {
+            if (error is CancellationException) throw error
+            val status = Regex("\\b(?:401|403|404|429|5\\d\\d)\\b")
+                .find(error.message.orEmpty())
+                ?.value
+                ?.toIntOrNull()
+            val message = status?.let(::userFacingStatusMessage)
+                ?: "Provider request failed — check your connection, API key, and selected model."
+            return RuntimeException(message)
         }
     }
 
@@ -224,9 +236,13 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
     }.flowOn(Dispatchers.IO)
 
     private fun streamGemini(apiKey: String, modelId: String, prompt: String): Flow<String> = flow {
-        val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
-        val tokens = model.generateContentStream(prompt).mapNotNull { it.text }
-        emitLinesFromTokens(tokens)
+        try {
+            val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
+            val tokens = model.generateContentStream(prompt).mapNotNull { it.text }
+            emitLinesFromTokens(tokens)
+        } catch (error: Throwable) {
+            throw userFacingProviderException(error)
+        }
     }
 
     private fun streamOpenAI(apiKey: String, modelId: String, prompt: String): Flow<String> = flow {
@@ -548,14 +564,18 @@ Rules:
     }
 
     private suspend fun callGeminiRaw(apiKey: String, modelId: String, prompt: String): String {
-        val model = GenerativeModel(
-            modelName = modelId,
-            apiKey = apiKey,
-            generationConfig = generationConfig {
-                responseMimeType = "application/json"
-            }
-        )
-        return model.generateContent(prompt).text?.trim().orEmpty()
+        return try {
+            val model = GenerativeModel(
+                modelName = modelId,
+                apiKey = apiKey,
+                generationConfig = generationConfig {
+                    responseMimeType = "application/json"
+                }
+            )
+            model.generateContent(prompt).text?.trim().orEmpty()
+        } catch (error: Throwable) {
+            throw userFacingProviderException(error)
+        }
     }
 
     private suspend fun callOpenAIRaw(apiKey: String, modelId: String, prompt: String): String {
@@ -659,10 +679,14 @@ Rules:
     }
 
     private suspend fun callGemini(apiKey: String, modelId: String, prompt: String): List<String> {
-        val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
-        val response = model.generateContent(prompt)
-        val text = response.text?.trim() ?: return emptyList()
-        return parseSuggestionList(text)
+        return try {
+            val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
+            val response = model.generateContent(prompt)
+            val text = response.text?.trim() ?: return emptyList()
+            parseSuggestionList(text)
+        } catch (error: Throwable) {
+            throw userFacingProviderException(error)
+        }
     }
 
     private suspend fun callOpenAI(apiKey: String, modelId: String, prompt: String): List<String> {
