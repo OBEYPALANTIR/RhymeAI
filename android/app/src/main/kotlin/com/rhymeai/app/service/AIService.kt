@@ -21,6 +21,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.io.IOException
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
@@ -97,14 +98,16 @@ class AIService {
 
         fun userFacingProviderException(error: Throwable): RuntimeException {
             if (error is CancellationException) throw error
-            val rawMessage = error.message.orEmpty()
+            val causes = error.causes()
+            val rawMessage = causes.joinToString(" ") { cause ->
+                "${cause::class.java.simpleName} ${cause.message.orEmpty()}"
+            }
             val blocked = listOf("blocked", "safety", "finishReason", "prohibited")
                 .any { rawMessage.contains(it, ignoreCase = true) }
             if (blocked) {
                 return RuntimeException("Provider blocked the response for safety. Try adjusting the lyric or prompt.")
             }
-            val networkFailure = error is SocketTimeoutException ||
-                error is UnknownHostException ||
+            val networkFailure = causes.any { it is IOException || it is SocketTimeoutException || it is UnknownHostException } ||
                 listOf("timeout", "timed out", "Unable to resolve host", "UnknownHostException", "SocketTimeoutException")
                     .any { rawMessage.contains(it, ignoreCase = true) }
             if (networkFailure) {
@@ -117,6 +120,16 @@ class AIService {
             val message = status?.let(::userFacingStatusMessage)
                 ?: "Provider request failed — check your connection, API key, and selected model."
             return RuntimeException(message)
+        }
+
+        private fun Throwable.causes(): List<Throwable> {
+            val chain = mutableListOf<Throwable>()
+            var current: Throwable? = this
+            while (current != null && current !in chain) {
+                chain += current
+                current = current.cause
+            }
+            return chain
         }
     }
 

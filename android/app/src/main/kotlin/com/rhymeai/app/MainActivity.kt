@@ -37,7 +37,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
-                assets.open("cmudict-rhymeai.tsv").use(PronunciationDictionary::initialize)
+                if (PronunciationDictionary.shared.wordCount == 0) {
+                    assets.open("cmudict-rhymeai.tsv").use(PronunciationDictionary::initialize)
+                }
             }.onFailure { error ->
                 Log.w("RhymeAI", "Falling back to heuristic syllable counts; CMU dictionary failed to load.", error)
             }

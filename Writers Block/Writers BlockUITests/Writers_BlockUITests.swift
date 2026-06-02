@@ -281,6 +281,26 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssistantOfflineFailureShowsConnectionMessage() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song",
+            "--ui-test-open-assistant"
+        ])
+        app.launchEnvironment["GEMINI_TEST_KEY"] = "offline-smoke-key"
+        app.launchEnvironment["RHYMEAI_GEMINI_BASE_URL"] = "https://127.0.0.1:1/v1beta"
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        app.buttons["Suggest Next Line"].tap()
+
+        XCTAssertTrue(
+            app.staticTexts["Provider request failed — check your connection and try again."]
+                .waitForExistence(timeout: 15)
+        )
+        XCTAssertTrue(app.buttons["Suggest Next Line"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testIPadSplitEditorShowsInlineAssistantAndProsody() throws {
         try requireIPad()
 

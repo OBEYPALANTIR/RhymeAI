@@ -6,6 +6,7 @@ import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import kotlin.test.Test
@@ -121,6 +122,10 @@ class AIServiceFailureTest {
         assertEquals(
             "Provider request failed — check your connection and try again.",
             service.userFacingProviderMessageForError(UnknownHostException())
+        )
+        assertEquals(
+            "Provider request failed — check your connection and try again.",
+            service.userFacingProviderMessageForError(RuntimeException("wrapped", IOException("network down")))
         )
     }
 

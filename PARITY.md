@@ -18,7 +18,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini Android UI cancel behavior: Instrumented UI-verified that the assistant button changes from `Suggest Next Line` to `Stop`, cancels the in-flight suggestion request, and returns to `Suggest Next Line`.
 - Gemini iOS UI cancel behavior: Simulator UI-verified that the assistant button changes from `Suggest Next Line` to `Stop`, cancels the in-flight suggestion request, and returns to `Suggest Next Line`.
 - Gemini invalid-key failure: Verified on Android and iOS; failures use user-facing messages and do not echo the invalid key.
-- Gemini timeout/offline and blocked-response failures: Unit-verified on Android and iOS; timeout/offline failures use the shared connection retry message, and blocked/safety responses use the shared blocked-response message.
+- Gemini timeout/offline and blocked-response failures: Unit-verified on Android and iOS; Android emulator offline and iOS simulator unreachable-endpoint UI smokes verify timeout/offline failures use the shared connection retry message and return to `Suggest Next Line`; blocked/safety responses use the shared blocked-response message.
 - Gemini suggestion response parsing: Aligned for line responses, JSON arrays, JSON object array wrappers, numbering/bullets, duplicate suggestions, prompt echo, provider markers, and overlong lines.
 - Gemini prompt shaping: Unit-verified on both platforms for immediate vs whole-song context, target-rhyme vs new-rhyme instructions, section hints, complexity, six-line output contract, and every rewrite action instruction.
 - Rewrite action UI walkthrough: Android instrumented and iOS simulator UI-verified that `Rephrase`, `Harder Rhyme`, and `Punch Up` each open the inline rewrite review controls and that `Cancel` returns to the rewrite chip bar.
@@ -48,5 +48,4 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 ## Open parity checks
 
-- Gemini live timeout/offline simulator smoke: Pending manual network-condition run; service-level timeout/offline and blocked-response messages are unit-verified.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.

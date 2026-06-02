@@ -162,6 +162,10 @@ struct AIService {
 
                     try await emitLines(from: tokens, into: continuation)
                     continuation.finish()
+                } catch let error as URLError where error.code == .cancelled {
+                    continuation.finish(throwing: CancellationError())
+                } catch is URLError {
+                    continuation.finish(throwing: AIServiceError.networkUnavailable)
                 } catch {
                     continuation.finish(throwing: error)
                 }
@@ -213,10 +217,7 @@ struct AIService {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):streamGenerateContent?alt=sse"
-                    guard let url = URL(string: urlString) else {
-                        throw AIServiceError.invalidResponse
-                    }
+                    let url = try Self.geminiURL(modelId: modelId, method: "streamGenerateContent", query: "alt=sse")
                     let body: [String: Any] = [
                         "contents": [["parts": [["text": prompt]]]]
                     ]
@@ -481,8 +482,7 @@ struct AIService {
     // MARK: - Gemini
 
     private func callGemini(apiKey: String, modelId: String, prompt: String) async throws -> [String] {
-        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):generateContent"
-        guard let url = URL(string: urlString) else { throw AIServiceError.invalidResponse }
+        let url = try Self.geminiURL(modelId: modelId, method: "generateContent")
 
         let body: [String: Any] = [
             "contents": [
@@ -862,8 +862,7 @@ struct AIService {
     }
 
     private func callGeminiRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
-        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(modelId):generateContent"
-        guard let url = URL(string: urlString) else { throw AIServiceError.invalidResponse }
+        let url = try Self.geminiURL(modelId: modelId, method: "generateContent")
 
         let body: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
@@ -881,6 +880,27 @@ struct AIService {
             throw AIServiceError.decodingError
         }
         return try Self.geminiText(from: json)
+    }
+
+    private static func geminiURL(modelId: String, method: String, query: String? = nil) throws -> URL {
+        let base = geminiBaseURLString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var urlString = "\(base)/models/\(modelId):\(method)"
+        if let query, !query.isEmpty {
+            urlString += "?\(query)"
+        }
+        guard let url = URL(string: urlString) else { throw AIServiceError.invalidResponse }
+        return url
+    }
+
+    private static var geminiBaseURLString: String {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-in-memory-store"),
+           let override = ProcessInfo.processInfo.environment["RHYMEAI_GEMINI_BASE_URL"],
+           !override.isEmpty {
+            return override
+        }
+        #endif
+        return "https://generativelanguage.googleapis.com/v1beta"
     }
 
     private func callOpenAIRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {

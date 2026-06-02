@@ -1,5 +1,6 @@
 package com.rhymeai.app
 
+import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -36,18 +37,21 @@ class NewFeatureUiTest {
     @get:Rule
     val composeRule = createEmptyComposeRule()
 
-    private lateinit var scenario: ActivityScenario<MainActivity>
+    private var scenario: ActivityScenario<MainActivity>? = null
 
     @Before
     fun setUp() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        context.assets.open("cmudict-rhymeai.tsv").use(PronunciationDictionary::initialize)
+        if (PronunciationDictionary.shared.wordCount == 0) {
+            context.assets.open("cmudict-rhymeai.tsv").use(PronunciationDictionary::initialize)
+        }
         scenario = ActivityScenario.launch(MainActivity::class.java)
     }
 
     @After
     fun tearDown() {
-        scenario.close()
+        scenario?.close()
+        scenario = null
     }
 
     @Test
@@ -97,6 +101,28 @@ class NewFeatureUiTest {
         composeRule.onNodeWithText("Stop").performClick()
 
         composeRule.onNodeWithText("Suggest Next Line").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun assistantOfflineFailureShowsConnectionMessage() {
+        setEmulatorNetworkEnabled(false)
+        try {
+            composeRule.onNodeWithText("New Song").performClick()
+            composeRule.onNodeWithTag("lyricsEditor").performClick()
+            composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music\nfollow music")
+
+            composeRule.onNodeWithText("UnBlock").performClick()
+            composeRule.onNodeWithText("Suggest Next Line").performScrollTo().performClick()
+
+            composeRule.waitUntil(timeoutMillis = 45_000) {
+                composeRule.onAllNodesWithText("Provider request failed — check your connection and try again.")
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }
+            composeRule.onNodeWithText("Suggest Next Line").performScrollTo().assertIsDisplayed()
+        } finally {
+            setEmulatorNetworkEnabled(true)
+        }
     }
 
     @OptIn(ExperimentalTestApi::class)
@@ -188,6 +214,25 @@ class NewFeatureUiTest {
         composeRule.onNodeWithTag("songTitleEditor").performTextInput(title)
         composeRule.waitUntil(timeoutMillis = 3_000) {
             composeRule.onAllNodesWithText("Saved").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    private fun setEmulatorNetworkEnabled(enabled: Boolean) {
+        if (enabled) {
+            shell("cmd connectivity airplane-mode disable")
+            shell("svc wifi enable")
+            shell("svc data enable")
+        } else {
+            shell("svc wifi disable")
+            shell("svc data disable")
+            shell("cmd connectivity airplane-mode enable")
+        }
+    }
+
+    private fun shell(command: String) {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use {
+            it.readBytes()
         }
     }
 }
