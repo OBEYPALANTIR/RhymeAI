@@ -33,6 +33,9 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 - Remaining live matrix: create, edit, concurrent edit, offline reconnect, delete
   propagation, trash restore, and permanent delete across two iCloud-signed-in
   simulators/devices.
+- Current preflight evidence: on 2026-06-02, two iOS 26.5 simulators booted, but
+  neither had a `MobileMeAccounts` account record and both failed
+  `simctl icloud_sync` with `BRCloudDocsErrorDomain` code `153`.
 - Next verification: execute `docs/CLOUDKIT_SYNC_CHECKLIST.md` on two
   iCloud-signed-in simulators/devices.
 
@@ -44,6 +47,9 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
   `scripts/provider-live-smoke.sh` are wired to verify suggestions, rewrites,
   and streaming against the configured OpenAI and Claude models without printing
   keys. No-key/status/error behavior remains unit-verified.
+- Current preflight evidence: on 2026-06-02, this shell had no
+  `OPENAI_TEST_KEY`, `CLAUDE_TEST_KEY`, or `ANTHROPIC_TEST_KEY`, and
+  `./scripts/provider-live-smoke.sh` exited `2` before running provider calls.
 - Next verification: run:
 
 ```sh

@@ -36,6 +36,16 @@ when the required external keys, model file, devices, or account state exist.
 The latest sign-off evidence is tracked in
 `docs/FINAL_SIGNOFF_STATUS.md`.
 
+To preflight only the remaining external live-gate prerequisites without printing
+secrets:
+
+```sh
+./scripts/remaining-live-gates-preflight.sh
+```
+
+Set `CLOUDKIT_SIM_A` and `CLOUDKIT_SIM_B` to specific booted simulator UDIDs, or
+leave them unset to use the first two booted iOS simulators.
+
 ## Features
 
 - Section-aware suggestions and rewrites for `[Verse]`, `[Chorus]`, and `[Bridge]`.

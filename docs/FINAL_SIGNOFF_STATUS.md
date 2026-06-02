@@ -1,6 +1,6 @@
 # Final Sign-Off Status
 
-Last updated: 2026-06-02 04:48 America/New_York.
+Last updated: 2026-06-02 04:54 America/New_York.
 
 ## Current Local Evidence
 
@@ -31,6 +31,13 @@ LOCAL_GGUF_PATH="$PWD/artifacts/local-model-smoke/tinyllama-1.1b-chat-v0.6.q2_k.
   The ignored smoke fixture was 482143168 bytes with a valid GGUF header, and
   `LocalModelInstrumentedTest` passed after loading the model and producing
   nonblank generation output.
+- `./scripts/remaining-live-gates-preflight.sh` currently exits `2`: this shell
+  has no `OPENAI_TEST_KEY`, `CLAUDE_TEST_KEY`, or `ANTHROPIC_TEST_KEY`.
+- Two iOS 26.5 simulators booted successfully for CloudKit preflight
+  (`E4C0D568-C431-462E-84B3-B019135F2F29` and
+  `48C15EB1-26B1-4AC8-BE0E-C5B1B65C184F`), but neither has a
+  `MobileMeAccounts` account record and both return `BRCloudDocsErrorDomain`
+  code `153` from `simctl icloud_sync`.
 
 ## Remaining External Gates
 

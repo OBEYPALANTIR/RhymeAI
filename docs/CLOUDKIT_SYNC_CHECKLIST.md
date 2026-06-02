@@ -71,7 +71,10 @@ sync latency for each check.
 
 As of 2026-06-02, `./scripts/ios-cloudkit-readiness.sh` passes and verifies the
 static CloudKit container, entitlements, background mode, build, and trash
-conflict tests. The local simulator used for the latest readiness run was not
-signed into iCloud, so the live two-device matrix still needs an
-iCloud-signed-in simulator/device pair. Do not mark CloudKit complete until every
-live matrix item above has current evidence.
+conflict tests. `./scripts/remaining-live-gates-preflight.sh` can check the live
+matrix prerequisites without printing account values. The latest preflight booted
+two iOS 26.5 simulators, but neither had a `MobileMeAccounts` account record and
+both failed `simctl icloud_sync` with `BRCloudDocsErrorDomain` code `153`, so the
+live two-device matrix still needs an iCloud-signed-in simulator/device pair. Do
+not mark CloudKit complete until every live matrix item above has current
+evidence.
