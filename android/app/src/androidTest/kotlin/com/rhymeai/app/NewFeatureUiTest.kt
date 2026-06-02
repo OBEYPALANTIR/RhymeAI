@@ -82,6 +82,23 @@ class NewFeatureUiTest {
         composeRule.onNode(hasText("jɛloʊ", substring = true)).performScrollTo().assertIsDisplayed()
     }
 
+    @Test
+    fun assistantStopCancelsSuggestionRequest() {
+        composeRule.onNodeWithText("New Song").performClick()
+        composeRule.onNodeWithTag("lyricsEditor").performClick()
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music\nfollow music")
+
+        composeRule.onNodeWithText("UnBlock").performClick()
+        composeRule.onNodeWithText("Suggest Next Line").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("Stop").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        composeRule.onNodeWithText("Stop").performClick()
+
+        composeRule.onNodeWithText("Suggest Next Line").performScrollTo().assertIsDisplayed()
+    }
+
     @OptIn(ExperimentalTestApi::class)
     @Test
     fun selectedRewriteDockPreservesNativeSelectionAndRootSafe() {
