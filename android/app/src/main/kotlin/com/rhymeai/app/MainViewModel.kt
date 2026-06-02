@@ -47,8 +47,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         private const val AUTOSAVE_DEBOUNCE_MILLIS = 450L
         private const val SAVE_STATUS_VISIBLE_MILLIS = 700L
-        val sectionHeaderRegex = Regex("^\\s*\\[.*]\\s*$")
-        val sectionHeaderCaptureRegex = Regex("^\\s*\\[(.+)]\\s*$")
     }
 
     private val repo = ProjectRepository(application)
@@ -247,69 +245,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun computeRhymeContext(): RhymeContext {
-        val text = lyrics
-        val scheme = activeRhymeScheme
-        if (text.isEmpty()) {
-            return RhymeContext(null, scheme.firstOrNull()?.toString() ?: "A", emptyList(), 0)
-        }
-
-        val pos = cursorPosition.coerceIn(0, text.length)
-        val currentSection = currentSongSection(text, pos)
-        val textBefore = text.substring(0, pos)
-        val textAfter = text.substring(pos)
-
-        // Find stanza boundaries
-        val lastDoubleNewline = textBefore.lastIndexOf("\n\n")
-        val stanzaStart = if (lastDoubleNewline == -1) 0 else lastDoubleNewline + 2
-
-        val nextDoubleNewline = textAfter.indexOf("\n\n")
-        val stanzaEnd = if (nextDoubleNewline == -1) text.length else pos + nextDoubleNewline
-
-        val currentStanza = text.substring(stanzaStart, stanzaEnd)
-        val stanzaLines = currentStanza.split("\n")
-
-        // Determine which raw line the cursor is on
-        val stanzaTextBefore = textBefore.substring(stanzaStart)
-        val rawCursorLineIndex = stanzaTextBefore.split("\n").size - 1
-
-        // Find the lyric-line position of the cursor line
-        // Count how many non-header lines are at or before the cursor
-        val lyricLinePos = stanzaLines.take(rawCursorLineIndex + 1).count { line ->
-            !sectionHeaderRegex.matches(line) && line.isNotBlank()
-        } - 1
-        val effectiveLineIndex = maxOf(lyricLinePos, 0)
-
-        val schemeLetters = scheme.toList()
-        if (schemeLetters.isEmpty()) {
-            return RhymeContext(null, "A", stanzaLines, rawCursorLineIndex, currentSection)
-        }
-
-        val currentLetter = schemeLetters[effectiveLineIndex % schemeLetters.size].toString()
-
-        // Find previous lyric line with the same scheme letter
-        var targetLine: String? = null
-        var lyricCount = 0
-        for (i in stanzaLines.indices) {
-            if (i >= rawCursorLineIndex) break
-            val line = stanzaLines[i].trim()
-            if (sectionHeaderRegex.matches(line) || line.isEmpty()) continue
-            val letterForThis = schemeLetters[lyricCount % schemeLetters.size].toString()
-            if (letterForThis == currentLetter && line.isNotEmpty()) {
-                targetLine = line
-            }
-            lyricCount++
-        }
-
-        return RhymeContext(targetLine, currentLetter, stanzaLines, rawCursorLineIndex, currentSection)
+        return RhymeContextAnalyzer.compute(lyrics, cursorPosition, activeRhymeScheme)
     }
 
     private fun currentSongSection(text: String, cursor: Int): SongSection {
-        val textBeforeCursor = text.take(cursor.coerceIn(0, text.length))
-        val header = textBeforeCursor
-            .lineSequence()
-            .mapNotNull { sectionHeaderCaptureRegex.matchEntire(it)?.groupValues?.getOrNull(1) }
-            .lastOrNull()
-        return header?.let(SongSection::fromHeader) ?: SongSection.UNKNOWN
+        return RhymeContextAnalyzer.currentSongSection(text, cursor)
     }
 
     fun getSuggestions() {
