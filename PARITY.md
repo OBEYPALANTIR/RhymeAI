@@ -45,6 +45,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 ## Local model checks
 
 - Android Gemma GGUF download helpers are unit-verified for missing, incomplete, non-GGUF, valid GGUF, resumable partial download, HTTP failure, no-storage messaging, and progress formatting.
+- iOS local provider/model switching is unit-verified: the Local picker exposes only `local-model`, selecting Local moves the current model to the on-device model, and Local does not require an API key.
 
 ## Rhyme context checks
 

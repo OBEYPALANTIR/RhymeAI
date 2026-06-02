@@ -93,6 +93,49 @@ struct Writers_BlockTests {
         ])
     }
 
+    @Test func localModelPickerUsesOnDeviceModelOnly() {
+        let models = AIModel.models(for: .local)
+
+        #expect(models == [.localModel])
+        #expect(models.first?.displayName == "On-Device Model")
+        #expect(AIProvider.local.keyHint == "Runs on-device with Apple Foundation Models when available.")
+    }
+
+    @MainActor
+    @Test func providerSwitchingKeepsSelectedModelAligned() {
+        let defaults = UserDefaults.standard
+        let savedProvider = defaults.string(forKey: "selectedProvider")
+        let savedModel = defaults.string(forKey: "selectedModel")
+        defer {
+            if let savedProvider {
+                defaults.set(savedProvider, forKey: "selectedProvider")
+            } else {
+                defaults.removeObject(forKey: "selectedProvider")
+            }
+            if let savedModel {
+                defaults.set(savedModel, forKey: "selectedModel")
+            } else {
+                defaults.removeObject(forKey: "selectedModel")
+            }
+        }
+        defaults.removeObject(forKey: "selectedProvider")
+        defaults.removeObject(forKey: "selectedModel")
+
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore())
+
+        viewModel.saveModel(.gpt4o)
+        viewModel.saveProvider(.local)
+
+        #expect(viewModel.selectedProvider == .local)
+        #expect(viewModel.selectedModel == .localModel)
+        #expect(viewModel.apiKey(for: .local).isEmpty)
+
+        viewModel.saveProvider(.claude)
+
+        #expect(viewModel.selectedProvider == .claude)
+        #expect(viewModel.selectedModel.provider == .claude)
+    }
+
     @Test func prosodyAnalyzerCountsDictionaryStress() {
         let dictionary = Self.fixtureDictionary
         let prosody = ProsodyAnalyzer.analyzeLine("yellow music", dictionary: dictionary)
