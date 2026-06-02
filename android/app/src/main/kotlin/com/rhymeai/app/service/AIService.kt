@@ -749,7 +749,7 @@ Rules:
         return parseSuggestionList(content)
     }
 
-    private fun parseSuggestionList(raw: String): List<String> {
+    internal fun parseSuggestionList(raw: String): List<String> {
         val parsed = parseJsonArray(raw).ifEmpty { parseLines(raw) }
         val seen = mutableSetOf<String>()
         return parsed
@@ -885,11 +885,25 @@ Rules:
             .removePrefix("```")
             .removeSuffix("```")
             .trim()
-        return try {
-            json.decodeFromString<List<String>>(cleaned).take(SUGGESTION_COUNT)
-        } catch (_: Exception) {
-            emptyList()
-        }
+        if (cleaned.isEmpty()) return emptyList()
+
+        val directArray = runCatching {
+            json.decodeFromString<List<String>>(cleaned)
+        }.getOrNull()
+        if (directArray != null) return directArray.take(SUGGESTION_COUNT)
+
+        return runCatching {
+            json.parseToJsonElement(cleaned).jsonObject.values
+                .firstNotNullOfOrNull { value ->
+                    runCatching {
+                        value.jsonArray.mapNotNull { item ->
+                            item.jsonPrimitive.content.trim().takeIf(String::isNotEmpty)
+                        }
+                    }.getOrNull()
+                }
+                ?.take(SUGGESTION_COUNT)
+                ?: emptyList()
+        }.getOrDefault(emptyList())
     }
 
     private fun gemmaInstructionPrompt(userPrompt: String): String =

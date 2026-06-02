@@ -65,18 +65,20 @@ class GeminiSdkLiveGateTest {
         assertTrue(suggestions.isNotEmpty(), "Gemini returned no suggestions")
         assertTrue(suggestions.all { it.isNotBlank() })
 
-        val rewrite = withTimeout(45_000) {
-            service.getRewrite(
-                provider = AIProvider.GEMINI,
-                apiKey = apiKey,
-                modelId = AIModel.DEFAULT.id,
-                action = RewriteAction.REPHRASE,
-                fullLyrics = lyrics,
-                selection = "I keep the melody close",
-                currentSection = SongSection.VERSE
-            )
+        RewriteAction.entries.forEach { action ->
+            val rewrite = withTimeout(45_000) {
+                service.getRewrite(
+                    provider = AIProvider.GEMINI,
+                    apiKey = apiKey,
+                    modelId = AIModel.DEFAULT.id,
+                    action = action,
+                    fullLyrics = lyrics,
+                    selection = "I keep the melody close",
+                    currentSection = SongSection.VERSE
+                )
+            }
+            assertTrue(rewrite.isNotBlank(), "Gemini returned no ${action.name} rewrite")
         }
-        assertTrue(rewrite.isNotBlank(), "Gemini returned no rewrite")
 
         val streamed = withTimeout(45_000) {
             service.streamSuggestions(
