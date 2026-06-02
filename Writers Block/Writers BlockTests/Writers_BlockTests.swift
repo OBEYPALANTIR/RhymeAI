@@ -401,6 +401,37 @@ struct Writers_BlockTests {
     }
 
     @MainActor
+    @Test func geminiStreamingCanBeCancelledAfterFirstSuggestionWithDebugKey() async throws {
+        let apiKey = Self.geminiTestKey
+        if apiKey.isEmpty { return }
+
+        let service = AIService()
+        let lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
+        var streamed: [String] = []
+
+        for try await line in service.streamSuggestions(
+            provider: .gemini,
+            apiKey: apiKey,
+            modelId: AIModel.default.id,
+            theme: "late-night resolve",
+            lyrics: lyrics,
+            targetRhymeLine: nil,
+            rhymeType: .perfect,
+            rhymeScheme: "AABB",
+            currentLetter: "B",
+            currentSection: .verse,
+            complexity: .moderate,
+            useWholeSongContext: true
+        ) {
+            streamed.append(line)
+            break
+        }
+
+        #expect(streamed.count == 1)
+        #expect(!streamed[0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @MainActor
     @Test func geminiInvalidKeyFailureIsUserFacingAndDoesNotEchoSecret() async throws {
         let service = AIService()
         let invalidKey = "invalid-gemini-key-for-test"
