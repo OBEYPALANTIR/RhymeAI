@@ -15,7 +15,7 @@ the full release walkthrough and remaining known issues are closed.
 - Android release builds are minified, can be signed through ignored
   `android/keystore.properties`, and have a release smoke gate for signing,
   release artifact key scanning, install, and launch.
-- Android Release visual audit captures and reviews phone or tablet
+- Android Release visual audit captures and reviews phone and tablet
   light/dark/large-font launch screenshots plus populated editor, assistant, and
   export surfaces.
 - iOS Release builds have a signed simulator build/launch smoke gate, archive
@@ -48,5 +48,5 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 - Run Android local GGUF smoke with an actual model file.
 - Run CloudKit live two-simulator/device matrix with an iCloud account.
 - Finish any remaining human-only release walkthrough beyond the captured
-  Android/iOS screenshots before moving non-blocking friction into
+  Android phone/tablet and iOS screenshots before moving non-blocking friction into
   `KNOWN_ISSUES.md`.

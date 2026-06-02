@@ -43,6 +43,8 @@ wm_size=""
 wm_density=""
 sdk_version=""
 model_name=""
+screen_width=1080
+screen_height=2400
 
 device_serial() {
   "$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1; exit }'
@@ -179,13 +181,16 @@ wait_for_node_with_scroll() {
   local needle="$2"
   local timeout="${3:-30}"
   local deadline=$((SECONDS + timeout))
+  local swipe_x=$((screen_width / 2))
+  local swipe_start=$((screen_height * 85 / 100))
+  local swipe_end=$((screen_height * 30 / 100))
   until node_bounds "$mode" "$needle" >/dev/null; do
     if (( SECONDS >= deadline )); then
       dump_ui >&2 || true
       echo "Timed out waiting for UI node after scrolling: $needle" >&2
       exit 1
     fi
-    "$ADB" -s "$serial" shell input swipe 540 2100 540 700 450 >/dev/null || true
+    "$ADB" -s "$serial" shell input swipe "$swipe_x" "$swipe_start" "$swipe_x" "$swipe_end" 450 >/dev/null || true
     sleep 1
   done
 }
@@ -213,8 +218,16 @@ input_text() {
 }
 
 assert_no_crash_markers() {
-  if "$ADB" -s "$serial" logcat -d -t 500 | rg -n 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError'; then
-    echo "Release visual audit emitted crash markers." >&2
+  local markers
+  markers="$("$ADB" -s "$serial" logcat -d -t 700 | rg -n 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError' || true)"
+  if [[ -n "$markers" ]] && printf '%s\n' "$markers" | rg -q "$PACKAGE|FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError"; then
+    printf '%s\n' "$markers" >&2
+    echo "Release visual audit emitted app crash markers." >&2
+    exit 1
+  fi
+  if [[ -z "$("$ADB" -s "$serial" shell pidof "$PACKAGE" | tr -d '\r' || true)" ]]; then
+    printf '%s\n' "$markers" >&2
+    echo "Release app process is not running." >&2
     exit 1
   fi
 }
@@ -229,8 +242,8 @@ classify_device() {
   size="$(printf '%s\n' "$wm_size" | sed -n 's/.*: *\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' | tail -1)"
   density="$(printf '%s\n' "$wm_density" | sed -n 's/.*: *\([0-9][0-9]*\).*/\1/p' | tail -1)"
   if [[ -n "$size" && -n "$density" ]]; then
-    read -r width height <<<"$size"
-    smallest_dp="$(awk -v w="$width" -v h="$height" -v d="$density" 'BEGIN { s = w < h ? w : h; printf "%.0f", s * 160 / d }')"
+    read -r screen_width screen_height <<<"$size"
+    smallest_dp="$(awk -v w="$screen_width" -v h="$screen_height" -v d="$density" 'BEGIN { s = w < h ? w : h; printf "%.0f", s * 160 / d }')"
     if (( smallest_dp >= 600 )); then
       device_class="tablet"
     fi

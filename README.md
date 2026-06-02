@@ -105,7 +105,8 @@ release APK, classifies the attached target as phone or tablet from its actual
 screen size and density, captures launch screenshots in light, dark, and 1.3
 font scale profiles, then captures populated editor, assistant panel, and export
 sheet screenshots without entering an API key. Screenshots and a report are
-written under `artifacts/android-release-visual-audit/`.
+written under `artifacts/android-release-visual-audit/`. Use `ANDROID_SERIAL` or
+`ANDROID_AVD_NAME` to point the audit at a specific phone or tablet target.
 
 To run the Android local GGUF inference smoke, attach an emulator or device and
 provide a real model file:
