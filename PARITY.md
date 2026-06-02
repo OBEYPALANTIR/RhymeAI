@@ -26,7 +26,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 - TXT export: Android and iOS unit-verified for untitled fallback, optional theme header, and lyric text preservation.
 - LRC export: Android and iOS unit-verified for shared metadata headers, blank-line handling, leading lyric indentation preservation, and trailing horizontal whitespace trimming.
 - JSON export: Android and iOS unit-verified for project field round trip. Platform timestamp encodings differ by model type (`Long` on Android, ISO-8601 `Date` on iOS), but each export remains re-importable on its source platform.
-- PDF export: iOS unit-verified to produce PDF bytes from a long lyric sheet. Android PDF formatting remains a device/instrumentation follow-up because local JVM unit tests cannot honestly exercise `android.graphics.pdf.PdfDocument`.
+- PDF export: iOS unit-verified to produce PDF bytes from a long lyric sheet. Android instrumented-verified that a long lyric sheet produces readable PDF bytes, paginates through `PdfRenderer`, and renders visible ink on the first page.
 
 ## Trash and persistence checks
 
@@ -47,4 +47,4 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini timeout/offline and blocked-response behavior: Pending emulator/simulator/network-condition verification.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.
-- Android PDF export and broader autosave/import persistence: Pending hardening pass.
+- Broader autosave/import persistence: Pending hardening pass.
