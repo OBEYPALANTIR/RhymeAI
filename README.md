@@ -83,6 +83,16 @@ release APK, then drives create, save, graceful no-key suggestion handling,
 export surface reachability, force-stop/reopen, and persisted lyrics through
 the user-visible UI.
 
+To run the Android Release live Gemini gate on an attached emulator/device:
+
+```sh
+./scripts/android-release-live-gemini.sh
+```
+
+The live gate reads `GEMINI_TEST_KEY` or gitignored `android/local.properties`
+`geminiTestKey`, enters it through the release app Settings UI, then exercises
+live Gemini suggestion and rewrite preview paths on the minified release APK.
+
 To run the Android local GGUF inference smoke, attach an emulator or device and
 provide a real model file:
 

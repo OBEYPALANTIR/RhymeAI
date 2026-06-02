@@ -28,6 +28,7 @@ the full release walkthrough and remaining known issues are closed.
 ./scripts/verify.sh
 ./scripts/android-release-smoke.sh
 ./scripts/android-release-walkthrough.sh
+./scripts/android-release-live-gemini.sh
 ./scripts/ios-release-smoke.sh
 ./scripts/ios-release-walkthrough.sh
 ./scripts/ios-cloudkit-readiness.sh
@@ -39,6 +40,5 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 
 - Run Android local GGUF smoke with an actual model file.
 - Run CloudKit live two-simulator/device matrix with an iCloud account.
-- Cover live Gemini suggestion/rewrite on signed Android release and the broader
-  iOS light/dark/iPad human release pass before moving any non-blocking friction
-  into `KNOWN_ISSUES.md`.
+- Cover the broader iOS light/dark/iPad human release pass before moving any
+  non-blocking friction into `KNOWN_ISSUES.md`.

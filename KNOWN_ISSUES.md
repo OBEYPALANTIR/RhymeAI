@@ -37,7 +37,8 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
   Android has `scripts/android-release-walkthrough.sh` for a passing minified
   release APK create/save/export surface/graceful no-key
   suggestion/force-stop/relaunch persistence run.
-- Remaining walkthrough: Android still needs live Gemini suggestion/rewrite
-  coverage on a signed release build, including light/dark and phone/tablet
-  coverage where available. iOS still needs the broader human light/dark and
-  iPad release pass.
+  Android also has a passing `scripts/android-release-live-gemini.sh` run for
+  release runtime key entry plus live Gemini suggestion/rewrite preview coverage.
+- Remaining walkthrough: Android still needs light/dark and phone/tablet coverage
+  where available. iOS still needs the broader human light/dark and iPad release
+  pass.
