@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -6,6 +7,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.isFile) {
+        localPropertiesFile.inputStream().use(::load)
+    }
+}
+val geminiTestKey = localProperties.getProperty("geminiTestKey", "")
+fun buildConfigString(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "com.rhymeai.app"
@@ -27,8 +37,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(geminiTestKey))
+        }
         release {
             isMinifyEnabled = true
+            buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(""))
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

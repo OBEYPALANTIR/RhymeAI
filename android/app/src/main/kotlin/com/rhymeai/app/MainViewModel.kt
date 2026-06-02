@@ -102,9 +102,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var apiKeyPresence by mutableStateOf<Map<String, Boolean>>(emptyMap())
         private set
 
-    val currentApiKey: String get() = repo.getApiKey(selectedProvider.name)
+    val currentApiKey: String get() = apiKey(selectedProvider)
 
-    fun apiKey(provider: AIProvider): String = repo.getApiKey(provider.name)
+    fun apiKey(provider: AIProvider): String {
+        val storedKey = repo.getApiKey(provider.name)
+        if (storedKey.isNotBlank()) return storedKey
+
+        return if (BuildConfig.DEBUG &&
+            provider == AIProvider.GEMINI &&
+            BuildConfig.GEMINI_TEST_KEY.isNotBlank()
+        ) {
+            BuildConfig.GEMINI_TEST_KEY
+        } else {
+            ""
+        }
+    }
 
     fun apiKeySnapshot(): Map<String, String> = repo.apiKeySnapshot()
 
