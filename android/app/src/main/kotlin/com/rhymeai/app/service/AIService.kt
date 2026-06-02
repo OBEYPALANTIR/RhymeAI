@@ -100,6 +100,9 @@ class AIService {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    internal fun userFacingStatusMessageForStatus(code: Int): String =
+        userFacingStatusMessage(code)
+
     fun buildPrompt(
         theme: String,
         lyrics: String,
