@@ -379,8 +379,13 @@ final class EditorViewModel: ObservableObject {
         suggestionsTask = Task { @MainActor in
             defer { self.isLoading = false }
             do {
+                var emittedSuggestion = false
                 for try await line in stream {
+                    emittedSuggestion = true
                     self.suggestions.append(line)
+                }
+                if !emittedSuggestion, !Task.isCancelled {
+                    self.errorMessage = "AI did not return suggestions. Try again."
                 }
             } catch is CancellationError {
                 // expected when cancelSuggestions() is invoked

@@ -190,6 +190,71 @@ struct Writers_BlockTests {
         ])
     }
 
+    @Test func suggestionPromptShapesImmediateAndWholeSongContext() {
+        let service = AIService()
+        let immediatePrompt = service.buildPrompt(
+            theme: "late-night resolve",
+            lyrics: "[Verse]\nYellow lights on a midnight road",
+            targetRhymeLine: "Yellow lights on a midnight road",
+            rhymeType: .perfect,
+            rhymeScheme: "AABB",
+            currentLetter: "A",
+            currentSection: .verse,
+            complexity: .moderate,
+            useWholeSongContext: false
+        )
+        let wholeSongPrompt = service.buildPrompt(
+            theme: "ignored when whole-song context is enabled",
+            lyrics: "[Verse]\nYellow lights\n\n[Chorus]\nKeep moving",
+            targetRhymeLine: nil,
+            rhymeType: .slant,
+            rhymeScheme: "ABAB",
+            currentLetter: "B",
+            currentSection: .chorus,
+            complexity: .complex,
+            useWholeSongContext: true
+        )
+
+        #expect(immediatePrompt.contains("late-night resolve"))
+        #expect(immediatePrompt.contains("Prioritize the immediate writing context"))
+        #expect(immediatePrompt.contains("MUST end with a **Perfect Rhyme**"))
+        #expect(immediatePrompt.contains("Current song section: Verse."))
+        #expect(immediatePrompt.contains("Complexity level: Moderate"))
+        #expect(immediatePrompt.contains("Respond with exactly 6 lines"))
+
+        #expect(wholeSongPrompt.contains("Whole song context enabled; infer the theme from the full lyrics."))
+        #expect(wholeSongPrompt.contains("Analyze the whole song for story arc"))
+        #expect(wholeSongPrompt.contains("new rhyme sound (\"B\")"))
+        #expect(wholeSongPrompt.contains("Current song section: Chorus."))
+        #expect(wholeSongPrompt.contains("Complexity level: Complex"))
+    }
+
+    @Test func rewritePromptIncludesEveryActionContract() {
+        let service = AIService()
+
+        for action in RewriteAction.allCases {
+            let prompt = service.buildRewritePrompt(
+                action: action,
+                lyrics: "[Bridge]\nI keep the melody close",
+                selection: "I keep the melody close",
+                currentSection: .bridge
+            )
+
+            #expect(prompt.contains("Current song section: Bridge."))
+            #expect(prompt.contains("Action: \(action.label)"))
+            #expect(prompt.contains("Instruction: \(action.instruction)"))
+            #expect(prompt.contains("Preserve line breaks where present."))
+            #expect(prompt.contains(#"{"rewrite": "..."}"#))
+        }
+    }
+
+    @Test func emptySuggestionResponsesParseToEmptyList() {
+        let service = AIService()
+
+        #expect(service.parseSuggestionList("") == [])
+        #expect(service.parseSuggestionList("```json\n[]\n```") == [])
+    }
+
     @MainActor
     @Test func geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey() async throws {
         let apiKey = Self.geminiTestKey

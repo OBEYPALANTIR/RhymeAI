@@ -415,7 +415,7 @@ struct AIService {
 
     // MARK: - Prompt Builder
 
-    private func buildPrompt(
+    func buildPrompt(
         theme: String,
         lyrics: String,
         targetRhymeLine: String?,
@@ -801,7 +801,7 @@ struct AIService {
         throw AIServiceError.decodingError
     }
 
-    private func buildRewritePrompt(
+    func buildRewritePrompt(
         action: RewriteAction,
         lyrics: String,
         selection: String,
