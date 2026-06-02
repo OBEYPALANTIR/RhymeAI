@@ -48,6 +48,11 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
     GEMINI_25_FLASH_LITE("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", AIProvider.GEMINI),
 
     // OpenAI
+    GPT_55("gpt-5.5", "GPT-5.5", AIProvider.OPENAI),
+    GPT_55_PRO("gpt-5.5-pro", "GPT-5.5 Pro", AIProvider.OPENAI),
+    GPT_54("gpt-5.4", "GPT-5.4", AIProvider.OPENAI),
+    GPT_54_MINI("gpt-5.4-mini", "GPT-5.4 Mini", AIProvider.OPENAI),
+    GPT_54_NANO("gpt-5.4-nano", "GPT-5.4 Nano", AIProvider.OPENAI),
     GPT_41("gpt-4.1", "GPT-4.1", AIProvider.OPENAI),
     GPT_41_MINI("gpt-4.1-mini", "GPT-4.1 Mini", AIProvider.OPENAI),
     GPT_41_NANO("gpt-4.1-nano", "GPT-4.1 Nano", AIProvider.OPENAI),
@@ -55,9 +60,11 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
     GPT_4O_MINI("gpt-4o-mini", "GPT-4o Mini", AIProvider.OPENAI),
 
     // Claude
+    CLAUDE_OPUS_47("claude-opus-4-7", "Claude Opus 4.7", AIProvider.CLAUDE),
+    CLAUDE_SONNET_46("claude-sonnet-4-6", "Claude Sonnet 4.6", AIProvider.CLAUDE),
+    CLAUDE_OPUS("claude-opus-4-20250514", "Claude Opus 4", AIProvider.CLAUDE),
     CLAUDE_SONNET("claude-sonnet-4-20250514", "Claude Sonnet 4", AIProvider.CLAUDE),
     CLAUDE_HAIKU("claude-haiku-4-5-20251001", "Claude Haiku 4.5", AIProvider.CLAUDE),
-    CLAUDE_OPUS("claude-opus-4-20250514", "Claude Opus 4", AIProvider.CLAUDE),
 
     // Local on-device
     LOCAL_MODEL("local-model", "On-Device Model", AIProvider.LOCAL);
