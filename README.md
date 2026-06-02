@@ -10,6 +10,19 @@ The active targets are:
 
 The old React/Vite web variant has been removed. Shared pronunciation/prosody data stays in `shared/`, with generation tooling in `scripts/`, because Android and iOS both consume those assets.
 
+## Local verification
+
+Run the default local gate from `/Users/tylermanring/Documents/RhymeAI`:
+
+```sh
+./scripts/verify.sh
+```
+
+The script runs Android `assembleDebug`, `testDebugUnitTest`, and `lintDebug`,
+then builds iOS and runs `Writers BlockTests` against `iPhone 17 Pro, OS 26.5`.
+Override the simulator with `IOS_DESTINATION`, or use `SKIP_ANDROID=1` /
+`SKIP_IOS=1` for targeted runs.
+
 ## Features
 
 - Section-aware suggestions and rewrites for `[Verse]`, `[Chorus]`, and `[Bridge]`.
