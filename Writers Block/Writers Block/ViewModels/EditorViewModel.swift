@@ -670,6 +670,7 @@ final class EditorViewModel: ObservableObject {
     func restoreTrashedProject(_ trashedProject: TrashedSongProject) {
         guard let context = modelContext else { return }
         let restoredProject = trashedProject.restoredProject()
+        removeExistingProject(id: restoredProject.id, in: context)
         context.insert(restoredProject)
         context.delete(trashedProject)
         try? context.save()
@@ -717,6 +718,16 @@ final class EditorViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: nanoseconds)
             self?.trashSchedulerTask = nil
             self?.purgeExpiredTrashedProjects()
+        }
+    }
+
+    private func removeExistingProject(id: String, in context: ModelContext) {
+        let projectId = id
+        let descriptor = FetchDescriptor<SongProject>(
+            predicate: #Predicate<SongProject> { $0.id == projectId }
+        )
+        if let existing = try? context.fetch(descriptor).first {
+            context.delete(existing)
         }
     }
 
