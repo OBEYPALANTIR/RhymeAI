@@ -88,3 +88,16 @@ xcrun simctl list devices
 ```
 
 Then build or test with the confirmed scheme and simulator destination.
+
+To run the iOS Release gate from the repo root:
+
+```sh
+./scripts/ios-release-smoke.sh
+```
+
+The script builds the Release simulator app, scans the compiled binary for the
+Gemini key pattern, installs/launches it on the default iPhone 17 Pro OS 26.5
+simulator when available, then produces a signed generic iOS archive and scans
+the archive binary. Archive output defaults to a temporary directory outside the
+iCloud-synced repo; override with `IOS_RELEASE_WORK_DIR`, `IOS_ARCHIVE_PATH`, or
+`SKIP_ARCHIVE=1` for targeted checks.
