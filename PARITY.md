@@ -37,10 +37,14 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 - Android and iOS unit-verified shared dictionary stress counting, IPA stress markers, fallback syllable counts, punctuation/digit normalization, internal apostrophe retention, CMU rhyme keys, multi-pronunciation rhyme keys, stopword filtering, and short unknown-word rhyme suppression.
 
+## Rhyme context checks
+
+- Android and iOS unit-verified that section headers do not consume rhyme-scheme positions, latest previous lyric lines with the same scheme letter become the rhyme target, current section detection reaches prompt shaping, and empty lyrics use the first active scheme letter. Android pure seam additionally verifies cursor clamping and empty-scheme fallback to `A`.
+
 ## Open parity checks
 
 - Gemini UI cancel behavior: Pending emulator/simulator UI verification.
 - Gemini timeout/offline and blocked-response behavior: Pending emulator/simulator/network-condition verification.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.
-- Rhyme context, Android PDF export, and broader autosave/import persistence: Pending hardening pass.
+- Android PDF export and broader autosave/import persistence: Pending hardening pass.
