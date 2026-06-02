@@ -20,3 +20,17 @@
 - Root cause: Both ViewModels cleared suggestions and stopped loading, but did not surface an error when the stream completed empty.
 - Fix commit: `cccc3d3` (Android), `d6ab06b` (iOS).
 - Re-verify: Passed on 2026-06-02 with `./gradlew :app:testDebugUnitTest --tests 'com.rhymeai.app.service.AIServicePromptTest' --tests 'com.rhymeai.app.service.AIServiceParsingTest'` and `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -only-testing:"Writers BlockTests"`.
+
+## BUG-004: iOS rewrite chip look-up tap target could fall through
+
+- Repro: In the iOS editor, select a single word, wait for the rewrite chip bar, then tap near the edge of the look-up glyph.
+- Root cause: The button's visual frame was 44pt, but only the small glyph region participated in hit testing, so edge taps could pass through to the lyric editor.
+- Fix commit: `32d3a81`.
+- Re-verify: Passed on 2026-06-02 with `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -only-testing:"Writers BlockUITests/Writers_BlockUITests/testSingleWordLookUpOpensInspector"`.
+
+## BUG-005: iOS UnBlock button could overlap the rewrite chip bar
+
+- Repro: On iPhone, force the selection rewrite bar visible and check whether the floating UnBlock button remains behind it.
+- Root cause: The assistant floating button hid for active rewrites and modals, but not for the selection rewrite chip bar, so two bottom-anchored controls could compete for the same space.
+- Fix commit: `32d3a81`.
+- Re-verify: Passed on 2026-06-02 with `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -only-testing:"Writers BlockUITests/Writers_BlockUITests/testUnBlockButtonHidesWhenRewriteBarVisible"`.
