@@ -69,6 +69,9 @@ sync latency for each check.
 
 ## Current Status
 
-As of this checklist, CloudKit static readiness is scriptable, but the live
-two-device matrix still needs an iCloud-signed-in simulator/device pair. Do not
-mark CloudKit complete until every live matrix item above has current evidence.
+As of 2026-06-02, `./scripts/ios-cloudkit-readiness.sh` passes and verifies the
+static CloudKit container, entitlements, background mode, build, and trash
+conflict tests. The local simulator used for the latest readiness run was not
+signed into iCloud, so the live two-device matrix still needs an
+iCloud-signed-in simulator/device pair. Do not mark CloudKit complete until every
+live matrix item above has current evidence.

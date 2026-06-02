@@ -20,12 +20,14 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 - Scope: iOS CloudKit sync.
 - Evidence: static CloudKit readiness is scriptable through
   `scripts/ios-cloudkit-readiness.sh`; duplicate active/trash row behavior is
-  unit-verified.
+  unit-verified. The static gate passed on 2026-06-02, verifying the CloudKit
+  container, entitlements, remote-notification background mode, build output,
+  and trash conflict tests.
 - Remaining live matrix: create, edit, concurrent edit, offline reconnect, delete
   propagation, trash restore, and permanent delete across two iCloud-signed-in
   simulators/devices.
-- Next verification: run `./scripts/ios-cloudkit-readiness.sh`, then execute
-  `docs/CLOUDKIT_SYNC_CHECKLIST.md`.
+- Next verification: execute `docs/CLOUDKIT_SYNC_CHECKLIST.md` on two
+  iCloud-signed-in simulators/devices.
 
 ## Final release walkthrough evidence is captured
 
