@@ -21,6 +21,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini timeout/offline and blocked-response failures: Unit-verified on Android and iOS; timeout/offline failures use the shared connection retry message, and blocked/safety responses use the shared blocked-response message.
 - Gemini suggestion response parsing: Aligned for line responses, JSON arrays, JSON object array wrappers, numbering/bullets, duplicate suggestions, prompt echo, provider markers, and overlong lines.
 - Gemini prompt shaping: Unit-verified on both platforms for immediate vs whole-song context, target-rhyme vs new-rhyme instructions, section hints, complexity, six-line output contract, and every rewrite action instruction.
+- Rewrite action UI walkthrough: Android instrumented and iOS simulator UI-verified that `Rephrase`, `Harder Rhyme`, and `Punch Up` each open the inline rewrite review controls and that `Cancel` returns to the rewrite chip bar.
 - Gemini empty suggestion stream: Android and iOS both surface `AI did not return suggestions. Try again.` instead of leaving a blank result.
 - Gemini no-key and provider status failures: Unit-verified on both platforms for suggestions, streaming, rewrite, synonyms, rejected-key, missing-model, rate-limit, and service-error user messages before provider bodies can leak into UI text.
 
@@ -48,5 +49,4 @@ This tracks behavior that must stay aligned between Android and iOS.
 ## Open parity checks
 
 - Gemini live timeout/offline simulator smoke: Pending manual network-condition run; service-level timeout/offline and blocked-response messages are unit-verified.
-- Rewrite actions: Pending emulator/simulator UI walkthrough.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.

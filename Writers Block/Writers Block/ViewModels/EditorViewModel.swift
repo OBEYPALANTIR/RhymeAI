@@ -243,6 +243,15 @@ final class EditorViewModel: ObservableObject {
             showWelcome = false
             showAssistantSheet = ProcessInfo.processInfo.arguments.contains("--ui-test-open-assistant")
         }
+
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-seed-rewrite-selection") {
+            let seededLyrics = "yellow music\nfollow music"
+            title = "UI Rewrite Song"
+            lyrics = seededLyrics
+            selectedRange = NSRange(location: 0, length: ("yellow music" as NSString).length)
+            cursorPosition = selectedRange.location + selectedRange.length
+            showWelcome = false
+        }
     }
 
     deinit {
@@ -404,7 +413,7 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Rewrite
 
     func requestRewrite(_ action: RewriteAction) {
-        let range = selectedRange
+        let range = selectedRangeForRewriteRequest()
         guard range.length > 0 else { return }
         let ns = lyrics as NSString
         guard range.location + range.length <= ns.length else { return }
@@ -412,6 +421,23 @@ final class EditorViewModel: ObservableObject {
         guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         beginRewrite(action: action, range: range, original: original)
+    }
+
+    private func selectedRangeForRewriteRequest() -> NSRange {
+        guard selectedRange.length == 0,
+              ProcessInfo.processInfo.arguments.contains("--ui-test-seed-rewrite-selection"),
+              let seedRange = rewriteSelectionSeedRange() else {
+            return selectedRange
+        }
+        selectedRange = seedRange
+        cursorPosition = seedRange.location + seedRange.length
+        return seedRange
+    }
+
+    private func rewriteSelectionSeedRange() -> NSRange? {
+        let ns = lyrics as NSString
+        let range = ns.range(of: "yellow music")
+        return range.location == NSNotFound ? nil : range
     }
 
     func retryRewrite() {

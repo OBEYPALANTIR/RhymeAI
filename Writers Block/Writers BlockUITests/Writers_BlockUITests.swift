@@ -142,6 +142,25 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testRewriteActionsOpenReviewBarAndCancelBackToChipBar() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-rewrite-selection",
+            "--ui-test-force-rewrite-bar"
+        ])
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
+
+        for action in ["Rephrase", "Harder Rhyme", "Punch Up"] {
+            XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5), "\(action) button missing")
+            app.buttons[action].tap()
+            XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5), "\(action) did not open review controls")
+            app.buttons["Cancel"].tap()
+            XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5), "\(action) cancel did not return to chip bar")
+        }
+    }
+
+    @MainActor
     func testBackSwipeClosesAssistantSheetWithoutReturningToMenu() throws {
         try requirePhone()
 

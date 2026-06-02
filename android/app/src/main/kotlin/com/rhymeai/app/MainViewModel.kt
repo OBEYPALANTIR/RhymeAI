@@ -374,6 +374,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rewriteRange = null
     }
 
+    fun cancelRewriteReview() {
+        val rangeToRestore = rewriteRange
+        dismissRewrite()
+        if (rangeToRestore != null &&
+            rangeToRestore.min < rangeToRestore.max &&
+            rangeToRestore.max <= lyrics.length
+        ) {
+            pendingRewriteRange = rangeToRestore
+        }
+    }
+
     fun openInspectorForSelection() {
         val (word, range) = singleWordSelection ?: return
         openInspector(word, range)

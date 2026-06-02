@@ -157,6 +157,25 @@ class NewFeatureUiTest {
         composeRule.onNodeWithTag("wordInspectorSheet").assertIsDisplayed()
     }
 
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun rewriteActionsOpenReviewBarAndCancelBackToChipBar() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val lyrics = "yellow music\nfollow music"
+        val selection = TextRange(0, "yellow music".length)
+        composeRule.onNodeWithTag("lyricsEditor").performClick()
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
+        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
+
+        listOf("Rephrase", "Harder Rhyme", "Punch Up").forEach { action ->
+            composeRule.onNodeWithText(action).assertIsDisplayed().performClick()
+            composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
+            composeRule.onNodeWithText("Cancel").performClick()
+            composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        }
+    }
+
     private fun lyricsEditorFocused(): Boolean {
         return composeRule.onNodeWithTag("lyricsEditor")
             .fetchSemanticsNode()
