@@ -48,3 +48,10 @@
 - Root cause: `SyncMerger` merged active projects and trash independently, then always removed active projects whose IDs appeared in trash instead of comparing the active update timestamp against the trash deletion timestamp.
 - Fix commit: `519daf8`.
 - Re-verify: Passed on 2026-06-02 with `./gradlew :app:testDebugUnitTest --tests 'com.rhymeai.app.data.sync.SyncMergerTest'`.
+
+## BUG-008: iOS trash restore could duplicate active projects
+
+- Repro: Restore a `TrashedSongProject` when a stale active `SongProject` with the same ID already exists in SwiftData.
+- Root cause: `restoreTrashedProject` inserted the restored project and deleted the trash row, but did not remove an existing active row with the same application ID. CloudKit-backed stores cannot enforce `@Attribute(.unique)`, so the restore flow must enforce replacement.
+- Fix commit: `60dbd28`.
+- Re-verify: Passed on 2026-06-02 with `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -only-testing:"Writers BlockTests/TrashLifecycleTests"` and full `-only-testing:"Writers BlockTests"`.

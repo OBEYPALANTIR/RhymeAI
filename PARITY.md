@@ -31,6 +31,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 ## Trash and persistence checks
 
 - Android sync merge: Unit-verified that active project changes merge by `updatedAt`, trash entries merge by `deletedAt`, newer trash removes stale active copies, and newer restored active projects are not deleted by stale trash entries.
+- iOS trash lifecycle: In-memory SwiftData unit-verified that moving the current project to trash clears editor state, creates a 30-day trash entry, restore replaces any stale active row with the same ID, and purge removes only expired trash.
 
 ## Open parity checks
 
@@ -38,4 +39,4 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini timeout/offline and blocked-response behavior: Pending emulator/simulator/network-condition verification.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.
-- Rhyme context, prosody, Android PDF export, and iOS trash/persistence lifecycle: Pending hardening pass.
+- Rhyme context, prosody, Android PDF export, and broader autosave/import persistence: Pending hardening pass.
