@@ -15,6 +15,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini rewrite actions: `REPHRASE` / `rephrase`, `HARDER_RHYME` / `harderRhyme`, and `PUNCH_UP` / `punchUp` are live-verified on both platforms.
 - Gemini streaming: Verified on Android and iOS through the same live tests.
 - Gemini service-level stream cancellation: Live-verified on Android and iOS by cancelling the Gemini suggestion stream after the first emitted suggestion.
+- Gemini Android UI cancel behavior: Instrumented UI-verified that the assistant button changes from `Suggest Next Line` to `Stop`, cancels the in-flight suggestion request, and returns to `Suggest Next Line`.
 - Gemini invalid-key failure: Verified on Android and iOS; failures use user-facing messages and do not echo the invalid key.
 - Gemini suggestion response parsing: Aligned for line responses, JSON arrays, JSON object array wrappers, numbering/bullets, duplicate suggestions, prompt echo, provider markers, and overlong lines.
 - Gemini prompt shaping: Unit-verified on both platforms for immediate vs whole-song context, target-rhyme vs new-rhyme instructions, section hints, complexity, six-line output contract, and every rewrite action instruction.
@@ -44,7 +45,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 ## Open parity checks
 
-- Gemini UI cancel behavior: Pending emulator/simulator UI verification.
+- Gemini iOS UI cancel behavior: Pending live simulator UI verification. The UI test hook exists, but the local Xcode UI test runner did not receive `GEMINI_TEST_KEY` during this pass, so it skipped instead of proving the flow.
 - Gemini timeout/offline and blocked-response behavior: Pending emulator/simulator/network-condition verification.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.
