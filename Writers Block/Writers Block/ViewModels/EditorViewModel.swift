@@ -681,14 +681,14 @@ final class EditorViewModel: ObservableObject {
     func moveProjectToTrash(_ project: SongProject) {
         guard let context = modelContext else { return }
         autoSaveTask?.cancel()
-        removeExistingTrashEntry(id: project.id, in: context)
 
         let trashedProject = TrashedSongProject(project: project)
+        removeExistingTrashEntries(id: project.id, in: context)
         context.insert(trashedProject)
         if currentProjectId == project.id {
             clearEditorAfterProjectDelete()
         }
-        context.delete(project)
+        removeExistingProjects(id: project.id, in: context)
         try? context.save()
         scheduleTrashPurge()
     }
@@ -696,9 +696,9 @@ final class EditorViewModel: ObservableObject {
     func restoreTrashedProject(_ trashedProject: TrashedSongProject) {
         guard let context = modelContext else { return }
         let restoredProject = trashedProject.restoredProject()
-        removeExistingProject(id: restoredProject.id, in: context)
+        removeExistingProjects(id: restoredProject.id, in: context)
         context.insert(restoredProject)
-        context.delete(trashedProject)
+        removeExistingTrashEntries(id: restoredProject.id, in: context)
         try? context.save()
         scheduleTrashPurge()
     }
@@ -747,22 +747,24 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
-    private func removeExistingProject(id: String, in context: ModelContext) {
+    private func removeExistingProjects(id: String, in context: ModelContext) {
         let projectId = id
         let descriptor = FetchDescriptor<SongProject>(
             predicate: #Predicate<SongProject> { $0.id == projectId }
         )
-        if let existing = try? context.fetch(descriptor).first {
+        guard let existingProjects = try? context.fetch(descriptor) else { return }
+        for existing in existingProjects {
             context.delete(existing)
         }
     }
 
-    private func removeExistingTrashEntry(id: String, in context: ModelContext) {
+    private func removeExistingTrashEntries(id: String, in context: ModelContext) {
         let projectId = id
         let descriptor = FetchDescriptor<TrashedSongProject>(
             predicate: #Predicate<TrashedSongProject> { $0.id == projectId }
         )
-        if let existing = try? context.fetch(descriptor).first {
+        guard let existingProjects = try? context.fetch(descriptor) else { return }
+        for existing in existingProjects {
             context.delete(existing)
         }
     }
