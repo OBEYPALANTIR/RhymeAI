@@ -121,3 +121,12 @@ To verify CloudKit readiness before the live two-device sync matrix:
 
 Then use `/Users/tylermanring/Documents/RhymeAI/docs/CLOUDKIT_SYNC_CHECKLIST.md`
 for the iCloud-signed-in simulator/device matrix.
+
+To verify iOS Local provider behavior on a simulator/device:
+
+```sh
+./scripts/ios-local-provider-smoke.sh
+```
+
+The smoke passes when Apple Foundation Models either return non-empty suggestions
+or report a user-facing on-device availability reason.

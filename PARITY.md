@@ -54,6 +54,6 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 ## Open parity checks
 
-- Local model live/inference path: Android now has a runnable emulator/device smoke gate for GGUF load and generation, but the live run still needs an actual local model file supplied through `LOCAL_GGUF_PATH`; iOS local provider depends on Apple Foundation Models availability and still needs a simulator/device availability smoke.
+- Local model live/inference path: Android now has a runnable emulator/device smoke gate for GGUF load and generation, but the live run still needs an actual local model file supplied through `LOCAL_GGUF_PATH`; iOS local provider has a simulator/device smoke gate that passes when Apple Foundation Models either return text or surface an on-device availability reason.
 - CloudKit live sync matrix: Static readiness is scriptable, but create/edit/concurrent edit/offline/delete/trash propagation still needs the live iCloud-signed-in two-simulator/device matrix in `docs/CLOUDKIT_SYNC_CHECKLIST.md`.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.

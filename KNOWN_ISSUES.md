@@ -27,15 +27,6 @@ LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke
 - Next verification: run `./scripts/ios-cloudkit-readiness.sh`, then execute
   `docs/CLOUDKIT_SYNC_CHECKLIST.md`.
 
-## iOS local provider availability smoke is pending
-
-- Status: Open.
-- Scope: iOS Local provider.
-- Evidence: provider/model switching is unit-verified, but Apple Foundation
-  Models availability still needs simulator/device verification.
-- Expected handling: Local must either be available and produce text, or fail
-  gracefully with a user-facing availability message.
-
 ## Final release walkthrough is pending
 
 - Status: Open.
