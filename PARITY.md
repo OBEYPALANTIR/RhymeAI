@@ -16,6 +16,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Gemini streaming: Verified on Android and iOS through the same live tests.
 - Gemini service-level stream cancellation: Live-verified on Android and iOS by cancelling the Gemini suggestion stream after the first emitted suggestion.
 - Gemini Android UI cancel behavior: Instrumented UI-verified that the assistant button changes from `Suggest Next Line` to `Stop`, cancels the in-flight suggestion request, and returns to `Suggest Next Line`.
+- Gemini iOS UI cancel behavior: Simulator UI-verified that the assistant button changes from `Suggest Next Line` to `Stop`, cancels the in-flight suggestion request, and returns to `Suggest Next Line`.
 - Gemini invalid-key failure: Verified on Android and iOS; failures use user-facing messages and do not echo the invalid key.
 - Gemini timeout/offline and blocked-response failures: Unit-verified on Android and iOS; timeout/offline failures use the shared connection retry message, and blocked/safety responses use the shared blocked-response message.
 - Gemini suggestion response parsing: Aligned for line responses, JSON arrays, JSON object array wrappers, numbering/bullets, duplicate suggestions, prompt echo, provider markers, and overlong lines.
@@ -46,7 +47,6 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 ## Open parity checks
 
-- Gemini iOS UI cancel behavior: Pending live simulator UI verification. The UI test hook exists, but the local Xcode UI test runner did not receive `GEMINI_TEST_KEY` during this pass, so it skipped instead of proving the flow.
 - Gemini live timeout/offline simulator smoke: Pending manual network-condition run; service-level timeout/offline and blocked-response messages are unit-verified.
 - Rewrite actions: Pending emulator/simulator UI walkthrough.
 - OpenAI/Claude happy paths: Pending manual smoke only if Tyler supplies keys; no-key/status/error messages are unit-verified.

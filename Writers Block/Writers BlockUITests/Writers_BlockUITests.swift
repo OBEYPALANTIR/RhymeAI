@@ -238,8 +238,10 @@ final class Writers_BlockUITests: XCTestCase {
 
     @MainActor
     func testAssistantStopCancelsSuggestionRequest() throws {
-        guard let geminiTestKey = ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"],
-              !geminiTestKey.isEmpty else {
+        let geminiTestKey = ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"]
+            ?? ProcessInfo.processInfo.environment["SIMCTL_CHILD_GEMINI_TEST_KEY"]
+            ?? ""
+        guard !geminiTestKey.isEmpty else {
             throw XCTSkip("GEMINI_TEST_KEY is required for live assistant cancel UI verification")
         }
 
