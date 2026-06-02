@@ -12,6 +12,7 @@ class ProsodyAnalyzerTest {
             "music\tM Y UW1 Z IH0 K",
             "road\tR OW1 D",
             "glowed\tG L OW1 D",
+            "radio\tR EY1 D IY0 OW2",
             "orange\tAO1 R AH0 N JH|AO1 R IH0 N JH"
         )
     )
@@ -34,6 +35,15 @@ class ProsodyAnalyzerTest {
     }
 
     @Test
+    fun rendersSecondaryStressInIpaPreview() {
+        val prosody = ProsodyAnalyzer.analyzeWord("radio", dictionary)
+
+        assertEquals("ˈreɪdiˌoʊ", prosody.ipa)
+        assertEquals(listOf(1, 0, 2), prosody.stressPattern)
+        assertFalse(prosody.isFallback)
+    }
+
+    @Test
     fun usesFallbackForUnknownWords() {
         val prosody = ProsodyAnalyzer.analyzeWord("Scottys", dictionary)
 
@@ -43,11 +53,35 @@ class ProsodyAnalyzerTest {
     }
 
     @Test
+    fun normalizesPunctuationDigitsAndInternalApostrophes() {
+        assertEquals("don't", ProsodyAnalyzer.normalizeWord("  'Don't!!42"))
+
+        val prosody = ProsodyAnalyzer.analyzeLine("Don't stop, road-99 glowed.", dictionary)
+
+        assertEquals(listOf("don't", "stop", "road", "glowed"), prosody.words.map { it.normalized })
+        assertEquals(4, prosody.syllableCount)
+        assertEquals(listOf(1, 1, 1, 1), prosody.stressPattern)
+    }
+
+    @Test
     fun rhymeKeysUseCmuPhones() {
         val roadKeys = ProsodyAnalyzer.rhymeKeys("road", dictionary = dictionary)
         val glowedKeys = ProsodyAnalyzer.rhymeKeys("glowed", dictionary = dictionary)
 
         assertTrue(roadKeys.intersect(glowedKeys.toSet()).isNotEmpty())
+    }
+
+    @Test
+    fun rhymeKeysIncludeMultipleDictionaryPronunciations() {
+        val keys = ProsodyAnalyzer.rhymeKeys("orange", dictionary = dictionary)
+
+        assertEquals(
+            listOf(
+                "AO R AH N JH",
+                "AO R IH N JH"
+            ),
+            keys
+        )
     }
 
     @Test
