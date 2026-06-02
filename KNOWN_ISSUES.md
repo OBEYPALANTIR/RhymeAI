@@ -1,0 +1,46 @@
+# Known Issues
+
+Current non-critical items remaining before final production-ready sign-off.
+
+## Local GGUF inference smoke needs a model file
+
+- Status: Open.
+- Scope: Android local provider.
+- Evidence: `scripts/android-local-model-smoke.sh` and `LocalModelInstrumentedTest`
+  are wired, but no local `.gguf` file was present during the latest pass.
+- Next verification: attach an emulator/device and run:
+
+```sh
+LOCAL_GGUF_PATH=/absolute/path/to/model.gguf ./scripts/android-local-model-smoke.sh
+```
+
+## CloudKit needs live two-device verification
+
+- Status: Open.
+- Scope: iOS CloudKit sync.
+- Evidence: static CloudKit readiness is scriptable through
+  `scripts/ios-cloudkit-readiness.sh`; duplicate active/trash row behavior is
+  unit-verified.
+- Remaining live matrix: create, edit, concurrent edit, offline reconnect, delete
+  propagation, trash restore, and permanent delete across two iCloud-signed-in
+  simulators/devices.
+- Next verification: run `./scripts/ios-cloudkit-readiness.sh`, then execute
+  `docs/CLOUDKIT_SYNC_CHECKLIST.md`.
+
+## iOS local provider availability smoke is pending
+
+- Status: Open.
+- Scope: iOS Local provider.
+- Evidence: provider/model switching is unit-verified, but Apple Foundation
+  Models availability still needs simulator/device verification.
+- Expected handling: Local must either be available and produce text, or fail
+  gracefully with a user-facing availability message.
+
+## Final release walkthrough is pending
+
+- Status: Open.
+- Scope: Android and iOS.
+- Evidence: Android and iOS release build gates exist and passed individually.
+- Remaining walkthrough: run create song -> write lyrics -> Gemini suggestion ->
+  rewrite -> export -> background/kill -> reopen on release builds, including
+  light/dark and phone/tablet coverage where available.

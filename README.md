@@ -112,3 +112,12 @@ simulator when available, then produces a signed generic iOS archive and scans
 the archive binary. Archive output defaults to a temporary directory outside the
 iCloud-synced repo; override with `IOS_RELEASE_WORK_DIR`, `IOS_ARCHIVE_PATH`, or
 `SKIP_ARCHIVE=1` for targeted checks.
+
+To verify CloudKit readiness before the live two-device sync matrix:
+
+```sh
+./scripts/ios-cloudkit-readiness.sh
+```
+
+Then use `/Users/tylermanring/Documents/RhymeAI/docs/CLOUDKIT_SYNC_CHECKLIST.md`
+for the iCloud-signed-in simulator/device matrix.
