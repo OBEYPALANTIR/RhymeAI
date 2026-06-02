@@ -84,6 +84,64 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testUnBlockButtonHidesWhenRewriteBarVisible() throws {
+        try requirePhone()
+
+        let app = XCUIApplication()
+        app.launchArguments.append("--ui-test-force-rewrite-bar")
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        lyricsEditor.tap()
+        lyricsEditor.typeText("Selection rewrite bar")
+
+        // The selection rewrite bar is up (forced for the test)...
+        XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
+
+        // ...so the UnBlock FAB must yield. On iPhone both anchor to the bottom,
+        // and the FAB would otherwise show through behind the chip bar.
+        XCTAssertFalse(app.buttons["unblockButton"].exists)
+        XCTAssertFalse(app.buttons["UnBlock"].exists)
+    }
+
+    @MainActor
+    func testSingleWordLookUpOpensInspector() throws {
+        try requirePhone()
+
+        let app = XCUIApplication()
+        app.launchArguments.append("--ui-test-in-memory-store")
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let editor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        editor.typeText("yellow")
+
+        // Select the single word, then open the Word Inspector from the chip
+        // bar's look-up button (parity with Android). Regression guard: the
+        // look-up's hit area was once only the glyph, so edge taps fell through
+        // to the text view and the button silently did nothing.
+        editor.coordinate(withNormalizedOffset: CGVector(dx: 0.07, dy: 0.03)).doubleTap()
+        XCTAssertTrue(app.buttons["Punch Up"].waitForExistence(timeout: 5),
+                      "selecting a word did not raise the rewrite chip bar")
+
+        let lookUp = app.buttons["Look up word"]
+        XCTAssertTrue(lookUp.waitForExistence(timeout: 5), "look-up button missing from the chip bar")
+        lookUp.tap()
+        XCTAssertTrue(app.staticTexts["Word inspector"].waitForExistence(timeout: 5),
+                      "look-up did not open the Word Inspector")
+    }
+
+    @MainActor
     func testBackSwipeClosesAssistantSheetWithoutReturningToMenu() throws {
         try requirePhone()
 

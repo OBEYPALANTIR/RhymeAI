@@ -23,6 +23,10 @@ struct RewriteChipBar: View {
                             interactive: true,
                             fallbackOpacity: 0.08
                         )
+                        // Make the whole 44pt frame tappable. The bare glyph is
+                        // only ~12pt, so taps near its edges fell through to the
+                        // text view behind the bar — the look-up appeared dead.
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.rhymePress)
                 .accessibilityLabel("Look up word")

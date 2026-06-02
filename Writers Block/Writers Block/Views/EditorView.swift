@@ -188,10 +188,13 @@ struct EditorView: View {
 
     @ViewBuilder
     private var assistantFloatingButton: some View {
-        // Matches Android: hidden only when assistant sheet is up, a modal is up,
-        // or an inline rewrite is being reviewed. Keyboard does NOT hide the
-        // button — it rides above the keyboard instead.
-        if !viewModel.showAssistantSheet && !assistantModalOpen && !viewModel.hasActiveRewrite {
+        // Hidden when the assistant sheet is up, a modal is up, or an inline
+        // rewrite is being reviewed. It also yields to the selection rewrite
+        // bar: on iPhone both are anchored to the bottom, so the FAB would
+        // otherwise show through behind the chip bar. (Android keeps its FAB up
+        // during selection because its bottom-end FAB and centered chip bar do
+        // not overlap.) Keyboard does NOT hide the button — it rides above it.
+        if !viewModel.showAssistantSheet && !assistantModalOpen && !viewModel.hasActiveRewrite && !shouldShowRewriteChipBar {
             VStack {
                 Spacer()
                 HStack {
