@@ -36,6 +36,7 @@ the remaining known issues are closed.
 
 ```sh
 ./scripts/verify.sh
+./scripts/final-signoff-status.sh
 ./scripts/android-release-smoke.sh
 ./scripts/android-release-walkthrough.sh
 ./scripts/android-release-live-gemini.sh

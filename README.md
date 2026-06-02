@@ -23,6 +23,17 @@ then builds iOS and runs `Writers BlockTests` against `iPhone 17 Pro, OS 26.5`.
 Override the simulator with `IOS_DESTINATION`, or use `SKIP_ANDROID=1` /
 `SKIP_IOS=1` for targeted runs.
 
+To check final production sign-off status without printing secrets:
+
+```sh
+./scripts/final-signoff-status.sh
+```
+
+The status script verifies tracked key hygiene and required release docs, then
+reports the remaining live gates. Set `RUN_VERIFY=1`, `RUN_PROVIDER_LIVE=1`,
+`RUN_LOCAL_GGUF=1`, or `RUN_CLOUDKIT_READINESS=1` to execute the matching gates
+when the required external keys, model file, devices, or account state exist.
+
 ## Features
 
 - Section-aware suggestions and rewrites for `[Verse]`, `[Chorus]`, and `[Bridge]`.
