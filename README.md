@@ -29,12 +29,11 @@ To check final production sign-off status without printing secrets:
 ./scripts/final-signoff-status.sh
 ```
 
-The status script verifies tracked key hygiene and required release docs, then
+The status script verifies tracked key hygiene and required release docs, uses
+`docs/FINAL_SIGNOFF_STATUS.md` for already-recorded local gate evidence, then
 reports the remaining live gates. Set `RUN_VERIFY=1`, `RUN_PROVIDER_LIVE=1`,
-`RUN_LOCAL_GGUF=1`, or `RUN_CLOUDKIT_READINESS=1` to execute the matching gates
+`RUN_LOCAL_GGUF=1`, or `RUN_CLOUDKIT_READINESS=1` to rerun the matching gates
 when the required external keys, model file, devices, or account state exist.
-The latest sign-off evidence is tracked in
-`docs/FINAL_SIGNOFF_STATUS.md`.
 
 To preflight only the remaining external live-gate prerequisites without printing
 secrets:

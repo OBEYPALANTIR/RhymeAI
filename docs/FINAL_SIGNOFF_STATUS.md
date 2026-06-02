@@ -1,6 +1,6 @@
 # Final Sign-Off Status
 
-Last updated: 2026-06-02 04:54 America/New_York.
+Last updated: 2026-06-02 04:57 America/New_York.
 
 ## Current Local Evidence
 
@@ -38,6 +38,8 @@ LOCAL_GGUF_PATH="$PWD/artifacts/local-model-smoke/tinyllama-1.1b-chat-v0.6.q2_k.
   `48C15EB1-26B1-4AC8-BE0E-C5B1B65C184F`), but neither has a
   `MobileMeAccounts` account record and both return `BRCloudDocsErrorDomain`
   code `153` from `simctl icloud_sync`.
+- `./scripts/final-signoff-status.sh` now reports two pending items by default:
+  OpenAI/Claude live provider smoke and CloudKit live sync.
 
 ## Remaining External Gates
 
