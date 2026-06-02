@@ -15,7 +15,10 @@ app-icon.png
 android/build/
 android/app/build/
 android/local.properties
+android/keystore.properties
 android/.gradle/
+*.jks
+*.keystore
 
 # IDE
 .idea/

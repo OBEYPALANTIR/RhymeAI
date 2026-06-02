@@ -29,6 +29,30 @@ Run from `/Users/tylermanring/Documents/RhymeAI/android`:
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
+Release builds are minified. To produce signed release artifacts, create a gitignored
+`android/keystore.properties`:
+
+```properties
+storeFile=/absolute/path/to/release.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
+```
+
+Then run:
+
+```sh
+./gradlew :app:assembleRelease
+./gradlew :app:bundleRelease
+```
+
+Without `keystore.properties`, Gradle still builds the minified release APK/AAB for
+R8 verification, but the APK output is unsigned. Release key hygiene check:
+
+```sh
+unzip -p app/build/outputs/apk/release/*.apk classes.dex | strings | rg 'AI[z]a'
+```
+
 ## iOS
 
 Use Xcode with:
