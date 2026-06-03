@@ -6,6 +6,7 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
+import com.rhymeai.app.util.ProsodyAnalyzer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -82,11 +83,61 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
 }
 
 class AIService {
+    internal data class SingleWordRewriteContext(
+        val line: String,
+        val previousWord: String?,
+        val nextWord: String?,
+        val isLineEnding: Boolean
+    )
+
     private companion object {
         const val SUGGESTION_COUNT = 6
         const val LOCAL_RECENT_CONTEXT_CHARS = 2600
         const val LOCAL_WHOLE_SONG_HEAD_CHARS = 900
         const val LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
+        const val LOCAL_REWRITE_ATTEMPTS = 2
+        val fallbackRephraseWords = mapOf(
+            "believe" to listOf("imagine", "trust", "dream"),
+            "birds" to listOf("sparrows", "voices", "wings"),
+            "calls" to listOf("rings", "echoes", "signals"),
+            "enemies" to listOf("rivals", "foes", "strangers"),
+            "feel" to listOf("sense", "know", "ache"),
+            "free" to listOf("loose", "clear", "unbound"),
+            "glow" to listOf("gleam", "shine", "spark"),
+            "lies" to listOf("myths", "spin", "masks"),
+            "real" to listOf("true", "clear", "solid"),
+            "street" to listOf("block", "road", "lane"),
+            "tvs" to listOf("screens", "feeds", "channels"),
+            "walls" to listOf("barriers", "rooms", "blocks")
+        )
+        val fallbackHarderRhymeWords = mapOf(
+            "believe" to listOf("deceive", "relieve", "receive"),
+            "birds" to listOf("words", "herds", "thirds"),
+            "calls" to listOf("walls", "falls", "halls"),
+            "enemies" to listOf("remedies", "memories", "melodies"),
+            "feel" to listOf("real", "steel", "wheel"),
+            "free" to listOf("see", "be", "flee"),
+            "glow" to listOf("show", "flow", "low"),
+            "lies" to listOf("eyes", "skies", "disguise"),
+            "real" to listOf("feel", "steel", "wheel"),
+            "street" to listOf("beat", "heat", "feet"),
+            "tvs" to listOf("feeds", "screens", "dreams"),
+            "walls" to listOf("calls", "falls", "halls")
+        )
+        val fallbackPunchUpWords = mapOf(
+            "believe" to listOf("swallow", "worship", "chase"),
+            "birds" to listOf("sirens", "static", "wires"),
+            "calls" to listOf("alarms", "signals", "sirens"),
+            "enemies" to listOf("traitors", "targets", "rivals"),
+            "feel" to listOf("burn", "bleed", "know"),
+            "free" to listOf("wild", "untamed", "unbound"),
+            "glow" to listOf("flare", "blaze", "spark"),
+            "lies" to listOf("poison", "fraud", "venom"),
+            "real" to listOf("raw", "true", "solid"),
+            "street" to listOf("asphalt", "gutter", "curb"),
+            "tvs" to listOf("screens", "static", "feeds"),
+            "walls" to listOf("concrete", "barricades", "barriers")
+        )
 
         fun userFacingStatusMessage(code: Int): String = when (code) {
             401, 403 -> "Provider rejected the request — check your API key in Settings."
@@ -534,7 +585,9 @@ Rules:
         action: RewriteAction,
         fullLyrics: String,
         selection: String,
-        currentSection: SongSection = SongSection.UNKNOWN
+        currentSection: SongSection = SongSection.UNKNOWN,
+        selectionStart: Int? = null,
+        rejectedCandidates: Set<String> = emptySet()
     ): String {
         if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
@@ -544,8 +597,14 @@ Rules:
         }
 
         return if (provider == AIProvider.LOCAL) {
-            val prompt = buildLocalRewritePrompt(action, fullLyrics, selection, currentSection)
-            callLocalRewrite(prompt, selection)
+            callLocalRewrite(
+                action = action,
+                lyrics = fullLyrics,
+                selection = selection,
+                currentSection = currentSection,
+                selectionStart = selectionStart,
+                rejectedCandidates = rejectedCandidates
+            )
         } else {
             val prompt = buildRewritePrompt(action, fullLyrics, selection, currentSection)
             val raw = when (provider) {
@@ -596,20 +655,32 @@ Respond ONLY with a JSON object of the form {"rewrite": "..."}. No code fences.
         action: RewriteAction,
         lyrics: String,
         selection: String,
-        currentSection: SongSection = SongSection.UNKNOWN
+        currentSection: SongSection = SongSection.UNKNOWN,
+        selectionStart: Int? = null,
+        rejectedCandidates: Set<String> = emptySet()
     ): String {
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext = false)
         val singleWord = isSingleWordSelection(selection)
+        val selectedLine = selectionStart
+            ?.let { lyricLineAt(lyrics, it) }
+            ?.takeIf { it.isNotBlank() }
         val taskLine = if (singleWord) {
             "Task: replace the selected word with a different word that fits the song."
         } else {
             "Task: rewrite the selected passage from the user's song."
+        }
+        val rejectedKeys = rewriteRejectKeys(selection, rejectedCandidates)
+        val rejectedRule = if (singleWord && rejectedKeys.isNotEmpty()) {
+            "- Do not return any of these rejected words: ${rejectedKeys.joinToString(", ")}."
+        } else {
+            ""
         }
         val outputRules = if (singleWord) {
             """
 - Return exactly one replacement word.
 - The replacement must be different from the selected word.
 - Do not return "$selection".
+$rejectedRule
 - No quotes, no markdown, no labels, no commentary.
 """.trimIndent()
         } else {
@@ -633,6 +704,7 @@ ${"\"\"\""}
 $lyricContext
 ${"\"\"\""}
 
+${selectedLine?.let { "Line containing the selected word:\n\"\"\"\n$it\n\"\"\"\n" }.orEmpty()}
 Selected passage to rewrite:
 ${"\"\"\""}
 $selection
@@ -719,49 +791,224 @@ $outputRules
             .orEmpty()
     }
 
-    private suspend fun callLocalRewrite(prompt: String, selection: String): String {
+    private suspend fun callLocalRewrite(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection,
+        selectionStart: Int?,
+        rejectedCandidates: Set<String>
+    ): String {
         val service = localModelService
             ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         if (!service.isLoaded) {
             throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         }
-        val response = service.generateResponse(prompt)
-        val cleaned = cleanLocalRewrite(response, selection)
-        if (cleaned.isBlank()) {
-            throw RuntimeException("Local model returned no rewrite. Try a different model or use a cloud provider.")
+
+        if (!isSingleWordSelection(selection)) {
+            val prompt = buildLocalRewritePrompt(action, lyrics, selection, currentSection)
+            val parsed = cleanLocalRewrite(service.generateResponse(prompt), selection)
+            if (parsed.isBlank()) {
+                throw RuntimeException("Local model returned no rewrite. Try a different model or use a cloud provider.")
+            }
+            if (normalizeSuggestionKey(parsed) == normalizeSuggestionKey(selection)) {
+                throw RuntimeException("Local model returned the original text unchanged. Try again or use a cloud provider.")
+            }
+            return parsed
         }
-        if (normalizeSuggestionKey(cleaned) == normalizeSuggestionKey(selection)) {
-            throw RuntimeException("Local model returned the original text unchanged. Try again or use a cloud provider.")
+
+        val context = singleWordRewriteContext(lyrics, selection, selectionStart)
+        val rejectedKeys = rewriteRejectKeys(selection, rejectedCandidates).toMutableSet()
+        repeat(LOCAL_REWRITE_ATTEMPTS) {
+            val prompt = buildLocalRewritePrompt(
+                action = action,
+                lyrics = lyrics,
+                selection = selection,
+                currentSection = currentSection,
+                selectionStart = selectionStart,
+                rejectedCandidates = rejectedKeys
+            )
+            val parsed = cleanLocalRewrite(service.generateResponse(prompt), selection)
+            val accepted = acceptLocalSingleWordRewrite(parsed, selection, action, context, rejectedKeys)
+            if (accepted.isNotBlank()) return accepted
+            normalizeSuggestionKey(parsed).takeIf { it.isNotBlank() }?.let { rejectedKeys += it }
         }
-        return cleaned
+
+        val fallback = fallbackLocalSingleWordRewrite(selection, action, context, rejectedKeys)
+        if (fallback.isNotBlank()) return fallback
+
+        if (action == RewriteAction.HARDER_RHYME) {
+            throw RuntimeException("No safe rhyme. Select the line.")
+        }
+        throw RuntimeException("Local model returned no rewrite. Try a different model or use a cloud provider.")
     }
 
+    internal fun acceptLocalSingleWordRewrite(candidate: String, selection: String, action: RewriteAction): String =
+        acceptLocalSingleWordRewrite(candidate, selection, action, context = null, rejectedCandidates = emptySet())
+
+    internal fun acceptLocalSingleWordRewrite(
+        candidate: String,
+        selection: String,
+        action: RewriteAction,
+        context: SingleWordRewriteContext?,
+        rejectedCandidates: Set<String>
+    ): String {
+        val word = candidate.trim()
+        if (!isSingleWordSelection(word)) return ""
+        val originalKey = normalizeSuggestionKey(selection)
+        val candidateKey = normalizeSuggestionKey(word)
+        if (
+            candidateKey.isEmpty() ||
+            candidateKey == originalKey ||
+            candidateKey in rewriteRejectKeys(selection, rejectedCandidates)
+        ) {
+            return ""
+        }
+
+        if (action == RewriteAction.HARDER_RHYME) {
+            val originalSyllables = ProsodyAnalyzer.countWord(selection).coerceAtLeast(1)
+            val candidateSyllables = ProsodyAnalyzer.countWord(word).coerceAtLeast(1)
+            if (candidateSyllables > originalSyllables + 1) return ""
+            if (!harderRhymeFitsContext(selection, word, context)) return ""
+        }
+
+        return word
+    }
+
+    internal fun fallbackLocalSingleWordRewrite(
+        selection: String,
+        action: RewriteAction,
+        context: SingleWordRewriteContext? = null,
+        rejectedCandidates: Set<String> = emptySet()
+    ): String {
+        val originalKey = normalizeSuggestionKey(selection)
+        if (originalKey.isEmpty()) return ""
+        val candidates = when (action) {
+            RewriteAction.REPHRASE -> fallbackRephraseWords[originalKey]
+            RewriteAction.HARDER_RHYME -> fallbackHarderRhymeWords[originalKey]
+            RewriteAction.PUNCH_UP -> fallbackPunchUpWords[originalKey]
+        }.orEmpty()
+        return candidates.firstOrNull { candidate ->
+            acceptLocalSingleWordRewrite(candidate, selection, action, context, rejectedCandidates).isNotBlank()
+        }.orEmpty()
+    }
+
+    internal fun singleWordRewriteContext(
+        lyrics: String,
+        selection: String,
+        selectionStart: Int?
+    ): SingleWordRewriteContext? {
+        val start = selectionStart ?: return null
+        if (start !in 0..lyrics.length) return null
+        val lineStart = lyrics.lastIndexOf('\n', (start - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        val lineEnd = lyrics.indexOf('\n', start).let { if (it < 0) lyrics.length else it }
+        val line = lyrics.substring(lineStart, lineEnd)
+        val relativeStart = start - lineStart
+        val relativeEnd = relativeStart + selection.length
+        val matches = singleWordPattern.findAll(line).toList()
+        val selectedIndex = matches.indexOfFirst { match ->
+            val range = match.range
+            relativeStart <= range.last + 1 && relativeEnd >= range.first
+        }
+        if (selectedIndex < 0) return null
+        val selectedMatch = matches[selectedIndex]
+        val trailing = line.substring(selectedMatch.range.last + 1)
+        return SingleWordRewriteContext(
+            line = line,
+            previousWord = matches.getOrNull(selectedIndex - 1)?.value,
+            nextWord = matches.getOrNull(selectedIndex + 1)?.value,
+            isLineEnding = trailing.none { it.isLetterOrDigit() }
+        )
+    }
+
+    private fun harderRhymeFitsContext(
+        selection: String,
+        candidate: String,
+        context: SingleWordRewriteContext?
+    ): Boolean {
+        val ctx = context ?: return true
+        val originalKey = normalizeSuggestionKey(selection)
+        val candidateKey = normalizeSuggestionKey(candidate)
+        val previousKey = ctx.previousWord?.let(::normalizeSuggestionKey).orEmpty()
+        val nextKey = ctx.nextWord?.let(::normalizeSuggestionKey).orEmpty()
+
+        if (!ctx.isLineEnding) return false
+        if (originalKey == "make" && nextKey == "believe") return false
+        if (previousKey == "phone" && candidateKey in setOf("walls", "falls", "halls")) return false
+        if (!harderRhymeSoundsClose(selection, candidate)) return false
+        return true
+    }
+
+    private fun harderRhymeSoundsClose(selection: String, candidate: String): Boolean {
+        val originalKey = normalizeSuggestionKey(selection)
+        val candidateKey = normalizeSuggestionKey(candidate)
+        val fallbackKeys = fallbackHarderRhymeWords[originalKey].orEmpty().map(::normalizeSuggestionKey).toSet()
+        if (candidateKey in fallbackKeys) return true
+
+        val originalRhymeKeys = ProsodyAnalyzer.rhymeKeys(selection, maxDepth = 2).toSet()
+        val candidateRhymeKeys = ProsodyAnalyzer.rhymeKeys(candidate, maxDepth = 2).toSet()
+        if (originalRhymeKeys.isNotEmpty() && candidateRhymeKeys.isNotEmpty()) {
+            return originalRhymeKeys.intersect(candidateRhymeKeys).isNotEmpty()
+        }
+
+        val originalTail = spellingRhymeTail(originalKey)
+        val candidateTail = spellingRhymeTail(candidateKey)
+        return originalTail.isNotBlank() && originalTail == candidateTail
+    }
+
+    private fun spellingRhymeTail(word: String): String {
+        if (word.length < 2) return ""
+        return word
+            .replace("ee", "i")
+            .replace("ea", "i")
+            .replace("ie", "i")
+            .replace("igh", "i")
+            .replace("ai", "a")
+            .replace("ay", "a")
+            .takeLast(3)
+    }
+
+    private fun lyricLineAt(lyrics: String, selectionStart: Int): String {
+        val start = selectionStart.coerceIn(0, lyrics.length)
+        val lineStart = lyrics.lastIndexOf('\n', (start - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        val lineEnd = lyrics.indexOf('\n', start).let { if (it < 0) lyrics.length else it }
+        return lyrics.substring(lineStart, lineEnd).trim()
+    }
+
+    private fun rewriteRejectKeys(selection: String, rejectedCandidates: Set<String>): Set<String> =
+        (rejectedCandidates + selection)
+            .mapNotNull { normalizeSuggestionKey(it).takeIf(String::isNotBlank) }
+            .toSet()
+
     internal fun cleanLocalRewrite(response: String, selection: String? = null): String {
-        val markerStripped = response
-            .substringBefore("<end_of_turn>")
-            .lines()
-            .map { markerPrefixPattern.replace(it, "").trim() }
-            .filterNot { line ->
-                line.isEmpty() ||
-                    markerOnlyPattern.matches(line) ||
-                    line.equals("```json", ignoreCase = true) ||
-                    line == "```"
-            }
-            .joinToString("\n")
-        val trimmed = markerStripped
-            .trim()
-            .removePrefix("```json")
-            .removePrefix("```")
-            .removeSuffix("```")
-            .trim()
+        val trimmed = stripLocalModelArtifacts(response)
         // If the model still emitted JSON, extract its rewrite field.
-        val extracted = extractRewriteField(trimmed) ?: trimmed
-        val cleaned = extracted.removeSurrounding("\"").removeSurrounding("'").trim()
-        return if (selection != null && isSingleWordSelection(selection)) {
+        val extracted = extractRewriteField(trimmed)?.let(::stripLocalModelArtifacts) ?: trimmed
+        val cleaned = extracted
+            .removeSurrounding("\"")
+            .removeSurrounding("'")
+            .trim()
+        val candidate = if (selection != null && isSingleWordSelection(selection)) {
             cleanSingleWordRewrite(cleaned, selection)
         } else {
-            cleaned
+            cleanRewritePassage(cleaned)
         }
+        return if (selection != null && normalizeSuggestionKey(candidate) == normalizeSuggestionKey(selection)) {
+            ""
+        } else {
+            candidate
+        }
+    }
+
+    private fun cleanRewritePassage(response: String): String {
+        val cleaned = stripLocalModelArtifacts(response)
+            .lines()
+            .mapNotNull { cleanLocalOutputLine(it, maxLength = 240) }
+            .joinToString("\n")
+            .trim()
+        if (cleaned.isBlank()) return ""
+        if (localControlMarkerPattern.containsMatchIn(cleaned)) return ""
+        return cleaned
     }
 
     private fun cleanSingleWordRewrite(response: String, selection: String): String {
@@ -774,6 +1021,7 @@ $outputRules
             "i",
             "instead",
             "is",
+            "model",
             "original",
             "replace",
             "replacement",
@@ -782,12 +1030,14 @@ $outputRules
             "suggest",
             "the",
             "try",
+            "turn",
             "use",
+            "user",
             "with",
             "word",
             "would"
         )
-        return response
+        return stripLocalModelArtifacts(response)
             .replace("=>", "->")
             .replace(":", " ")
             .lineSequence()
@@ -819,7 +1069,7 @@ $outputRules
     }
 
     private fun extractRewriteField(text: String): String? {
-        val cleaned = text.trim()
+        val cleaned = stripLocalModelArtifacts(text)
             .removePrefix("```json")
             .removePrefix("```")
             .removeSuffix("```")
@@ -991,11 +1241,19 @@ Rules:
 
     private val listPrefixPattern = Regex("^\\s*(?:[-*]\\s+|\\d+[.)\\-:]\\s*)")
     private val markerOnlyPattern = Regex(
-        pattern = "^\\s*(?:_?response>|_?model_response>|assistant_response>|model_response>|<[^>]+>|user|model|assistant)\\s*$",
+        pattern = "^\\s*(?:_?response>|_?model_response>|assistant_response>|model_response>|<?/?(?:start_of_turn|end_of_turn)>?\\w*|<[^>]+>|user|model|assistant)\\s*$",
         option = RegexOption.IGNORE_CASE
     )
     private val markerPrefixPattern = Regex(
-        pattern = "^\\s*(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<start_of_turn>\\w+|<end_of_turn>)\\s*",
+        pattern = "^\\s*(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start_of_turn|end_of_turn)>?\\w*)\\s*",
+        option = RegexOption.IGNORE_CASE
+    )
+    private val modelPayloadPrefixPattern = Regex(
+        pattern = ".*(?:<start_of_turn>\\s*model|start_of_turn>\\s*model|_?model_response>|assistant_response>|model_response>)\\s*",
+        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+    private val localControlMarkerPattern = Regex(
+        pattern = "<?/?(?:start_of_turn|end_of_turn)>?\\w*|_?response>|_?model_response>|assistant_response>|model_response>",
         option = RegexOption.IGNORE_CASE
     )
     private val promptEchoPattern = Regex(
@@ -1003,6 +1261,7 @@ Rules:
         option = RegexOption.IGNORE_CASE
     )
     private val normalizedLinePattern = Regex("[^a-z0-9]+")
+    private val singleWordPattern = Regex("[\\p{L}\\p{N}'-]+")
 
     private fun parseLines(text: String): List<String> {
         return text.lines()
@@ -1105,7 +1364,7 @@ $userPrompt
     }
 
     private fun cleanLocalSuggestionLine(line: String): String? {
-        var cleaned = line.trim()
+        var cleaned = stripLocalModelArtifacts(line)
             .removePrefix("```json")
             .removePrefix("```")
             .removeSuffix("```")
@@ -1113,9 +1372,19 @@ $userPrompt
 
         if (cleaned.isBlank() || markerOnlyPattern.matches(cleaned)) return null
 
-        cleaned = cleaned
-            .substringBefore("<end_of_turn>")
-            .substringBefore("<start_of_turn>")
+        cleaned = cleanLocalOutputLine(cleaned, maxLength = 140) ?: return null
+
+        if (cleaned.isBlank()) return null
+        if (markerOnlyPattern.matches(cleaned)) return null
+        if (promptEchoPattern.containsMatchIn(cleaned)) return null
+        if (localControlMarkerPattern.containsMatchIn(cleaned)) return null
+        if (cleaned.length > 140) return null
+
+        return cleaned
+    }
+
+    private fun cleanLocalOutputLine(line: String, maxLength: Int): String? {
+        val cleaned = stripLocalModelArtifacts(line)
             .let { markerPrefixPattern.replace(it, "") }
             .let { listPrefixPattern.replace(it, "") }
             .trim()
@@ -1126,10 +1395,29 @@ $userPrompt
         if (cleaned.isBlank()) return null
         if (markerOnlyPattern.matches(cleaned)) return null
         if (promptEchoPattern.containsMatchIn(cleaned)) return null
-        if (cleaned.contains("response>", ignoreCase = true)) return null
-        if (cleaned.length > 140) return null
-
+        if (localControlMarkerPattern.containsMatchIn(cleaned)) return null
+        if (cleaned.length > maxLength) return null
         return cleaned
+    }
+
+    private fun stripLocalModelArtifacts(text: String): String {
+        return text
+            .trim()
+            .let { modelPayloadPrefixPattern.replace(it, "") }
+            .substringBefore("<end_of_turn>")
+            .substringBefore("end_of_turn>")
+            .let { localControlMarkerPattern.replace(it, "") }
+            .lines()
+            .filterNot { line ->
+                val trimmed = line.trim()
+                trimmed.equals("```json", ignoreCase = true) || trimmed == "```" || markerOnlyPattern.matches(trimmed)
+            }
+            .joinToString("\n")
+            .trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
     }
 
     private fun normalizeSuggestionKey(text: String): String =

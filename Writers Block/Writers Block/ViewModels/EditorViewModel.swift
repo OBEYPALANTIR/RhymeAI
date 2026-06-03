@@ -61,6 +61,7 @@ final class EditorViewModel: ObservableObject {
     private var rewriteRange: NSRange?
     private var rewriteTask: Task<Void, Never>?
     private var suggestionsTask: Task<Void, Never>?
+    private var rewriteRejectedCandidates: Set<String> = []
 
     // MARK: - Word Inspector
 
@@ -420,6 +421,7 @@ final class EditorViewModel: ObservableObject {
         let original = ns.substring(with: range)
         guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        rewriteRejectedCandidates = []
         beginRewrite(action: action, range: range, original: original)
     }
 
@@ -447,19 +449,32 @@ final class EditorViewModel: ObservableObject {
             return
         }
 
-        beginRewrite(action: action, range: range, original: original)
+        beginRewrite(
+            action: action,
+            range: range,
+            original: original,
+            rejectedCandidates: rewritePreview.map { Set([$0]) } ?? []
+        )
     }
 
-    private func beginRewrite(action: RewriteAction, range: NSRange, original: String) {
+    private func beginRewrite(
+        action: RewriteAction,
+        range: NSRange,
+        original: String,
+        rejectedCandidates: Set<String> = []
+    ) {
         rewriteTask?.cancel()
         rewriteAction = action
         rewriteOriginal = original
         rewriteRange = range
+        rewriteRejectedCandidates.formUnion(rejectedCandidates)
+        rewriteRejectedCandidates.insert(original)
         rewritePreview = nil
         rewriteError = nil
         rewriteLoading = true
         let fullLyrics = lyrics
         let currentSection = currentSongSection(in: fullLyrics, cursorPosition: range.location)
+        let rejectedForRequest = rewriteRejectedCandidates
 
         rewriteTask = Task { @MainActor in
             do {
@@ -470,7 +485,9 @@ final class EditorViewModel: ObservableObject {
                     action: action,
                     fullLyrics: fullLyrics,
                     selection: original,
-                    currentSection: currentSection
+                    currentSection: currentSection,
+                    selectionStart: range.location,
+                    rejectedCandidates: rejectedForRequest
                 )
                 guard !Task.isCancelled else { return }
                 rewritePreview = result
@@ -511,6 +528,7 @@ final class EditorViewModel: ObservableObject {
         rewriteOriginal = nil
         rewriteError = nil
         rewriteRange = nil
+        rewriteRejectedCandidates = []
     }
 
     // MARK: - Word Inspector

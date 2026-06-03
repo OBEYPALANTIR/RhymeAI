@@ -9,6 +9,7 @@ enum AIServiceError: LocalizedError {
     case networkUnavailable
     case blockedResponse
     case decodingError
+    case noSafeSingleWordRhyme
 
     var errorDescription: String? {
         switch self {
@@ -26,12 +27,64 @@ enum AIServiceError: LocalizedError {
             return "Provider blocked the response for safety. Try adjusting the lyric or prompt."
         case .decodingError:
             return "Failed to parse AI response."
+        case .noSafeSingleWordRhyme:
+            return "No safe rhyme. Select the line."
         }
     }
 }
 
 struct AIService {
+    struct SingleWordRewriteContext {
+        let line: String
+        let previousWord: String?
+        let nextWord: String?
+        let isLineEnding: Bool
+    }
+
     private static let suggestionCount = 6
+    private static let localRewriteAttempts = 2
+    private static let fallbackRephraseWords: [String: [String]] = [
+        "believe": ["imagine", "trust", "dream"],
+        "birds": ["sparrows", "voices", "wings"],
+        "calls": ["rings", "echoes", "signals"],
+        "enemies": ["rivals", "foes", "strangers"],
+        "feel": ["sense", "know", "ache"],
+        "free": ["loose", "clear", "unbound"],
+        "glow": ["gleam", "shine", "spark"],
+        "lies": ["myths", "spin", "masks"],
+        "real": ["true", "clear", "solid"],
+        "street": ["block", "road", "lane"],
+        "tvs": ["screens", "feeds", "channels"],
+        "walls": ["barriers", "rooms", "blocks"]
+    ]
+    private static let fallbackHarderRhymeWords: [String: [String]] = [
+        "believe": ["deceive", "relieve", "receive"],
+        "birds": ["words", "herds", "thirds"],
+        "calls": ["walls", "falls", "halls"],
+        "enemies": ["remedies", "memories", "melodies"],
+        "feel": ["real", "steel", "wheel"],
+        "free": ["see", "be", "flee"],
+        "glow": ["show", "flow", "low"],
+        "lies": ["eyes", "skies", "disguise"],
+        "real": ["feel", "steel", "wheel"],
+        "street": ["beat", "heat", "feet"],
+        "tvs": ["feeds", "screens", "dreams"],
+        "walls": ["calls", "falls", "halls"]
+    ]
+    private static let fallbackPunchUpWords: [String: [String]] = [
+        "believe": ["swallow", "worship", "chase"],
+        "birds": ["sirens", "static", "wires"],
+        "calls": ["alarms", "signals", "sirens"],
+        "enemies": ["traitors", "targets", "rivals"],
+        "feel": ["burn", "bleed", "know"],
+        "free": ["wild", "untamed", "unbound"],
+        "glow": ["flare", "blaze", "spark"],
+        "lies": ["poison", "fraud", "venom"],
+        "real": ["raw", "true", "solid"],
+        "street": ["asphalt", "gutter", "curb"],
+        "tvs": ["screens", "static", "feeds"],
+        "walls": ["concrete", "barricades", "barriers"]
+    ]
 
     func getSuggestions(
         provider: AIProvider,
@@ -381,17 +434,17 @@ struct AIService {
     }
 
     private func cleanSuggestionLine(_ line: String) -> String? {
-        var cleaned = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        var cleaned = stripLocalModelArtifacts(line)
         if cleaned.hasPrefix("```json") { cleaned = String(cleaned.dropFirst(7)) }
         if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
         if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleaned.isEmpty { return nil }
-        let markerOnly = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|<[^>]+>|user|model|assistant)\s*$"#
+        let markerOnly = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>]+>|user|model|assistant)\s*$"#
         if cleaned.range(of: markerOnly, options: [.regularExpression, .caseInsensitive]) != nil {
             return nil
         }
-        let markerPrefix = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<start_of_turn>\w+|<end_of_turn>)\s*"#
+        let markerPrefix = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start_of_turn|end_of_turn)>?\w*)\s*"#
         if let range = cleaned.range(of: markerPrefix, options: [.regularExpression, .caseInsensitive]) {
             cleaned = String(cleaned[range.upperBound...])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -407,7 +460,7 @@ struct AIService {
         if cleaned.range(of: promptEcho, options: [.regularExpression, .caseInsensitive]) != nil {
             return nil
         }
-        if cleaned.range(of: "response>", options: .caseInsensitive) != nil {
+        if containsLocalControlMarker(cleaned) {
             return nil
         }
         if cleaned.isEmpty || cleaned.count > 140 { return nil }
@@ -766,7 +819,9 @@ struct AIService {
         action: RewriteAction,
         fullLyrics: String,
         selection: String,
-        currentSection: SongSection = .unknown
+        currentSection: SongSection = .unknown,
+        selectionStart: Int? = nil,
+        rejectedCandidates: Set<String> = []
     ) async throws -> String {
         guard !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AIServiceError.invalidResponse
@@ -774,8 +829,14 @@ struct AIService {
 
         if provider == .local {
             if #available(iOS 26.0, *) {
-                let prompt = buildLocalRewritePrompt(action: action, lyrics: fullLyrics, selection: selection, currentSection: currentSection)
-                return try await callLocalRewrite(prompt: prompt)
+                return try await callLocalRewrite(
+                    action: action,
+                    lyrics: fullLyrics,
+                    selection: selection,
+                    currentSection: currentSection,
+                    selectionStart: selectionStart,
+                    rejectedCandidates: rejectedCandidates
+                )
             }
             throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence rewrites require iOS 26 or later.")
         }
@@ -842,10 +903,34 @@ struct AIService {
         action: RewriteAction,
         lyrics: String,
         selection: String,
-        currentSection: SongSection = .unknown
+        currentSection: SongSection = .unknown,
+        selectionStart: Int? = nil,
+        rejectedCandidates: Set<String> = []
     ) -> String {
+        let singleWord = isSingleWordSelection(selection)
+        let selectedLine = selectionStart.flatMap { lyricLine(at: $0, in: lyrics) }
+        let rejectedKeys = rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates)
+        let rejectedRule = singleWord && !rejectedKeys.isEmpty
+            ? "Do not return any of these rejected words: \(rejectedKeys.sorted().joined(separator: ", "))."
+            : ""
+        let taskLine = singleWord
+            ? "Replace the selected word with a different word that fits the song."
+            : "Rewrite the selected passage from this song."
+        let outputRules = singleWord
+            ? """
+            Return exactly one replacement word.
+            The replacement must be different from the selected word.
+            Do not return "\(selection)".
+            \(rejectedRule)
+            No quotes, no labels, no commentary.
+            """
+            : """
+            Reply with the rewritten passage only.
+            Preserve line breaks if the selection has multiple lines.
+            No quotes, no labels, no commentary.
+            """
         return """
-        Rewrite the selected passage from this song.
+        \(taskLine)
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
         Action: \(action.label).
@@ -854,10 +939,12 @@ struct AIService {
         Lyrics so far:
         \(lyrics)
 
+        \(selectedLine.map { "Line containing the selected word:\n\($0)\n" } ?? "")
         Selected passage:
         \(selection)
 
-        Reply with the rewritten passage only. No quotes, no labels, no commentary.
+        Rules:
+        \(outputRules)
         """
     }
 
@@ -956,7 +1043,14 @@ struct AIService {
     }
 
     @available(iOS 26.0, *)
-    private func callLocalRewrite(prompt: String) async throws -> String {
+    private func callLocalRewrite(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection,
+        selectionStart: Int?,
+        rejectedCandidates: Set<String>
+    ) async throws -> String {
         let model = SystemLanguageModel.default
         guard model.isAvailable else {
             throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
@@ -965,14 +1059,244 @@ struct AIService {
             model: model,
             instructions: "You are an expert songwriter. Rewrite passages only. Output the rewrite only — no quotes, no commentary."
         )
-        let response = try await session.respond(to: prompt)
-        let trimmed = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let extracted = extractRewriteField(trimmed) { return extracted }
-        return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+
+        if !isSingleWordSelection(selection) {
+            let prompt = buildLocalRewritePrompt(action: action, lyrics: lyrics, selection: selection, currentSection: currentSection)
+            let response = try await session.respond(to: prompt)
+            let parsed = cleanLocalRewrite(response.content, selection: selection)
+            guard !parsed.isEmpty else {
+                throw AIServiceError.decodingError
+            }
+            return parsed
+        }
+
+        let context = singleWordRewriteContext(lyrics: lyrics, selection: selection, selectionStart: selectionStart)
+        var rejectedKeys = rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates)
+        for _ in 0..<Self.localRewriteAttempts {
+            let prompt = buildLocalRewritePrompt(
+                action: action,
+                lyrics: lyrics,
+                selection: selection,
+                currentSection: currentSection,
+                selectionStart: selectionStart,
+                rejectedCandidates: rejectedKeys
+            )
+            let response = try await session.respond(to: prompt)
+            let parsed = cleanLocalRewrite(response.content, selection: selection)
+            let accepted = acceptLocalSingleWordRewrite(
+                candidate: parsed,
+                selection: selection,
+                action: action,
+                context: context,
+                rejectedCandidates: rejectedKeys
+            )
+            if !accepted.isEmpty {
+                return accepted
+            }
+            let parsedKey = normalizeSuggestionKey(parsed)
+            if !parsedKey.isEmpty {
+                rejectedKeys.insert(parsedKey)
+            }
+        }
+
+        let fallback = fallbackLocalSingleWordRewrite(
+            selection: selection,
+            action: action,
+            context: context,
+            rejectedCandidates: rejectedKeys
+        )
+        if !fallback.isEmpty {
+            return fallback
+        }
+        if action == .harderRhyme {
+            throw AIServiceError.noSafeSingleWordRhyme
+        }
+        throw AIServiceError.decodingError
+    }
+
+    func acceptLocalSingleWordRewrite(candidate: String, selection: String, action: RewriteAction) -> String {
+        acceptLocalSingleWordRewrite(
+            candidate: candidate,
+            selection: selection,
+            action: action,
+            context: nil,
+            rejectedCandidates: []
+        )
+    }
+
+    func acceptLocalSingleWordRewrite(
+        candidate: String,
+        selection: String,
+        action: RewriteAction,
+        context: SingleWordRewriteContext?,
+        rejectedCandidates: Set<String>
+    ) -> String {
+        let word = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isSingleWordSelection(word) else { return "" }
+        let originalKey = normalizeSuggestionKey(selection)
+        let candidateKey = normalizeSuggestionKey(word)
+        guard !candidateKey.isEmpty,
+              candidateKey != originalKey,
+              !rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates).contains(candidateKey) else {
+            return ""
+        }
+
+        if action == .harderRhyme {
+            let originalSyllables = max(ProsodyAnalyzer.countWord(selection), 1)
+            let candidateSyllables = max(ProsodyAnalyzer.countWord(word), 1)
+            guard candidateSyllables <= originalSyllables + 1 else { return "" }
+            guard harderRhymeFitsContext(selection: selection, candidate: word, context: context) else { return "" }
+        }
+
+        return word
+    }
+
+    func fallbackLocalSingleWordRewrite(
+        selection: String,
+        action: RewriteAction,
+        context: SingleWordRewriteContext? = nil,
+        rejectedCandidates: Set<String> = []
+    ) -> String {
+        let originalKey = normalizeSuggestionKey(selection)
+        guard !originalKey.isEmpty else { return "" }
+        let candidates: [String]
+        switch action {
+        case .rephrase:
+            candidates = Self.fallbackRephraseWords[originalKey] ?? []
+        case .harderRhyme:
+            candidates = Self.fallbackHarderRhymeWords[originalKey] ?? []
+        case .punchUp:
+            candidates = Self.fallbackPunchUpWords[originalKey] ?? []
+        }
+        return candidates.first { candidate in
+            !acceptLocalSingleWordRewrite(
+                candidate: candidate,
+                selection: selection,
+                action: action,
+                context: context,
+                rejectedCandidates: rejectedCandidates
+            ).isEmpty
+        } ?? ""
+    }
+
+    func singleWordRewriteContext(
+        lyrics: String,
+        selection: String,
+        selectionStart: Int?
+    ) -> SingleWordRewriteContext? {
+        guard let selectionStart,
+              selectionStart >= 0,
+              selectionStart <= lyrics.count,
+              let startIndex = lyrics.index(lyrics.startIndex, offsetBy: selectionStart, limitedBy: lyrics.endIndex) else {
+            return nil
+        }
+        let lineStart = lyrics[..<startIndex].lastIndex(of: "\n").map { lyrics.index(after: $0) } ?? lyrics.startIndex
+        let lineEnd = lyrics[startIndex...].firstIndex(of: "\n") ?? lyrics.endIndex
+        let line = String(lyrics[lineStart..<lineEnd])
+        let relativeStart = lyrics.distance(from: lineStart, to: startIndex)
+        let relativeEnd = relativeStart + selection.count
+        let regex = try? NSRegularExpression(pattern: #"[\p{L}\p{N}'-]+"#)
+        let nsLine = line as NSString
+        let matches = regex?.matches(in: line, range: NSRange(location: 0, length: nsLine.length)) ?? []
+        guard let selectedIndex = matches.firstIndex(where: { match in
+            relativeStart <= match.range.upperBound && relativeEnd >= match.range.location
+        }) else {
+            return nil
+        }
+        let selectedRange = matches[selectedIndex].range
+        let trailing = nsLine.substring(from: selectedRange.upperBound)
+        return SingleWordRewriteContext(
+            line: line,
+            previousWord: selectedIndex > 0 ? nsLine.substring(with: matches[selectedIndex - 1].range) : nil,
+            nextWord: selectedIndex + 1 < matches.count ? nsLine.substring(with: matches[selectedIndex + 1].range) : nil,
+            isLineEnding: !trailing.contains(where: \.isLetter) && !trailing.contains(where: \.isNumber)
+        )
+    }
+
+    private func harderRhymeFitsContext(
+        selection: String,
+        candidate: String,
+        context: SingleWordRewriteContext?
+    ) -> Bool {
+        guard let context else { return true }
+        let originalKey = normalizeSuggestionKey(selection)
+        let candidateKey = normalizeSuggestionKey(candidate)
+        let previousKey = context.previousWord.map(normalizeSuggestionKey) ?? ""
+        let nextKey = context.nextWord.map(normalizeSuggestionKey) ?? ""
+
+        guard context.isLineEnding else { return false }
+        if originalKey == "make", nextKey == "believe" { return false }
+        if previousKey == "phone", ["walls", "falls", "halls"].contains(candidateKey) { return false }
+        return harderRhymeSoundsClose(selection: selection, candidate: candidate)
+    }
+
+    private func harderRhymeSoundsClose(selection: String, candidate: String) -> Bool {
+        let originalKey = normalizeSuggestionKey(selection)
+        let candidateKey = normalizeSuggestionKey(candidate)
+        let fallbackKeys = Set((Self.fallbackHarderRhymeWords[originalKey] ?? []).map(normalizeSuggestionKey))
+        if fallbackKeys.contains(candidateKey) { return true }
+
+        let originalRhymeKeys = Set(ProsodyAnalyzer.rhymeKeys(for: selection, maxDepth: 2))
+        let candidateRhymeKeys = Set(ProsodyAnalyzer.rhymeKeys(for: candidate, maxDepth: 2))
+        if !originalRhymeKeys.isEmpty, !candidateRhymeKeys.isEmpty {
+            return !originalRhymeKeys.intersection(candidateRhymeKeys).isEmpty
+        }
+
+        let originalTail = spellingRhymeTail(originalKey)
+        let candidateTail = spellingRhymeTail(candidateKey)
+        return !originalTail.isEmpty && originalTail == candidateTail
+    }
+
+    private func spellingRhymeTail(_ word: String) -> String {
+        var normalized = word
+        [
+            ("ee", "i"),
+            ("ea", "i"),
+            ("ie", "i"),
+            ("igh", "i"),
+            ("ai", "a"),
+            ("ay", "a")
+        ].forEach { from, to in
+            normalized = normalized.replacingOccurrences(of: from, with: to)
+        }
+        return String(normalized.suffix(3))
+    }
+
+    private func lyricLine(at selectionStart: Int, in lyrics: String) -> String? {
+        guard selectionStart >= 0,
+              selectionStart <= lyrics.count,
+              let startIndex = lyrics.index(lyrics.startIndex, offsetBy: selectionStart, limitedBy: lyrics.endIndex) else {
+            return nil
+        }
+        let lineStart = lyrics[..<startIndex].lastIndex(of: "\n").map { lyrics.index(after: $0) } ?? lyrics.startIndex
+        let lineEnd = lyrics[startIndex...].firstIndex(of: "\n") ?? lyrics.endIndex
+        let line = String(lyrics[lineStart..<lineEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return line.isEmpty ? nil : line
+    }
+
+    private func rewriteRejectKeys(selection: String, rejectedCandidates: Set<String>) -> Set<String> {
+        Set(rejectedCandidates.union([selection]).map(normalizeSuggestionKey).filter { !$0.isEmpty })
+    }
+
+    func cleanLocalRewrite(_ response: String, selection: String? = nil) -> String {
+        let stripped = stripLocalModelArtifacts(response)
+        let extracted = extractRewriteField(stripped).map(stripLocalModelArtifacts) ?? stripped
+        var cleaned = extracted
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if selection.map(isSingleWordSelection) == true {
+            cleaned = cleanSingleWordRewrite(cleaned, selection: selection ?? "")
+        } else {
+            cleaned = cleanRewritePassage(cleaned)
+        }
+        if let selection, normalizeSuggestionKey(cleaned) == normalizeSuggestionKey(selection) {
+            return ""
+        }
+        return cleaned
     }
 
     private func extractRewriteField(_ text: String) -> String? {
-        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var cleaned = stripLocalModelArtifacts(text)
         if cleaned.hasPrefix("```json") { cleaned = String(cleaned.dropFirst(7)) }
         if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
         if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
@@ -983,6 +1307,116 @@ struct AIService {
             return nil
         }
         return value
+    }
+
+    private func cleanRewritePassage(_ response: String) -> String {
+        let cleaned = stripLocalModelArtifacts(response)
+            .components(separatedBy: .newlines)
+            .compactMap { cleanLocalOutputLine($0, maxLength: 240) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !containsLocalControlMarker(cleaned) else { return "" }
+        return cleaned
+    }
+
+    private func cleanSingleWordRewrite(_ response: String, selection: String) -> String {
+        let originalKey = normalizeSuggestionKey(selection)
+        let labelTokens: Set<String> = [
+            "a", "an", "as", "be", "i", "instead", "is", "model", "original",
+            "replace", "replacement", "rewrite", "selected", "suggest", "the",
+            "try", "turn", "use", "user", "with", "word", "would"
+        ]
+        let normalized = stripLocalModelArtifacts(response)
+            .replacingOccurrences(of: "=>", with: "->")
+            .replacingOccurrences(of: ":", with: " ")
+
+        for line in normalized.components(separatedBy: .newlines) {
+            let pieces = line
+                .components(separatedBy: CharacterSet(charactersIn: ",/|"))
+                .flatMap { $0.components(separatedBy: "->") }
+            for piece in pieces {
+                let tokens = piece.split(whereSeparator: \.isWhitespace).map(String.init)
+                let candidates = tokens.isEmpty ? [piece] : tokens
+                for candidate in candidates {
+                    let word = candidate
+                        .trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'`.!?;:-*•"))
+                    let key = normalizeSuggestionKey(word)
+                    if !key.isEmpty,
+                       key != originalKey,
+                       word.count <= 32,
+                       !labelTokens.contains(key) {
+                        return word
+                    }
+                }
+            }
+        }
+        return ""
+    }
+
+    private func isSingleWordSelection(_ selection: String) -> Bool {
+        selection.trimmingCharacters(in: .whitespacesAndNewlines)
+            .range(of: #"^[\p{L}\p{N}'-]+$"#, options: .regularExpression) != nil
+    }
+
+    private func cleanLocalOutputLine(_ line: String, maxLength: Int) -> String? {
+        var cleaned = stripLocalModelArtifacts(line)
+        let markerPrefix = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start_of_turn|end_of_turn)>?\w*)\s*"#
+        if let range = cleaned.range(of: markerPrefix, options: [.regularExpression, .caseInsensitive]) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+        if let range = cleaned.range(of: #"^(?:[-*]\s+|\d+[.)\-:]\s*)"#, options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+        cleaned = cleaned
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !cleaned.isEmpty else { return nil }
+        let markerOnly = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>]+>|user|model|assistant)\s*$"#
+        guard cleaned.range(of: markerOnly, options: [.regularExpression, .caseInsensitive]) == nil else { return nil }
+        let promptEcho = #"^(?:task:|theme:|rhyme scheme:|lyrics context:|rules:|return exactly|return only|one suggestion|no numbering|do not|keep each|you are rhymeai|sure[, ]|here are|i can(?:not|'t)|as an ai)"#
+        guard cleaned.range(of: promptEcho, options: [.regularExpression, .caseInsensitive]) == nil else { return nil }
+        guard !containsLocalControlMarker(cleaned), cleaned.count <= maxLength else { return nil }
+        return cleaned
+    }
+
+    private func stripLocalModelArtifacts(_ text: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelPayloadPrefix = #"(?is).*(?:<start_of_turn>\s*model|start_of_turn>\s*model|_?model_response>|assistant_response>|model_response>)\s*"#
+        if let range = cleaned.range(of: modelPayloadPrefix, options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+        if let range = cleaned.range(of: #"<end_of_turn>|end_of_turn>"#, options: [.regularExpression, .caseInsensitive]) {
+            cleaned = String(cleaned[..<range.lowerBound])
+        }
+        cleaned = cleaned.replacingOccurrences(
+            of: #"(?i)<?/?(?:start_of_turn|end_of_turn)>?\w*|_?response>|_?model_response>|assistant_response>|model_response>"#,
+            with: "",
+            options: .regularExpression
+        )
+        let filtered = cleaned
+            .components(separatedBy: .newlines)
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                return !trimmed.isEmpty &&
+                    trimmed != "```" &&
+                    trimmed.range(of: #"^```json$"#, options: [.regularExpression, .caseInsensitive]) == nil
+            }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var unfenced = filtered
+        if unfenced.hasPrefix("```json") { unfenced = String(unfenced.dropFirst(7)) }
+        if unfenced.hasPrefix("```") { unfenced = String(unfenced.dropFirst(3)) }
+        if unfenced.hasSuffix("```") { unfenced = String(unfenced.dropLast(3)) }
+        return unfenced.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func containsLocalControlMarker(_ text: String) -> Bool {
+        text.range(
+            of: #"(?i)<?/?(?:start_of_turn|end_of_turn)>?\w*|_?response>|_?model_response>|assistant_response>|model_response>"#,
+            options: .regularExpression
+        ) != nil
     }
 
     // MARK: - HTTP

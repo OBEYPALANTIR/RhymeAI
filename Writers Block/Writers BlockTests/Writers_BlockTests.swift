@@ -334,6 +334,180 @@ struct Writers_BlockTests {
         }
     }
 
+    @Test func localRewriteCleanerStripsMalformedTurnMarkers() {
+        let raw = """
+        start_of_turn>model
+        Where we swear we're free
+        <end_of_turn>
+        """
+
+        #expect(
+            AIService().cleanLocalRewrite(raw, selection: "Where we claim to be free") ==
+            "Where we swear we're free"
+        )
+    }
+
+    @Test func localRewriteCleanerExtractsJsonAfterMarkers() {
+        let raw = """
+        <start_of_turn>model
+        {"rewrite":"Cold corporate walls still listen"}
+        <end_of_turn>
+        """
+
+        #expect(
+            AIService().cleanLocalRewrite(raw, selection: "Cold corporate walls") ==
+            "Cold corporate walls still listen"
+        )
+    }
+
+    @Test func localRewriteCleanerRejectsMarkerOnlyAndUnchangedOutput() {
+        let service = AIService()
+
+        #expect(service.cleanLocalRewrite("start_of_turn>", selection: "Where we claim to be free").isEmpty)
+        #expect(service.cleanLocalRewrite("Where we claim to be free", selection: "Where we claim to be free").isEmpty)
+    }
+
+    @Test func localSingleWordRewriteDropsLabelsAndMarkers() {
+        let raw = """
+        <start_of_turn>model
+        Replacement: gleam
+        <end_of_turn>
+        """
+
+        #expect(AIService().cleanLocalRewrite(raw, selection: "glow") == "gleam")
+    }
+
+    @Test func localSingleWordFallbackCoversCommonRewriteActions() {
+        let service = AIService()
+
+        #expect(service.fallbackLocalSingleWordRewrite(selection: "glow", action: .rephrase) == "gleam")
+        #expect(service.fallbackLocalSingleWordRewrite(selection: "glow", action: .harderRhyme) == "show")
+        #expect(service.fallbackLocalSingleWordRewrite(selection: "glow", action: .punchUp) == "flare")
+        #expect(service.fallbackLocalSingleWordRewrite(selection: "real", action: .harderRhyme) == "feel")
+        #expect(service.fallbackLocalSingleWordRewrite(selection: "xylophone", action: .rephrase).isEmpty)
+    }
+
+    @Test func localSingleWordValidatorRejectsAwkwardHarderRhymeExpansion() {
+        let service = AIService()
+
+        #expect(service.cleanLocalRewrite("reality", selection: "real") == "reality")
+        #expect(
+            service.acceptLocalSingleWordRewrite(
+                candidate: "reality",
+                selection: "real",
+                action: .harderRhyme
+            ).isEmpty
+        )
+        let fallback = service.acceptLocalSingleWordRewrite(
+            candidate: "reality",
+            selection: "real",
+            action: .harderRhyme
+        ).isEmpty ? service.fallbackLocalSingleWordRewrite(selection: "real", action: .harderRhyme) : "reality"
+        #expect(fallback == "feel")
+        #expect(
+            service.acceptLocalSingleWordRewrite(
+                candidate: "feel",
+                selection: "real",
+                action: .harderRhyme
+            ) == "feel"
+        )
+    }
+
+    @Test func localHarderRhymeValidatorRejectsReportedBadSingleWordContexts() {
+        let service = AIService()
+        let makeLyrics = "In the land of make believe"
+        let makeContext = service.singleWordRewriteContext(
+            lyrics: makeLyrics,
+            selection: "make",
+            selectionStart: (makeLyrics as NSString).range(of: "make").location
+        )
+        #expect(
+            service.acceptLocalSingleWordRewrite(
+                candidate: "deceive",
+                selection: "make",
+                action: .harderRhyme,
+                context: makeContext,
+                rejectedCandidates: []
+            ).isEmpty
+        )
+
+        let callsLyrics = "Birds chirping in phone calls"
+        let callsContext = service.singleWordRewriteContext(
+            lyrics: callsLyrics,
+            selection: "calls",
+            selectionStart: (callsLyrics as NSString).range(of: "calls").location
+        )
+        #expect(
+            service.acceptLocalSingleWordRewrite(
+                candidate: "walls",
+                selection: "calls",
+                action: .harderRhyme,
+                context: callsContext,
+                rejectedCandidates: []
+            ).isEmpty
+        )
+        #expect(
+            service.fallbackLocalSingleWordRewrite(
+                selection: "calls",
+                action: .harderRhyme,
+                context: callsContext
+            ).isEmpty
+        )
+
+        let feedsLyrics = "Personalized social feeds"
+        let feedsContext = service.singleWordRewriteContext(
+            lyrics: feedsLyrics,
+            selection: "feeds",
+            selectionStart: (feedsLyrics as NSString).range(of: "feeds").location
+        )
+        #expect(
+            service.acceptLocalSingleWordRewrite(
+                candidate: "streams",
+                selection: "feeds",
+                action: .harderRhyme,
+                context: feedsContext,
+                rejectedCandidates: []
+            ).isEmpty
+        )
+    }
+
+    @Test func localHarderRhymeValidatorRejectsPreviousPreviewOnRedo() {
+        let service = AIService()
+        let lyrics = "Cold corporate walls"
+        let context = service.singleWordRewriteContext(
+            lyrics: lyrics,
+            selection: "walls",
+            selectionStart: (lyrics as NSString).range(of: "walls").location
+        )
+
+        #expect(
+            service.acceptLocalSingleWordRewrite(
+                candidate: "calls",
+                selection: "walls",
+                action: .harderRhyme,
+                context: context,
+                rejectedCandidates: []
+            ) == "calls"
+        )
+        #expect(
+            service.acceptLocalSingleWordRewrite(
+                candidate: "calls",
+                selection: "walls",
+                action: .harderRhyme,
+                context: context,
+                rejectedCandidates: ["calls"]
+            ).isEmpty
+        )
+        #expect(
+            service.fallbackLocalSingleWordRewrite(
+                selection: "walls",
+                action: .harderRhyme,
+                context: context,
+                rejectedCandidates: ["calls"]
+            ) == "falls"
+        )
+    }
+
     @Test func emptySuggestionResponsesParseToEmptyList() {
         let service = AIService()
 

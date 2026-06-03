@@ -125,6 +125,83 @@ class LocalModelInstrumentedTest {
         assertFalse("Local single-word rewrite should not return the selected word", singleWordRewrite.equals("glow", ignoreCase = true))
         assertNoPromptEcho("single word rewrite", listOf(singleWordRewrite))
 
+        val harderSingleWordRewrite = timedEval(modelLabel, "harder_single_word_rewrite") {
+            val chorusLyrics = """
+                [Chorus]
+                We're lost
+                We don't even know what's real
+                We're lost
+                We go with what we feel
+            """.trimIndent()
+            service.getRewrite(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                action = RewriteAction.HARDER_RHYME,
+                fullLyrics = chorusLyrics,
+                selection = "real",
+                currentSection = SongSection.CHORUS,
+                selectionStart = chorusLyrics.indexOf("real")
+            )
+        }
+        assertTrue(
+            "Local harder-rhyme single-word rewrite should return one short replacement word",
+            harderSingleWordRewrite.matches(Regex("[\\p{L}\\p{N}'-]+")) && harderSingleWordRewrite.length <= 8
+        )
+        assertFalse("Local harder-rhyme single-word rewrite should not return the selected word", harderSingleWordRewrite.equals("real", ignoreCase = true))
+        assertFalse("Local harder-rhyme single-word rewrite should reject awkward expansions", harderSingleWordRewrite.equals("reality", ignoreCase = true))
+        assertNoPromptEcho("harder single word rewrite", listOf(harderSingleWordRewrite))
+
+        val reportedLyrics = """
+            [Verse 1]
+            In the land of make believe
+            Where we claim to be free
+            Hypnotized by TVs
+            Personalized social feeds
+
+            Cold corporate walls
+            Birds chirping in phone calls
+        """.trimIndent()
+        val wallsRewrite = timedEval(modelLabel, "harder_reported_walls") {
+            service.getRewrite(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                action = RewriteAction.HARDER_RHYME,
+                fullLyrics = reportedLyrics,
+                selection = "walls",
+                currentSection = SongSection.VERSE,
+                selectionStart = reportedLyrics.indexOf("walls")
+            )
+        }
+        assertFalse("Local harder-rhyme rewrite should not repeat walls", wallsRewrite.equals("walls", ignoreCase = true))
+        assertNoPromptEcho("reported walls harder rhyme", listOf(wallsRewrite))
+
+        assertRejectsBadHarderRhyme(
+            modelLabel = modelLabel,
+            caseName = "harder_reported_calls",
+            service = service,
+            lyrics = reportedLyrics,
+            selection = "calls",
+            forbidden = setOf("calls", "walls", "falls", "halls")
+        )
+        assertRejectsBadHarderRhyme(
+            modelLabel = modelLabel,
+            caseName = "harder_reported_make",
+            service = service,
+            lyrics = reportedLyrics,
+            selection = "make",
+            forbidden = setOf("make", "deceive")
+        )
+        assertRejectsBadHarderRhyme(
+            modelLabel = modelLabel,
+            caseName = "harder_reported_feeds",
+            service = service,
+            lyrics = reportedLyrics,
+            selection = "feeds",
+            forbidden = setOf("feeds", "streams")
+        )
+
         val synonyms = timedEval(modelLabel, "synonyms") {
             service.getSynonyms(
                 provider = AIProvider.LOCAL,
@@ -150,6 +227,47 @@ class LocalModelInstrumentedTest {
         }
         println("LOCAL_MODEL_RESULT model=$modelLabel case=$caseName elapsedMs=${System.currentTimeMillis() - start} count=$count")
         return result
+    }
+
+    private suspend fun assertRejectsBadHarderRhyme(
+        modelLabel: String,
+        caseName: String,
+        service: AIService,
+        lyrics: String,
+        selection: String,
+        forbidden: Set<String>
+    ) {
+        val start = System.currentTimeMillis()
+        val result = runCatching {
+            service.getRewrite(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                action = RewriteAction.HARDER_RHYME,
+                fullLyrics = lyrics,
+                selection = selection,
+                currentSection = SongSection.VERSE,
+                selectionStart = lyrics.indexOf(selection)
+            )
+        }
+        val value = result.getOrNull().orEmpty()
+        println(
+            "LOCAL_MODEL_RESULT model=$modelLabel case=$caseName elapsedMs=${System.currentTimeMillis() - start} " +
+                "count=${value.length} status=${if (result.isSuccess) "accepted" else "rejected"}"
+        )
+        result.onSuccess { rewrite ->
+            assertTrue("Local harder-rhyme $caseName should return one word", rewrite.matches(Regex("[\\p{L}\\p{N}'-]+")))
+            assertFalse(
+                "Local harder-rhyme $caseName accepted a forbidden preview: $rewrite",
+                forbidden.any { rewrite.equals(it, ignoreCase = true) }
+            )
+            assertNoPromptEcho(caseName, listOf(rewrite))
+        }.onFailure { error ->
+            assertTrue(
+                "Local harder-rhyme $caseName should fail with the single-word guidance, got: ${error.message}",
+                error.message?.contains("No safe rhyme", ignoreCase = true) == true
+            )
+        }
     }
 
     private fun assertNoPromptEcho(caseName: String, lines: List<String>) {

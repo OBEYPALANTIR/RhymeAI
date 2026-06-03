@@ -1,6 +1,10 @@
 package com.rhymeai.app
 
+import android.content.ContentValues
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -24,6 +28,8 @@ import androidx.compose.ui.text.TextRange
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.lifecycle.ViewModelProvider
+import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.util.PronunciationDictionary
 import org.junit.Assert.assertTrue
 import org.junit.After
@@ -177,6 +183,7 @@ class NewFeatureUiTest {
         // the leading look-up (magnifying glass) button.
         composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
         composeRule.onNodeWithTag("inspectAction").assertIsDisplayed()
+        captureRootScreenshot("rewrite-chip-single-word.png")
 
         // Tapping look-up opens the Word Inspector sheet.
         composeRule.onNodeWithTag("inspectAction").performClick()
@@ -197,9 +204,119 @@ class NewFeatureUiTest {
         listOf("Rephrase", "Harder Rhyme", "Punch Up").forEach { action ->
             composeRule.onNodeWithText(action).assertIsDisplayed().performClick()
             composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
+            if (action == "Punch Up") {
+                captureRootScreenshot("rewrite-review-punch-up.png")
+            }
             composeRule.onNodeWithText("Cancel").performClick()
             composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
         }
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun harderRhymeSingleWordPreviewRejectsReality() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val lyrics = """
+            We're lost
+            We don't even know what's real
+            We're lost
+            We go with what we feel
+        """.trimIndent()
+        val selectionStart = lyrics.indexOf("real")
+        val selection = TextRange(selectionStart, selectionStart + "real".length)
+
+        composeRule.onNodeWithTag("lyricsEditor").performClick()
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
+        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
+
+        scenario?.onActivity { activity ->
+            ViewModelProvider(activity)[MainViewModel::class.java]
+                .seedRewritePreviewForTesting(
+                    action = RewriteAction.HARDER_RHYME,
+                    range = selection,
+                    original = "real",
+                    preview = "feel"
+                )
+        }
+
+        composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
+        assertTrue(
+            "Harder Rhyme preview must not show the rejected E2B expansion",
+            composeRule.onAllNodesWithText("reality", substring = true).fetchSemanticsNodes().isEmpty()
+        )
+        composeRule.onNode(hasText("feel", substring = true)).assertIsDisplayed()
+        captureRootScreenshot("harder-rhyme-real-feel-preview.png")
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun harderRhymeReportedExamplesRenderSafePreviewAndRefusal() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val lyrics = """
+            In the land of make believe
+            Where we claim to be free
+            Hypnotized by TVs
+            Personalized social feeds
+
+            Cold corporate walls
+            Birds chirping in phone calls
+        """.trimIndent()
+        composeRule.onNodeWithTag("lyricsEditor").performClick()
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
+
+        val wallsStart = lyrics.indexOf("walls")
+        val wallsRange = TextRange(wallsStart, wallsStart + "walls".length)
+        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(wallsRange)
+        scenario?.onActivity { activity ->
+            ViewModelProvider(activity)[MainViewModel::class.java]
+                .seedRewritePreviewForTesting(
+                    action = RewriteAction.HARDER_RHYME,
+                    range = wallsRange,
+                    original = "walls",
+                    preview = "calls"
+                )
+        }
+
+        composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
+        composeRule.onNode(hasText("calls", substring = true)).assertIsDisplayed()
+        captureRootScreenshot("harder-rhyme-walls-calls-preview.png")
+
+        composeRule.onNodeWithText("Cancel").performClick()
+        val callsStart = lyrics.indexOf("calls")
+        val callsRange = TextRange(callsStart, callsStart + "calls".length)
+        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(callsRange)
+        scenario?.onActivity { activity ->
+            ViewModelProvider(activity)[MainViewModel::class.java]
+                .seedRewriteErrorForTesting(
+                    action = RewriteAction.HARDER_RHYME,
+                    range = callsRange,
+                    original = "calls",
+                    error = "No safe rhyme. Select the line."
+                )
+        }
+
+        composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
+        composeRule.onNode(hasText("No safe rhyme", substring = true)).assertIsDisplayed()
+        captureRootScreenshot("harder-rhyme-no-safe-single-word.png")
+    }
+
+    private fun captureRootScreenshot(name: String) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/RhymeAI-Test")
+        }
+        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: error("Could not create screenshot media row for $name")
+        context.contentResolver.openOutputStream(uri).use { output ->
+            requireNotNull(output) { "Could not open screenshot output stream for $name" }
+            composeRule.onRoot().captureToImage().asAndroidBitmap()
+                .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+        }
+        println("SCREENSHOT_PATH /sdcard/Pictures/RhymeAI-Test/$name")
     }
 
     private fun lyricsEditorFocused(): Boolean {

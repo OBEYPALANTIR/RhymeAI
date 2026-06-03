@@ -1129,7 +1129,7 @@ private fun InlineRewriteReviewBar(
             color = if (error == null) colorScheme.onSurface else colorScheme.error,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
-            maxLines = 1,
+            maxLines = if (error == null) 1 else 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )

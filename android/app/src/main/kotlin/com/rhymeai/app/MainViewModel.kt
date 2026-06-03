@@ -137,6 +137,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     private var rewriteRange: TextRange? = null
     private var rewriteJob: Job? = null
+    private var rewriteRejectedCandidates: Set<String> = emptySet()
     private var suggestionsJob: Job? = null
 
     // Word inspector state
@@ -299,6 +300,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        rewriteRejectedCandidates = emptySet()
         beginRewrite(action, TextRange(start, end), original)
     }
 
@@ -306,20 +308,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val action = rewriteAction ?: return
         val range = rewriteRange ?: return
         val original = rewriteOriginal ?: return
-        beginRewrite(action, range, original)
+        val rejectedPreview = rewritePreview?.let { setOf(it) }.orEmpty()
+        beginRewrite(action, range, original, rejectedPreview)
     }
 
-    private fun beginRewrite(action: RewriteAction, range: TextRange, original: String) {
+    private fun beginRewrite(
+        action: RewriteAction,
+        range: TextRange,
+        original: String,
+        rejectedCandidates: Set<String> = emptySet()
+    ) {
         rewriteJob?.cancel()
         pendingRewriteRange = null
         rewriteAction = action
         rewriteOriginal = original
         rewriteRange = range
+        rewriteRejectedCandidates = rewriteRejectedCandidates + rejectedCandidates + original
         rewritePreview = null
         rewriteError = null
         rewriteLoading = true
         val fullLyrics = lyrics
         val currentSection = currentSongSection(fullLyrics, range.min)
+        val rejectedForRequest = rewriteRejectedCandidates
 
         rewriteJob = viewModelScope.launch {
             try {
@@ -330,7 +340,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     action = action,
                     fullLyrics = fullLyrics,
                     selection = original,
-                    currentSection = currentSection
+                    currentSection = currentSection,
+                    selectionStart = range.min,
+                    rejectedCandidates = rejectedForRequest
                 )
                 rewritePreview = result
             } catch (e: Exception) {
@@ -339,6 +351,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 rewriteLoading = false
             }
         }
+    }
+
+    fun seedRewritePreviewForTesting(action: RewriteAction, range: TextRange, original: String, preview: String) {
+        check(BuildConfig.DEBUG) { "Rewrite preview seeding is only available in debug builds." }
+        rewriteJob?.cancel()
+        pendingRewriteRange = null
+        rewriteAction = action
+        rewriteOriginal = original
+        rewriteRange = range
+        rewriteRejectedCandidates = setOf(original)
+        rewritePreview = preview
+        rewriteError = null
+        rewriteLoading = false
+    }
+
+    fun seedRewriteErrorForTesting(action: RewriteAction, range: TextRange, original: String, error: String) {
+        check(BuildConfig.DEBUG) { "Rewrite error seeding is only available in debug builds." }
+        rewriteJob?.cancel()
+        pendingRewriteRange = null
+        rewriteAction = action
+        rewriteOriginal = original
+        rewriteRange = range
+        rewriteRejectedCandidates = setOf(original)
+        rewritePreview = null
+        rewriteError = error
+        rewriteLoading = false
     }
 
     fun applyRewrite() {
@@ -372,6 +410,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rewriteOriginal = null
         rewriteError = null
         rewriteRange = null
+        rewriteRejectedCandidates = emptySet()
     }
 
     fun cancelRewriteReview() {
