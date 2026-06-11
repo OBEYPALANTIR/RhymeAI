@@ -64,16 +64,18 @@ class SecureKeyStoreTest {
     }
 
     @Test
-    fun migrationIsIdempotentAndPreservesExistingSecureKey() {
+    fun migrationPreservesExistingSecureKeyButStillRequestsLegacyWipe() {
         val store: SecureKeyStore = FakeSecureKeyStore()
         store.setKey("GEMINI", "already-in-secure")
 
-        val migrated = ApiKeyMigration.apply(
+        val hadLegacy = ApiKeyMigration.apply(
             mapOf("GEMINI" to "stale-plaintext", "OPENAI" to "", "CLAUDE" to ""),
             store
         )
 
-        assertFalse(migrated)
+        // The stale plaintext must still be wiped by the caller even though
+        // nothing was moved — otherwise it survives in DataStore forever.
+        assertTrue(hadLegacy)
         assertEquals("already-in-secure", store.getKey("GEMINI"))
     }
 
