@@ -104,7 +104,13 @@ enum SongSection: String, Codable {
         if normalized.contains("verse") { return .verse }
         if normalized.contains("bridge") { return .bridge }
         if normalized.contains("hook") { return .chorus }
-        if normalized.contains("chorus") && !normalized.contains("pre-chorus") { return .chorus }
+        if normalized.contains("chorus") {
+            // "Pre-Chorus" / "Pre Chorus" / "PreChorus" are not the chorus.
+            let squashed = normalized
+                .replacingOccurrences(of: "-", with: "")
+                .replacingOccurrences(of: " ", with: "")
+            return squashed.contains("prechorus") ? .unknown : .chorus
+        }
         return .unknown
     }
 }

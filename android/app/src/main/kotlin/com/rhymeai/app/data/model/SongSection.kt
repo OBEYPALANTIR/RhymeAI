@@ -30,11 +30,13 @@ enum class SongSection(
                 .trim()
                 .lowercase()
 
+            // "Pre-Chorus" / "Pre Chorus" / "PreChorus" are not the chorus.
+            val squashed = normalized.replace("-", "").replace(" ", "")
             return when {
                 normalized.contains("verse") -> VERSE
                 normalized.contains("bridge") -> BRIDGE
                 normalized.contains("hook") -> CHORUS
-                normalized.contains("chorus") && !normalized.contains("pre-chorus") -> CHORUS
+                normalized.contains("chorus") && !squashed.contains("prechorus") -> CHORUS
                 else -> UNKNOWN
             }
         }
