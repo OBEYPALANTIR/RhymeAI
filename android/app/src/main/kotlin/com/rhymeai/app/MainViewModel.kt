@@ -383,7 +383,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val preview = rewritePreview ?: return
         val range = rewriteRange ?: return
         val text = lyrics
-        if (range.start > text.length || range.end > text.length) {
+        // TextRange.start/end follow selection direction; min/max are the safe bounds.
+        if (range.min < 0 || range.max > text.length) {
             dismissRewrite()
             return
         }
@@ -391,10 +392,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             dismissRewrite()
             return
         }
-        val before = text.substring(0, range.start)
-        val after = text.substring(range.end)
+        val before = text.substring(0, range.min)
+        val after = text.substring(range.max)
         val newText = before + preview + after
-        val newCursor = (range.start + preview.length).coerceAtMost(newText.length)
+        val newCursor = (range.min + preview.length).coerceAtMost(newText.length)
         lyricsFieldValue = TextFieldValue(newText, TextRange(newCursor))
         dismissRewrite()
         triggerAutoSave()
@@ -529,6 +530,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun newProject() {
+        autoSaveJob?.cancel()
         pendingRewriteRange = null
         title = ""
         lyricsFieldValue = TextFieldValue("")
@@ -544,6 +546,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadProject(project: SongProject) {
+        autoSaveJob?.cancel()
         pendingRewriteRange = null
         title = project.title
         lyricsFieldValue = TextFieldValue(project.lyrics)
@@ -701,6 +704,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val currentTitle = title
             val currentLyrics = lyrics
             val currentTheme = theme
+            val projectIdAtTrigger = currentProjectId
 
             if (currentTitle.isEmpty() && currentLyrics.isEmpty() && currentTheme.isEmpty()) {
                 saveStatus = SaveStatus.IDLE
@@ -708,42 +712,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             delay(AUTOSAVE_DEBOUNCE_MILLIS)
-            saveStatus = SaveStatus.SAVING
 
-            val projectId = currentProjectId
-            val updatedProjectId: String
-            val updatedProjects = if (projectId == null) {
-                val newId = java.util.UUID.randomUUID().toString()
-                val newProject = SongProject(
-                    id = newId,
-                    title = currentTitle.ifEmpty { "Untitled Song" },
-                    lyrics = currentLyrics,
-                    theme = currentTheme,
-                    updatedAt = System.currentTimeMillis()
-                )
-                updatedProjectId = newId
-                listOf(newProject) + projects
-            } else {
-                updatedProjectId = projectId
-                projects.map {
-                    if (it.id == projectId) it.copy(
+            // The editor switched projects (or this one was trashed) during the
+            // debounce; saving the stale snapshot now would clobber the newly
+            // loaded project or resurrect a deleted one.
+            if (currentProjectId != projectIdAtTrigger) return@launch
+            if (projectIdAtTrigger != null && projects.none { it.id == projectIdAtTrigger }) return@launch
+
+            saveStatus = SaveStatus.SAVING
+            try {
+                val updatedProjectId: String
+                val updatedProjects = if (projectIdAtTrigger == null) {
+                    val newId = java.util.UUID.randomUUID().toString()
+                    val newProject = SongProject(
+                        id = newId,
                         title = currentTitle.ifEmpty { "Untitled Song" },
                         lyrics = currentLyrics,
                         theme = currentTheme,
                         updatedAt = System.currentTimeMillis()
-                    ) else it
+                    )
+                    updatedProjectId = newId
+                    listOf(newProject) + projects
+                } else {
+                    updatedProjectId = projectIdAtTrigger
+                    projects.map {
+                        if (it.id == projectIdAtTrigger) it.copy(
+                            title = currentTitle.ifEmpty { "Untitled Song" },
+                            lyrics = currentLyrics,
+                            theme = currentTheme,
+                            updatedAt = System.currentTimeMillis()
+                        ) else it
+                    }
                 }
+
+                projects = updatedProjects
+                currentProjectId = updatedProjectId
+
+                repo.saveProjects(updatedProjects)
+                repo.setCurrentProjectId(updatedProjectId)
+                repo.saveEditorState(currentTitle, currentLyrics, currentTheme)
+
+                delay(SAVE_STATUS_VISIBLE_MILLIS)
+                saveStatus = SaveStatus.SAVED
+            } finally {
+                // Cancellation mid-save would otherwise leave the indicator stuck on SAVING.
+                if (saveStatus == SaveStatus.SAVING) saveStatus = SaveStatus.IDLE
             }
-
-            projects = updatedProjects
-            currentProjectId = updatedProjectId
-
-            repo.saveProjects(updatedProjects)
-            repo.setCurrentProjectId(updatedProjectId)
-            repo.saveEditorState(currentTitle, currentLyrics, currentTheme)
-
-            delay(SAVE_STATUS_VISIBLE_MILLIS)
-            saveStatus = SaveStatus.SAVED
         }
     }
 
