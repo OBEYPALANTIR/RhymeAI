@@ -7,6 +7,7 @@ enum AIServiceError: LocalizedError {
     case invalidResponse
     case apiError(statusCode: Int, message: String)
     case networkUnavailable
+    case requestTimedOut
     case blockedResponse
     case decodingError
     case noSafeSingleWordRhyme
@@ -23,6 +24,8 @@ enum AIServiceError: LocalizedError {
             return "API error (\(code)): \(msg)"
         case .networkUnavailable:
             return "Provider request failed — check your connection and try again."
+        case .requestTimedOut:
+            return "Provider request timed out — try again in a moment."
         case .blockedResponse:
             return "Provider blocked the response for safety. Try adjusting the lyric or prompt."
         case .decodingError:
@@ -217,6 +220,8 @@ struct AIService {
                     continuation.finish()
                 } catch let error as URLError where error.code == .cancelled {
                     continuation.finish(throwing: CancellationError())
+                } catch let error as URLError where error.code == .timedOut {
+                    continuation.finish(throwing: AIServiceError.requestTimedOut)
                 } catch is URLError {
                     continuation.finish(throwing: AIServiceError.networkUnavailable)
                 } catch {
@@ -410,7 +415,8 @@ struct AIService {
                         // Drain the response so the connection cleans up, but do not
                         // surface the body — provider error payloads can echo back
                         // the request URL or the API key into user-visible text.
-                        for try await _ in bytes {}
+                        // A drain failure must not mask the mapped status message.
+                        do { for try await _ in bytes {} } catch {}
                         throw AIServiceError.apiError(
                             statusCode: httpResponse.statusCode,
                             message: AIService.userFacingStatusMessage(for: httpResponse.statusCode)
@@ -1435,6 +1441,8 @@ struct AIService {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch let error as URLError where error.code == .cancelled {
             throw CancellationError()
+        } catch let error as URLError where error.code == .timedOut {
+            throw AIServiceError.requestTimedOut
         } catch is URLError {
             throw AIServiceError.networkUnavailable
         }
