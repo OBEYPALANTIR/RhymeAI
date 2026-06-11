@@ -79,12 +79,14 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
     }
 
     nonisolated private func ensureBuilt(dictionary: PronunciationDictionary) {
+        // Hold the lock for the whole build: releasing it here let two concurrent
+        // first-callers each scan the full dictionary. Callers are off-main and a
+        // second caller would have to wait for the index anyway.
         lock.lock()
+        defer { lock.unlock() }
         if builtForWordCount == dictionary.wordCount {
-            lock.unlock()
             return
         }
-        lock.unlock()
 
         var perfectBuild: [String: [String]] = [:]
         var multiBuild: [String: [String]] = [:]
@@ -117,12 +119,10 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
             }
         }
 
-        lock.lock()
         perfectByKey = perfectBuild
         multiByKey = multiBuild
         nearByVowel = nearBuild
         builtForWordCount = dictionary.wordCount
-        lock.unlock()
     }
 }
 
@@ -439,8 +439,12 @@ nonisolated enum ProsodyAnalyzer {
         }
 
         if w.hasSuffix("e"), !w.hasSuffix("le"), count > 1 { count -= 1 }
-        if w.hasSuffix("les"), w.count > 4, count > 1 { count -= 1 }
-        if w.hasSuffix("es"), !w.hasSuffix("ses"), !w.hasSuffix("zes"), count > 1 { count -= 1 }
+        // Vowel+"les" is a silent e ("miles"); consonant+"les" is a syllabic le
+        // ("tables") and must keep its count. "les" words are excluded from the
+        // generic "es" rule so they are never decremented twice.
+        let endsInLes = w.hasSuffix("les")
+        if endsInLes, w.count >= 4, vowels.contains(w[w.index(w.endIndex, offsetBy: -4)]), count > 1 { count -= 1 }
+        if !endsInLes, w.hasSuffix("es"), !w.hasSuffix("ses"), !w.hasSuffix("zes"), count > 1 { count -= 1 }
         if w.hasSuffix("ed"), !w.hasSuffix("ted"), !w.hasSuffix("ded"), count > 1 { count -= 1 }
 
         return max(count, 1)
