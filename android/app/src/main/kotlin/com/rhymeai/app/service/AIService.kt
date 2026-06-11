@@ -245,6 +245,7 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
     }
 
     var localModelService: LocalModelService? = null
+        internal set
 
     suspend fun getSuggestions(
         provider: AIProvider,
@@ -450,8 +451,9 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
             if (code !in 200..299) {
                 // Drain the error stream so the connection can clean up, but do not
                 // surface the body — provider error payloads can echo back the
-                // request URL or the API key into user-visible text.
-                connection.errorStream?.bufferedReader()?.use { it.readText() }
+                // request URL or the API key into user-visible text. A drain failure
+                // must not mask the mapped status message either.
+                runCatching { connection.errorStream?.bufferedReader()?.use { it.readText() } }
                 throw RuntimeException(userFacingStatusMessage(code))
             }
 
@@ -461,10 +463,8 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
                     if (line.isEmpty() || line.startsWith(":")) continue
                     if (!line.startsWith("data:")) continue
                     val payload = line.substring(5).trim()
-                    if (payload.isEmpty() || payload == "[DONE]") {
-                        if (payload == "[DONE]") break
-                        continue
-                    }
+                    if (payload == "[DONE]") break
+                    if (payload.isEmpty()) continue
                     emit(payload)
                 }
             }
@@ -962,6 +962,9 @@ $outputRules
             .replace("ee", "i")
             .replace("ea", "i")
             .replace("ie", "i")
+            // "ight" must collapse before the bare "igh" rule so "night"/"invite"
+            // land in the same bucket ("nite"/"vite" share the "ite" tail).
+            .replace("ight", "ite")
             .replace("igh", "i")
             .replace("ai", "a")
             .replace("ay", "a")
