@@ -107,7 +107,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.security:security-crypto:1.1.0")
 
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
 
