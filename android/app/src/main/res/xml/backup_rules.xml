@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    API 31+ backup/transfer rules. The encrypted key prefs are excluded: the
+    AES master key lives in the device's hardware Keystore and never travels,
+    so a restored copy is undecryptable noise — and on Android 9 and below the
+    backup transport is less protected. Project data (DataStore) stays included
+    so lyrics survive device migration.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="rhymeai_secure_keys.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="rhymeai_secure_keys.xml" />
+    </device-transfer>
+</data-extraction-rules>
