@@ -53,6 +53,16 @@ class ProsodyAnalyzerTest {
     }
 
     @Test
+    fun fallbackDistinguishesSyllabicLeFromSilentE() {
+        // None of these are in the injected mini-dictionary, so all hit the fallback.
+        // Consonant+"les" is a spoken syllable; vowel+"les" is a silent e.
+        assertEquals(2, ProsodyAnalyzer.analyzeWord("tables", dictionary).syllableCount)
+        assertEquals(3, ProsodyAnalyzer.analyzeWord("examples", dictionary).syllableCount)
+        assertEquals(1, ProsodyAnalyzer.analyzeWord("miles", dictionary).syllableCount)
+        assertEquals(1, ProsodyAnalyzer.analyzeWord("makes", dictionary).syllableCount)
+    }
+
+    @Test
     fun normalizesPunctuationDigitsAndInternalApostrophes() {
         assertEquals("don't", ProsodyAnalyzer.normalizeWord("  'Don't!!42"))
 
