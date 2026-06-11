@@ -116,8 +116,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun apiKeySnapshot(): Map<String, String> = repo.apiKeySnapshot()
-
     // Local model state
     var localModelPath by mutableStateOf<String?>(null)
     var localModelLoading by mutableStateOf(false)

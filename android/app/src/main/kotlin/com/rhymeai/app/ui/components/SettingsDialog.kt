@@ -1,6 +1,7 @@
 package com.rhymeai.app.ui.components
 
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.launch
@@ -82,7 +83,7 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsDialog(
-    apiKeys: Map<String, String>,
+    apiKeyPresence: Map<String, Boolean>,
     currentProvider: AIProvider,
     currentModel: AIModel,
     localModelLoading: Boolean,
@@ -101,9 +102,11 @@ fun SettingsDialog(
     val density = LocalDensity.current
     var selectedProvider by remember { mutableStateOf(currentProvider) }
     var selectedModel by remember { mutableStateOf(currentModel) }
-    var geminiKey by remember { mutableStateOf(apiKeys["GEMINI"] ?: "") }
-    var openaiKey by remember { mutableStateOf(apiKeys["OPENAI"] ?: "") }
-    var claudeKey by remember { mutableStateOf(apiKeys["CLAUDE"] ?: "") }
+    // Saved key values never enter Compose state: fields are write-only and start
+    // empty; an empty field on save leaves the stored key untouched.
+    var geminiKey by remember { mutableStateOf("") }
+    var openaiKey by remember { mutableStateOf("") }
+    var claudeKey by remember { mutableStateOf("") }
     var showKey by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
     var modelExpanded by remember { mutableStateOf(false) }
@@ -114,6 +117,7 @@ fun SettingsDialog(
         AIProvider.CLAUDE -> claudeKey
         AIProvider.LOCAL -> ""
     }
+    val currentProviderHasSavedKey = apiKeyPresence[selectedProvider.name] == true
 
     // File picker for local models
     var copyingFile by remember { mutableStateOf(false) }
@@ -187,7 +191,7 @@ fun SettingsDialog(
                     useDownloadedModel(model)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.w("RhymeAI", "Gemma download failed", e)
                 tempFile.delete()
                 withContext(Dispatchers.Main) {
                     downloadingModel = null
@@ -231,7 +235,7 @@ fun SettingsDialog(
                         saved = true
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    Log.w("RhymeAI", "Local model file copy failed", e)
                     withContext(Dispatchers.Main) {
                         copyingFile = false
                         copyError = "Failed to load file: ${e.message}"
@@ -557,7 +561,12 @@ fun SettingsDialog(
                                     }
                                     saved = false
                                 },
-                                placeholder = { Text("Paste your API key here...", fontSize = 14.sp) },
+                                placeholder = {
+                                    Text(
+                                        if (currentProviderHasSavedKey) "Key saved — type to replace" else "Paste your API key here...",
+                                        fontSize = 14.sp
+                                    )
+                                },
                                 leadingIcon = {
                                     Icon(Icons.Default.Key, null, tint = colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
                                 },
@@ -578,6 +587,15 @@ fun SettingsDialog(
                                 singleLine = true,
                                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp)
                             )
+
+                            if (currentProviderHasSavedKey && currentKeyForProvider.isEmpty()) {
+                                TextButton(onClick = {
+                                    onSaveApiKey(selectedProvider, "")
+                                    saved = false
+                                }) {
+                                    Text("Remove saved key", fontSize = 12.sp)
+                                }
+                            }
 
                             Spacer(Modifier.height(20.dp))
 
@@ -634,9 +652,10 @@ fun SettingsDialog(
 
                 Button(
                     onClick = {
-                        onSaveApiKey(AIProvider.GEMINI, geminiKey.trim())
-                        onSaveApiKey(AIProvider.OPENAI, openaiKey.trim())
-                        onSaveApiKey(AIProvider.CLAUDE, claudeKey.trim())
+                        // Empty fields mean "keep the stored key" — only save typed values.
+                        if (geminiKey.isNotBlank()) onSaveApiKey(AIProvider.GEMINI, geminiKey.trim())
+                        if (openaiKey.isNotBlank()) onSaveApiKey(AIProvider.OPENAI, openaiKey.trim())
+                        if (claudeKey.isNotBlank()) onSaveApiKey(AIProvider.CLAUDE, claudeKey.trim())
                         onSaveProvider(selectedProvider)
                         if (selectedProvider != AIProvider.LOCAL) {
                             onSaveModel(selectedModel)

@@ -130,7 +130,7 @@ class MainActivity : ComponentActivity() {
 
                     if (viewModel.showSettingsDialog) {
                         SettingsDialog(
-                            apiKeys = viewModel.apiKeySnapshot(),
+                            apiKeyPresence = viewModel.apiKeyPresence,
                             currentProvider = viewModel.selectedProvider,
                             currentModel = viewModel.selectedModel,
                             localModelLoading = viewModel.localModelLoading,
