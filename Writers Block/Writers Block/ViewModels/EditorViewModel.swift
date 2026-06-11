@@ -73,6 +73,7 @@ final class EditorViewModel: ObservableObject {
     @Published var inspectorSynonymsLoading: Bool = false
     @Published var inspectorSynonymsError: String?
     private var inspectorSynonymsTask: Task<Void, Never>?
+    private var inspectorAnalysisTask: Task<Void, Never>?
 
     var showInspector: Bool { inspectorWord != nil }
 
@@ -257,6 +258,11 @@ final class EditorViewModel: ObservableObject {
 
     deinit {
         trashSchedulerTask?.cancel()
+        autoSaveTask?.cancel()
+        rewriteTask?.cancel()
+        suggestionsTask?.cancel()
+        inspectorSynonymsTask?.cancel()
+        inspectorAnalysisTask?.cancel()
     }
 
     // MARK: - Rhyme Context
@@ -271,12 +277,28 @@ final class EditorViewModel: ObservableObject {
         rhymeContext = computeRhymeContext()
     }
 
+    /// `cursorPosition` comes from UITextView in UTF-16 units, but the String
+    /// operations in this file count Characters (grapheme clusters). Convert once
+    /// at the boundary so emoji/CJK lyrics don't skew offsets; snaps to the nearest
+    /// preceding grapheme boundary when the offset lands inside a cluster.
+    static func characterOffset(forUTF16Offset offset: Int, in text: String) -> Int {
+        var clamped = min(max(offset, 0), text.utf16.count)
+        while clamped > 0 {
+            if let utf16Index = text.utf16.index(text.utf16.startIndex, offsetBy: clamped, limitedBy: text.utf16.endIndex),
+               let characterIndex = utf16Index.samePosition(in: text) {
+                return text.distance(from: text.startIndex, to: characterIndex)
+            }
+            clamped -= 1
+        }
+        return 0
+    }
+
     func computeRhymeContext() -> RhymeContext {
         guard !lyrics.isEmpty else {
             return RhymeContext.emptyContext(currentLetter: String(activeRhymeScheme.first ?? Character("A")))
         }
 
-        let pos = min(max(cursorPosition, 0), lyrics.count)
+        let pos = Self.characterOffset(forUTF16Offset: cursorPosition, in: lyrics)
         let currentSection = currentSongSection(in: lyrics, cursorPosition: pos)
         let textIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
         let textBeforeCursor = String(lyrics.prefix(pos))
@@ -473,7 +495,10 @@ final class EditorViewModel: ObservableObject {
         rewriteError = nil
         rewriteLoading = true
         let fullLyrics = lyrics
-        let currentSection = currentSongSection(in: fullLyrics, cursorPosition: range.location)
+        let currentSection = currentSongSection(
+            in: fullLyrics,
+            cursorPosition: Self.characterOffset(forUTF16Offset: range.location, in: fullLyrics)
+        )
         let rejectedForRequest = rewriteRejectedCandidates
 
         rewriteTask = Task { @MainActor in
@@ -540,19 +565,22 @@ final class EditorViewModel: ObservableObject {
 
     func openInspector(word: String, range: NSRange) {
         inspectorSynonymsTask?.cancel()
+        inspectorAnalysisTask?.cancel()
         inspectorWord = word
         inspectorRange = range
+        inspectorProsody = nil
+        inspectorMatches = nil
         inspectorSynonyms = []
         inspectorSynonymsError = nil
 
-        Task { @MainActor in
+        inspectorAnalysisTask = Task { @MainActor in
             let prosody = await Task.detached(priority: .userInitiated) {
                 ProsodyAnalyzer.analyzeWord(word)
             }.value
             let matches = await Task.detached(priority: .userInitiated) {
                 ProsodyAnalyzer.findRhymes(for: word)
             }.value
-            guard inspectorWord == word else { return }
+            guard !Task.isCancelled, inspectorWord == word else { return }
             inspectorProsody = prosody
             inspectorMatches = matches
         }
@@ -641,6 +669,8 @@ final class EditorViewModel: ObservableObject {
     func dismissInspector() {
         inspectorSynonymsTask?.cancel()
         inspectorSynonymsTask = nil
+        inspectorAnalysisTask?.cancel()
+        inspectorAnalysisTask = nil
         inspectorWord = nil
         inspectorRange = nil
         inspectorProsody = nil
@@ -654,7 +684,7 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Suggestion Insertion
 
     func insertSuggestion(_ suggestion: String) {
-        let pos = min(cursorPosition, lyrics.count)
+        let pos = Self.characterOffset(forUTF16Offset: cursorPosition, in: lyrics)
         let beforeIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
         let before = String(lyrics[lyrics.startIndex..<beforeIndex])
         let after = String(lyrics[beforeIndex..<lyrics.endIndex])
@@ -663,7 +693,8 @@ final class EditorViewModel: ObservableObject {
         let insertText = (needsNewline ? "\n" : "") + suggestion + "\n"
 
         lyrics = before + insertText + after
-        cursorPosition = pos + insertText.count
+        // cursorPosition is a UTF-16 offset (UITextView units).
+        cursorPosition = before.utf16.count + insertText.utf16.count
         suggestions = []
         triggerAutoSave()
     }
@@ -671,6 +702,7 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Project Management
 
     func newProject() {
+        autoSaveTask?.cancel()
         title = ""
         lyrics = ""
         theme = ""
@@ -684,6 +716,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func loadProject(_ project: SongProject) {
+        autoSaveTask?.cancel()
         title = project.title
         lyrics = project.lyrics
         theme = project.theme
@@ -758,8 +791,9 @@ final class EditorViewModel: ObservableObject {
 
         let delay = max(nextProject.deleteAfter.timeIntervalSinceNow, 0)
         trashSchedulerTask = Task { @MainActor [weak self] in
-            let nanoseconds = UInt64(delay * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: nanoseconds)
+            // Duration-based sleep — manual Double→UInt64 nanosecond math overflows
+            // for far-future dates and would fire the purge immediately.
+            try? await Task.sleep(for: .seconds(delay))
             self?.trashSchedulerTask = nil
             self?.purgeExpiredTrashedProjects()
         }
@@ -801,9 +835,9 @@ final class EditorViewModel: ObservableObject {
     func positionSeededProsodyCursorForUITests() {
         guard ProcessInfo.processInfo.arguments.contains("--ui-test-seed-prosody-song") else { return }
         if let range = lyrics.range(of: "follow music") {
-            cursorPosition = lyrics.distance(from: lyrics.startIndex, to: range.lowerBound)
+            cursorPosition = lyrics.utf16.distance(from: lyrics.utf16.startIndex, to: range.lowerBound)
         } else {
-            cursorPosition = max(lyrics.count - 1, 0)
+            cursorPosition = max(lyrics.utf16.count - 1, 0)
         }
     }
 
@@ -843,7 +877,7 @@ final class EditorViewModel: ObservableObject {
         title = project.title
         lyrics = project.lyrics
         theme = project.theme
-        cursorPosition = project.lyrics.count
+        cursorPosition = project.lyrics.utf16.count
         currentProjectId = project.id
         suggestions = []
         errorMessage = nil
@@ -867,7 +901,7 @@ final class EditorViewModel: ObservableObject {
         title = project.title
         lyrics = project.lyrics
         theme = project.theme
-        cursorPosition = project.lyrics.count
+        cursorPosition = project.lyrics.utf16.count
         currentProjectId = project.id
         suggestions = []
         errorMessage = nil
@@ -907,6 +941,7 @@ final class EditorViewModel: ObservableObject {
 
     func triggerAutoSave() {
         autoSaveTask?.cancel()
+        let projectIdAtTrigger = currentProjectId
         autoSaveTask = Task { @MainActor [weak self] in
             guard let self else { return }
             guard !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
@@ -918,7 +953,18 @@ final class EditorViewModel: ObservableObject {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
 
-            guard let context = modelContext else { return }
+            // The editor switched projects (or cleared) during the debounce —
+            // saving now would write into the wrong project or create an empty one.
+            guard currentProjectId == projectIdAtTrigger,
+                  !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
+                saveStatus = .idle
+                return
+            }
+
+            guard let context = modelContext else {
+                saveStatus = .idle
+                return
+            }
 
             if let projectId = currentProjectId {
                 let descriptor = FetchDescriptor<SongProject>(
@@ -950,10 +996,14 @@ final class EditorViewModel: ObservableObject {
     func saveApiKey(provider: AIProvider, key: String) {
         if key.isEmpty {
             keychainStore.deleteKey(provider: provider.rawValue)
-        } else {
-            keychainStore.setKey(provider: provider.rawValue, key: key)
+            apiKeyPresence[provider.rawValue] = false
+            return
         }
-        apiKeyPresence[provider.rawValue] = !key.isEmpty
+        let stored = keychainStore.setKey(provider: provider.rawValue, key: key)
+        if !stored {
+            errorMessage = "Couldn't save the \(provider.displayName) API key to the Keychain. Try again after unlocking the device."
+        }
+        apiKeyPresence[provider.rawValue] = stored
     }
 
     func saveProvider(_ provider: AIProvider) {

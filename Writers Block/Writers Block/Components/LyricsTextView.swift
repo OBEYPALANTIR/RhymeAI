@@ -44,8 +44,9 @@ struct LyricsTextView: UIViewRepresentable {
         if textView.text != currentRenderedText {
             let selectedRange = textView.selectedRange
             textView.text = currentRenderedText
-            // Restore selection if still valid
-            if selectedRange.location <= currentRenderedText.utf16.count {
+            // Restore selection if still valid — the whole range must fit, not just
+            // its start, or restoring after the text shrank raises NSRangeException.
+            if selectedRange.location + selectedRange.length <= currentRenderedText.utf16.count {
                 textView.selectedRange = selectedRange
             }
         }
