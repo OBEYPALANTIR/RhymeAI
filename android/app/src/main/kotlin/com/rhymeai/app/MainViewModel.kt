@@ -100,7 +100,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var apiKeyPresence by mutableStateOf<Map<String, Boolean>>(emptyMap())
         private set
 
-    val currentApiKey: String get() = apiKey(selectedProvider)
+    /**
+     * EncryptedSharedPreferences hits the Android Keystore on first read, which can
+     * take tens of milliseconds — resolve off the main thread inside request coroutines.
+     */
+    private suspend fun resolveApiKey(): String =
+        withContext(Dispatchers.IO) { apiKey(selectedProvider) }
 
     fun apiKey(provider: AIProvider): String {
         val storedKey = repo.getApiKey(provider.name)
@@ -262,7 +267,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 var emittedSuggestion = false
                 aiService.streamSuggestions(
-                    selectedProvider, currentApiKey, selectedModel.id, theme, lyrics, context.targetLine,
+                    selectedProvider, resolveApiKey(), selectedModel.id, theme, lyrics, context.targetLine,
                     rhymeType, activeRhymeScheme, context.currentLetter, context.currentSection, rhymeComplexity, useWholeSongContext
                 ).collect { line ->
                     emittedSuggestion = true
@@ -333,7 +338,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val result = aiService.getRewrite(
                     provider = selectedProvider,
-                    apiKey = currentApiKey,
+                    apiKey = resolveApiKey(),
                     modelId = selectedModel.id,
                     action = action,
                     fullLyrics = fullLyrics,
@@ -460,7 +465,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val results = aiService.getSynonyms(
                     provider = selectedProvider,
-                    apiKey = currentApiKey,
+                    apiKey = resolveApiKey(),
                     modelId = selectedModel.id,
                     word = word,
                     lineContext = lineContext
