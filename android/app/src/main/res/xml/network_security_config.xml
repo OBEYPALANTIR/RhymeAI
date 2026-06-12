@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pins the AI provider domains to their CA SPKIs (verified 2026-06-12: all
+     three chain to Google Trust Services, cross-signed by GlobalSign). The
+     expiration makes pinning fail-open to default trust so an upstream CA
+     migration can't permanently break the app; ISRG/DigiCert are backups in
+     case OpenAI/Anthropic hop CAs before then. -->
+<network-security-config>
+    <domain-config>
+        <domain includeSubdomains="false">generativelanguage.googleapis.com</domain>
+        <domain includeSubdomains="false">api.openai.com</domain>
+        <domain includeSubdomains="false">api.anthropic.com</domain>
+        <pin-set expiration="2027-06-12">
+            <!-- GTS Root R1 -->
+            <pin digest="SHA-256">hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</pin>
+            <!-- GTS Root R2 -->
+            <pin digest="SHA-256">Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=</pin>
+            <!-- GTS Root R3 -->
+            <pin digest="SHA-256">QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=</pin>
+            <!-- GTS Root R4 -->
+            <pin digest="SHA-256">mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=</pin>
+            <!-- GlobalSign Root CA (GTS cross-sign anchor on older trust stores) -->
+            <pin digest="SHA-256">K87oWBWM9UZfyddvDfoxL+8lpNyoUB2ptGtn0fv6G2Q=</pin>
+            <!-- ISRG Root X1 (backup) -->
+            <pin digest="SHA-256">C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=</pin>
+            <!-- DigiCert Global Root CA (backup) -->
+            <pin digest="SHA-256">r/mIkG3eEpVdm+u/ko/cwxzOMo1bk4TyHIlByibiA5E=</pin>
+        </pin-set>
+    </domain-config>
+</network-security-config>
