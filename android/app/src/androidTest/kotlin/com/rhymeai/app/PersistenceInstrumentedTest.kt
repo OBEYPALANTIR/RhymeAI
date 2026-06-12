@@ -52,8 +52,11 @@ class PersistenceInstrumentedTest {
 
         waitUntil {
             runBlocking {
+                // Editor state is the last of the three autosave writes; waiting on
+                // it too keeps this from racing the project/current-id emissions.
                 repo.projectsFlow.first().any { it.lyrics == imported.lyrics } &&
-                    repo.currentProjectIdFlow.first() != null
+                    repo.currentProjectIdFlow.first() != null &&
+                    repo.editorStateFlow().first().second == imported.lyrics
             }
         }
 
@@ -91,8 +94,11 @@ class PersistenceInstrumentedTest {
 
         waitUntil {
             runBlocking {
+                // Editor state is the last of the three autosave writes; waiting on
+                // it too keeps this from racing the project/current-id emissions.
                 repo.projectsFlow.first().any { it.title == "Autosaved Draft" } &&
-                    repo.currentProjectIdFlow.first() != null
+                    repo.currentProjectIdFlow.first() != null &&
+                    repo.editorStateFlow().first().first == "Autosaved Draft"
             }
         }
 
