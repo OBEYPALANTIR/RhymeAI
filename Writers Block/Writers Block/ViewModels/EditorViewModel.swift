@@ -221,6 +221,16 @@ final class EditorViewModel: ObservableObject {
         }
         #endif
 
+        if runningUITestInMemory {
+            // Stray provider/model defaults can outlive the app container
+            // (cfprefsd caching, or a simulator-level preference domain written
+            // via `simctl spawn defaults write`) and silently reroute UI tests
+            // to another provider. Writing the baseline — not removing — is what
+            // shadows those merged fallback domains.
+            UserDefaults.standard.set(AIProvider.gemini.rawValue, forKey: "selectedProvider")
+            UserDefaults.standard.set(AIModel.default.rawValue, forKey: "selectedModel")
+        }
+
         let providerRaw = UserDefaults.standard.string(forKey: "selectedProvider") ?? AIProvider.gemini.rawValue
         selectedProvider = AIProvider(rawValue: providerRaw) ?? .gemini
         let modelRaw = UserDefaults.standard.string(forKey: "selectedModel") ?? AIModel.default.rawValue
