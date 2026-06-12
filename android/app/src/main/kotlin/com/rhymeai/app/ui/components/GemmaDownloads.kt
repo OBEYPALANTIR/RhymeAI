@@ -10,6 +10,21 @@ import java.util.Locale
 internal const val DOWNLOAD_BUFFER_BYTES = 8 * 1024 * 1024
 private const val MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES = 750L * 1024L * 1024L
 
+// E4B needs roughly 7 GB of RAM headroom to run without thrashing. On a real 8 GB device
+// the kernel and OS reserve ~1–2 GB, leaving ~6 GB usable, which causes heavy swap pressure
+// under sustained generation. 10 GB total gives a safe margin for E4B; below that, steer
+// users toward E2B which fits comfortably on phones with 4–6 GB total RAM.
+internal const val RAM_THRESHOLD_E4B_BYTES = 10L * 1024L * 1024L * 1024L  // 10 GB
+
+/** Returns the model index in [GEMMA_DOWNLOADS] that best fits the device's total RAM. */
+internal fun recommendedGemmaModel(totalRamBytes: Long): GemmaDownload {
+    return if (totalRamBytes >= RAM_THRESHOLD_E4B_BYTES) {
+        GEMMA_DOWNLOADS[1] // E4B
+    } else {
+        GEMMA_DOWNLOADS[0] // E2B — safe on 4–8 GB phones
+    }
+}
+
 internal data class GemmaDownload(
     val label: String,
     val description: String,

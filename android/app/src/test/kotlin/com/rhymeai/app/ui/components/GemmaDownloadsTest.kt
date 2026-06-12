@@ -109,6 +109,47 @@ class GemmaDownloadsTest {
         assertEquals("100%", formatDownloadProgress(1f))
     }
 
+    // --- recommendedGemmaModel ---
+
+    @Test
+    fun recommendedGemmaModelReturnsE2BForTypicalPhone() {
+        // 8 GB phone (most Android flagships) — E4B thrashes here, so E2B is correct.
+        val eightGb = 8L * 1024L * 1024L * 1024L
+        val rec = recommendedGemmaModel(eightGb)
+        assertEquals(GEMMA_DOWNLOADS[0].fileName, rec.fileName)
+    }
+
+    @Test
+    fun recommendedGemmaModelReturnsE2BAtBoundaryJustBelow10GB() {
+        // One byte below the 10 GB threshold — still E2B territory.
+        val justBelow = RAM_THRESHOLD_E4B_BYTES - 1L
+        val rec = recommendedGemmaModel(justBelow)
+        assertEquals(GEMMA_DOWNLOADS[0].fileName, rec.fileName)
+    }
+
+    @Test
+    fun recommendedGemmaModelReturnsE4BAtExactThreshold() {
+        // At exactly 10 GB total RAM the device has enough headroom for E4B.
+        val rec = recommendedGemmaModel(RAM_THRESHOLD_E4B_BYTES)
+        assertEquals(GEMMA_DOWNLOADS[1].fileName, rec.fileName)
+    }
+
+    @Test
+    fun recommendedGemmaModelReturnsE4BForHighRamDevice() {
+        // 16 GB flagship tablet / desktop-class device — E4B should be recommended.
+        val sixteenGb = 16L * 1024L * 1024L * 1024L
+        val rec = recommendedGemmaModel(sixteenGb)
+        assertEquals(GEMMA_DOWNLOADS[1].fileName, rec.fileName)
+    }
+
+    @Test
+    fun recommendedGemmaModelReturnsE2BForMinimalLowEndDevice() {
+        // 3 GB budget device — definitely not enough for E4B.
+        val threeGb = 3L * 1024L * 1024L * 1024L
+        val rec = recommendedGemmaModel(threeGb)
+        assertEquals(GEMMA_DOWNLOADS[0].fileName, rec.fileName)
+    }
+
     private fun tinyGemma(
         url: String = "https://example.invalid/tiny.gguf",
         expectedBytes: Long

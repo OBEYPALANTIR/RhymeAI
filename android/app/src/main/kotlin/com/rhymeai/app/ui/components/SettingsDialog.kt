@@ -1,5 +1,7 @@
 package com.rhymeai.app.ui.components
 
+import android.app.ActivityManager
+import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -100,6 +102,18 @@ fun SettingsDialog(
     val colorScheme = MaterialTheme.colorScheme
     val context = LocalContext.current
     val density = LocalDensity.current
+
+    // Read total RAM once — used to show which Gemma model fits this device.
+    val deviceTotalRamBytes = remember(context) {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val info = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(info)
+        info.totalMem
+    }
+    val recommendedModel = remember(deviceTotalRamBytes) {
+        recommendedGemmaModel(deviceTotalRamBytes)
+    }
+
     var selectedProvider by remember { mutableStateOf(currentProvider) }
     var selectedModel by remember { mutableStateOf(currentModel) }
     // Saved key values never enter Compose state: fields are write-only and start
@@ -415,6 +429,10 @@ fun SettingsDialog(
                                         model.description
                                     }
                                     val isDownloadingThis = downloadingModel?.fileName == model.fileName
+                                    val isRecommended = model.fileName == recommendedModel.fileName
+                                    // Warn on the non-recommended model so users know it may thrash;
+                                    // downloading is still allowed — just not the best fit for this device.
+                                    val exceedsRam = !isRecommended
                                     OutlinedButton(
                                         onClick = {
                                             if (isInstalled) {
@@ -449,12 +467,38 @@ fun SettingsDialog(
                                                     .padding(start = 8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(2.dp)
                                             ) {
-                                                Text(model.label, fontWeight = FontWeight.Medium)
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(model.label, fontWeight = FontWeight.Medium)
+                                                    if (isRecommended) {
+                                                        Text(
+                                                            "Recommended for this device",
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Medium,
+                                                            color = colorScheme.onTertiaryContainer,
+                                                            modifier = Modifier
+                                                                .background(
+                                                                    colorScheme.tertiaryContainer,
+                                                                    RoundedCornerShape(4.dp)
+                                                                )
+                                                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
                                                 Text(
                                                     installedLabel,
                                                     fontSize = 11.sp,
                                                     color = colorScheme.onSurfaceVariant
                                                 )
+                                                if (exceedsRam) {
+                                                    Text(
+                                                        "May be slow on this device — needs more memory",
+                                                        fontSize = 11.sp,
+                                                        color = colorScheme.error.copy(alpha = 0.75f)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
