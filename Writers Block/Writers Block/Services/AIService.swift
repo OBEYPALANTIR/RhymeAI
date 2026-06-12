@@ -117,10 +117,9 @@ struct AIService {
                 // Same gate as the prompt's constraint block: only filter when
                 // the model was actually told which ending words to use.
                 let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
-                let parsed = try await callLocal(
-                    prompt: prompt,
-                    limit: filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
-                )
+                // The local prompt asks for suggestionCount lines even when
+                // constrained (see buildLocalPrompt); rank() still verifies them.
+                let parsed = try await callLocal(prompt: prompt, limit: Self.suggestionCount)
                 guard let filter else { return parsed }
                 return filter.rank(parsed, want: Self.suggestionCount)
             }
@@ -708,7 +707,10 @@ struct AIService {
         let constraintBlock = Self.rhymeConstraintBlock(targetRhymeLine: targetRhymeLine, rhymeType: rhymeType)
         // Over-generate 2x when ending words are constrained so the rhyme
         // filter can discard misses and still deliver a full set.
-        let requestCount = constraintBlock == nil ? Self.suggestionCount : Self.suggestionCount * 2
+        // Cloud over-generates 2x for the rhyme filter; the on-device model is
+        // slow and small, and doubling its output length doubles the chance of
+        // malformed output — keep the ask at 6 and let the filter re-rank.
+        let requestCount = Self.suggestionCount
 
         var rhymeHint: String
         if let targetRhymeLine {
@@ -749,7 +751,7 @@ struct AIService {
             model: model,
             instructions: "You are an expert songwriter and lyricist. Return concise lyric line suggestions only."
         )
-        let response = try await session.respond(to: prompt)
+        let response = try await session.respond(to: prompt, options: Self.localGenerationOptions(maxTokens: 256))
         let parsed = parseSuggestionList(response.content, limit: limit)
         guard !parsed.isEmpty else {
             throw AIServiceError.decodingError
@@ -882,7 +884,15 @@ struct AIService {
             throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
         }
         let session = LanguageModelSession(model: model, instructions: instructions)
-        return try await session.respond(to: prompt).content
+        return try await session.respond(to: prompt, options: Self.localGenerationOptions(maxTokens: 256)).content
+    }
+
+    /// Unbounded on-device generation can ramble until it overflows the 4k
+    /// context window (observed: a 55s harder-rhyme rewrite dying at 4089
+    /// tokens). Capping the response keeps latency and the window in check.
+    @available(iOS 26.0, *)
+    private static func localGenerationOptions(maxTokens: Int) -> GenerationOptions {
+        GenerationOptions(maximumResponseTokens: maxTokens)
     }
 
     // MARK: - Rewrite
@@ -1009,7 +1019,7 @@ struct AIService {
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
         Action: \(action.label).
-        Instruction: \(action.instruction)
+        Instruction: \(Self.localRewriteInstruction(for: action))
 
         Lyrics so far:
         \(lyrics)
@@ -1021,6 +1031,19 @@ struct AIService {
         Rules:
         \(outputRules)
         """
+    }
+
+    /// Apple's on-device guardrails reject the cloud punch-up wording
+    /// ("visceral", "aggressive", "hit harder") as unsafe content, so the
+    /// local prompt uses a softer instruction with the same creative intent.
+    /// Cloud providers keep RewriteAction.instruction unchanged.
+    private static func localRewriteInstruction(for action: RewriteAction) -> String {
+        switch action {
+        case .punchUp:
+            return "Rewrite this passage with sharper, bolder, more vivid imagery. Preserve meaning and rhyme positions. Avoid clichés. Make every line land with more impact."
+        case .rephrase, .harderRhyme:
+            return action.instruction
+        }
     }
 
     private func callGeminiRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
@@ -1137,8 +1160,13 @@ struct AIService {
 
         if !isSingleWordSelection(selection) {
             let prompt = buildLocalRewritePrompt(action: action, lyrics: lyrics, selection: selection, currentSection: currentSection)
-            let response = try await session.respond(to: prompt)
-            let parsed = cleanLocalRewrite(response.content, selection: selection)
+            let content: String
+            do {
+                content = try await session.respond(to: prompt, options: Self.localGenerationOptions(maxTokens: 256)).content
+            } catch {
+                throw Self.mapLocalGenerationError(error)
+            }
+            let parsed = cleanLocalRewrite(content, selection: selection)
             guard !parsed.isEmpty else {
                 throw AIServiceError.decodingError
             }
@@ -1147,6 +1175,7 @@ struct AIService {
 
         let context = singleWordRewriteContext(lyrics: lyrics, selection: selection, selectionStart: selectionStart)
         var rejectedKeys = rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates)
+        var generationError: Error?
         for _ in 0..<Self.localRewriteAttempts {
             let prompt = buildLocalRewritePrompt(
                 action: action,
@@ -1156,8 +1185,17 @@ struct AIService {
                 selectionStart: selectionStart,
                 rejectedCandidates: rejectedKeys
             )
-            let response = try await session.respond(to: prompt)
-            let parsed = cleanLocalRewrite(response.content, selection: selection)
+            let content: String
+            do {
+                content = try await session.respond(to: prompt, options: Self.localGenerationOptions(maxTokens: 32)).content
+            } catch {
+                // Guardrail refusal or transient generation failure: keep the
+                // deterministic fallback table in play instead of surfacing a
+                // raw FoundationModels error for a single-word selection.
+                generationError = error
+                continue
+            }
+            let parsed = cleanLocalRewrite(content, selection: selection)
             let accepted = acceptLocalSingleWordRewrite(
                 candidate: parsed,
                 selection: selection,
@@ -1183,10 +1221,24 @@ struct AIService {
         if !fallback.isEmpty {
             return fallback
         }
+        if let generationError {
+            throw Self.mapLocalGenerationError(generationError)
+        }
         if action == .harderRhyme {
             throw AIServiceError.noSafeSingleWordRhyme
         }
         throw AIServiceError.decodingError
+    }
+
+    /// Surfaces on-device guardrail refusals as the recognized safety error
+    /// instead of a raw FoundationModels failure.
+    @available(iOS 26.0, *)
+    private static func mapLocalGenerationError(_ error: Error) -> Error {
+        if let generationError = error as? LanguageModelSession.GenerationError,
+           case .guardrailViolation = generationError {
+            return AIServiceError.blockedResponse
+        }
+        return error
     }
 
     func acceptLocalSingleWordRewrite(candidate: String, selection: String, action: RewriteAction) -> String {

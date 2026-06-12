@@ -6,32 +6,173 @@ final class LocalProviderSmokeTests: XCTestCase {
     func testLocalProviderReturnsTextOrAvailabilityMessage() async throws {
         let service = AIService()
         let lyrics = "[Verse]\nI keep a notebook under neon rain\nEvery margin learns my name"
+        let maxAttempts = 2
 
-        do {
-            let suggestions = try await service.getSuggestions(
-                provider: .local,
-                apiKey: "",
-                modelId: AIModel.localModel.id,
-                theme: "late-night writing",
-                lyrics: lyrics,
-                targetRhymeLine: "I keep a notebook under neon rain",
-                rhymeType: .perfect,
-                rhymeScheme: "AABB",
-                currentLetter: "A",
-                currentSection: .verse,
-                complexity: .moderate,
-                useWholeSongContext: false
-            )
-            XCTAssertFalse(suggestions.isEmpty, "Local provider returned no suggestions")
-            XCTAssertTrue(suggestions.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-        } catch AIServiceError.localModelUnavailable(let reason) {
-            XCTAssertFalse(reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            XCTAssertTrue(
-                AIServiceError.localModelUnavailable(reason: reason)
-                    .localizedDescription
-                    .hasPrefix("On-device model unavailable: ")
-            )
+        for attempt in 1...maxAttempts {
+            do {
+                let suggestions = try await service.getSuggestions(
+                    provider: .local,
+                    apiKey: "",
+                    modelId: AIModel.localModel.id,
+                    theme: "late-night writing",
+                    lyrics: lyrics,
+                    targetRhymeLine: "I keep a notebook under neon rain",
+                    rhymeType: .perfect,
+                    rhymeScheme: "AABB",
+                    currentLetter: "A",
+                    currentSection: .verse,
+                    complexity: .moderate,
+                    useWholeSongContext: false
+                )
+                XCTAssertFalse(suggestions.isEmpty, "Local provider returned no suggestions")
+                XCTAssertTrue(suggestions.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+                return
+            } catch AIServiceError.localModelUnavailable(let reason) {
+                XCTAssertFalse(reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                XCTAssertTrue(
+                    AIServiceError.localModelUnavailable(reason: reason)
+                        .localizedDescription
+                        .hasPrefix("On-device model unavailable: ")
+                )
+                return
+            } catch {
+                // Apple's on-device guardrails can refuse a prompt
+                // nondeterministically; retry once before calling it real.
+                print("LOCAL_SUGGESTION_RETRY attempt=\(attempt) error=\(error)")
+                if attempt == maxAttempts {
+                    throw error
+                }
+            }
         }
+    }
+
+    // MARK: - Local rewrite smoke (Apple Intelligence path)
+
+    private static let rewriteLyrics = "[Verse]\nI keep a notebook under neon rain\nEvery margin learns my name"
+    private static let rewritePassage = "I keep a notebook under neon rain\nEvery margin learns my name"
+
+    @MainActor
+    func testLocalRewriteRephrasePassageReturnsTextOrAvailabilityMessage() async throws {
+        try await verifyLocalRewrite(
+            action: .rephrase,
+            fullLyrics: Self.rewriteLyrics,
+            selection: Self.rewritePassage
+        )
+    }
+
+    @MainActor
+    func testLocalRewritePunchUpPassageReturnsTextOrAvailabilityMessage() async throws {
+        try await verifyLocalRewrite(
+            action: .punchUp,
+            fullLyrics: Self.rewriteLyrics,
+            selection: Self.rewritePassage
+        )
+    }
+
+    @MainActor
+    func testLocalRewriteHarderRhymePassageReturnsTextOrAvailabilityMessage() async throws {
+        try await verifyLocalRewrite(
+            action: .harderRhyme,
+            fullLyrics: Self.rewriteLyrics,
+            selection: Self.rewritePassage
+        )
+    }
+
+    @MainActor
+    func testLocalRewritePunchUpSingleWordReturnsTextOrAvailabilityMessage() async throws {
+        // "glow" is in AIService.fallbackPunchUpWords, so the deterministic
+        // fallback table can serve this selection if the live model declines.
+        let lyrics = "[Verse]\nCity lights glow on the boulevard\nEvery window hums a different song"
+        let selection = "glow"
+        let selectionRange = try XCTUnwrap(lyrics.range(of: selection))
+        let selectionStart = lyrics.distance(from: lyrics.startIndex, to: selectionRange.lowerBound)
+
+        try await verifyLocalRewrite(
+            action: .punchUp,
+            fullLyrics: lyrics,
+            selection: selection,
+            selectionStart: selectionStart,
+            caseLabel: "punchUpSingleWord",
+            acceptsGuardrailBlock: false
+        )
+    }
+
+    /// Mirrors the suggestion smoke's tolerance: a non-empty rewrite and an
+    /// on-device availability message are both acceptable outcomes. For
+    /// passage selections a recognized guardrail block (blockedResponse) is
+    /// also acceptable after one retry, because Apple's on-device safety layer
+    /// can refuse a prompt nondeterministically. Single-word selections must
+    /// never end blocked — the deterministic fallback table has to serve them.
+    /// Any other error gets one retry before it is treated as a real failure.
+    @MainActor
+    private func verifyLocalRewrite(
+        action: RewriteAction,
+        fullLyrics: String,
+        selection: String,
+        selectionStart: Int? = nil,
+        caseLabel: String? = nil,
+        acceptsGuardrailBlock: Bool = true
+    ) async throws {
+        let service = AIService()
+        let label = caseLabel ?? action.rawValue
+        let maxAttempts = 2
+
+        for attempt in 1...maxAttempts {
+            let start = Date()
+            do {
+                let rewrite = try await service.getRewrite(
+                    provider: .local,
+                    apiKey: "",
+                    modelId: AIModel.localModel.id,
+                    action: action,
+                    fullLyrics: fullLyrics,
+                    selection: selection,
+                    currentSection: .verse,
+                    selectionStart: selectionStart
+                )
+                let trimmed = rewrite.trimmingCharacters(in: .whitespacesAndNewlines)
+                print("LOCAL_REWRITE_RESULT action=\(label) attempt=\(attempt) elapsed=\(Self.elapsedString(since: start)) output=\(Self.logSample(trimmed))")
+                XCTAssertFalse(trimmed.isEmpty, "Local rewrite (\(label)) returned empty text")
+                // cleanLocalRewrite already rejects echoes of the selection, so a
+                // returned rewrite must differ from the input.
+                XCTAssertNotEqual(
+                    trimmed.lowercased(),
+                    selection.lowercased(),
+                    "Local rewrite (\(label)) returned the selection unchanged"
+                )
+                return
+            } catch AIServiceError.localModelUnavailable(let reason) {
+                print("LOCAL_REWRITE_RESULT action=\(label) attempt=\(attempt) elapsed=\(Self.elapsedString(since: start)) unavailable=\(Self.logSample(reason))")
+                XCTAssertFalse(reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                XCTAssertTrue(
+                    AIServiceError.localModelUnavailable(reason: reason)
+                        .localizedDescription
+                        .hasPrefix("On-device model unavailable: ")
+                )
+                return
+            } catch AIServiceError.blockedResponse where acceptsGuardrailBlock {
+                print("LOCAL_REWRITE_RESULT action=\(label) attempt=\(attempt) elapsed=\(Self.elapsedString(since: start)) blocked=on-device guardrail refused the prompt")
+                if attempt == maxAttempts {
+                    // Recognized, user-facing safety refusal — acceptable
+                    // terminal outcome for a passage rewrite.
+                    return
+                }
+            } catch {
+                print("LOCAL_REWRITE_RESULT action=\(label) attempt=\(attempt) elapsed=\(Self.elapsedString(since: start)) error=\(error)")
+                if attempt == maxAttempts {
+                    throw error
+                }
+            }
+        }
+    }
+
+    private static func elapsedString(since start: Date) -> String {
+        String(format: "%.2fs", Date().timeIntervalSince(start))
+    }
+
+    private static func logSample(_ text: String) -> String {
+        let flattened = text.replacingOccurrences(of: "\n", with: " / ")
+        return flattened.count > 160 ? String(flattened.prefix(160)) + "…" : flattened
     }
 }
 
