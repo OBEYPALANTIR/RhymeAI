@@ -229,7 +229,8 @@ object ProsodyAnalyzer {
         perfectLimit: Int = 60,
         nearLimit: Int = 30,
         multiLimit: Int = 30,
-        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared,
+        wordFrequency: WordFrequency = WordFrequency.shared
     ): RhymeMatches {
         val normalized = normalizeWord(word)
         if (normalized.length < 2 || normalized in stopwords) return RhymeMatches.EMPTY
@@ -252,10 +253,13 @@ object ProsodyAnalyzer {
         val nearAll = (nearByVowel[vowel0] ?: emptyList())
             .filter { it != normalized && it !in perfectSet && it !in multiSet }
 
+        // Re-rank each pool by word frequency (most common first) before the
+        // limit cut, so both candidateEndWords and the rhyme inspector surface
+        // familiar words rather than dictionary-hash-order obscurities.
         return RhymeMatches(
-            perfect = perfectAll.take(perfectLimit),
-            near = nearAll.take(nearLimit),
-            multi = multiAll.take(multiLimit)
+            perfect = wordFrequency.sortByFrequency(perfectAll).take(perfectLimit),
+            near = wordFrequency.sortByFrequency(nearAll).take(nearLimit),
+            multi = wordFrequency.sortByFrequency(multiAll).take(multiLimit)
         )
     }
 

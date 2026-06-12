@@ -26,6 +26,8 @@ object RhymeConstraint {
         val matches = ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary)
         if (matches.isEmpty) return emptyList()
         // Perfect requests stay strict; looser types may pad with near rhymes.
+        // Each pool is already frequency-ranked by findRhymes; we simply
+        // concatenate pools in priority order (perfect/multi before near).
         val pools = when (rhymeType) {
             RhymeType.PERFECT -> listOf(matches.perfect, matches.multi)
             RhymeType.NEAR, RhymeType.SLANT -> listOf(matches.perfect, matches.multi, matches.near)

@@ -33,3 +33,7 @@ DerivedData/
 .agenteam/events/
 .agenteam/state/
 .codex/agents/
+
+# Python venvs (build-time tooling)
+scripts/.venv/
+.venv/

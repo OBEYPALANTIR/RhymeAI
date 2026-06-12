@@ -41,7 +41,8 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         perfectLimit: Int = 60,
         nearLimit: Int = 30,
         multiLimit: Int = 30,
-        dictionary: PronunciationDictionary = .shared
+        dictionary: PronunciationDictionary = .shared,
+        wordFrequency: WordFrequency = .shared
     ) -> RhymeMatches {
         let normalized = ProsodyAnalyzer.normalizeWord(word)
         guard normalized.count >= 2 else { return .empty }
@@ -71,10 +72,13 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         let exclude = Set(perfectAll).union(multiAll)
         let nearAll = (nearMap[vowel0] ?? []).filter { $0 != normalized && !exclude.contains($0) }
 
+        // Re-rank each pool by word frequency (most common first) before the
+        // limit cut, so both candidateEndWords and the rhyme inspector surface
+        // familiar words rather than dictionary-hash-order obscurities.
         return RhymeMatches(
-            perfect: Array(perfectAll.prefix(perfectLimit)),
-            near: Array(nearAll.prefix(nearLimit)),
-            multi: Array(multiAll.prefix(multiLimit))
+            perfect: Array(wordFrequency.sortByFrequency(perfectAll).prefix(perfectLimit)),
+            near: Array(wordFrequency.sortByFrequency(nearAll).prefix(nearLimit)),
+            multi: Array(wordFrequency.sortByFrequency(multiAll).prefix(multiLimit))
         )
     }
 

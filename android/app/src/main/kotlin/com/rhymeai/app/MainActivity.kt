@@ -28,6 +28,7 @@ import com.rhymeai.app.ui.navigation.RhymeNavGraph
 import com.rhymeai.app.ui.navigation.Routes
 import com.rhymeai.app.ui.theme.RhymeAITheme
 import com.rhymeai.app.util.PronunciationDictionary
+import com.rhymeai.app.util.WordFrequency
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -42,6 +43,13 @@ class MainActivity : ComponentActivity() {
                 }
             }.onFailure { error ->
                 Log.w("RhymeAI", "Falling back to heuristic syllable counts; CMU dictionary failed to load.", error)
+            }
+            runCatching {
+                if (!WordFrequency.shared.isLoaded) {
+                    assets.open("word-frequency.txt").use(WordFrequency.shared::initialize)
+                }
+            }.onFailure { error ->
+                Log.w("RhymeAI", "Word frequency list failed to load; rhyme candidates will use dictionary order.", error)
             }
         }
         enableEdgeToEdge()

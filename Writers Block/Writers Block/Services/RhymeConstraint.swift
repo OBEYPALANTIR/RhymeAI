@@ -25,6 +25,11 @@ nonisolated enum RhymeConstraint {
     /// Allowed ending words for a target word, best rhymes first. Empty when
     /// the dictionary doesn't know the word — callers must then skip
     /// constraining entirely so the model isn't steered by bad data.
+    ///
+    /// Within each rhyme pool (perfect/multi, then near) words are ranked by
+    /// English word frequency so common words surface before obscure ones.
+    /// Pool precedence is preserved: a near rhyme never outranks a perfect
+    /// rhyme regardless of frequency.
     static func candidateEndWords(
         targetWord: String,
         rhymeType: RhymeType,
@@ -88,10 +93,13 @@ nonisolated enum RhymeConstraint {
 
     /// Selection order favors tighter rhymes: perfect-type requests never
     /// offer near rhymes, looser types accept them after perfect and multi.
+    /// Each pool is already frequency-ranked by RhymeIndex.find; we simply
+    /// concatenate pools in priority order so perfect/multi always precede near.
     static func orderedCandidates(
         _ matches: RhymeMatches,
         rhymeType: RhymeType,
-        excluding targetWord: String
+        excluding targetWord: String,
+        wordFrequency: WordFrequency = .shared
     ) -> [String] {
         let ordered: [String]
         switch rhymeType {
