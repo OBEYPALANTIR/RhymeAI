@@ -49,6 +49,8 @@ final class EditorViewModel: ObservableObject {
     @Published var isSyllableColoringEnabled: Bool = true
     @Published var isStressPreviewEnabled: Bool = false
     @Published var isRhymeHighlightEnabled: Bool = false
+    @Published var isBeatGridEnabled: Bool = false
+    @Published var beatGridBpm: Int = 90
 
     // MARK: - Selection / Rewrite
 

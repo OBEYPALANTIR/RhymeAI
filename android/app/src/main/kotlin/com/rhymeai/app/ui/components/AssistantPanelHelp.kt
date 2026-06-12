@@ -84,6 +84,10 @@ internal enum class FeatureHelp(
         "Color Rhymes",
         "Colors words that share the same rhyme sound. Each color represents a rhyme family, so matching colors should rhyme or echo each other.",
         FeatureLegend.RHYMES
+    ),
+    BEAT_GRID(
+        "Beat Grid",
+        "Shows how many beats each line fills at the current BPM. Lines that fit within one bar are normal, tight lines use one extra beat of grace, and overflow lines exceed the bar in red."
     )
 }
 

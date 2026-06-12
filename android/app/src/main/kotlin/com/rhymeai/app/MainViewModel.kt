@@ -106,6 +106,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var isSyllableColoringEnabled by mutableStateOf(true)
     var isStressPreviewEnabled by mutableStateOf(false)
     var isRhymeHighlightEnabled by mutableStateOf(false)
+    var isBeatGridEnabled by mutableStateOf(false)
+    var beatGridBpm by mutableStateOf(90)
 
     // Project management
     var projects by mutableStateOf<List<SongProject>>(emptyList())

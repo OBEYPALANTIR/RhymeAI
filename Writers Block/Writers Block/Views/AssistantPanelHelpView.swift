@@ -16,6 +16,7 @@ enum FeatureHelp: String, Identifiable {
     case underlineSyllables
     case stressIPA
     case colorRhymes
+    case beatGrid
 
     var id: String { rawValue }
 
@@ -31,6 +32,7 @@ enum FeatureHelp: String, Identifiable {
         case .underlineSyllables: return "Underline Syllables"
         case .stressIPA: return "Stress + IPA"
         case .colorRhymes: return "Color Rhymes"
+        case .beatGrid: return "Beat Grid"
         }
     }
 
@@ -56,6 +58,8 @@ enum FeatureHelp: String, Identifiable {
             return "Shows dictionary-backed syllable stress and IPA previews for the target line and suggestions. Stressed syllables are shown as DA and unstressed syllables as da."
         case .colorRhymes:
             return "Colors words that share the same rhyme sound. Each color represents a rhyme family, so matching colors should rhyme or echo each other."
+        case .beatGrid:
+            return "Shows how many beats each line fills at the current BPM. Lines that fit within one bar are normal, tight lines use one extra beat of grace, and overflow lines exceed the bar in red."
         }
     }
 

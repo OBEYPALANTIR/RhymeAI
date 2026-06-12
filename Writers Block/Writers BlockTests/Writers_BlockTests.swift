@@ -1067,4 +1067,107 @@ struct Writers_BlockTests {
         #expect(context.firstChorusLines == nil)
     }
 
+    // MARK: - BeatGrid tests
+
+    @Test func beatGridSyllablesMapToBeatsAndBars() {
+        // "hello world" → 3 syllables at 1 syl/beat, 4/4 → beats=3, bars=0.75 → fits
+        let grid = BeatGrid.compute(lyrics: "hello world", bpm: 90)
+        #expect(grid.lines.count == 1)
+        let line = grid.lines[0]
+        #expect(line.syllableCount == 3)
+        #expect(abs(line.beats - 3.0) < 0.001)
+        #expect(abs(line.bars - 0.75) < 0.001)
+        #expect(line.fit == .fits)
+    }
+
+    @Test func beatGridSecondsPerLineCalculation() {
+        // 4 beats at 120 bpm → 4 * 60/120 = 2.0 s
+        let grid = BeatGrid.compute(lyrics: "one two three four", bpm: 120)
+        #expect(grid.lines.count == 1)
+        let line = grid.lines[0]
+        let expected = line.beats * 60.0 / 120.0
+        #expect(abs(line.secondsPerLine - expected) < 0.001)
+    }
+
+    @Test func beatGridExactlyOneBarClassifiedAsFits() {
+        // 4 syllables = 4 beats = exactly 1 bar in 4/4 → FITS
+        let grid = BeatGrid.compute(lyrics: "one two three four", bpm: 90)
+        #expect(grid.lines.count == 1)
+        #expect(grid.lines[0].syllableCount == 4)
+        #expect(grid.lines[0].fit == .fits)
+    }
+
+    @Test func beatGridOneBarPlusOneBeatClassifiedAsTight() {
+        // 5 syllables → beats=5 > 4 but ≤ 5 → TIGHT
+        let grid = BeatGrid.compute(lyrics: "one two three four five", bpm: 90)
+        #expect(grid.lines.count == 1)
+        #expect(grid.lines[0].fit == .tight)
+    }
+
+    @Test func beatGridMoreThanOneBarPlusOneBeatClassifiedAsOverflow() {
+        // 6 syllables → beats=6 > 5 → OVERFLOW
+        let grid = BeatGrid.compute(lyrics: "one two three four five six", bpm: 90)
+        #expect(grid.lines.count == 1)
+        #expect(grid.lines[0].fit == .overflow)
+    }
+
+    @Test func beatGridBracketedHeadersAreSkipped() {
+        let lyrics = "[Verse 1]\nhello world"
+        let grid = BeatGrid.compute(lyrics: lyrics, bpm: 90)
+        // Only the lyric line appears; [Verse 1] header is excluded.
+        #expect(grid.lines.count == 1)
+        #expect(grid.lines[0].text == "hello world")
+    }
+
+    @Test func beatGridBareHeadersAreSkipped() {
+        let lyrics = "chorus\none two three"
+        let grid = BeatGrid.compute(lyrics: lyrics, bpm: 90)
+        #expect(grid.lines.count == 1)
+    }
+
+    @Test func beatGridBlankLinesAreSkipped() {
+        let lyrics = "one two\n\nthree four"
+        let grid = BeatGrid.compute(lyrics: lyrics, bpm: 90)
+        #expect(grid.lines.count == 2)
+    }
+
+    @Test func beatGridTapTempoAveragesFourTapsAt500msIntervals() {
+        // 5 timestamps at 500 ms intervals → 4 × 500 ms intervals → 120 bpm
+        let timestamps: [TimeInterval] = [0, 500, 1000, 1500, 2000]
+        let bpm = BeatGrid.tapTempoBpm(timestamps: timestamps)
+        #expect(bpm == 120)
+    }
+
+    @Test func beatGridTapTempoRequiresAtLeastTwoTimestamps() {
+        #expect(BeatGrid.tapTempoBpm(timestamps: []) == nil)
+        #expect(BeatGrid.tapTempoBpm(timestamps: [1000]) == nil)
+    }
+
+    @Test func beatGridTapTempoClampedToMinimum40() {
+        // 10 000 ms interval → 6 bpm → clamp to 40
+        let bpm = BeatGrid.tapTempoBpm(timestamps: [0, 10_000])
+        #expect(bpm == 40)
+    }
+
+    @Test func beatGridTapTempoClampedToMaximum220() {
+        // 100 ms interval → 600 bpm → clamp to 220
+        let bpm = BeatGrid.tapTempoBpm(timestamps: [0, 100])
+        #expect(bpm == 220)
+    }
+
+    @Test func beatGridBpmClampedToMinimum40() {
+        let grid = BeatGrid.compute(lyrics: "hello", bpm: 0)
+        #expect(grid.bpm == 40)
+    }
+
+    @Test func beatGridBpmClampedToMaximum220() {
+        let grid = BeatGrid.compute(lyrics: "hello", bpm: 999)
+        #expect(grid.bpm == 220)
+    }
+
+    @Test func beatGridBpmPassedThroughWhenInRange() {
+        let grid = BeatGrid.compute(lyrics: "hello", bpm: 90)
+        #expect(grid.bpm == 90)
+    }
+
 }

@@ -256,6 +256,22 @@ struct AssistantPanelView: View {
                 )
             )
 
+            // MARK: - Beat Grid toggle
+            toggleHelpRow(
+                "Beat Grid",
+                help: .beatGrid,
+                isOn: $viewModel.isBeatGridEnabled
+            )
+
+            // Tempo control + per-line grid — shown only when Beat Grid is enabled.
+            if viewModel.isBeatGridEnabled {
+                BeatGridTempoControl(bpm: $viewModel.beatGridBpm)
+
+                if !viewModel.lyrics.isEmpty {
+                    BeatGridPreviewView(lyrics: viewModel.lyrics, bpm: viewModel.beatGridBpm)
+                }
+            }
+
             // MARK: - Suggest Button — turns into Stop while streaming
             Button {
                 if viewModel.isLoading {

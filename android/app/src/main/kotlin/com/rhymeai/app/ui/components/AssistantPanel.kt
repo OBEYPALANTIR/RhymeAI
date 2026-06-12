@@ -21,9 +21,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -65,6 +67,7 @@ import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.util.BeatGrid
 import com.rhymeai.app.util.SyllableCounter
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -485,6 +488,114 @@ fun AssistantPanel(
                         uncheckedTrackColor = colorScheme.surfaceContainerHighest
                     )
                 )
+            }
+
+            // Beat Grid toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FeatureHelpLabel(
+                    text = "Beat Grid",
+                    help = FeatureHelp.BEAT_GRID,
+                    onHelp = { activeHelp = it },
+                    color = colorScheme.onSurfaceVariant
+                )
+                Switch(
+                    checked = viewModel.isBeatGridEnabled,
+                    onCheckedChange = { viewModel.isBeatGridEnabled = it },
+                    modifier = Modifier.semantics { contentDescription = "Toggle Beat Grid" },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = colorScheme.onPrimary,
+                        checkedTrackColor = colorScheme.primary,
+                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
+                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
+                    )
+                )
+            }
+
+            // Tempo control + per-line grid — shown only when Beat Grid is enabled.
+            if (viewModel.isBeatGridEnabled) {
+                // Tap-tempo state: keep the last 4 tap timestamps in memory.
+                var tapTimestamps by remember { mutableStateOf(emptyList<Long>()) }
+
+                // BPM stepper row with tap-tempo button.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "BPM",
+                        fontSize = 13.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                        color = colorScheme.onSurfaceVariant
+                    )
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Tap-tempo button
+                        IconButton(
+                            onClick = {
+                                val now = System.currentTimeMillis()
+                                val updated = (tapTimestamps + now).takeLast(5)
+                                tapTimestamps = updated
+                                BeatGrid.tapTempoBpm(updated)?.let { viewModel.beatGridBpm = it }
+                            },
+                            modifier = Modifier.semantics { contentDescription = "Tap tempo" }
+                        ) {
+                            Icon(
+                                Icons.Default.MusicNote,
+                                contentDescription = null,
+                                tint = colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        // Stepper: decrement
+                        TextButton(
+                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm - 1).coerceAtLeast(40) }
+                        ) { Text("−", fontSize = 16.sp) }
+
+                        Text(
+                            "${viewModel.beatGridBpm}",
+                            fontSize = 15.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = colorScheme.onSurface,
+                            modifier = Modifier.width(42.dp),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+
+                        // Stepper: increment
+                        TextButton(
+                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm + 1).coerceAtMost(220) }
+                        ) { Text("+", fontSize = 16.sp) }
+                    }
+                }
+
+                // BPM slider 40–220
+                Slider(
+                    value = viewModel.beatGridBpm.toFloat(),
+                    onValueChange = { viewModel.beatGridBpm = it.toInt() },
+                    valueRange = 40f..220f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = colorScheme.primary,
+                        activeTrackColor = colorScheme.primary,
+                        inactiveTrackColor = colorScheme.outlineVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Per-line beat strip
+                if (viewModel.lyrics.isNotEmpty()) {
+                    BeatGridPreview(
+                        lyrics = viewModel.lyrics,
+                        bpm = viewModel.beatGridBpm
+                    )
+                }
             }
 
             // Suggest button — turns into Stop while streaming.
