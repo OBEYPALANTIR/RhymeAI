@@ -1,6 +1,5 @@
 package com.rhymeai.app.util
 
-import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.text.TextPaint
@@ -88,49 +87,45 @@ object LyricsExporter {
             var canvas = page.canvas
             var y = marginY + titleHeight
 
+            fun startNewPage() {
+                doc.finishPage(page)
+                pageNumber++
+                page = doc.startPage(
+                    PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
+                )
+                canvas = page.canvas
+                y = marginY + lineHeight
+            }
+
             canvas.drawText(project.title.ifBlank { "Untitled" }, marginX, y, titlePaint)
             y += 8f
             if (project.theme.isNotBlank()) {
                 y += lineHeight
-                drawWrapped(
-                    canvas = canvas,
-                    text = "Theme: ${project.theme}",
-                    x = marginX,
-                    yStart = y,
-                    paint = themePaint,
-                    maxWidth = maxLineWidth,
-                    lineHeight = lineHeight - 4f
-                )
+                var themeY = y
+                for (row in wrapLine("Theme: ${project.theme}", maxLineWidth, themePaint::measureText)) {
+                    canvas.drawText(row, marginX, themeY, themePaint)
+                    themeY += lineHeight - 4f
+                }
                 y += lineHeight
             }
             y += lineHeight
 
             for (raw in project.lyrics.lines()) {
                 val line = raw.trimEnd()
-                if (y > pageHeight - marginY) {
-                    doc.finishPage(page)
-                    pageNumber++
-                    page = doc.startPage(
-                        PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
-                    )
-                    canvas = page.canvas
-                    y = marginY + lineHeight
-                }
                 if (line.isEmpty()) {
+                    if (y > pageHeight - marginY) startNewPage()
                     y += lineHeight
                     continue
                 }
                 val paint = if (line.startsWith("[") && line.endsWith("]")) sectionPaint else bodyPaint
-                val consumedLines = drawWrapped(
-                    canvas = canvas,
-                    text = line,
-                    x = marginX,
-                    yStart = y,
-                    paint = paint,
-                    maxWidth = maxLineWidth,
-                    lineHeight = lineHeight
-                )
-                y += lineHeight * consumedLines
+                // Page-break per wrapped row, not per logical line, so a long line
+                // that wraps near the bottom margin continues on the next page
+                // instead of being clipped.
+                for (row in wrapLine(line, maxLineWidth, paint::measureText)) {
+                    if (y > pageHeight - marginY) startNewPage()
+                    canvas.drawText(row, marginX, y, paint)
+                    y += lineHeight
+                }
             }
             doc.finishPage(page)
 
@@ -142,35 +137,26 @@ object LyricsExporter {
         }
     }
 
-    private fun drawWrapped(
-        canvas: android.graphics.Canvas,
-        text: String,
-        x: Float,
-        yStart: Float,
-        paint: Paint,
-        maxWidth: Float,
-        lineHeight: Float
-    ): Int {
-        if (paint.measureText(text) <= maxWidth) {
-            canvas.drawText(text, x, yStart, paint)
-            return 1
-        }
-        var lines = 0
+    // Pure so the row-splitting math is unit-testable without Android's Paint.
+    internal fun wrapLine(text: String, maxWidth: Float, measure: (String) -> Float): List<String> {
+        if (measure(text) <= maxWidth) return listOf(text)
+        val rows = mutableListOf<String>()
         var remaining = text
-        var y = yStart
         while (remaining.isNotEmpty()) {
-            var take = paint.breakText(remaining, true, maxWidth, null)
+            var take = 0
+            while (take < remaining.length && measure(remaining.substring(0, take + 1)) <= maxWidth) {
+                take++
+            }
+            // Nothing fits (single glyph wider than the page): emit the rest
+            // as one overflowing row rather than loop forever.
             if (take <= 0) take = remaining.length
             if (take < remaining.length) {
                 val space = remaining.lastIndexOf(' ', take - 1)
                 if (space > 0) take = space
             }
-            val chunk = remaining.substring(0, take)
-            canvas.drawText(chunk, x, y, paint)
-            y += lineHeight
-            lines++
+            rows.add(remaining.substring(0, take))
             remaining = if (take < remaining.length) remaining.substring(take).trimStart() else ""
         }
-        return lines
+        return rows
     }
 }

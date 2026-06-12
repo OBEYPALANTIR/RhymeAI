@@ -77,4 +77,46 @@ class LyricsExporterTest {
 
         assertEquals(project, decoded)
     }
+
+    // wrapLine tests use one unit of width per character so maxWidth doubles
+    // as a character budget.
+    private val charWidth: (String) -> Float = { it.length.toFloat() }
+
+    @Test
+    fun wrapLineKeepsFittingLineIntact() {
+        assertEquals(listOf("short line"), LyricsExporter.wrapLine("short line", 10f, charWidth))
+    }
+
+    @Test
+    fun wrapLineKeepsExactFitAsSingleRow() {
+        assertEquals(listOf("exact fit!"), LyricsExporter.wrapLine("exact fit!", 10f, charWidth))
+    }
+
+    @Test
+    fun wrapLineKeepsEmptyLineAsSingleEmptyRow() {
+        assertEquals(listOf(""), LyricsExporter.wrapLine("", 10f, charWidth))
+    }
+
+    @Test
+    fun wrapLineBreaksAtWordBoundaryAndTrimsLeadingSpaces() {
+        assertEquals(
+            listOf("hello world", "again"),
+            LyricsExporter.wrapLine("hello world again", 12f, charWidth)
+        )
+    }
+
+    @Test
+    fun wrapLineHardBreaksWordLongerThanWidth() {
+        assertEquals(
+            listOf("abc", "def", "ghi", "j"),
+            LyricsExporter.wrapLine("abcdefghij", 3f, charWidth)
+        )
+    }
+
+    @Test
+    fun wrapLineEmitsOverflowRowWhenNothingFits() {
+        // Not even one character fits; the remainder must still come out in
+        // one row instead of looping forever.
+        assertEquals(listOf("ab"), LyricsExporter.wrapLine("ab", 10f) { 100f })
+    }
 }
