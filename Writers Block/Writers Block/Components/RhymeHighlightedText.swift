@@ -1,5 +1,35 @@
 import SwiftUI
 
+// Per-word rhyme keys and syllable counts are pure functions of the word and the
+// static pronunciation dictionary, but the editor overlay recomputes them for every
+// word on every keystroke, which drops frames on long lyrics. Caching by lowercased
+// word (both lookups normalize case internally, so this is output-identical) means a
+// keystroke only pays for words it hasn't seen before.
+private final class WordAnalysisCache: @unchecked Sendable {
+    static let shared = WordAnalysisCache()
+
+    private let lock = NSLock()
+    private var entries: [String: (rhymeKeys: [String], syllableCount: Int)] = [:]
+    private static let capacity = 4096
+
+    func analysis(for word: String) -> (rhymeKeys: [String], syllableCount: Int) {
+        let key = word.lowercased()
+        lock.lock()
+        defer { lock.unlock() }
+        if let hit = entries[key] { return hit }
+
+        let value = (RhymePhonetics.rhymeKeys(for: key), SyllableCounter.count(key))
+        // A song's vocabulary is far below the cap, so wholesale eviction is
+        // effectively never hit; it just bounds memory without LRU bookkeeping,
+        // and a refill costs one render.
+        if entries.count >= Self.capacity {
+            entries.removeAll(keepingCapacity: true)
+        }
+        entries[key] = value
+        return value
+    }
+}
+
 struct RhymeHighlightedText: View, Equatable {
     let text: String
     let enabled: Bool
@@ -80,7 +110,8 @@ struct RhymeHighlightedText: View, Equatable {
             tokens.append(Token(value: String(text[r]), range: r))
         }
 
-        let keysPerToken: [[String]] = tokens.map { RhymePhonetics.rhymeKeys(for: $0.value) }
+        let analyses = tokens.map { WordAnalysisCache.shared.analysis(for: $0.value) }
+        let keysPerToken: [[String]] = analyses.map(\.rhymeKeys)
 
         var keyOccurrences: [String: Int] = [:]
         for keys in keysPerToken {
@@ -108,7 +139,7 @@ struct RhymeHighlightedText: View, Equatable {
                 seg.foregroundColor = .primary.opacity(0.9)
             }
             if syllablesEnabled {
-                let count = SyllableCounter.count(tok.value)
+                let count = analyses[i].syllableCount
                 seg.underlineStyle = Text.LineStyle(
                     pattern: .solid,
                     color: syllableColor(for: count)

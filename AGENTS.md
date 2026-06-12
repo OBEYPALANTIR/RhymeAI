@@ -6,7 +6,7 @@ RhymeAI is a native songwriting assistant for writing lyrics, managing song proj
 
 ## Architecture & Data Flow
 
-- **Android:** `MainViewModel.kt` is the single source of truth for editor, project, settings, AI provider/model, suggestions, rewrite previews, trash state, prosody previews, and save status. Compose screens read/write ViewModel `mutableStateOf` properties directly. `ProjectRepository.kt` persists projects, current editor state, trash state, provider/model choice, and API keys in Preferences DataStore. `AIService.kt` dispatches to Gemini, OpenAI, Claude, or a local GGUF model.
+- **Android:** `MainViewModel.kt` is the single source of truth for editor, project, settings, AI provider/model, suggestions, rewrite previews, trash state, prosody previews, and save status. Compose screens read/write ViewModel `mutableStateOf` properties directly. `ProjectRepository.kt` persists projects, current editor state, trash state, and provider/model choice in Preferences DataStore, and routes API keys through `SecureKeyStore`/EncryptedSharedPreferences. `AIService.kt` dispatches to Gemini, OpenAI, Claude, or a local GGUF model.
 - **iOS:** `Writers_BlockApp.swift` creates the `EditorViewModel` and SwiftData `ModelContainer`. `ContentView.swift` injects the ViewModel into SwiftUI via `@EnvironmentObject`. `EditorViewModel.swift` owns editor/project/settings state, debounced autosave, trash state, rhyme context, prosody previews, and rewrite flow. `AIService.swift` handles Gemini/OpenAI/Claude/Apple Intelligence calls.
 - **Common flow:** lyrics + cursor position -> stanza/rhyme-context parsing -> section-aware prompt shaping -> AI suggestion/rewrite response -> UI preview/application -> debounced persistence. Android persists to DataStore; iOS persists projects with SwiftData and settings/API keys with `UserDefaults`.
 - **Shared prosody assets:** `shared/pronunciation/` contains source fixtures and generated pronunciation data. `scripts/generate-pronunciation-assets.mjs` refreshes native assets for Android and iOS.
@@ -53,7 +53,7 @@ Then run `xcodebuild build` or `xcodebuild test` with the confirmed scheme and s
 - **Swift/iOS:** SwiftUI views end in `View`, services in `Service`, models are nouns. `EditorViewModel` uses `@Published`, `@MainActor`, async/await, cancellable `Task`s, and 1-second autosave debounce. SwiftUI dependencies flow through `@EnvironmentObject` and `@Environment(\.modelContext)`.
 - **Rhyme context:** both platforms parse lyrics by line/stanza, skip or account for section headers, compute the active rhyme-scheme letter from cursor position, and use that context in prompts. Keep behavior aligned across Android and iOS when changing rhyme logic.
 - **Prosody and syllables:** both platforms should consume the same pronunciation data and algorithmic rules so stress/IPA previews, syllable counts, and near/slant rhyme decisions stay aligned.
-- **Persistence caution:** Android DataStore and iOS `UserDefaults` are not secure storage. Do not expand API-key persistence without considering Keychain/Encrypted storage.
+- **Persistence caution:** Android DataStore and iOS `UserDefaults` are not secure storage. API keys belong in `SecureKeyStore`/EncryptedSharedPreferences on Android and Keychain on iOS; do not regress them into plaintext preferences.
 
 ## Important Files
 
@@ -61,7 +61,7 @@ Then run `xcodebuild build` or `xcodebuild test` with the confirmed scheme and s
 - `android/app/src/main/kotlin/com/rhymeai/app/MainViewModel.kt` — Android app state machine.
 - `android/app/src/main/kotlin/com/rhymeai/app/service/AIService.kt` — Android `AIService`, provider/model enums, prompts, streaming, and API parsing.
 - `android/app/src/main/kotlin/com/rhymeai/app/data/repository/ProjectRepository.kt` — Android DataStore persistence.
-- `android/app/build.gradle.kts` — Android SDKs, Kotlin/Compose config, dependencies, `BuildConfig.GEMINI_API_KEY`.
+- `android/app/build.gradle.kts` — Android SDKs, Kotlin/Compose config, dependencies, and generated `BuildConfig` version metadata.
 - `Writers Block/Writers Block/Writers_BlockApp.swift` — iOS app entry and SwiftData container.
 - `Writers Block/Writers Block/ViewModels/EditorViewModel.swift` — iOS central state, autosave, project/template/rewrite/trash/prosody logic.
 - `Writers Block/Writers Block/Services/AIService.swift` — iOS multi-provider AI client and prompt parsing.
@@ -74,9 +74,9 @@ Then run `xcodebuild build` or `xcodebuild test` with the confirmed scheme and s
 ## Runtime/Tooling Preferences
 
 - Use the Gradle wrapper in `android/`; do not assume a globally installed Gradle.
-- Android uses Kotlin 2.3.20, Android Gradle plugin 8.9.1, Gradle 8.14.3, JVM 17, compile SDK 36, min SDK 26, target SDK 35.
-- iOS is SwiftUI/SwiftData under Xcode; confirm scheme and simulator before command-line builds because no shared `.xcscheme` is checked in.
-- Android reads `GEMINI_API_KEY` from `android/local.properties`. Never commit local secret files.
+- Android uses Kotlin 2.3.20, Android Gradle plugin 8.9.1, Gradle 9.0.0, JVM 17, compile SDK 36, min SDK 26, target SDK 35.
+- iOS is SwiftUI/SwiftData under Xcode; a shared `Writers Block` scheme is checked in, but still confirm schemes and simulator destinations before command-line builds.
+- Android `android/local.properties` is local SDK configuration only. Runtime API keys are entered in-app and stored through encrypted storage. Never commit local secret files.
 - Keep native asset generation in `scripts/`; do not reintroduce a root web package just to run the app.
 
 ## Testing & QA

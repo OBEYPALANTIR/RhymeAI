@@ -1,0 +1,184 @@
+package com.rhymeai.app.ui.components
+
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+import java.io.OutputStream
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import kotlin.io.path.createTempDirectory
+
+class GemmaDownloadsTest {
+    private val tempDirs = mutableListOf<File>()
+    private var server: TestHttpServer? = null
+
+    @After
+    fun tearDown() {
+        server?.close()
+        tempDirs.forEach { it.deleteRecursively() }
+    }
+
+    @Test
+    fun validateDownloadedGemmaRejectsMissingIncompleteAndNonGgufFiles() {
+        val model = tinyGemma(expectedBytes = 8)
+        val dir = tempDir()
+        val file = File(dir, model.fileName)
+
+        assertEquals("Gemma Tiny is not downloaded yet", validateDownloadedGemma(model, file))
+
+        file.writeBytes(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+        assertEquals(
+            "Gemma Tiny download is incomplete: 0.00 GB of 0.00 GB",
+            validateDownloadedGemma(model, file)
+        )
+
+        file.writeText("not-a-gguf")
+        assertEquals("Gemma Tiny download did not produce a GGUF file", validateDownloadedGemma(model, file))
+
+        file.writeBytes(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte(), 1, 2, 3, 4))
+        assertNull(validateDownloadedGemma(model, file))
+    }
+
+    @Test
+    fun downloadGemmaToTempResumesPartialFileAndReportsProgress() = runBlocking {
+        val dir = tempDir()
+        val tempFile = File(dir, "tiny.gguf.download")
+        tempFile.writeBytes(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+
+        var sawRangeHeader = false
+        val url = startServer { request, output ->
+            sawRangeHeader = request.contains("Range: bytes=4-")
+            output.writeResponse(206, byteArrayOf(1, 2, 3, 4))
+        }
+        val model = tinyGemma(url = url, expectedBytes = 8)
+        val progress = mutableListOf<Float>()
+
+        downloadGemmaToTemp(model, tempFile) { progress += it }
+
+        assertTrue(sawRangeHeader)
+        assertEquals(listOf(0.5f, 1.0f), progress)
+        assertEquals(
+            byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte(), 1, 2, 3, 4).toList(),
+            tempFile.readBytes().toList()
+        )
+    }
+
+    @Test
+    fun downloadGemmaToTempSurfacesHttpFailure() = runBlocking {
+        val dir = tempDir()
+        val tempFile = File(dir, "tiny.gguf.download")
+        val url = startServer { _, output ->
+            output.writeResponse(503, ByteArray(0))
+        }
+        val model = tinyGemma(url = url, expectedBytes = 8)
+
+        val error = runCatching {
+            downloadGemmaToTemp(model, tempFile) {}
+        }.exceptionOrNull()
+
+        assertNotNull(error)
+        assertTrue(error!!.message!!.contains("Hugging Face returned HTTP 503"))
+    }
+
+    @Test
+    fun ensureEnoughSpaceForGemmaSurfacesNoStorageMessage() {
+        val dir = tempDir()
+        val tempFile = File(dir, "tiny.gguf.download")
+        val model = tinyGemma(expectedBytes = dir.usableSpace + 1L)
+
+        val error = runCatching {
+            ensureEnoughSpaceForGemma(model, File(dir, "tiny.gguf"), tempFile)
+        }.exceptionOrNull()
+
+        assertNotNull(error)
+        assertTrue(error!!.message!!.contains("Need "))
+        assertTrue(error.message!!.contains("free for Gemma Tiny"))
+    }
+
+    @Test
+    fun formatDownloadProgressHandlesUnknownAndPercentValues() {
+        assertEquals("downloading...", formatDownloadProgress(null))
+        assertEquals("downloading...", formatDownloadProgress(0f))
+        assertEquals("42%", formatDownloadProgress(0.42f))
+        assertEquals("100%", formatDownloadProgress(1f))
+    }
+
+    private fun tinyGemma(
+        url: String = "https://example.invalid/tiny.gguf",
+        expectedBytes: Long
+    ) = GemmaDownload(
+        label = "Gemma Tiny",
+        description = "Tiny test model.",
+        fileName = "tiny.gguf",
+        url = url,
+        expectedBytes = expectedBytes
+    )
+
+    private fun tempDir(): File {
+        val dir = createTempDirectory("rhymeai-gemma-test").toFile()
+        tempDirs += dir
+        return dir
+    }
+
+    private fun startServer(handler: (String, OutputStream) -> Unit): String {
+        val httpServer = TestHttpServer(handler)
+        server = httpServer
+        return "http://${httpServer.host}:${httpServer.port}/tiny.gguf"
+    }
+
+    private class TestHttpServer(
+        private val handler: (String, OutputStream) -> Unit
+    ) : AutoCloseable {
+        private val socket = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        private val thread = Thread {
+            socket.use { serverSocket ->
+                serverSocket.accept().use { client ->
+                    val request = client.readRequest()
+                    handler(request, client.getOutputStream())
+                }
+            }
+        }
+
+        val host: String = socket.inetAddress.hostAddress ?: "127.0.0.1"
+        val port: Int = socket.localPort
+
+        init {
+            thread.start()
+        }
+
+        override fun close() {
+            runCatching { socket.close() }
+            thread.join(1_000)
+        }
+
+        private fun Socket.readRequest(): String {
+            val input = getInputStream().bufferedReader()
+            val lines = mutableListOf<String>()
+            while (true) {
+                val line = input.readLine() ?: break
+                if (line.isEmpty()) break
+                lines += line
+            }
+            return lines.joinToString("\n")
+        }
+    }
+
+    private fun OutputStream.writeResponse(statusCode: Int, body: ByteArray) {
+        write(
+            buildString {
+                append("HTTP/1.1 $statusCode Test\r\n")
+                append("Content-Length: ${body.size}\r\n")
+                append("Connection: close\r\n")
+                append("\r\n")
+            }.toByteArray(Charsets.UTF_8)
+        )
+        write(body)
+        flush()
+    }
+}

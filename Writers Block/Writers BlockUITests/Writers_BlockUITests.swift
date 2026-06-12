@@ -84,6 +84,130 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testUnBlockButtonHidesWhenRewriteBarVisible() throws {
+        try requirePhone()
+
+        let app = XCUIApplication()
+        app.launchArguments.append("--ui-test-force-rewrite-bar")
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        lyricsEditor.tap()
+        lyricsEditor.typeText("Selection rewrite bar")
+
+        // The selection rewrite bar is up (forced for the test)...
+        XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
+
+        // ...so the UnBlock FAB must yield. On iPhone both anchor to the bottom,
+        // and the FAB would otherwise show through behind the chip bar.
+        XCTAssertFalse(app.buttons["unblockButton"].exists)
+        XCTAssertFalse(app.buttons["UnBlock"].exists)
+    }
+
+    @MainActor
+    func testSingleWordLookUpOpensInspector() throws {
+        try requirePhone()
+
+        let app = XCUIApplication()
+        app.launchArguments.append("--ui-test-in-memory-store")
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let editor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        editor.typeText("yellow")
+
+        // Select the single word, then open the Word Inspector from the chip
+        // bar's look-up button (parity with Android). Regression guard: the
+        // look-up's hit area was once only the glyph, so edge taps fell through
+        // to the text view and the button silently did nothing.
+        editor.coordinate(withNormalizedOffset: CGVector(dx: 0.07, dy: 0.03)).doubleTap()
+        XCTAssertTrue(app.buttons["Punch Up"].waitForExistence(timeout: 5),
+                      "selecting a word did not raise the rewrite chip bar")
+
+        let lookUp = app.buttons["Look up word"]
+        XCTAssertTrue(lookUp.waitForExistence(timeout: 5), "look-up button missing from the chip bar")
+        lookUp.tap()
+        XCTAssertTrue(app.staticTexts["Word inspector"].waitForExistence(timeout: 5),
+                      "look-up did not open the Word Inspector")
+    }
+
+    @MainActor
+    func testRewriteActionsOpenReviewBarAndCancelBackToChipBar() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-rewrite-selection",
+            "--ui-test-force-rewrite-bar"
+        ])
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
+
+        for action in ["Rephrase", "Harder Rhyme", "Punch Up"] {
+            XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5), "\(action) button missing")
+            app.buttons[action].tap()
+            XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5), "\(action) did not open review controls")
+            app.buttons["Cancel"].tap()
+            XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5), "\(action) cancel did not return to chip bar")
+        }
+    }
+
+    @MainActor
+    func testLiveGeminiSelectedRewriteActionsProducePreviewForConfiguredModels() throws {
+        let geminiTestKey = Self.geminiTestKey
+        guard !geminiTestKey.isEmpty else {
+            throw XCTSkip("GEMINI_TEST_KEY is required for live selected rewrite UI verification")
+        }
+
+        for modelId in Self.liveGeminiModelIds {
+            let app = isolatedUITestApp(arguments: [
+                "-selectedProvider",
+                "GEMINI",
+                "-selectedModel",
+                modelId,
+                "--ui-test-seed-rewrite-selection",
+                "--ui-test-force-rewrite-bar"
+            ])
+            app.launchEnvironment["GEMINI_TEST_KEY"] = geminiTestKey
+            app.launch()
+
+            XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
+            attachScreenshot(app, name: "live-gemini-\(Self.screenshotSlug(modelId))-rewrite-chip")
+
+            for action in ["Rephrase", "Harder Rhyme", "Punch Up"] {
+                XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5), "\(action) button missing for \(modelId)")
+                app.buttons[action].tap()
+                XCTAssertTrue(app.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5))
+
+                let preview = app.staticTexts["Previewing \(action)"]
+                if !preview.waitForExistence(timeout: 120) {
+                    attachScreenshot(app, name: "live-gemini-\(Self.screenshotSlug(modelId))-\(Self.screenshotSlug(action))-failure")
+                    let providerError = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Provider")).firstMatch
+                    if providerError.exists {
+                        XCTFail("Live Gemini selected rewrite returned provider error for \(modelId) \(action): \(providerError.label)")
+                    } else {
+                        XCTFail("Live Gemini selected rewrite did not reach preview for \(modelId) \(action)")
+                    }
+                }
+
+                attachScreenshot(app, name: "live-gemini-\(Self.screenshotSlug(modelId))-\(Self.screenshotSlug(action))-preview")
+                app.buttons["Cancel"].tap()
+                XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5), "\(action) cancel did not return to chip bar for \(modelId)")
+            }
+
+            app.terminate()
+        }
+    }
+
+    @MainActor
     func testBackSwipeClosesAssistantSheetWithoutReturningToMenu() throws {
         try requirePhone()
 
@@ -176,6 +300,51 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["ˈDA da | ˈDA da"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "jɛloʊ")).firstMatch.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testAssistantStopCancelsSuggestionRequest() throws {
+        let geminiTestKey = ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"]
+            ?? ProcessInfo.processInfo.environment["SIMCTL_CHILD_GEMINI_TEST_KEY"]
+            ?? ""
+        guard !geminiTestKey.isEmpty else {
+            throw XCTSkip("GEMINI_TEST_KEY is required for live assistant cancel UI verification")
+        }
+
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song",
+            "--ui-test-open-assistant"
+        ])
+        app.launchEnvironment["GEMINI_TEST_KEY"] = geminiTestKey
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        app.buttons["Suggest Next Line"].tap()
+        XCTAssertTrue(app.buttons["Stop"].waitForExistence(timeout: 5))
+
+        app.buttons["Stop"].tap()
+
+        XCTAssertTrue(app.buttons["Suggest Next Line"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testAssistantOfflineFailureShowsConnectionMessage() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song",
+            "--ui-test-open-assistant"
+        ])
+        app.launchEnvironment["GEMINI_TEST_KEY"] = "offline-smoke-key"
+        app.launchEnvironment["RHYMEAI_GEMINI_BASE_URL"] = "https://127.0.0.1:1/v1beta"
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        app.buttons["Suggest Next Line"].tap()
+
+        XCTAssertTrue(
+            app.staticTexts["Provider request failed — check your connection and try again."]
+                .waitForExistence(timeout: 15)
+        )
+        XCTAssertTrue(app.buttons["Suggest Next Line"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -312,6 +481,167 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testReleaseWalkthroughCreatesExportsAndPersistsSong() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let title = "Release Walkthrough \(Int(Date().timeIntervalSince1970))"
+        let lyrics = "[Verse]\nMidnight notes on a borrowed train\nI keep the hook alive through rain"
+
+        createNewSong(in: app)
+
+        let titleEditor = app.textFields["songTitleEditor"]
+        XCTAssertTrue(titleEditor.waitForExistence(timeout: 5))
+        titleEditor.tap()
+        titleEditor.typeText(title)
+
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        lyricsEditor.tap()
+        lyricsEditor.typeText(lyrics)
+
+        XCTAssertTrue(app.staticTexts["Saved"].waitForExistence(timeout: 5))
+
+        app.buttons["Share"].tap()
+        XCTAssertTrue(app.staticTexts["Export Song"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Plain Text"))
+                .firstMatch
+                .waitForExistence(timeout: 5)
+        )
+        app.buttons["Cancel"].tap()
+
+        app.terminate()
+        app.launch()
+
+        openExistingSong(in: app, title: title)
+
+        XCTAssertTrue(app.textFields["songTitleEditor"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["songTitleEditor"].value as? String, title)
+        XCTAssertTrue(
+            ((app.textViews["lyricsEditor"].value as? String) ?? "")
+                .contains("Midnight notes on a borrowed train")
+        )
+    }
+
+    @MainActor
+    func testReleaseSuggestionNoKeyFailsGracefully() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song",
+            "--ui-test-open-assistant"
+        ])
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        app.buttons["Suggest Next Line"].tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
+                .firstMatch
+                .waitForExistence(timeout: 10)
+        )
+    }
+
+    @MainActor
+    func testReleaseRewriteNoKeyFailsGracefully() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-rewrite-selection",
+            "--ui-test-force-rewrite-bar"
+        ])
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
+        app.buttons["Rephrase"].tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
+                .firstMatch
+                .waitForExistence(timeout: 10)
+        )
+        app.buttons["Cancel"].tap()
+    }
+
+    @MainActor
+    func testReleaseVisualWalkthroughCapturesScreenshots() throws {
+        let app = isolatedUITestApp()
+        app.launch()
+
+        attachScreenshot(app, name: "release-welcome")
+
+        createNewSong(in: app)
+
+        let titleEditor = app.textFields["songTitleEditor"]
+        XCTAssertTrue(titleEditor.waitForExistence(timeout: 5))
+        titleEditor.tap()
+        titleEditor.typeText("Release Visual Walkthrough")
+
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        lyricsEditor.tap()
+        lyricsEditor.typeText("[Verse]\nMidnight notes on a borrowed train\nI keep the hook alive through rain")
+        XCTAssertTrue(app.staticTexts["Saved"].waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "release-populated-editor")
+
+        app.buttons["Share"].tap()
+        XCTAssertTrue(app.staticTexts["Export Song"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Plain Text"))
+                .firstMatch
+                .waitForExistence(timeout: 5)
+        )
+        attachScreenshot(app, name: "release-export-sheet")
+        app.buttons["Cancel"].tap()
+
+        let unblockButton = app.buttons["unblockButton"]
+        XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        unblockButton.tap()
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "release-assistant-panel")
+        app.buttons["Close Assistant"].tap()
+
+        app.terminate()
+
+        let suggestionApp = isolatedUITestApp(arguments: [
+            "-selectedProvider",
+            "GEMINI",
+            "-selectedModel",
+            "gemini-3.5-flash",
+            "--ui-test-seed-prosody-song",
+            "--ui-test-open-assistant"
+        ])
+        suggestionApp.launch()
+        XCTAssertTrue(suggestionApp.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        suggestionApp.buttons["Suggest Next Line"].tap()
+        XCTAssertTrue(
+            suggestionApp.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
+                .firstMatch
+                .waitForExistence(timeout: 10)
+        )
+        suggestionApp.swipeUp()
+        attachScreenshot(suggestionApp, name: "release-assistant-no-key")
+        suggestionApp.terminate()
+
+        let rewriteApp = isolatedUITestApp(arguments: [
+            "-selectedProvider",
+            "GEMINI",
+            "-selectedModel",
+            "gemini-3.5-flash",
+            "--ui-test-seed-rewrite-selection",
+            "--ui-test-force-rewrite-bar"
+        ])
+        rewriteApp.launch()
+        XCTAssertTrue(rewriteApp.buttons["Rephrase"].waitForExistence(timeout: 5))
+        rewriteApp.buttons["Rephrase"].tap()
+        XCTAssertTrue(rewriteApp.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            rewriteApp.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
+                .firstMatch
+                .waitForExistence(timeout: 10)
+        )
+        attachScreenshot(rewriteApp, name: "release-rewrite-no-key")
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
@@ -323,6 +653,44 @@ final class Writers_BlockUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-in-memory-store"] + arguments
         return app
+    }
+
+    private func createNewSong(in app: XCUIApplication) {
+        let welcomeNewSong = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        if welcomeNewSong.waitForExistence(timeout: 2) {
+            welcomeNewSong.tap()
+            return
+        }
+
+        let openDrawerButton = app.buttons["Open songs drawer"]
+        XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
+        openDrawerButton.tap()
+
+        let createNewSongButton = app.buttons["Create New Song"]
+        XCTAssertTrue(createNewSongButton.waitForExistence(timeout: 5))
+        createNewSongButton.tap()
+    }
+
+    private func openExistingSong(in app: XCUIApplication, title: String) {
+        let loadSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Load Song")).firstMatch
+        if loadSongButton.waitForExistence(timeout: 2) {
+            loadSongButton.tap()
+        } else {
+            let openDrawerButton = app.buttons["Open songs drawer"]
+            XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
+            openDrawerButton.tap()
+        }
+
+        let savedSongButton = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+        XCTAssertTrue(savedSongButton.waitForExistence(timeout: 5))
+        savedSongButton.tap()
+    }
+
+    private func attachScreenshot(_ app: XCUIApplication, name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private var ipadAuditOrientations: [UIDeviceOrientation] {
@@ -341,5 +709,24 @@ final class Writers_BlockUITests: XCTestCase {
         guard UIDevice.current.userInterfaceIdiom == .phone && !simulatorName.localizedCaseInsensitiveContains("iPad") else {
             throw XCTSkip("Phone-only assistant sheet test")
         }
+    }
+
+    private static var geminiTestKey: String {
+        ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"]
+            ?? ProcessInfo.processInfo.environment["SIMCTL_CHILD_GEMINI_TEST_KEY"]
+            ?? ""
+    }
+
+    private static let liveGeminiModelIds = [
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview"
+    ]
+
+    private static func screenshotSlug(_ raw: String) -> String {
+        raw.replacingOccurrences(
+            of: "[^A-Za-z0-9_-]",
+            with: "_",
+            options: .regularExpression
+        )
     }
 }

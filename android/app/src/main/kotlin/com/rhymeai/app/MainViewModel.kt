@@ -47,8 +47,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         private const val AUTOSAVE_DEBOUNCE_MILLIS = 450L
         private const val SAVE_STATUS_VISIBLE_MILLIS = 700L
-        val sectionHeaderRegex = Regex("^\\s*\\[.*]\\s*$")
-        val sectionHeaderCaptureRegex = Regex("^\\s*\\[(.+)]\\s*$")
     }
 
     private val repo = ProjectRepository(application)
@@ -102,11 +100,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var apiKeyPresence by mutableStateOf<Map<String, Boolean>>(emptyMap())
         private set
 
-    val currentApiKey: String get() = repo.getApiKey(selectedProvider.name)
+    /**
+     * EncryptedSharedPreferences hits the Android Keystore on first read, which can
+     * take tens of milliseconds — resolve off the main thread inside request coroutines.
+     */
+    private suspend fun resolveApiKey(): String =
+        withContext(Dispatchers.IO) { apiKey(selectedProvider) }
 
-    fun apiKey(provider: AIProvider): String = repo.getApiKey(provider.name)
+    fun apiKey(provider: AIProvider): String {
+        val storedKey = repo.getApiKey(provider.name)
+        if (storedKey.isNotBlank()) return storedKey
 
-    fun apiKeySnapshot(): Map<String, String> = repo.apiKeySnapshot()
+        return if (BuildConfig.DEBUG &&
+            provider == AIProvider.GEMINI &&
+            BuildConfig.GEMINI_TEST_KEY.isNotBlank()
+        ) {
+            BuildConfig.GEMINI_TEST_KEY
+        } else {
+            ""
+        }
+    }
 
     // Local model state
     var localModelPath by mutableStateOf<String?>(null)
@@ -127,6 +140,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     private var rewriteRange: TextRange? = null
     private var rewriteJob: Job? = null
+    private var rewriteRejectedCandidates: Set<String> = emptySet()
     private var suggestionsJob: Job? = null
 
     // Word inspector state
@@ -235,69 +249,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun computeRhymeContext(): RhymeContext {
-        val text = lyrics
-        val scheme = activeRhymeScheme
-        if (text.isEmpty()) {
-            return RhymeContext(null, scheme.firstOrNull()?.toString() ?: "A", emptyList(), 0)
-        }
-
-        val pos = cursorPosition.coerceIn(0, text.length)
-        val currentSection = currentSongSection(text, pos)
-        val textBefore = text.substring(0, pos)
-        val textAfter = text.substring(pos)
-
-        // Find stanza boundaries
-        val lastDoubleNewline = textBefore.lastIndexOf("\n\n")
-        val stanzaStart = if (lastDoubleNewline == -1) 0 else lastDoubleNewline + 2
-
-        val nextDoubleNewline = textAfter.indexOf("\n\n")
-        val stanzaEnd = if (nextDoubleNewline == -1) text.length else pos + nextDoubleNewline
-
-        val currentStanza = text.substring(stanzaStart, stanzaEnd)
-        val stanzaLines = currentStanza.split("\n")
-
-        // Determine which raw line the cursor is on
-        val stanzaTextBefore = textBefore.substring(stanzaStart)
-        val rawCursorLineIndex = stanzaTextBefore.split("\n").size - 1
-
-        // Find the lyric-line position of the cursor line
-        // Count how many non-header lines are at or before the cursor
-        val lyricLinePos = stanzaLines.take(rawCursorLineIndex + 1).count { line ->
-            !sectionHeaderRegex.matches(line) && line.isNotBlank()
-        } - 1
-        val effectiveLineIndex = maxOf(lyricLinePos, 0)
-
-        val schemeLetters = scheme.toList()
-        if (schemeLetters.isEmpty()) {
-            return RhymeContext(null, "A", stanzaLines, rawCursorLineIndex, currentSection)
-        }
-
-        val currentLetter = schemeLetters[effectiveLineIndex % schemeLetters.size].toString()
-
-        // Find previous lyric line with the same scheme letter
-        var targetLine: String? = null
-        var lyricCount = 0
-        for (i in stanzaLines.indices) {
-            if (i >= rawCursorLineIndex) break
-            val line = stanzaLines[i].trim()
-            if (sectionHeaderRegex.matches(line) || line.isEmpty()) continue
-            val letterForThis = schemeLetters[lyricCount % schemeLetters.size].toString()
-            if (letterForThis == currentLetter && line.isNotEmpty()) {
-                targetLine = line
-            }
-            lyricCount++
-        }
-
-        return RhymeContext(targetLine, currentLetter, stanzaLines, rawCursorLineIndex, currentSection)
+        return RhymeContextAnalyzer.compute(lyrics, cursorPosition, activeRhymeScheme)
     }
 
     private fun currentSongSection(text: String, cursor: Int): SongSection {
-        val textBeforeCursor = text.take(cursor.coerceIn(0, text.length))
-        val header = textBeforeCursor
-            .lineSequence()
-            .mapNotNull { sectionHeaderCaptureRegex.matchEntire(it)?.groupValues?.getOrNull(1) }
-            .lastOrNull()
-        return header?.let(SongSection::fromHeader) ?: SongSection.UNKNOWN
+        return RhymeContextAnalyzer.currentSongSection(text, cursor)
     }
 
     fun getSuggestions() {
@@ -309,11 +265,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         isLoading = true
         suggestionsJob = viewModelScope.launch {
             try {
+                var emittedSuggestion = false
                 aiService.streamSuggestions(
-                    selectedProvider, currentApiKey, selectedModel.id, theme, lyrics, context.targetLine,
+                    selectedProvider, resolveApiKey(), selectedModel.id, theme, lyrics, context.targetLine,
                     rhymeType, activeRhymeScheme, context.currentLetter, context.currentSection, rhymeComplexity, useWholeSongContext
                 ).collect { line ->
+                    emittedSuggestion = true
                     suggestions = suggestions + line
+                }
+                if (!emittedSuggestion) {
+                    errorMessage = "AI did not return suggestions. Try again."
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -342,6 +303,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        rewriteRejectedCandidates = emptySet()
         beginRewrite(action, TextRange(start, end), original)
     }
 
@@ -349,31 +311,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val action = rewriteAction ?: return
         val range = rewriteRange ?: return
         val original = rewriteOriginal ?: return
-        beginRewrite(action, range, original)
+        val rejectedPreview = rewritePreview?.let { setOf(it) }.orEmpty()
+        beginRewrite(action, range, original, rejectedPreview)
     }
 
-    private fun beginRewrite(action: RewriteAction, range: TextRange, original: String) {
+    private fun beginRewrite(
+        action: RewriteAction,
+        range: TextRange,
+        original: String,
+        rejectedCandidates: Set<String> = emptySet()
+    ) {
         rewriteJob?.cancel()
         pendingRewriteRange = null
         rewriteAction = action
         rewriteOriginal = original
         rewriteRange = range
+        rewriteRejectedCandidates = rewriteRejectedCandidates + rejectedCandidates + original
         rewritePreview = null
         rewriteError = null
         rewriteLoading = true
         val fullLyrics = lyrics
         val currentSection = currentSongSection(fullLyrics, range.min)
+        val rejectedForRequest = rewriteRejectedCandidates
 
         rewriteJob = viewModelScope.launch {
             try {
                 val result = aiService.getRewrite(
                     provider = selectedProvider,
-                    apiKey = currentApiKey,
+                    apiKey = resolveApiKey(),
                     modelId = selectedModel.id,
                     action = action,
                     fullLyrics = fullLyrics,
                     selection = original,
-                    currentSection = currentSection
+                    currentSection = currentSection,
+                    selectionStart = range.min,
+                    rejectedCandidates = rejectedForRequest
                 )
                 rewritePreview = result
             } catch (e: Exception) {
@@ -384,11 +356,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun seedRewritePreviewForTesting(action: RewriteAction, range: TextRange, original: String, preview: String) {
+        check(BuildConfig.DEBUG) { "Rewrite preview seeding is only available in debug builds." }
+        rewriteJob?.cancel()
+        pendingRewriteRange = null
+        rewriteAction = action
+        rewriteOriginal = original
+        rewriteRange = range
+        rewriteRejectedCandidates = setOf(original)
+        rewritePreview = preview
+        rewriteError = null
+        rewriteLoading = false
+    }
+
+    fun seedRewriteErrorForTesting(action: RewriteAction, range: TextRange, original: String, error: String) {
+        check(BuildConfig.DEBUG) { "Rewrite error seeding is only available in debug builds." }
+        rewriteJob?.cancel()
+        pendingRewriteRange = null
+        rewriteAction = action
+        rewriteOriginal = original
+        rewriteRange = range
+        rewriteRejectedCandidates = setOf(original)
+        rewritePreview = null
+        rewriteError = error
+        rewriteLoading = false
+    }
+
     fun applyRewrite() {
         val preview = rewritePreview ?: return
         val range = rewriteRange ?: return
         val text = lyrics
-        if (range.start > text.length || range.end > text.length) {
+        // TextRange.start/end follow selection direction; min/max are the safe bounds.
+        if (range.min < 0 || range.max > text.length) {
             dismissRewrite()
             return
         }
@@ -396,10 +395,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             dismissRewrite()
             return
         }
-        val before = text.substring(0, range.start)
-        val after = text.substring(range.end)
+        val before = text.substring(0, range.min)
+        val after = text.substring(range.max)
         val newText = before + preview + after
-        val newCursor = (range.start + preview.length).coerceAtMost(newText.length)
+        val newCursor = (range.min + preview.length).coerceAtMost(newText.length)
         lyricsFieldValue = TextFieldValue(newText, TextRange(newCursor))
         dismissRewrite()
         triggerAutoSave()
@@ -415,6 +414,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rewriteOriginal = null
         rewriteError = null
         rewriteRange = null
+        rewriteRejectedCandidates = emptySet()
+    }
+
+    fun cancelRewriteReview() {
+        val rangeToRestore = rewriteRange
+        dismissRewrite()
+        if (rangeToRestore != null &&
+            rangeToRestore.min < rangeToRestore.max &&
+            rangeToRestore.max <= lyrics.length
+        ) {
+            pendingRewriteRange = rangeToRestore
+        }
     }
 
     fun openInspectorForSelection() {
@@ -454,7 +465,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val results = aiService.getSynonyms(
                     provider = selectedProvider,
-                    apiKey = currentApiKey,
+                    apiKey = resolveApiKey(),
                     modelId = selectedModel.id,
                     word = word,
                     lineContext = lineContext
@@ -522,6 +533,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun newProject() {
+        autoSaveJob?.cancel()
         pendingRewriteRange = null
         title = ""
         lyricsFieldValue = TextFieldValue("")
@@ -537,6 +549,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadProject(project: SongProject) {
+        autoSaveJob?.cancel()
         pendingRewriteRange = null
         title = project.title
         lyricsFieldValue = TextFieldValue(project.lyrics)
@@ -694,6 +707,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val currentTitle = title
             val currentLyrics = lyrics
             val currentTheme = theme
+            val projectIdAtTrigger = currentProjectId
 
             if (currentTitle.isEmpty() && currentLyrics.isEmpty() && currentTheme.isEmpty()) {
                 saveStatus = SaveStatus.IDLE
@@ -701,42 +715,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             delay(AUTOSAVE_DEBOUNCE_MILLIS)
-            saveStatus = SaveStatus.SAVING
 
-            val projectId = currentProjectId
-            val updatedProjectId: String
-            val updatedProjects = if (projectId == null) {
-                val newId = java.util.UUID.randomUUID().toString()
-                val newProject = SongProject(
-                    id = newId,
-                    title = currentTitle.ifEmpty { "Untitled Song" },
-                    lyrics = currentLyrics,
-                    theme = currentTheme,
-                    updatedAt = System.currentTimeMillis()
-                )
-                updatedProjectId = newId
-                listOf(newProject) + projects
-            } else {
-                updatedProjectId = projectId
-                projects.map {
-                    if (it.id == projectId) it.copy(
+            // The editor switched projects (or this one was trashed) during the
+            // debounce; saving the stale snapshot now would clobber the newly
+            // loaded project or resurrect a deleted one.
+            if (currentProjectId != projectIdAtTrigger) return@launch
+            if (projectIdAtTrigger != null && projects.none { it.id == projectIdAtTrigger }) return@launch
+
+            saveStatus = SaveStatus.SAVING
+            try {
+                val updatedProjectId: String
+                val updatedProjects = if (projectIdAtTrigger == null) {
+                    val newId = java.util.UUID.randomUUID().toString()
+                    val newProject = SongProject(
+                        id = newId,
                         title = currentTitle.ifEmpty { "Untitled Song" },
                         lyrics = currentLyrics,
                         theme = currentTheme,
                         updatedAt = System.currentTimeMillis()
-                    ) else it
+                    )
+                    updatedProjectId = newId
+                    listOf(newProject) + projects
+                } else {
+                    updatedProjectId = projectIdAtTrigger
+                    projects.map {
+                        if (it.id == projectIdAtTrigger) it.copy(
+                            title = currentTitle.ifEmpty { "Untitled Song" },
+                            lyrics = currentLyrics,
+                            theme = currentTheme,
+                            updatedAt = System.currentTimeMillis()
+                        ) else it
+                    }
                 }
+
+                projects = updatedProjects
+                currentProjectId = updatedProjectId
+
+                repo.saveProjects(updatedProjects)
+                repo.setCurrentProjectId(updatedProjectId)
+                repo.saveEditorState(currentTitle, currentLyrics, currentTheme)
+
+                delay(SAVE_STATUS_VISIBLE_MILLIS)
+                saveStatus = SaveStatus.SAVED
+            } finally {
+                // Cancellation mid-save would otherwise leave the indicator stuck on SAVING.
+                if (saveStatus == SaveStatus.SAVING) saveStatus = SaveStatus.IDLE
             }
-
-            projects = updatedProjects
-            currentProjectId = updatedProjectId
-
-            repo.saveProjects(updatedProjects)
-            repo.setCurrentProjectId(updatedProjectId)
-            repo.saveEditorState(currentTitle, currentLyrics, currentTheme)
-
-            delay(SAVE_STATUS_VISIBLE_MILLIS)
-            saveStatus = SaveStatus.SAVED
         }
     }
 

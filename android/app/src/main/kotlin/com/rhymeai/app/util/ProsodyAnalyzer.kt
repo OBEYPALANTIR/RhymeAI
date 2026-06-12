@@ -367,8 +367,12 @@ object ProsodyAnalyzer {
         }
 
         if (w.endsWith("e") && !w.endsWith("le") && count > 1) count--
-        if (w.endsWith("les") && w.length > 4 && count > 1) count--
-        if (w.endsWith("es") && !w.endsWith("ses") && !w.endsWith("zes") && count > 1) count--
+        // Vowel+"les" is a silent e ("miles"); consonant+"les" is a syllabic le
+        // ("tables") and must keep its count. "les" words are excluded from the
+        // generic "es" rule so they are never decremented twice.
+        val endsInLes = w.endsWith("les")
+        if (endsInLes && w.length >= 4 && w[w.length - 4] in vowelLetters && count > 1) count--
+        if (!endsInLes && w.endsWith("es") && !w.endsWith("ses") && !w.endsWith("zes") && count > 1) count--
         if (w.endsWith("ed") && !w.endsWith("ted") && !w.endsWith("ded") && count > 1) count--
 
         return maxOf(count, 1)

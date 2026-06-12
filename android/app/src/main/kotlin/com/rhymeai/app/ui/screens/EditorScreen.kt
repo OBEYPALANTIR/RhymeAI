@@ -924,7 +924,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         preview = viewModel.rewritePreview,
                         error = viewModel.rewriteError,
                         onApply = { viewModel.applyRewrite() },
-                        onCancel = { viewModel.dismissRewrite() },
+                        onCancel = { viewModel.cancelRewriteReview() },
                         onRetry = { viewModel.retryRewrite() },
                         modifier = Modifier.onSizeChanged { rewriteReviewBarHeightPx = it.height }
                     )
@@ -1102,6 +1102,7 @@ private fun InlineRewriteReviewBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .testTag("inlineRewriteReviewBar")
             .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.sheet))
             .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.sheet))
             .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.sm),
@@ -1128,7 +1129,7 @@ private fun InlineRewriteReviewBar(
             color = if (error == null) colorScheme.onSurface else colorScheme.error,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
-            maxLines = 1,
+            maxLines = if (error == null) 1 else 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )

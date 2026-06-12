@@ -1,6 +1,7 @@
 package com.rhymeai.app.ui.components
 
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.launch
@@ -76,45 +77,13 @@ import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.isGgufFile
 import com.rhymeai.app.ui.theme.DesignTokens
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-
-private const val DOWNLOAD_BUFFER_BYTES = 8 * 1024 * 1024
-private const val MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES = 750L * 1024L * 1024L
-
-private data class GemmaDownload(
-    val label: String,
-    val description: String,
-    val fileName: String,
-    val url: String,
-    val expectedBytes: Long
-)
-
-private val GEMMA_DOWNLOADS = listOf(
-    GemmaDownload(
-        label = "Gemma 4 E2B",
-        description = "Best default for phones, 3.18 GB.",
-        fileName = "gemma-4-E2B-it-UD-Q4_K_XL.gguf",
-        url = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf?download=true",
-        expectedBytes = 3_184_494_720L
-    ),
-    GemmaDownload(
-        label = "Gemma 4 E4B",
-        description = "Higher quality, slower, 5.13 GB.",
-        fileName = "gemma-4-E4B-it-UD-Q4_K_XL.gguf",
-        url = "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf?download=true",
-        expectedBytes = 5_126_304_928L
-    )
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsDialog(
-    apiKeys: Map<String, String>,
+    apiKeyPresence: Map<String, Boolean>,
     currentProvider: AIProvider,
     currentModel: AIModel,
     localModelLoading: Boolean,
@@ -133,9 +102,11 @@ fun SettingsDialog(
     val density = LocalDensity.current
     var selectedProvider by remember { mutableStateOf(currentProvider) }
     var selectedModel by remember { mutableStateOf(currentModel) }
-    var geminiKey by remember { mutableStateOf(apiKeys["GEMINI"] ?: "") }
-    var openaiKey by remember { mutableStateOf(apiKeys["OPENAI"] ?: "") }
-    var claudeKey by remember { mutableStateOf(apiKeys["CLAUDE"] ?: "") }
+    // Saved key values never enter Compose state: fields are write-only and start
+    // empty; an empty field on save leaves the stored key untouched.
+    var geminiKey by remember { mutableStateOf("") }
+    var openaiKey by remember { mutableStateOf("") }
+    var claudeKey by remember { mutableStateOf("") }
     var showKey by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
     var modelExpanded by remember { mutableStateOf(false) }
@@ -146,6 +117,7 @@ fun SettingsDialog(
         AIProvider.CLAUDE -> claudeKey
         AIProvider.LOCAL -> ""
     }
+    val currentProviderHasSavedKey = apiKeyPresence[selectedProvider.name] == true
 
     // File picker for local models
     var copyingFile by remember { mutableStateOf(false) }
@@ -219,7 +191,7 @@ fun SettingsDialog(
                     useDownloadedModel(model)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.w("RhymeAI", "Gemma download failed", e)
                 tempFile.delete()
                 withContext(Dispatchers.Main) {
                     downloadingModel = null
@@ -263,7 +235,7 @@ fun SettingsDialog(
                         saved = true
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    Log.w("RhymeAI", "Local model file copy failed", e)
                     withContext(Dispatchers.Main) {
                         copyingFile = false
                         copyError = "Failed to load file: ${e.message}"
@@ -589,7 +561,12 @@ fun SettingsDialog(
                                     }
                                     saved = false
                                 },
-                                placeholder = { Text("Paste your API key here...", fontSize = 14.sp) },
+                                placeholder = {
+                                    Text(
+                                        if (currentProviderHasSavedKey) "Key saved — type to replace" else "Paste your API key here...",
+                                        fontSize = 14.sp
+                                    )
+                                },
                                 leadingIcon = {
                                     Icon(Icons.Default.Key, null, tint = colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
                                 },
@@ -610,6 +587,15 @@ fun SettingsDialog(
                                 singleLine = true,
                                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp)
                             )
+
+                            if (currentProviderHasSavedKey && currentKeyForProvider.isEmpty()) {
+                                TextButton(onClick = {
+                                    onSaveApiKey(selectedProvider, "")
+                                    saved = false
+                                }) {
+                                    Text("Remove saved key", fontSize = 12.sp)
+                                }
+                            }
 
                             Spacer(Modifier.height(20.dp))
 
@@ -666,9 +652,10 @@ fun SettingsDialog(
 
                 Button(
                     onClick = {
-                        onSaveApiKey(AIProvider.GEMINI, geminiKey.trim())
-                        onSaveApiKey(AIProvider.OPENAI, openaiKey.trim())
-                        onSaveApiKey(AIProvider.CLAUDE, claudeKey.trim())
+                        // Empty fields mean "keep the stored key" — only save typed values.
+                        if (geminiKey.isNotBlank()) onSaveApiKey(AIProvider.GEMINI, geminiKey.trim())
+                        if (openaiKey.isNotBlank()) onSaveApiKey(AIProvider.OPENAI, openaiKey.trim())
+                        if (claudeKey.isNotBlank()) onSaveApiKey(AIProvider.CLAUDE, claudeKey.trim())
                         onSaveProvider(selectedProvider)
                         if (selectedProvider != AIProvider.LOCAL) {
                             onSaveModel(selectedModel)
@@ -699,81 +686,4 @@ fun SettingsDialog(
             }
         }
     }
-}
-
-private fun formatDownloadProgress(progress: Float?): String {
-    if (progress == null || progress <= 0f) return "downloading..."
-    return "${String.format(Locale.US, "%.0f", progress * 100f)}%"
-}
-
-private fun validateDownloadedGemma(model: GemmaDownload, file: File): String? {
-    if (!file.exists()) return "${model.label} is not downloaded yet"
-    if (file.length() < model.expectedBytes) {
-        return "${model.label} download is incomplete: ${formatFileSize(file.length())} of ${formatFileSize(model.expectedBytes)}"
-    }
-    if (!file.isGgufFile()) return "${model.label} download did not produce a GGUF file"
-    return null
-}
-
-private suspend fun downloadGemmaToTemp(
-    model: GemmaDownload,
-    tempFile: File,
-    onProgress: suspend (Float) -> Unit
-) {
-    val resumeBytes = tempFile.length().takeIf { it > 0L && it < model.expectedBytes } ?: 0L
-    val connection = openGemmaConnection(model, resumeBytes)
-    try {
-        val code = connection.responseCode
-        if (code !in 200..299) {
-            throw IllegalStateException("Hugging Face returned HTTP $code")
-        }
-
-        val append = resumeBytes > 0L && code == HttpURLConnection.HTTP_PARTIAL
-        var copiedBytes = if (append) resumeBytes else 0L
-        if (resumeBytes > 0L && !append) tempFile.delete()
-        onProgress((copiedBytes.toFloat() / model.expectedBytes.toFloat()).coerceIn(0f, 1f))
-
-        connection.inputStream.use { input ->
-            FileOutputStream(tempFile, append).buffered().use { output ->
-                val buffer = ByteArray(DOWNLOAD_BUFFER_BYTES)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read == -1) break
-                    output.write(buffer, 0, read)
-                    copiedBytes += read
-                    onProgress((copiedBytes.toFloat() / model.expectedBytes.toFloat()).coerceIn(0f, 1f))
-                }
-            }
-        }
-    } finally {
-        connection.disconnect()
-    }
-}
-
-private fun openGemmaConnection(model: GemmaDownload, resumeBytes: Long): HttpURLConnection =
-    (URL(model.url).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 30_000
-        readTimeout = 60_000
-        instanceFollowRedirects = true
-        setRequestProperty("User-Agent", "RhymeAI-Android")
-        if (resumeBytes > 0L) {
-            setRequestProperty("Range", "bytes=$resumeBytes-")
-        }
-    }
-
-private fun ensureEnoughSpaceForGemma(model: GemmaDownload, destFile: File, tempFile: File) {
-    val reclaimableBytes = listOf(destFile, tempFile)
-        .filter { it.exists() }
-        .sumOf { it.length() }
-    val availableBytes = (tempFile.parentFile ?: tempFile).usableSpace + reclaimableBytes
-    val requiredBytes = model.expectedBytes + MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES
-    if (availableBytes < requiredBytes) {
-        throw IllegalStateException(
-            "Need ${formatFileSize(requiredBytes)} free for ${model.label}; only ${formatFileSize(availableBytes)} available."
-        )
-    }
-}
-
-private fun formatFileSize(bytes: Long): String {
-    return "${String.format(Locale.US, "%.2f", bytes / 1_000_000_000.0)} GB"
 }

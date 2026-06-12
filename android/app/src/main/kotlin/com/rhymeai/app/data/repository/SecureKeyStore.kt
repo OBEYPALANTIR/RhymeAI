@@ -55,19 +55,22 @@ class EncryptedPrefsKeyStore(context: Context) : SecureKeyStore {
 
 /**
  * One-shot migration of plaintext API keys into the secure store. Pure function so it
- * can be unit-tested without Android dependencies. Returns true iff at least one key
- * was moved into the secure store (so the caller knows to clear the legacy entries).
+ * can be unit-tested without Android dependencies. Returns true iff any legacy
+ * plaintext entry exists, so the caller knows to wipe the legacy storage — even when
+ * the secure store already held the key (e.g. a crash between migrate and wipe on a
+ * previous launch); otherwise the plaintext copy would survive forever.
  */
 object ApiKeyMigration {
     fun apply(legacyPlaintext: Map<String, String>, secure: SecureKeyStore): Boolean {
-        var migrated = false
+        var hadLegacy = false
         for (provider in SecureKeyStore.SUPPORTED_PROVIDERS) {
             val candidate = legacyPlaintext[provider]
-            if (!candidate.isNullOrEmpty() && secure.getKey(provider).isEmpty()) {
+            if (candidate.isNullOrEmpty()) continue
+            hadLegacy = true
+            if (secure.getKey(provider).isEmpty()) {
                 secure.setKey(provider, candidate)
-                migrated = true
             }
         }
-        return migrated
+        return hadLegacy
     }
 }

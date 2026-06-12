@@ -6,7 +6,10 @@ import Security
 /// swap in an in-memory fake without leaking values into the system keychain.
 protocol KeychainStore: AnyObject {
     func getKey(provider: String) -> String
-    func setKey(provider: String, key: String)
+    /// Returns false when the backing store rejected the write (e.g. keychain
+    /// unavailable) so callers can tell the user instead of silently losing the key.
+    @discardableResult
+    func setKey(provider: String, key: String) -> Bool
     func deleteKey(provider: String)
     func allKeys() -> [String: String]
     func clear()
@@ -42,18 +45,19 @@ final class SystemKeychainStore: KeychainStore {
         return value
     }
 
-    func setKey(provider: String, key: String) {
+    @discardableResult
+    func setKey(provider: String, key: String) -> Bool {
         let data = Data(key.utf8)
         var attributes = baseQuery(for: provider)
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
 
         let updateAttributes: [String: Any] = [kSecValueData as String: data]
         let updateStatus = SecItemUpdate(attributes as CFDictionary, updateAttributes as CFDictionary)
+        if updateStatus == errSecSuccess { return true }
 
-        if updateStatus == errSecItemNotFound {
-            attributes[kSecValueData as String] = data
-            _ = SecItemAdd(attributes as CFDictionary, nil)
-        }
+        guard updateStatus == errSecItemNotFound else { return false }
+        attributes[kSecValueData as String] = data
+        return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
     }
 
     func deleteKey(provider: String) {
@@ -86,7 +90,11 @@ final class InMemoryKeychainStore: KeychainStore {
     private var storage: [String: String] = [:]
 
     func getKey(provider: String) -> String { storage[provider] ?? "" }
-    func setKey(provider: String, key: String) { storage[provider] = key }
+    @discardableResult
+    func setKey(provider: String, key: String) -> Bool {
+        storage[provider] = key
+        return true
+    }
     func deleteKey(provider: String) { storage.removeValue(forKey: provider) }
     func allKeys() -> [String: String] {
         Dictionary(uniqueKeysWithValues: Self.supportedProviders.map { ($0, storage[$0] ?? "") })

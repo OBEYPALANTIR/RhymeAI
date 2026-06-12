@@ -136,8 +136,8 @@ class ProjectRepository(
             "OPENAI" to (prefs[OPENAI_API_KEY] ?: ""),
             "CLAUDE" to (prefs[CLAUDE_API_KEY] ?: "")
         )
-        val migrated = ApiKeyMigration.apply(legacy, secureKeyStore)
-        if (migrated) {
+        val wipeLegacy = ApiKeyMigration.apply(legacy, secureKeyStore)
+        if (wipeLegacy) {
             context.dataStore.edit {
                 it.remove(GEMINI_API_KEY)
                 it.remove(OPENAI_API_KEY)

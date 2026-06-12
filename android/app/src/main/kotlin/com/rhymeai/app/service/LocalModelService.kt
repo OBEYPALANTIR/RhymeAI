@@ -26,6 +26,11 @@ class LocalModelService {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val modelMutex = Mutex()
+    // Shared hot flow for all LlamaHelper events. Hazard: events carry no call id,
+    // so a collector started by one loadModel/generateResponse call can observe
+    // events emitted by an earlier, aborted call. modelMutex serializes calls and
+    // generateResponse stops prediction in its finally block, which keeps stale
+    // events out in practice — keep both invariants if changing this.
     private val llmFlow = MutableSharedFlow<LlamaHelper.LLMEvent>(
         replay = 0,
         extraBufferCapacity = 128,
@@ -127,10 +132,13 @@ class LocalModelService {
                 helper.predict(prompt)
                 withTimeout(GENERATION_TIMEOUT_MS) { deferred.await() }
             } catch (e: TimeoutCancellationException) {
-                helper.stopPrediction()
                 throw IllegalStateException("Local model took too long to respond. Try Gemma E2B or shorten the lyric context.", e)
             } finally {
                 job.cancel()
+                // Always stop the native prediction: without this, caller cancellation
+                // (user taps Stop) leaves llama generating, and its late events on the
+                // shared llmFlow would leak into the next call's collector.
+                try { helper.stopPrediction() } catch (_: Exception) {}
             }
         }
     }

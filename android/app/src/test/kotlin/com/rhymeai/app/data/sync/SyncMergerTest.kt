@@ -72,6 +72,41 @@ class SyncMergerTest {
     }
 
     @Test
+    fun restoredProjectNewerThanTrashRemainsActive() {
+        val local = SyncBlob(
+            projects = listOf(project("a", "restored lyrics", updatedAt = 300L)),
+            trashed = emptyList()
+        )
+        val remote = SyncBlob(
+            projects = emptyList(),
+            trashed = listOf(trashed("a", deletedAt = 200L, lyrics = "deleted lyrics"))
+        )
+
+        val merged = SyncMerger.merge(local, remote)
+
+        assertEquals(listOf("a"), merged.projects.map { it.id })
+        assertEquals("restored lyrics", merged.projects.first().lyrics)
+        assertFalse(merged.trashed.any { it.project.id == "a" }, "stale trash must not delete a newer restore")
+    }
+
+    @Test
+    fun newerTrashStillRemovesStaleActiveProject() {
+        val local = SyncBlob(
+            projects = listOf(project("a", "stale active", updatedAt = 100L)),
+            trashed = emptyList()
+        )
+        val remote = SyncBlob(
+            projects = emptyList(),
+            trashed = listOf(trashed("a", deletedAt = 300L, lyrics = "deleted lyrics"))
+        )
+
+        val merged = SyncMerger.merge(local, remote)
+
+        assertFalse(merged.projects.any { it.id == "a" }, "newer trash must remove stale active copy")
+        assertEquals("deleted lyrics", merged.trashed.first { it.project.id == "a" }.project.lyrics)
+    }
+
+    @Test
     fun trashLastWriterWinsByDeletedAt() {
         val local = SyncBlob(trashed = listOf(trashed("a", deletedAt = 100L, lyrics = "old")))
         val remote = SyncBlob(trashed = listOf(trashed("a", deletedAt = 200L, lyrics = "new")))
