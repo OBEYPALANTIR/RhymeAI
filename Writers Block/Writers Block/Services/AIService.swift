@@ -114,7 +114,15 @@ struct AIService {
                     currentSection: currentSection,
                     useWholeSongContext: useWholeSongContext
                 )
-                return try await callLocal(prompt: prompt)
+                // Same gate as the prompt's constraint block: only filter when
+                // the model was actually told which ending words to use.
+                let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
+                let parsed = try await callLocal(
+                    prompt: prompt,
+                    limit: filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
+                )
+                guard let filter else { return parsed }
+                return filter.rank(parsed, want: Self.suggestionCount)
             }
             throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
         }
@@ -216,7 +224,11 @@ struct AIService {
                         return
                     }
 
-                    try await emitLines(from: tokens, into: continuation)
+                    try await emitLines(
+                        from: tokens,
+                        into: continuation,
+                        filter: RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
+                    )
                     continuation.finish()
                 } catch let error as URLError where error.code == .cancelled {
                     continuation.finish(throwing: CancellationError())
@@ -234,35 +246,58 @@ struct AIService {
 
     private func emitLines(
         from tokens: AsyncThrowingStream<String, Error>,
-        into continuation: AsyncThrowingStream<String, Error>.Continuation
+        into continuation: AsyncThrowingStream<String, Error>.Continuation,
+        filter: RhymeLineFilter? = nil
     ) async throws {
         var buffer = ""
         var seen = Set<String>()
         var emitted = 0
+        var accepted = 0
+        // Tier-0 lines wait here; they only ship if too few verified rhymes arrive.
+        var held: [String] = []
+        // With a filter the prompt over-generated 2x, so read past suggestionCount.
+        let rawLimit = filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
 
-        for try await chunk in tokens {
+        streamLoop: for try await chunk in tokens {
             buffer += chunk
-            while emitted < Self.suggestionCount, let newlineIdx = buffer.firstIndex(of: "\n") {
+            while accepted < rawLimit, let newlineIdx = buffer.firstIndex(of: "\n") {
                 let rawLine = String(buffer[..<newlineIdx])
                 buffer = String(buffer[buffer.index(after: newlineIdx)...])
-                if let cleaned = cleanSuggestionLine(rawLine) {
-                    let key = normalizeSuggestionKey(cleaned)
-                    if !key.isEmpty, seen.insert(key).inserted {
+                guard let cleaned = cleanSuggestionLine(rawLine) else { continue }
+                let key = normalizeSuggestionKey(cleaned)
+                guard !key.isEmpty, seen.insert(key).inserted else { continue }
+                accepted += 1
+                if let filter, filter.tier(of: cleaned) == 0 {
+                    held.append(cleaned)
+                } else {
+                    continuation.yield(cleaned)
+                    emitted += 1
+                }
+                if emitted >= Self.suggestionCount { break streamLoop }
+            }
+            if accepted >= rawLimit { break }
+        }
+
+        if emitted < Self.suggestionCount, accepted < rawLimit {
+            let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !remaining.isEmpty, let cleaned = cleanSuggestionLine(remaining) {
+                let key = normalizeSuggestionKey(cleaned)
+                if !key.isEmpty, seen.insert(key).inserted {
+                    if let filter, filter.tier(of: cleaned) == 0 {
+                        held.append(cleaned)
+                    } else {
                         continuation.yield(cleaned)
                         emitted += 1
                     }
                 }
             }
-            if emitted >= Self.suggestionCount { break }
         }
 
-        if emitted < Self.suggestionCount {
-            let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !remaining.isEmpty, let cleaned = cleanSuggestionLine(remaining) {
-                let key = normalizeSuggestionKey(cleaned)
-                if !key.isEmpty, seen.insert(key).inserted {
-                    continuation.yield(cleaned)
-                }
+        // Stream is done; top up with the best of the non-rhyming leftovers.
+        if let filter, emitted < Self.suggestionCount {
+            for line in filter.rank(held, want: Self.suggestionCount - emitted) {
+                continuation.yield(line)
+                emitted += 1
             }
         }
     }
@@ -496,7 +531,12 @@ struct AIService {
             ? "Whole song context enabled; infer the theme from the full lyrics."
             : (theme.isEmpty ? "No specific theme provided" : theme)
 
-        let rhymeInstruction: String
+        let constraintBlock = Self.rhymeConstraintBlock(targetRhymeLine: targetRhymeLine, rhymeType: rhymeType)
+        // Over-generate 2x when ending words are constrained so the rhyme
+        // filter can discard misses and still deliver a full set.
+        let requestCount = constraintBlock == nil ? Self.suggestionCount : Self.suggestionCount * 2
+
+        var rhymeInstruction: String
         if let target = targetRhymeLine {
             rhymeInstruction = """
             Crucially, the new line MUST end with a **\(rhymeType.displayName)** to this specific line: "\(target)".
@@ -505,6 +545,9 @@ struct AIService {
             rhymeInstruction = """
             Since this is a new rhyme sound ("\(currentLetter)"), the new line should introduce a new end-rhyme that fits the meter and theme.
             """
+        }
+        if let constraintBlock {
+            rhymeInstruction += "\n" + constraintBlock
         }
 
         let rhymeAdherence = targetRhymeLine != nil
@@ -531,10 +574,28 @@ struct AIService {
 
         Complexity level: \(complexity.label). \(complexity.promptHint)
 
-        Provide \(Self.suggestionCount) creative, poetic, and contextually relevant suggestions for the next line.
+        Provide \(requestCount) creative, poetic, and contextually relevant suggestions for the next line.
         Make sure the rhythm and meter match the style of the current lyrics\(rhymeAdherence).
 
-        Respond with exactly \(Self.suggestionCount) lines, one suggestion per line. No numbering, no bullets, no quotes, no markdown, no code fences, and no commentary — just the bare suggestion lines.
+        Respond with exactly \(requestCount) lines, one suggestion per line. No numbering, no bullets, no quotes, no markdown, no code fences, and no commentary — just the bare suggestion lines.
+        """
+    }
+
+    /// Constraint block shared by the cloud and local prompts. Returns nil
+    /// when there is no target line or the dictionary can't offer ending
+    /// words — then prompts and counts must stay exactly as before.
+    static func rhymeConstraintBlock(targetRhymeLine: String?, rhymeType: RhymeType) -> String? {
+        guard let target = targetRhymeLine,
+              !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let targetWord = RhymeConstraint.lineEndWord(target)
+        guard !targetWord.isEmpty else { return nil }
+        let candidates = RhymeConstraint.candidateEndWords(targetWord: targetWord, rhymeType: rhymeType)
+        guard !candidates.isEmpty else { return nil }
+        return """
+        The new line must rhyme with: "\(target)" (it ends with "\(targetWord)").
+        End each line with one of these rhyming words: \(candidates.joined(separator: ", ")) (choose the most natural fit).
         """
     }
 
@@ -644,11 +705,19 @@ struct AIService {
         currentSection: SongSection = .unknown,
         useWholeSongContext: Bool
     ) -> String {
-        let rhymeHint: String
+        let constraintBlock = Self.rhymeConstraintBlock(targetRhymeLine: targetRhymeLine, rhymeType: rhymeType)
+        // Over-generate 2x when ending words are constrained so the rhyme
+        // filter can discard misses and still deliver a full set.
+        let requestCount = constraintBlock == nil ? Self.suggestionCount : Self.suggestionCount * 2
+
+        var rhymeHint: String
         if let targetRhymeLine {
             rhymeHint = "Each line must rhyme (\(rhymeType.displayName)) with: \"\(targetRhymeLine)\""
         } else {
             rhymeHint = "Start a new rhyme sound for letter \"\(currentLetter)\"."
+        }
+        if let constraintBlock {
+            rhymeHint += "\n" + constraintBlock
         }
         let songContextInstruction = useWholeSongContext
             ? "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
@@ -656,7 +725,7 @@ struct AIService {
         let themeClause = !useWholeSongContext && !theme.isEmpty ? " about \(theme)" : ""
 
         return """
-        Write \(Self.suggestionCount) next lines for this song\(themeClause).
+        Write \(requestCount) next lines for this song\(themeClause).
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
         \(rhymeHint)
@@ -665,12 +734,12 @@ struct AIService {
         Lyrics so far:
         \(lyrics)
 
-        Reply with exactly \(Self.suggestionCount) lines, one per line, no numbering, no extra text.
+        Reply with exactly \(requestCount) lines, one per line, no numbering, no extra text.
         """
     }
 
     @available(iOS 26.0, *)
-    private func callLocal(prompt: String) async throws -> [String] {
+    private func callLocal(prompt: String, limit: Int) async throws -> [String] {
         let model = SystemLanguageModel.default
         guard model.isAvailable else {
             throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
@@ -681,7 +750,7 @@ struct AIService {
             instructions: "You are an expert songwriter and lyricist. Return concise lyric line suggestions only."
         )
         let response = try await session.respond(to: prompt)
-        let parsed = parseSuggestionList(response.content)
+        let parsed = parseSuggestionList(response.content, limit: limit)
         guard !parsed.isEmpty else {
             throw AIServiceError.decodingError
         }
@@ -1500,7 +1569,11 @@ struct AIService {
     // MARK: - Parsing
 
     func parseSuggestionList(_ text: String) -> [String] {
-        let parsed = parseJsonArray(text)
+        parseSuggestionList(text, limit: Self.suggestionCount)
+    }
+
+    func parseSuggestionList(_ text: String, limit: Int) -> [String] {
+        let parsed = parseJsonArray(text, limit: limit)
         let candidates = parsed.isEmpty ? parseLines(text) : parsed
         var seen = Set<String>()
         var result: [String] = []
@@ -1510,12 +1583,12 @@ struct AIService {
             let key = normalizeSuggestionKey(cleaned)
             guard !key.isEmpty, seen.insert(key).inserted else { continue }
             result.append(cleaned)
-            if result.count >= Self.suggestionCount { break }
+            if result.count >= limit { break }
         }
         return result
     }
 
-    private func parseJsonArray(_ text: String) -> [String] {
+    private func parseJsonArray(_ text: String, limit: Int) -> [String] {
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Strip code fences
         if cleaned.hasPrefix("```json") { cleaned = String(cleaned.dropFirst(7)) }
@@ -1526,7 +1599,7 @@ struct AIService {
         // Try parsing as a direct JSON array
         if let data = cleaned.data(using: .utf8),
            let array = try? JSONSerialization.jsonObject(with: data) as? [String] {
-            return Array(array.prefix(Self.suggestionCount))
+            return Array(array.prefix(limit))
         }
 
         // Try parsing as a JSON object containing an array
@@ -1534,7 +1607,7 @@ struct AIService {
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             for value in obj.values {
                 if let array = value as? [String] {
-                    return Array(array.prefix(Self.suggestionCount))
+                    return Array(array.prefix(limit))
                 }
             }
         }

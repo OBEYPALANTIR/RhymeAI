@@ -306,13 +306,19 @@ struct Writers_BlockTests {
         #expect(immediatePrompt.contains("MUST end with a **Perfect Rhyme**"))
         #expect(immediatePrompt.contains("Current song section: Verse."))
         #expect(immediatePrompt.contains("Complexity level: Moderate"))
-        #expect(immediatePrompt.contains("Respond with exactly 6 lines"))
+        // "road" is in the dictionary, so the prompt constrains ending words
+        // and over-generates 2x for the rhyme filter.
+        #expect(immediatePrompt.contains("End each line with one of these rhyming words:"))
+        #expect(immediatePrompt.contains("Respond with exactly 12 lines"))
 
         #expect(wholeSongPrompt.contains("Whole song context enabled; infer the theme from the full lyrics."))
         #expect(wholeSongPrompt.contains("Analyze the whole song for story arc"))
         #expect(wholeSongPrompt.contains("new rhyme sound (\"B\")"))
         #expect(wholeSongPrompt.contains("Current song section: Chorus."))
         #expect(wholeSongPrompt.contains("Complexity level: Complex"))
+        // No target line: no constraint block and no over-generation.
+        #expect(!wholeSongPrompt.contains("End each line with"))
+        #expect(wholeSongPrompt.contains("Respond with exactly 6 lines"))
     }
 
     @Test func rewritePromptIncludesEveryActionContract() {
