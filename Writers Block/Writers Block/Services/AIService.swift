@@ -37,6 +37,17 @@ enum AIServiceError: LocalizedError {
 }
 
 struct AIService {
+
+    // MARK: - Gemma/GGUF shared runner
+    //
+    // A single runner is shared process-wide so the model loads once and stays
+    // resident. Actor isolation keeps all llama.cpp access on one domain.
+    // When the llama.cpp SPM package is not resolved, makeLocalGGUFRunner()
+    // returns GGUFModelStub — calls immediately throw localModelUnavailable.
+    static let ggufRunner: LocalGGUFRunner = makeLocalGGUFRunner()
+
+    // MARK: -
+
     struct SingleWordRewriteContext {
         let line: String
         let previousWord: String?
@@ -106,24 +117,29 @@ struct AIService {
         useWholeSongContext: Bool
     ) async throws -> [String] {
         if provider == .local {
+            let localPrompt = buildLocalPrompt(
+                theme: theme,
+                lyrics: lyrics,
+                targetRhymeLine: targetRhymeLine,
+                rhymeType: rhymeType,
+                currentLetter: currentLetter,
+                currentSection: currentSection,
+                sectionOrdinal: sectionOrdinal,
+                firstChorusLines: firstChorusLines,
+                useWholeSongContext: useWholeSongContext
+            )
+            let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
+
+            // Gemma engine: route through downloaded GGUF model.
+            if Self.shouldUseGemma() {
+                let parsed = try await callGGUFSuggestions(prompt: localPrompt, limit: Self.suggestionCount)
+                guard let filter else { return parsed }
+                return filter.rank(parsed, want: Self.suggestionCount)
+            }
+
+            // Apple Intelligence fallback.
             if #available(iOS 26.0, *) {
-                let prompt = buildLocalPrompt(
-                    theme: theme,
-                    lyrics: lyrics,
-                    targetRhymeLine: targetRhymeLine,
-                    rhymeType: rhymeType,
-                    currentLetter: currentLetter,
-                    currentSection: currentSection,
-                    sectionOrdinal: sectionOrdinal,
-                    firstChorusLines: firstChorusLines,
-                    useWholeSongContext: useWholeSongContext
-                )
-                // Same gate as the prompt's constraint block: only filter when
-                // the model was actually told which ending words to use.
-                let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
-                // The local prompt asks for suggestionCount lines even when
-                // constrained (see buildLocalPrompt); rank() still verifies them.
-                let parsed = try await callLocal(prompt: prompt, limit: Self.suggestionCount)
+                let parsed = try await callLocal(prompt: localPrompt, limit: Self.suggestionCount)
                 guard let filter else { return parsed }
                 return filter.rank(parsed, want: Self.suggestionCount)
             }
@@ -885,6 +901,199 @@ struct AIService {
         }
     }
 
+    // MARK: - GGUF / Gemma routing helpers
+
+    /// Returns true when calls should be routed through the Gemma GGUF runner.
+    /// Conditions: engine choice is .gemma AND at least one GGUF file exists in
+    /// the models directory.
+    static func shouldUseGemma() -> Bool {
+        guard GGUFEngineChoice.current == .gemma else { return false }
+        guard let dir = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ).appendingPathComponent("RhymeAI/Gemma", isDirectory: true) else { return false }
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return contents.contains { $0.hasSuffix(".gguf") }
+    }
+
+    /// Returns the path to the first available GGUF model file, or nil.
+    static func firstGGUFPath() -> String? {
+        guard let dir = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ).appendingPathComponent("RhymeAI/Gemma", isDirectory: true) else { return nil }
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        guard let gguf = contents.first(where: { $0.hasSuffix(".gguf") }) else { return nil }
+        return dir.appendingPathComponent(gguf).path
+    }
+
+    /// Ensure the shared GGUF runner has the correct model loaded, then call
+    /// generate(prompt:) and return the raw output.
+    private func callGGUF(prompt: String) async throws -> String {
+        let runner = Self.ggufRunner
+        let path: String
+        // Check if loaded path matches available file.
+        if let p = Self.firstGGUFPath() {
+            path = p
+        } else {
+            throw AIServiceError.localModelUnavailable(
+                reason: "No GGUF model found. Download a Gemma model in Settings."
+            )
+        }
+
+        // Load model if not already loaded (or if a different file is now present).
+        if !runner.isLoaded {
+            try await runner.loadModel(filePath: path)
+        }
+
+        return try await runner.generate(prompt: prompt)
+    }
+
+    /// Route a suggestion prompt through Gemma and parse the result.
+    private func callGGUFSuggestions(prompt: String, limit: Int) async throws -> [String] {
+        let raw = try await callGGUF(prompt: prompt)
+        let parsed = parseSuggestionList(raw, limit: limit)
+        guard !parsed.isEmpty else {
+            throw AIServiceError.decodingError
+        }
+        return parsed
+    }
+
+    /// Route a rewrite prompt through Gemma and clean the result.
+    /// For passage rewrites uses cleanLocalRewrite; for single-word uses the
+    /// same accept/fallback pipeline as Apple Intelligence.
+    private func callGGUFRewrite(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection,
+        selectionStart: Int?,
+        rejectedCandidates: Set<String>
+    ) async throws -> String {
+        // Build the same local prompt used for Apple Intelligence — Gemma
+        // understands it, and the output is cleaned the same way.
+        // IMPORTANT: Gemma must use the raw action.instruction for punchUp —
+        // do NOT soften it (no localRewriteInstruction(for:)); Apple's guardrails
+        // don't apply here.
+        let prompt = buildGemmaRewritePrompt(
+            action: action,
+            lyrics: lyrics,
+            selection: selection,
+            currentSection: currentSection,
+            selectionStart: selectionStart,
+            rejectedCandidates: rejectedCandidates
+        )
+
+        let singleWord = isSingleWordSelection(selection)
+        let raw = try await callGGUF(prompt: prompt)
+        let parsed = cleanLocalRewrite(raw, selection: selection)
+
+        if !singleWord {
+            guard !parsed.isEmpty else { throw AIServiceError.decodingError }
+            return parsed
+        }
+
+        // Single-word path: accept/fallback pipeline (same shape as Apple Intelligence).
+        let context = singleWordRewriteContext(lyrics: lyrics, selection: selection, selectionStart: selectionStart)
+        let rejectKeys = rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates)
+        let accepted = acceptLocalSingleWordRewrite(
+            candidate: parsed,
+            selection: selection,
+            action: action,
+            context: context,
+            rejectedCandidates: rejectKeys
+        )
+        if !accepted.isEmpty { return accepted }
+
+        let fallback = fallbackLocalSingleWordRewrite(
+            selection: selection,
+            action: action,
+            context: context,
+            rejectedCandidates: rejectKeys
+        )
+        if !fallback.isEmpty { return fallback }
+
+        if action == .harderRhyme { throw AIServiceError.noSafeSingleWordRhyme }
+        throw AIServiceError.decodingError
+    }
+
+    /// Builds the rewrite prompt for Gemma. Same structure as buildLocalRewritePrompt
+    /// but uses the raw action.instruction (no softening) for punchUp.
+    private func buildGemmaRewritePrompt(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection = .unknown,
+        selectionStart: Int? = nil,
+        rejectedCandidates: Set<String> = []
+    ) -> String {
+        let singleWord = isSingleWordSelection(selection)
+        let selectedLine = selectionStart.flatMap { lyricLine(at: $0, in: lyrics) }
+        let rejectedKeys = rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates)
+        let rejectedRule = singleWord && !rejectedKeys.isEmpty
+            ? "Do not return any of these rejected words: \(rejectedKeys.sorted().joined(separator: ", "))."
+            : ""
+        let taskLine = singleWord
+            ? "Replace the selected word with a different word that fits the song."
+            : "Rewrite the selected passage from this song."
+        let outputRules = singleWord
+            ? """
+            Return exactly one replacement word.
+            The replacement must be different from the selected word.
+            Do not return "\(selection)".
+            \(rejectedRule)
+            No quotes, no labels, no commentary.
+            """
+            : """
+            Reply with the rewritten passage only.
+            Preserve line breaks if the selection has multiple lines.
+            No quotes, no labels, no commentary.
+            """
+        // Gemma: use full action.instruction — no guardrail softening needed.
+        return """
+        \(taskLine)
+        Current song section: \(currentSection.displayName).
+        \(currentSection.promptHint)
+        Action: \(action.label).
+        Instruction: \(action.instruction)
+
+        Lyrics so far:
+        \(lyrics)
+
+        \(selectedLine.map { "Line containing the selected word:\n\($0)\n" } ?? "")
+        Selected passage:
+        \(selection)
+
+        Rules:
+        \(outputRules)
+        """
+    }
+
+    // MARK: - Test access shims
+
+    /// Exposed for unit tests that verify Gemma rewrite prompt construction.
+    func buildGemmaRewritePromptForTest(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection,
+        selectionStart: Int?,
+        rejectedCandidates: Set<String>
+    ) -> String {
+        buildGemmaRewritePrompt(
+            action: action,
+            lyrics: lyrics,
+            selection: selection,
+            currentSection: currentSection,
+            selectionStart: selectionStart,
+            rejectedCandidates: rejectedCandidates
+        )
+    }
+
     // MARK: - Synonyms
 
     func getSynonyms(
@@ -899,9 +1108,17 @@ struct AIService {
         guard !target.isEmpty else { return [] }
 
         if provider == .local {
+            let synPrompt = buildSynonymsPrompt(word: target, lineContext: lineContext, limit: limit)
+
+            // Gemma engine: route through downloaded GGUF model.
+            if Self.shouldUseGemma() {
+                let raw = try await callGGUF(prompt: synPrompt)
+                return extractSynonyms(raw, exclude: target, limit: limit)
+            }
+
+            // Apple Intelligence fallback.
             if #available(iOS 26.0, *) {
-                let prompt = buildSynonymsPrompt(word: target, lineContext: lineContext, limit: limit)
-                let raw = try await callLocalRaw(prompt: prompt, instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object.")
+                let raw = try await callLocalRaw(prompt: synPrompt, instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object.")
                 return extractSynonyms(raw, exclude: target, limit: limit)
             }
             throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence synonyms require iOS 26 or later.")
@@ -1023,6 +1240,19 @@ struct AIService {
         }
 
         if provider == .local {
+            // Gemma engine: route through downloaded GGUF model.
+            if Self.shouldUseGemma() {
+                return try await callGGUFRewrite(
+                    action: action,
+                    lyrics: fullLyrics,
+                    selection: selection,
+                    currentSection: currentSection,
+                    selectionStart: selectionStart,
+                    rejectedCandidates: rejectedCandidates
+                )
+            }
+
+            // Apple Intelligence fallback.
             if #available(iOS 26.0, *) {
                 return try await callLocalRewrite(
                     action: action,

@@ -47,6 +47,7 @@ struct SettingsView: View {
     @State private var downloadMessage: String?
     @State private var downloadError: String?
     @State private var downloadTask: Task<Void, Never>?
+    @State private var ggufEngineChoice: GGUFEngineChoice = GGUFEngineChoice.current
 
     var body: some View {
         NavigationStack {
@@ -163,6 +164,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             localStatusRow
 
+            // Engine picker: only shown when at least one GGUF is installed.
+            if !installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty {
+                enginePickerRow
+            }
+
             SettingsSectionTitle("Recommended Gemma Downloads", systemImage: "arrow.down.circle")
 
             ForEach(gemmaDownloadOptions) { option in
@@ -183,11 +189,36 @@ struct SettingsView: View {
                     .accessibilityIdentifier("gemmaDownloadError")
             }
 
-            Text("iOS suggestions currently use Apple Foundation Models. These GGUF downloads match Android's local-model files and are stored in the app sandbox.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty
+                 ? "Download a Gemma model to enable on-device inference without Apple Intelligence. Files are stored in the app sandbox."
+                 : "Gemma uses the downloaded GGUF model directly via llama.cpp. Apple Intelligence is the fallback when no GGUF is present."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var enginePickerRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SettingsSectionTitle("On-Device Engine", systemImage: "cpu")
+
+            Picker("On-device engine", selection: Binding(
+                get: { ggufEngineChoice },
+                set: { choice in
+                    ggufEngineChoice = choice
+                    choice.save()
+                }
+            )) {
+                ForEach(GGUFEngineChoice.allCases, id: \.self) { choice in
+                    Text(choice.displayName).tag(choice)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("ggufEnginePicker")
+        }
+        .padding(16)
+        .liquidGlassSurface(cornerRadius: 22, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     private var localStatusRow: some View {
@@ -355,6 +386,7 @@ struct SettingsView: View {
         for provider in AIProvider.allCases {
             editingKeys[provider.rawValue] = viewModel.apiKey(for: provider)
         }
+        ggufEngineChoice = GGUFEngineChoice.current
         refreshInstalledModels()
     }
 
@@ -418,9 +450,12 @@ struct SettingsView: View {
                 await MainActor.run {
                     viewModel.saveProvider(.local)
                     viewModel.saveModel(.localModel)
+                    // Automatically switch to Gemma engine now that a GGUF is available.
+                    GGUFEngineChoice.gemma.save()
+                    ggufEngineChoice = .gemma
                     installedModelFiles.insert(option.fileName)
                     activeDownloadID = nil
-                    downloadMessage = "\(option.title) downloaded. Local provider selected."
+                    downloadMessage = "\(option.title) downloaded. Gemma engine selected."
                 }
             } catch is CancellationError {
                 await MainActor.run {
