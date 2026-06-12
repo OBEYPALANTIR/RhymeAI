@@ -637,92 +637,95 @@ struct Writers_BlockTests {
 
     @MainActor
     @Test func geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey() async throws {
-        let apiKey = Self.geminiTestKey
-        if apiKey.isEmpty { return }
+        let apiKey = try #require(Self.geminiTestKey, "GEMINI_TEST_KEY is required for live Gemini service verification")
 
         let service = AIService()
         let lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
 
-        let suggestions = try await service.getSuggestions(
-            provider: .gemini,
-            apiKey: apiKey,
-            modelId: AIModel.default.id,
-            theme: "late-night resolve",
-            lyrics: lyrics,
-            targetRhymeLine: "Yellow lights on a midnight road",
-            rhymeType: .perfect,
-            rhymeScheme: "AABB",
-            currentLetter: "A",
-            currentSection: .verse,
-            complexity: .moderate,
-            useWholeSongContext: false
-        )
-        #expect(!suggestions.isEmpty, "Gemini returned no suggestions")
-        #expect(suggestions.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-
-        for action in RewriteAction.allCases {
-            let rewrite = try await service.getRewrite(
+        for model in Self.liveGeminiModels {
+            let suggestions = try await service.getSuggestions(
                 provider: .gemini,
                 apiKey: apiKey,
-                modelId: AIModel.default.id,
-                action: action,
-                fullLyrics: lyrics,
-                selection: "I keep the melody close",
-                currentSection: .verse
+                modelId: model.id,
+                theme: "late-night resolve",
+                lyrics: lyrics,
+                targetRhymeLine: "Yellow lights on a midnight road",
+                rhymeType: .perfect,
+                rhymeScheme: "AABB",
+                currentLetter: "A",
+                currentSection: .verse,
+                complexity: .moderate,
+                useWholeSongContext: false
             )
-            #expect(!rewrite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Gemini returned no \(action.label) rewrite")
-        }
+            #expect(!suggestions.isEmpty, "Gemini returned no suggestions for \(model.id)")
+            #expect(suggestions.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
 
-        var streamed: [String] = []
-        for try await line in service.streamSuggestions(
-            provider: .gemini,
-            apiKey: apiKey,
-            modelId: AIModel.default.id,
-            theme: "late-night resolve",
-            lyrics: lyrics,
-            targetRhymeLine: nil,
-            rhymeType: .perfect,
-            rhymeScheme: "AABB",
-            currentLetter: "B",
-            currentSection: .verse,
-            complexity: .moderate,
-            useWholeSongContext: true
-        ) {
-            streamed.append(line)
+            for action in RewriteAction.allCases {
+                let rewrite = try await service.getRewrite(
+                    provider: .gemini,
+                    apiKey: apiKey,
+                    modelId: model.id,
+                    action: action,
+                    fullLyrics: lyrics,
+                    selection: "I keep the melody close",
+                    currentSection: .verse
+                )
+                #expect(!rewrite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Gemini returned no \(action.label) rewrite for \(model.id)")
+            }
+
+            var streamed: [String] = []
+            for try await line in service.streamSuggestions(
+                provider: .gemini,
+                apiKey: apiKey,
+                modelId: model.id,
+                theme: "late-night resolve",
+                lyrics: lyrics,
+                targetRhymeLine: nil,
+                rhymeType: .perfect,
+                rhymeScheme: "AABB",
+                currentLetter: "B",
+                currentSection: .verse,
+                complexity: .moderate,
+                useWholeSongContext: true
+            ) {
+                streamed.append(line)
+            }
+            #expect(!streamed.isEmpty, "Gemini stream emitted no suggestions for \(model.id)")
+            #expect(streamed.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         }
-        #expect(!streamed.isEmpty, "Gemini stream emitted no suggestions")
-        #expect(streamed.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
     }
 
     @MainActor
     @Test func geminiStreamingCanBeCancelledAfterFirstSuggestionWithDebugKey() async throws {
-        let apiKey = Self.geminiTestKey
-        if apiKey.isEmpty { return }
+        let apiKey = try #require(Self.geminiTestKey, "GEMINI_TEST_KEY is required for live Gemini cancellation verification")
 
         let service = AIService()
         let lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
-        var streamed: [String] = []
 
-        for try await line in service.streamSuggestions(
-            provider: .gemini,
-            apiKey: apiKey,
-            modelId: AIModel.default.id,
-            theme: "late-night resolve",
-            lyrics: lyrics,
-            targetRhymeLine: nil,
-            rhymeType: .perfect,
-            rhymeScheme: "AABB",
-            currentLetter: "B",
-            currentSection: .verse,
-            complexity: .moderate,
-            useWholeSongContext: true
-        ) {
-            streamed.append(line)
-            break
+        for model in Self.liveGeminiModels {
+            var streamed: [String] = []
+
+            for try await line in service.streamSuggestions(
+                provider: .gemini,
+                apiKey: apiKey,
+                modelId: model.id,
+                theme: "late-night resolve",
+                lyrics: lyrics,
+                targetRhymeLine: nil,
+                rhymeType: .perfect,
+                rhymeScheme: "AABB",
+                currentLetter: "B",
+                currentSection: .verse,
+                complexity: .moderate,
+                useWholeSongContext: true
+            ) {
+                streamed.append(line)
+                break
+            }
+
+            #expect(streamed.count == 1, "Gemini stream did not cancel after first suggestion for \(model.id)")
+            #expect(!streamed[0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-
-        #expect(streamed.count == 1)
-        #expect(!streamed[0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     @MainActor
@@ -730,29 +733,36 @@ struct Writers_BlockTests {
         let service = AIService()
         let invalidKey = "invalid-gemini-key-for-test"
 
-        do {
-            _ = try await service.getSuggestions(
-                provider: .gemini,
-                apiKey: invalidKey,
-                modelId: AIModel.default.id,
-                theme: "",
-                lyrics: "one line",
-                targetRhymeLine: nil,
-                rhymeType: .perfect,
-                rhymeScheme: "AABB",
-                currentLetter: "A",
-                currentSection: .unknown,
-                complexity: .moderate,
-                useWholeSongContext: false
-            )
-            #expect(Bool(false), "Expected invalid Gemini key to fail")
-        } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-            #expect(!message.isEmpty)
-            #expect(message.contains("Provider") || message.contains("API error"))
-            #expect(!message.contains(invalidKey))
+        for model in Self.liveGeminiModels {
+            do {
+                _ = try await service.getSuggestions(
+                    provider: .gemini,
+                    apiKey: invalidKey,
+                    modelId: model.id,
+                    theme: "",
+                    lyrics: "one line",
+                    targetRhymeLine: nil,
+                    rhymeType: .perfect,
+                    rhymeScheme: "AABB",
+                    currentLetter: "A",
+                    currentSection: .unknown,
+                    complexity: .moderate,
+                    useWholeSongContext: false
+                )
+                #expect(Bool(false), "Expected invalid Gemini key to fail for \(model.id)")
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                #expect(!message.isEmpty)
+                #expect(message.contains("Provider") || message.contains("API error"))
+                #expect(!message.contains(invalidKey))
+            }
         }
     }
+
+    private static let liveGeminiModels: [AIModel] = [
+        .gemini35Flash,
+        .gemini31Pro
+    ]
 
     private static let fixtureDictionary = PronunciationDictionary.fromLines([
         "yellow\tY EH1 L OW0",
@@ -763,10 +773,11 @@ struct Writers_BlockTests {
         "orange\tAO1 R AH0 N JH|AO1 R IH0 N JH"
     ])
 
-    private static var geminiTestKey: String {
-        ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"]
+    private static var geminiTestKey: String? {
+        let key = ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"]
             ?? ProcessInfo.processInfo.environment["SIMCTL_CHILD_GEMINI_TEST_KEY"]
             ?? ""
+        return key.isEmpty ? nil : key
     }
 
 }

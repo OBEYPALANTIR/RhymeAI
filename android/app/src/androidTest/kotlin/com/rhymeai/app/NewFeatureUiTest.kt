@@ -30,10 +30,13 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.lifecycle.ViewModelProvider
 import com.rhymeai.app.data.model.RewriteAction
+import com.rhymeai.app.service.AIModel
+import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.util.PronunciationDictionary
 import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -214,6 +217,18 @@ class NewFeatureUiTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test
+    fun liveGemini35FlashSelectedRewriteActionsReachReviewPreview() {
+        verifyLiveGeminiSelectedRewriteActions(AIModel.GEMINI_35_FLASH)
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun liveGemini31ProSelectedRewriteActionsReachReviewPreview() {
+        verifyLiveGeminiSelectedRewriteActions(AIModel.GEMINI_31_PRO)
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
     fun harderRhymeSingleWordPreviewRejectsReality() {
         composeRule.onNodeWithText("New Song").performClick()
 
@@ -302,6 +317,51 @@ class NewFeatureUiTest {
         captureRootScreenshot("harder-rhyme-no-safe-single-word.png")
     }
 
+    @OptIn(ExperimentalTestApi::class)
+    private fun verifyLiveGeminiSelectedRewriteActions(model: AIModel) {
+        assumeTrue(
+            "Skipping live Gemini UI rewrite gate: android/local.properties has no geminiTestKey.",
+            BuildConfig.GEMINI_TEST_KEY.isNotBlank()
+        )
+
+        scenario?.onActivity { activity ->
+            ViewModelProvider(activity)[MainViewModel::class.java].run {
+                saveProvider(AIProvider.GEMINI)
+                saveModel(model)
+            }
+        }
+
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val lyrics = "yellow music\nfollow music"
+        val selection = TextRange(0, "yellow music".length)
+        composeRule.onNodeWithTag("lyricsEditor").performClick()
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
+        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
+        composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        captureRootScreenshot("live-gemini-${model.screenshotSlug()}-rewrite-chip.png")
+
+        listOf(RewriteAction.REPHRASE, RewriteAction.HARDER_RHYME, RewriteAction.PUNCH_UP).forEach { action ->
+            composeRule.onNodeWithText(action.label).assertIsDisplayed().performClick()
+            composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
+            composeRule.waitUntil(timeoutMillis = 120_000) {
+                composeRule.onAllNodesWithText("Previewing ${action.label}", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty() ||
+                    composeRule.onAllNodesWithText("Provider", substring = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+            }
+            val providerErrors = composeRule.onAllNodesWithText("Provider", substring = true)
+                .fetchSemanticsNodes()
+            assertTrue(
+                "Live Gemini selected rewrite produced a provider error for ${model.id} ${action.label}",
+                providerErrors.isEmpty()
+            )
+            captureRootScreenshot("live-gemini-${model.screenshotSlug()}-${action.name.lowercase()}-preview.png")
+            composeRule.onNodeWithText("Cancel").performClick()
+            composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        }
+    }
+
     private fun captureRootScreenshot(name: String) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val values = ContentValues().apply {
@@ -318,6 +378,9 @@ class NewFeatureUiTest {
         }
         println("SCREENSHOT_PATH /sdcard/Pictures/RhymeAI-Test/$name")
     }
+
+    private fun AIModel.screenshotSlug(): String =
+        id.replace(Regex("[^A-Za-z0-9_-]"), "_")
 
     private fun lyricsEditorFocused(): Boolean {
         return composeRule.onNodeWithTag("lyricsEditor")

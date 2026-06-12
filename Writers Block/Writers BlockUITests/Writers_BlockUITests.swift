@@ -161,6 +161,53 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testLiveGeminiSelectedRewriteActionsProducePreviewForConfiguredModels() throws {
+        let geminiTestKey = Self.geminiTestKey
+        guard !geminiTestKey.isEmpty else {
+            throw XCTSkip("GEMINI_TEST_KEY is required for live selected rewrite UI verification")
+        }
+
+        for modelId in Self.liveGeminiModelIds {
+            let app = isolatedUITestApp(arguments: [
+                "-selectedProvider",
+                "GEMINI",
+                "-selectedModel",
+                modelId,
+                "--ui-test-seed-rewrite-selection",
+                "--ui-test-force-rewrite-bar"
+            ])
+            app.launchEnvironment["GEMINI_TEST_KEY"] = geminiTestKey
+            app.launch()
+
+            XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
+            attachScreenshot(app, name: "live-gemini-\(Self.screenshotSlug(modelId))-rewrite-chip")
+
+            for action in ["Rephrase", "Harder Rhyme", "Punch Up"] {
+                XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5), "\(action) button missing for \(modelId)")
+                app.buttons[action].tap()
+                XCTAssertTrue(app.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5))
+
+                let preview = app.staticTexts["Previewing \(action)"]
+                if !preview.waitForExistence(timeout: 120) {
+                    attachScreenshot(app, name: "live-gemini-\(Self.screenshotSlug(modelId))-\(Self.screenshotSlug(action))-failure")
+                    let providerError = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Provider")).firstMatch
+                    if providerError.exists {
+                        XCTFail("Live Gemini selected rewrite returned provider error for \(modelId) \(action): \(providerError.label)")
+                    } else {
+                        XCTFail("Live Gemini selected rewrite did not reach preview for \(modelId) \(action)")
+                    }
+                }
+
+                attachScreenshot(app, name: "live-gemini-\(Self.screenshotSlug(modelId))-\(Self.screenshotSlug(action))-preview")
+                app.buttons["Cancel"].tap()
+                XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5), "\(action) cancel did not return to chip bar for \(modelId)")
+            }
+
+            app.terminate()
+        }
+    }
+
+    @MainActor
     func testBackSwipeClosesAssistantSheetWithoutReturningToMenu() throws {
         try requirePhone()
 
@@ -662,5 +709,24 @@ final class Writers_BlockUITests: XCTestCase {
         guard UIDevice.current.userInterfaceIdiom == .phone && !simulatorName.localizedCaseInsensitiveContains("iPad") else {
             throw XCTSkip("Phone-only assistant sheet test")
         }
+    }
+
+    private static var geminiTestKey: String {
+        ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"]
+            ?? ProcessInfo.processInfo.environment["SIMCTL_CHILD_GEMINI_TEST_KEY"]
+            ?? ""
+    }
+
+    private static let liveGeminiModelIds = [
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview"
+    ]
+
+    private static func screenshotSlug(_ raw: String) -> String {
+        raw.replacingOccurrences(
+            of: "[^A-Za-z0-9_-]",
+            with: "_",
+            options: .regularExpression
+        )
     }
 }
