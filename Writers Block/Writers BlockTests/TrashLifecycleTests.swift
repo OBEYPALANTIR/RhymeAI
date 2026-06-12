@@ -25,7 +25,7 @@ struct TrashLifecycleTests {
         viewModel.lyrics = project.lyrics
         viewModel.theme = project.theme
         viewModel.currentProjectId = project.id
-        viewModel.suggestions = ["keep this clear"]
+        viewModel.suggestions = [SuggestedLine(text: "keep this clear", tier: 0)]
 
         viewModel.moveProjectToTrash(project)
 

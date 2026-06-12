@@ -26,7 +26,7 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - AI State
 
-    @Published var suggestions: [String] = []
+    @Published var suggestions: [SuggestedLine] = []
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
 
@@ -318,9 +318,27 @@ final class EditorViewModel: ObservableObject {
         }
 
         let pos = Self.characterOffset(forUTF16Offset: cursorPosition, in: lyrics)
-        let currentSection = currentSongSection(in: lyrics, cursorPosition: pos)
-        let textIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
+        let rawLines = lyrics.components(separatedBy: "\n")
+        let sectionMap = SectionMap(lyrics: lyrics)
+
+        // Determine which full-document line index the cursor sits on.
         let textBeforeCursor = String(lyrics.prefix(pos))
+        let globalCursorLineIndex = textBeforeCursor.components(separatedBy: "\n").count - 1
+
+        // Look up section and ordinal from the map.
+        let sectionRef = sectionMap.sectionAt(lineIndex: globalCursorLineIndex)
+        let currentSection = sectionRef?.type ?? .unknown
+        let sectionOrdinal = sectionRef?.ordinal ?? 1
+
+        // First-chorus lines for consistency prompting on repeat choruses.
+        let firstChorusLines: [String]?
+        if currentSection == .chorus, sectionOrdinal >= 2 {
+            firstChorusLines = sectionMap.lines(forFirstOf: .chorus, in: rawLines)
+        } else {
+            firstChorusLines = nil
+        }
+
+        let textIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
         let textAfterCursor = String(lyrics.suffix(lyrics.count - pos))
 
         let stanzaStartOffset: Int
@@ -353,7 +371,7 @@ final class EditorViewModel: ObservableObject {
 
         let schemeLetters = Array(activeRhymeScheme)
         guard !schemeLetters.isEmpty else {
-            return RhymeContext(targetLine: nil, currentLetter: "A", stanzaLines: stanzaLines, currentLineIndex: rawCursorLineIndex, currentSection: currentSection)
+            return RhymeContext(targetLine: nil, currentLetter: "A", stanzaLines: stanzaLines, currentLineIndex: rawCursorLineIndex, currentSection: currentSection, sectionOrdinal: sectionOrdinal, firstChorusLines: firstChorusLines)
         }
 
         let currentLetter = String(schemeLetters[effectiveLineIndex % schemeLetters.count])
@@ -378,28 +396,31 @@ final class EditorViewModel: ObservableObject {
             currentLetter: currentLetter,
             stanzaLines: stanzaLines,
             currentLineIndex: rawCursorLineIndex,
-            currentSection: currentSection
+            currentSection: currentSection,
+            sectionOrdinal: sectionOrdinal,
+            firstChorusLines: firstChorusLines
         )
     }
 
+    private func isSectionHeader(_ line: String) -> Bool {
+        SectionMap.headerTitle(line.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+    }
+
+    // Keep for backward compatibility — some callers use this directly.
+    private func sectionHeaderTitle(_ line: String) -> String? {
+        SectionMap.headerTitle(line.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    // Rewrite path needs a quick section lookup without full context computation.
     private func currentSongSection(in lyrics: String, cursorPosition: Int) -> SongSection {
         let safePosition = min(max(cursorPosition, 0), lyrics.count)
+        let rawLines = lyrics.components(separatedBy: "\n")
         let textBeforeCursor = String(lyrics.prefix(safePosition))
-        let header = textBeforeCursor
-            .components(separatedBy: "\n")
-            .compactMap(sectionHeaderTitle)
-            .last
-        return header.map(SongSection.fromHeader) ?? .unknown
-    }
-
-    private func isSectionHeader(_ line: String) -> Bool {
-        sectionHeaderTitle(line) != nil
-    }
-
-    private func sectionHeaderTitle(_ line: String) -> String? {
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("["), trimmed.hasSuffix("]"), trimmed.count > 2 else { return nil }
-        return String(trimmed.dropFirst().dropLast())
+        let cursorLineIndex = textBeforeCursor.components(separatedBy: "\n").count - 1
+        return SectionMap(lyrics: lyrics).sectionAt(lineIndex: cursorLineIndex)?.type
+            ?? (rawLines.prefix(cursorLineIndex + 1)
+                .compactMap { SectionMap.headerTitle($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                .last.map(SongSection.fromHeader) ?? .unknown)
     }
 
     // MARK: - AI Suggestions
@@ -423,17 +444,37 @@ final class EditorViewModel: ObservableObject {
             rhymeScheme: activeRhymeScheme,
             currentLetter: context.currentLetter,
             currentSection: context.currentSection,
+            sectionOrdinal: context.sectionOrdinal,
+            firstChorusLines: context.firstChorusLines,
             complexity: rhymeComplexity,
             useWholeSongContext: useWholeSongContext
         )
+
+        // Compute tier per emitted line using the same filter the streaming
+        // path uses, so the badge always agrees with what was held/passed.
+        let filter = RhymeLineFilter(targetLine: context.targetLine, rhymeType: rhymeType)
+
+        // Hook-repeat: end words from first chorus used to flag "hook" badge
+        // variant on subsequent choruses.
+        let firstChorusEndWordSet: Set<String> = {
+            guard context.currentSection == .chorus, context.sectionOrdinal >= 2,
+                  let lines = context.firstChorusLines else { return [] }
+            return Set(lines.compactMap { line -> String? in
+                let w = RhymeConstraint.lineEndWord(line)
+                return w.isEmpty ? nil : w
+            })
+        }()
 
         suggestionsTask = Task { @MainActor in
             defer { self.isLoading = false }
             do {
                 var emittedSuggestion = false
-                for try await line in stream {
+                for try await text in stream {
                     emittedSuggestion = true
-                    self.suggestions.append(line)
+                    let tier = filter?.tier(of: text) ?? 0
+                    let endWord = RhymeConstraint.lineEndWord(text)
+                    let isHookRepeat = !firstChorusEndWordSet.isEmpty && firstChorusEndWordSet.contains(endWord)
+                    self.suggestions.append(SuggestedLine(text: text, tier: tier, isHookRepeat: isHookRepeat))
                 }
                 if !emittedSuggestion, !Task.isCancelled {
                     self.errorMessage = "AI did not return suggestions. Try again."

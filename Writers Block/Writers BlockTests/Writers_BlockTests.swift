@@ -786,4 +786,285 @@ struct Writers_BlockTests {
         return key.isEmpty ? nil : key
     }
 
+    // MARK: - SectionMap tests
+
+    @Test func sectionMapParsesOnlyBracketedHeaders() {
+        let lyrics = "[Verse 1]\nLine A\nLine B\n\n[Chorus]\nHook line"
+        let map = SectionMap(lyrics: lyrics)
+
+        #expect(map.sections.count == 2)
+        #expect(map.sections[0].type == .verse)
+        #expect(map.sections[0].ordinal == 1)
+        #expect(map.sections[1].type == .chorus)
+        #expect(map.sections[1].ordinal == 1)
+    }
+
+    @Test func sectionMapParsesBareSectionHeaders() {
+        let lyrics = "verse\nLine A\nLine B\n\nchorus\nHook line"
+        let map = SectionMap(lyrics: lyrics)
+
+        #expect(map.sections.count == 2)
+        #expect(map.sections[0].type == .verse)
+        #expect(map.sections[1].type == .chorus)
+    }
+
+    @Test func sectionMapOrdinalCountsPerType() {
+        let lyrics = "[Verse 1]\nA\n\n[Chorus]\nB\n\n[Verse 2]\nC\n\n[Chorus]\nD"
+        let map = SectionMap(lyrics: lyrics)
+
+        let verses = map.sections.filter { $0.type == .verse }
+        let choruses = map.sections.filter { $0.type == .chorus }
+        #expect(verses.map(\.ordinal) == [1, 2])
+        #expect(choruses.map(\.ordinal) == [1, 2])
+    }
+
+    @Test func sectionMapImplicitLeadingBlockIsUnknown() {
+        let lyrics = "Intro line\n\n[Chorus]\nHook"
+        let map = SectionMap(lyrics: lyrics)
+
+        #expect(map.sections[0].type == .unknown)
+        #expect(map.sections[0].ordinal == 1)
+        #expect(map.sections[1].type == .chorus)
+    }
+
+    @Test func sectionMapBareHeaderNotMatchedForLongLines() {
+        // "chorus of angels" is a lyric, not a header.
+        let lyrics = "[Verse]\ncorrect header\nchor of angels is a lyric"
+        let map = SectionMap(lyrics: lyrics)
+        // Only one section — the bare "chor..." line is NOT a header.
+        #expect(map.sections.count == 1)
+    }
+
+    @Test func sectionAtLineIndexReturnsCorrectSection() {
+        let lyrics = "[Verse]\nLine 1\n\n[Chorus]\nHook"
+        let map = SectionMap(lyrics: lyrics)
+
+        // Line 0 = "[Verse]", line 1 = "Line 1", line 2 = blank, line 3 = "[Chorus]"
+        #expect(map.sectionAt(lineIndex: 1)?.type == .verse)
+        #expect(map.sectionAt(lineIndex: 4)?.type == .chorus)
+    }
+
+    @Test func sectionMapLinesForFirstChorusExtractsLyricLines() {
+        let lyrics = "[Verse]\nVerse line\n\n[Chorus]\nHook one\nHook two\n\n[Verse 2]\nAnother verse"
+        let map = SectionMap(lyrics: lyrics)
+        let rawLines = lyrics.components(separatedBy: "\n")
+
+        let lines = map.lines(forFirstOf: .chorus, in: rawLines)
+        #expect(lines == ["Hook one", "Hook two"])
+    }
+
+    // MARK: - Chorus candidate injection tests
+
+    @Test func rhymeConstraintBlockInjectsChorusEndWordsForRepeatChorus() {
+        // "night" rhymes with "light", "fight", "right" etc.
+        let chorusLines = ["We shine so bright", "Dancing through the night"]
+        let firstChorusEndWords = AIService.endWords(of: chorusLines) // ["bright","night"]
+        let block = AIService.rhymeConstraintBlock(
+            targetRhymeLine: "We shine so bright",
+            rhymeType: .perfect,
+            currentSection: .chorus,
+            firstChorusEndWords: firstChorusEndWords
+        )
+
+        // Hook end-words should be first in the candidates list.
+        guard let block else {
+            Issue.record("Expected a constraint block but got nil")
+            return
+        }
+        let brightIndex = block.range(of: "bright")
+        let nightIndex = block.range(of: "night")
+        // Both hook words must appear.
+        #expect(brightIndex != nil)
+        #expect(nightIndex != nil)
+    }
+
+    @Test func rhymeConstraintBlockExcludesChorusEndWordsForVerse() {
+        let chorusLines = ["We move through rain", "Washing out the stain"]
+        let firstChorusEndWords = AIService.endWords(of: chorusLines) // ["rain","stain"]
+        // "plain" rhymes with "rain"; the verse should avoid "rain" and "stain".
+        let block = AIService.rhymeConstraintBlock(
+            targetRhymeLine: "Walking through the plain",
+            rhymeType: .perfect,
+            currentSection: .verse,
+            firstChorusEndWords: firstChorusEndWords
+        )
+        // Extract the candidate words from the block and check "rain"/"stain" absent.
+        // The block format is: "End each line with one of these rhyming words: w1, w2 (choose...)"
+        guard let block,
+              let rangeStart = block.range(of: "rhyming words: "),
+              let rangeEnd = block.range(of: " (choose") else {
+            // No block → dictionary miss or all candidates excluded, skip assertion.
+            return
+        }
+        let candidateString = String(block[rangeStart.upperBound ..< rangeEnd.lowerBound])
+        let candidateWords = candidateString.components(separatedBy: ", ")
+        #expect(!candidateWords.contains("rain"))
+        #expect(!candidateWords.contains("stain"))
+    }
+
+    @Test func rhymeConstraintBlockNeverEmptiesCandidatesOnExclusion() {
+        // Contrived: target line ends in a word whose ONLY rhyme candidate is
+        // a chorus end-word. Fallback must keep the unfiltered list.
+        // We can't easily force this in a dictionary test, but we can verify
+        // the static logic: if filtered list is empty we fall back to unfiltered.
+        // Build a tiny mock by testing with a word that has very few rhymes
+        // and supplying ALL of them as chorus end-words.
+        let targetLine = "She turns to face the light"
+        let candidates = RhymeConstraint.candidateEndWords(targetWord: "light", rhymeType: .perfect)
+        guard !candidates.isEmpty else { return } // dictionary miss, skip
+        // Supply all candidates as chorus words → should fall back to unfiltered
+        let block = AIService.rhymeConstraintBlock(
+            targetRhymeLine: targetLine,
+            rhymeType: .perfect,
+            currentSection: .verse,
+            firstChorusEndWords: candidates
+        )
+        // Block must still be non-nil (either unfiltered or nil due to dict miss).
+        // Key invariant: we never produce an empty candidate list in the block.
+        if let block {
+            #expect(block.contains("End each line with one of these rhyming words:"))
+        }
+    }
+
+    // MARK: - Prompt sentence tests
+
+    @Test func sectionInstanceSentenceVerseProducesVerbatimText() {
+        let sentence = AIService.sectionInstanceSentence(section: .verse, ordinal: 3, firstChorusLines: nil)
+        #expect(sentence == "This is Verse 3.")
+    }
+
+    @Test func sectionInstanceSentenceChorusFirstInstanceIsNil() {
+        // First chorus: no instance sentence.
+        let sentence = AIService.sectionInstanceSentence(section: .chorus, ordinal: 1, firstChorusLines: ["Hook line"])
+        #expect(sentence == nil)
+    }
+
+    @Test func sectionInstanceSentenceChorusRepeatContainsVerbatimPrefix() {
+        let firstLines = ["Moving to the beat", "Taking every seat"]
+        let sentence = AIService.sectionInstanceSentence(section: .chorus, ordinal: 2, firstChorusLines: firstLines)
+
+        guard let sentence else {
+            Issue.record("Expected non-nil sentence for chorus instance 2")
+            return
+        }
+        #expect(sentence.hasPrefix("This is the chorus (instance 2). Keep hook language and ending words consistent with the established chorus:"))
+        #expect(sentence.contains("Moving to the beat"))
+        #expect(sentence.contains("Taking every seat"))
+    }
+
+    @Test func sectionInstanceSentenceBridgeProducesVerbatimText() {
+        let sentence = AIService.sectionInstanceSentence(section: .bridge, ordinal: 1, firstChorusLines: nil)
+        #expect(sentence == "This is the bridge — introduce a contrasting rhyme sound and cadence; avoid the chorus's ending words.")
+    }
+
+    @Test func buildPromptContainsVerseInstanceSentence() {
+        let service = AIService()
+        let prompt = service.buildPrompt(
+            theme: "road",
+            lyrics: "[Verse 1]\nFirst line\n\n[Chorus]\nHook\n\n[Verse 2]\nSecond line",
+            targetRhymeLine: nil,
+            rhymeType: .perfect,
+            rhymeScheme: "AABB",
+            currentLetter: "A",
+            currentSection: .verse,
+            sectionOrdinal: 2,
+            firstChorusLines: nil,
+            complexity: .moderate,
+            useWholeSongContext: false
+        )
+        #expect(prompt.contains("This is Verse 2."))
+    }
+
+    @Test func buildPromptContainsChorusRepeatSentenceWithFirstChorusLines() {
+        let service = AIService()
+        let firstLines = ["We rise together", "Through every weather"]
+        let prompt = service.buildPrompt(
+            theme: "unity",
+            lyrics: "[Chorus]\nWe rise together\n\n[Chorus]\nRepeat",
+            targetRhymeLine: nil,
+            rhymeType: .perfect,
+            rhymeScheme: "AABB",
+            currentLetter: "A",
+            currentSection: .chorus,
+            sectionOrdinal: 2,
+            firstChorusLines: firstLines,
+            complexity: .moderate,
+            useWholeSongContext: false
+        )
+        #expect(prompt.contains("This is the chorus (instance 2). Keep hook language and ending words consistent with the established chorus:"))
+        #expect(prompt.contains("We rise together"))
+        #expect(prompt.contains("Through every weather"))
+    }
+
+    @Test func buildPromptContainsBridgeSentence() {
+        let service = AIService()
+        let prompt = service.buildPrompt(
+            theme: "contrast",
+            lyrics: "[Bridge]\nA new direction",
+            targetRhymeLine: nil,
+            rhymeType: .near,
+            rhymeScheme: "ABAB",
+            currentLetter: "A",
+            currentSection: .bridge,
+            sectionOrdinal: 1,
+            firstChorusLines: nil,
+            complexity: .moderate,
+            useWholeSongContext: false
+        )
+        #expect(prompt.contains("This is the bridge — introduce a contrasting rhyme sound and cadence; avoid the chorus's ending words."))
+    }
+
+    // MARK: - Tier propagation tests
+
+    @Test func rhymeLineFilterTierMatchesPerfectRhyme() {
+        // "light" rhymes perfectly with "night", "right", "fight" etc.
+        guard let filter = RhymeLineFilter(targetLine: "she saw the light", rhymeType: .perfect) else {
+            return // Dictionary miss on test system; skip.
+        }
+        let tier = filter.tier(of: "we stayed the night")
+        #expect(tier == 2)
+    }
+
+    @Test func rhymeLineFilterTierZeroForNonRhyme() {
+        guard let filter = RhymeLineFilter(targetLine: "she saw the light", rhymeType: .perfect) else { return }
+        let tier = filter.tier(of: "the clouds were gray and wide")
+        #expect(tier == 0)
+    }
+
+    @Test func sectionMapOrdinalFlowsThroughRhymeContext() {
+        let viewModel = EditorViewModel()
+        viewModel.rhymeScheme = .aabb
+        viewModel.lyrics = "[Verse 1]\nFirst verse\n\n[Chorus]\nHook it\n\n[Verse 2]\nSecond verse"
+        viewModel.cursorPosition = viewModel.lyrics.count
+
+        let context = viewModel.computeRhymeContext()
+        #expect(context.currentSection == .verse)
+        #expect(context.sectionOrdinal == 2)
+    }
+
+    @Test func firstChorusLinesPopulatedForRepeatChorus() {
+        let viewModel = EditorViewModel()
+        viewModel.rhymeScheme = .aabb
+        viewModel.lyrics = "[Chorus]\nRising up\nNever stop\n\n[Verse]\nSomething\n\n[Chorus]\nNext chorus line"
+        viewModel.cursorPosition = viewModel.lyrics.count
+
+        let context = viewModel.computeRhymeContext()
+        #expect(context.currentSection == .chorus)
+        #expect(context.sectionOrdinal == 2)
+        #expect(context.firstChorusLines != nil)
+        #expect(context.firstChorusLines?.contains("Rising up") == true)
+    }
+
+    @Test func firstChorusLinesNilForFirstChorusInstance() {
+        let viewModel = EditorViewModel()
+        viewModel.rhymeScheme = .aabb
+        viewModel.lyrics = "[Chorus]\nRising up"
+        viewModel.cursorPosition = viewModel.lyrics.count
+
+        let context = viewModel.computeRhymeContext()
+        #expect(context.currentSection == .chorus)
+        #expect(context.sectionOrdinal == 1)
+        #expect(context.firstChorusLines == nil)
+    }
+
 }

@@ -2,6 +2,10 @@ import SwiftUI
 
 struct SuggestionCardView: View {
     let suggestion: String
+    /// Rhyme quality tier: 2 = perfect/multi, 1 = near, 0 = unverified (no badge shown).
+    var rhymeTier: Int = 0
+    /// True when this is a chorus repeat and the end word matches the hook's established end word.
+    var isHookRepeat: Bool = false
     let highlightRhyme: Bool
     var showProsody: Bool = false
     let onTap: () -> Void
@@ -23,6 +27,17 @@ struct SuggestionCardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: RhymeAITokens.Spacing.xs) {
+                    // Tier badge — hidden from AX so it doesn't pollute the button label.
+                    if let badge = tierBadgeLabel {
+                        Text(badge)
+                            .font(.system(.caption2, design: .rounded).weight(.medium))
+                            .foregroundStyle(tierBadgeColor)
+                            .padding(.horizontal, RhymeAITokens.Spacing.xs)
+                            .padding(.vertical, 2)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, tint: tierBadgeColor.opacity(0.08), fallbackOpacity: 0.08)
+                            .accessibilityHidden(true)
+                    }
+
                     Text("\(SyllableCounter.countText(suggestion))")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary.opacity(0.6))
@@ -40,6 +55,21 @@ struct SuggestionCardView: View {
             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
         }
         .buttonStyle(.rhymePress)
+    }
+
+    // "hook" overrides "perfect" on chorus repeats.
+    private var tierBadgeLabel: String? {
+        if isHookRepeat { return "hook" }
+        switch rhymeTier {
+        case 2: return "perfect"
+        case 1: return "near"
+        default: return nil
+        }
+    }
+
+    private var tierBadgeColor: Color {
+        if isHookRepeat { return .indigo }
+        return rhymeTier >= 2 ? .green : .orange
     }
 
     @ViewBuilder

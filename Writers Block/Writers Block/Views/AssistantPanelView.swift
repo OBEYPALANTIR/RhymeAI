@@ -311,13 +311,15 @@ struct AssistantPanelView: View {
                         .font(.caption2.italic())
                         .foregroundStyle(.secondary.opacity(0.8))
 
-                    ForEach(Array(viewModel.suggestions.enumerated()), id: \.offset) { _, suggestion in
+                    ForEach(viewModel.suggestions) { suggestion in
                         SuggestionCardView(
-                            suggestion: suggestion,
+                            suggestion: suggestion.text,
+                            rhymeTier: suggestion.tier,
+                            isHookRepeat: suggestion.isHookRepeat,
                             highlightRhyme: viewModel.isHighlightEnabled,
                             showProsody: viewModel.isStressPreviewEnabled
                         ) {
-                            viewModel.insertSuggestion(suggestion)
+                            viewModel.insertSuggestion(suggestion.text)
                             if !isInline {
                                 viewModel.showAssistantSheet = false
                             }

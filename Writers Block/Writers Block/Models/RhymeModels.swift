@@ -115,19 +115,42 @@ enum SongSection: String, Codable {
     }
 }
 
+/// A suggestion line paired with its rhyme-quality tier so the UI can badge it.
+/// Tier 2 = perfect or multi-syllable rhyme; 1 = near rhyme; 0 = unverified.
+struct SuggestedLine: Identifiable {
+    let id = UUID()
+    let text: String
+    let tier: Int
+    /// True when this is a chorus repeat and the end word matches the first chorus.
+    let isHookRepeat: Bool
+
+    init(text: String, tier: Int, isHookRepeat: Bool = false) {
+        self.text = text
+        self.tier = tier
+        self.isHookRepeat = isHookRepeat
+    }
+}
+
 struct RhymeContext {
     let targetLine: String?
     let currentLetter: String
     let stanzaLines: [String]
     let currentLineIndex: Int
     let currentSection: SongSection
+    /// 1-based ordinal of the current section among sections of the same type.
+    let sectionOrdinal: Int
+    /// Non-header lyric lines from the FIRST chorus/hook in the song, used to
+    /// enforce hook consistency on subsequent choruses. Nil when not applicable.
+    let firstChorusLines: [String]?
 
     static let empty = RhymeContext(
         targetLine: nil,
         currentLetter: "A",
         stanzaLines: [],
         currentLineIndex: 0,
-        currentSection: .unknown
+        currentSection: .unknown,
+        sectionOrdinal: 1,
+        firstChorusLines: nil
     )
 
     static func emptyContext(currentLetter: String = "A", currentSection: SongSection = .unknown) -> RhymeContext {
@@ -136,7 +159,9 @@ struct RhymeContext {
             currentLetter: currentLetter,
             stanzaLines: [],
             currentLineIndex: 0,
-            currentSection: currentSection
+            currentSection: currentSection,
+            sectionOrdinal: 1,
+            firstChorusLines: nil
         )
     }
 }

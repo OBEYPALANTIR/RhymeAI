@@ -100,6 +100,8 @@ struct AIService {
         rhymeScheme: String,
         currentLetter: String,
         currentSection: SongSection = .unknown,
+        sectionOrdinal: Int = 1,
+        firstChorusLines: [String]? = nil,
         complexity: RhymeComplexity,
         useWholeSongContext: Bool
     ) async throws -> [String] {
@@ -112,6 +114,8 @@ struct AIService {
                     rhymeType: rhymeType,
                     currentLetter: currentLetter,
                     currentSection: currentSection,
+                    sectionOrdinal: sectionOrdinal,
+                    firstChorusLines: firstChorusLines,
                     useWholeSongContext: useWholeSongContext
                 )
                 // Same gate as the prompt's constraint block: only filter when
@@ -138,6 +142,8 @@ struct AIService {
             rhymeScheme: rhymeScheme,
             currentLetter: currentLetter,
             currentSection: currentSection,
+            sectionOrdinal: sectionOrdinal,
+            firstChorusLines: firstChorusLines,
             complexity: complexity,
             useWholeSongContext: useWholeSongContext
         )
@@ -167,6 +173,8 @@ struct AIService {
         rhymeScheme: String,
         currentLetter: String,
         currentSection: SongSection = .unknown,
+        sectionOrdinal: Int = 1,
+        firstChorusLines: [String]? = nil,
         complexity: RhymeComplexity,
         useWholeSongContext: Bool
     ) -> AsyncThrowingStream<String, Error> {
@@ -186,6 +194,8 @@ struct AIService {
                             rhymeScheme: rhymeScheme,
                             currentLetter: currentLetter,
                             currentSection: currentSection,
+                            sectionOrdinal: sectionOrdinal,
+                            firstChorusLines: firstChorusLines,
                             complexity: complexity,
                             useWholeSongContext: useWholeSongContext
                         )
@@ -206,6 +216,8 @@ struct AIService {
                         rhymeScheme: rhymeScheme,
                         currentLetter: currentLetter,
                         currentSection: currentSection,
+                        sectionOrdinal: sectionOrdinal,
+                        firstChorusLines: firstChorusLines,
                         complexity: complexity,
                         useWholeSongContext: useWholeSongContext
                     )
@@ -523,6 +535,8 @@ struct AIService {
         rhymeScheme: String,
         currentLetter: String,
         currentSection: SongSection = .unknown,
+        sectionOrdinal: Int = 1,
+        firstChorusLines: [String]? = nil,
         complexity: RhymeComplexity,
         useWholeSongContext: Bool
     ) -> String {
@@ -530,7 +544,12 @@ struct AIService {
             ? "Whole song context enabled; infer the theme from the full lyrics."
             : (theme.isEmpty ? "No specific theme provided" : theme)
 
-        let constraintBlock = Self.rhymeConstraintBlock(targetRhymeLine: targetRhymeLine, rhymeType: rhymeType)
+        let constraintBlock = Self.rhymeConstraintBlock(
+            targetRhymeLine: targetRhymeLine,
+            rhymeType: rhymeType,
+            currentSection: currentSection,
+            firstChorusEndWords: firstChorusLines.map { Self.endWords(of: $0) }
+        )
         // Over-generate 2x when ending words are constrained so the rhyme
         // filter can discard misses and still deliver a full set.
         let requestCount = constraintBlock == nil ? Self.suggestionCount : Self.suggestionCount * 2
@@ -549,6 +568,13 @@ struct AIService {
             rhymeInstruction += "\n" + constraintBlock
         }
 
+        // Verbatim section-instance sentences for parity with Android.
+        let sectionInstanceHint = Self.sectionInstanceSentence(
+            section: currentSection,
+            ordinal: sectionOrdinal,
+            firstChorusLines: firstChorusLines
+        )
+
         let rhymeAdherence = targetRhymeLine != nil
             ? ", and strictly adhere to the requested rhyme type (\(rhymeType.displayName))"
             : ""
@@ -556,7 +582,7 @@ struct AIService {
             ? "Analyze the whole song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary. Make each suggestion feel connected to the entire song while still fitting the immediate target line and rhyme scheme."
             : "Prioritize the immediate writing context, current stanza, target line, rhyme scheme, and provided theme/context."
 
-        return """
+        var prompt = """
         You are an expert songwriter and lyricist.
         The user is writing a song with the following theme/context: "\(effectiveTheme)".
         Here are the current lyrics:
@@ -568,6 +594,12 @@ struct AIService {
         The current stanza follows a "\(rhymeScheme)" rhyme scheme, and the next line corresponds to the letter "\(currentLetter)".
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
+        """
+        if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
+            prompt += "\n" + sectionInstanceHint
+        }
+        prompt += """
+
         \(rhymeInstruction)
         \(songContextInstruction)
 
@@ -578,24 +610,81 @@ struct AIService {
 
         Respond with exactly \(requestCount) lines, one suggestion per line. No numbering, no bullets, no quotes, no markdown, no code fences, and no commentary — just the bare suggestion lines.
         """
+        return prompt
     }
 
     /// Constraint block shared by the cloud and local prompts. Returns nil
     /// when there is no target line or the dictionary can't offer ending
     /// words — then prompts and counts must stay exactly as before.
-    static func rhymeConstraintBlock(targetRhymeLine: String?, rhymeType: RhymeType) -> String? {
+    ///
+    /// When `firstChorusEndWords` is non-nil the candidates are prepended with
+    /// those words (chorus repeat) or have them removed (verse/bridge exclusion).
+    static func rhymeConstraintBlock(
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        currentSection: SongSection = .unknown,
+        firstChorusEndWords: [String]? = nil
+    ) -> String? {
         guard let target = targetRhymeLine,
               !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
         let targetWord = RhymeConstraint.lineEndWord(target)
         guard !targetWord.isEmpty else { return nil }
-        let candidates = RhymeConstraint.candidateEndWords(targetWord: targetWord, rhymeType: rhymeType)
+        var candidates = RhymeConstraint.candidateEndWords(targetWord: targetWord, rhymeType: rhymeType)
         guard !candidates.isEmpty else { return nil }
+
+        // Chorus 2nd+: prepend first-chorus end words so they rank highest.
+        // Verse/Bridge: exclude first-chorus end words to diversify rhyme sounds.
+        if let chorusWords = firstChorusEndWords, !chorusWords.isEmpty {
+            switch currentSection {
+            case .chorus:
+                // Inject hook end-words at the front; remove any duplicates from the tail.
+                let hookSet = Set(chorusWords)
+                candidates = chorusWords + candidates.filter { !hookSet.contains($0) }
+            case .verse, .bridge:
+                // Strip chorus end-words unless doing so would empty the list.
+                let filtered = candidates.filter { !chorusWords.contains($0) }
+                if !filtered.isEmpty { candidates = filtered }
+            case .unknown:
+                break
+            }
+        }
+
         return """
         The new line must rhyme with: "\(target)" (it ends with "\(targetWord)").
         End each line with one of these rhyming words: \(candidates.joined(separator: ", ")) (choose the most natural fit).
         """
+    }
+
+    /// Verbatim section-instance sentence inserted after the section hint.
+    /// Matches the Android implementation exactly.
+    static func sectionInstanceSentence(
+        section: SongSection,
+        ordinal: Int,
+        firstChorusLines: [String]?
+    ) -> String? {
+        switch section {
+        case .chorus:
+            guard ordinal >= 2, let lines = firstChorusLines, !lines.isEmpty else { return nil }
+            let joined = lines.joined(separator: "\n")
+            return "This is the chorus (instance \(ordinal)). Keep hook language and ending words consistent with the established chorus:\n\(joined)"
+        case .verse:
+            return "This is Verse \(ordinal)."
+        case .bridge:
+            return "This is the bridge — introduce a contrasting rhyme sound and cadence; avoid the chorus's ending words."
+        case .unknown:
+            return nil
+        }
+    }
+
+    /// Last word of each line, normalized — used to derive end-word sets from
+    /// a block of chorus lines for constraint building.
+    static func endWords(of lines: [String]) -> [String] {
+        lines.compactMap { line -> String? in
+            let w = RhymeConstraint.lineEndWord(line)
+            return w.isEmpty ? nil : w
+        }
     }
 
     // MARK: - Gemini
@@ -702,9 +791,16 @@ struct AIService {
         rhymeType: RhymeType,
         currentLetter: String,
         currentSection: SongSection = .unknown,
+        sectionOrdinal: Int = 1,
+        firstChorusLines: [String]? = nil,
         useWholeSongContext: Bool
     ) -> String {
-        let constraintBlock = Self.rhymeConstraintBlock(targetRhymeLine: targetRhymeLine, rhymeType: rhymeType)
+        let constraintBlock = Self.rhymeConstraintBlock(
+            targetRhymeLine: targetRhymeLine,
+            rhymeType: rhymeType,
+            currentSection: currentSection,
+            firstChorusEndWords: firstChorusLines.map { Self.endWords(of: $0) }
+        )
         // Over-generate 2x when ending words are constrained so the rhyme
         // filter can discard misses and still deliver a full set.
         // Cloud over-generates 2x for the rhyme filter; the on-device model is
@@ -721,15 +817,28 @@ struct AIService {
         if let constraintBlock {
             rhymeHint += "\n" + constraintBlock
         }
+
+        let sectionInstanceHint = Self.sectionInstanceSentence(
+            section: currentSection,
+            ordinal: sectionOrdinal,
+            firstChorusLines: firstChorusLines
+        )
+
         let songContextInstruction = useWholeSongContext
             ? "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
             : "Use the immediate stanza, rhyme target, and theme first."
         let themeClause = !useWholeSongContext && !theme.isEmpty ? " about \(theme)" : ""
 
-        return """
+        var prompt = """
         Write \(requestCount) next lines for this song\(themeClause).
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
+        """
+        if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
+            prompt += "\n" + sectionInstanceHint
+        }
+        prompt += """
+
         \(rhymeHint)
         \(songContextInstruction)
 
@@ -738,6 +847,7 @@ struct AIService {
 
         Reply with exactly \(requestCount) lines, one per line, no numbering, no extra text.
         """
+        return prompt
     }
 
     @available(iOS 26.0, *)
