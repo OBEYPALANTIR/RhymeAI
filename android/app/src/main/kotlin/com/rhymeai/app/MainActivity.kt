@@ -1,10 +1,14 @@
 package com.rhymeai.app
 
+import android.app.Activity
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
@@ -56,6 +60,26 @@ class MainActivity : ComponentActivity() {
         setContent {
             RhymeAITheme {
                 val density = LocalDensity.current
+                val viewModel: MainViewModel = viewModel()
+
+                // Drive authorization consent screen. After the user approves, clear
+                // the pending intent and retry sync — the second call will find an
+                // access token directly via the identity cache.
+                val driveAuthLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.StartIntentSenderForResult()
+                ) { result ->
+                    viewModel.syncPendingIntent = null
+                    if (result.resultCode == Activity.RESULT_OK) {
+                        viewModel.triggerSync()
+                    }
+                }
+
+                androidx.compose.runtime.LaunchedEffect(viewModel.syncPendingIntent) {
+                    val intent = viewModel.syncPendingIntent ?: return@LaunchedEffect
+                    driveAuthLauncher.launch(
+                        IntentSenderRequest.Builder(intent.intentSender).build()
+                    )
+                }
                 val navigationBars = WindowInsets.navigationBars
                 val imeInsets = WindowInsets.ime
                 val statusBars = WindowInsets.statusBars
@@ -80,7 +104,6 @@ class MainActivity : ComponentActivity() {
                     LocalImeBottom provides imeBottom,
                     LocalStatusBarTop provides topInset
                 ) {
-                    val viewModel: MainViewModel = viewModel()
                     val navController = rememberNavController()
 
                     // Determine start destination
@@ -150,6 +173,11 @@ class MainActivity : ComponentActivity() {
                             onSaveModel = { viewModel.saveModel(it) },
                             onLoadLocalModel = { viewModel.loadLocalModel(it) },
                             onUnloadLocalModel = { viewModel.unloadLocalModel() },
+                            syncPassphraseStored = viewModel.syncPassphraseStored,
+                            syncInProgress = viewModel.syncInProgress,
+                            syncLastResult = viewModel.syncLastResult,
+                            onSaveSyncPassphrase = { viewModel.saveSyncPassphrase(it) },
+                            onSyncNow = { viewModel.triggerSync() },
                             onDismiss = { viewModel.showSettingsDialog = false }
                         )
                     }

@@ -16,7 +16,11 @@ import com.rhymeai.app.data.model.SongSection
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.model.TrashedSongProject
+import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
+import com.rhymeai.app.data.sync.DriveSyncService
+import com.rhymeai.app.data.sync.SyncResult
+import com.rhymeai.app.data.repository.EncryptedPrefsKeyStore
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIService
@@ -68,6 +72,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private val repo = ProjectRepository(application)
+    private val driveSyncService = DriveSyncService(
+        context = application,
+        secureKeyStore = EncryptedPrefsKeyStore(application),
+        driveClientId = BuildConfig.DRIVE_OAUTH_CLIENT_ID
+    )
     private val localModelService = LocalModelService().also {
         it.initialize(application)
     }
@@ -140,6 +149,75 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             BuildConfig.GEMINI_TEST_KEY
         } else {
             ""
+        }
+    }
+
+    // --- Drive sync state ---
+
+    /** True while a sync is in progress. */
+    var syncInProgress by mutableStateOf(false)
+        private set
+
+    /**
+     * Human-readable result of the last sync attempt.
+     * Null = never synced this session.
+     * Positive string = success.
+     * Negative string = error description.
+     */
+    var syncLastResult by mutableStateOf<String?>(null)
+        private set
+
+    /**
+     * Set when Drive authorization requires the user to approve a consent screen.
+     * The UI should launch this intent via startIntentSenderForResult; after the
+     * user returns, clear it and call [triggerSync] again.
+     */
+    var syncPendingIntent by mutableStateOf<PendingIntent?>(null)
+
+    /** True if a sync passphrase has been stored in the secure key store. */
+    var syncPassphraseStored by mutableStateOf(false)
+        private set
+
+    fun saveSyncPassphrase(passphrase: String) {
+        driveSyncService.setPassphrase(passphrase)
+        syncPassphraseStored = passphrase.isNotEmpty()
+    }
+
+    fun triggerSync() {
+        if (syncInProgress) return
+        syncInProgress = true
+        syncLastResult = null
+        viewModelScope.launch {
+            val result = driveSyncService.sync(repo)
+            syncInProgress = false
+            when (result) {
+                is SyncResult.Success -> {
+                    syncLastResult = "Sync complete"
+                    // Re-read projects into UI state since the snapshot may have changed.
+                    projects = result.merged.projects
+                    trashedProjects = result.merged.trashed
+                }
+                is SyncResult.AuthorizationRequired -> {
+                    syncPendingIntent = result.pendingIntent
+                    syncLastResult = "Authorization required — tap to approve"
+                }
+                is SyncResult.WrongPassphrase -> {
+                    syncLastResult = "Wrong passphrase — remote file was not changed"
+                }
+                is SyncResult.NotConfigured -> {
+                    syncLastResult = if (!driveSyncService.hasPassphrase()) {
+                        "Set a sync passphrase in Settings to enable Drive sync"
+                    } else {
+                        "Drive sync not configured — check Google Cloud Console setup"
+                    }
+                }
+                is SyncResult.NetworkError -> {
+                    syncLastResult = "Sync failed: ${result.message}"
+                }
+                is SyncResult.UnknownError -> {
+                    syncLastResult = "Sync failed: ${result.cause.message ?: "unexpected error"}"
+                }
+            }
         }
     }
 
@@ -230,6 +308,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else rhymeScheme.pattern
 
     init {
+        // Reflect stored passphrase presence without reading the value itself.
+        syncPassphraseStored = driveSyncService.hasPassphrase()
+
         viewModelScope.launch {
             // Load projects
             projects = repo.projectsFlow.first()

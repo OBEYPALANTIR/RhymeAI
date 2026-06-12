@@ -97,6 +97,12 @@ fun SettingsDialog(
     onSaveModel: (AIModel) -> Unit,
     onLoadLocalModel: (String) -> Unit,
     onUnloadLocalModel: () -> Unit,
+    // Drive sync
+    syncPassphraseStored: Boolean = false,
+    syncInProgress: Boolean = false,
+    syncLastResult: String? = null,
+    onSaveSyncPassphrase: (String) -> Unit = {},
+    onSyncNow: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -124,6 +130,10 @@ fun SettingsDialog(
     var showKey by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
     var modelExpanded by remember { mutableStateOf(false) }
+
+    // Sync passphrase field — write-only like API key fields; empty = do not change stored value.
+    var syncPassphraseField by remember { mutableStateOf("") }
+    var showSyncPassphrase by remember { mutableStateOf(false) }
 
     val currentKeyForProvider = when (selectedProvider) {
         AIProvider.GEMINI -> geminiKey
@@ -690,6 +700,105 @@ fun SettingsDialog(
                             }
                         }
                     }
+                }
+
+                // ---------------------------------------------------------------
+                // Drive Sync section
+                // ---------------------------------------------------------------
+                Spacer(Modifier.height(20.dp))
+                androidx.compose.material3.HorizontalDivider(
+                    color = colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    thickness = 0.5.dp
+                )
+                Spacer(Modifier.height(16.dp))
+
+                Text(
+                    "Cloud Sync (Google Drive)",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Encrypted with your passphrase before upload — losing it means starting over.",
+                    fontSize = 12.sp,
+                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    lineHeight = 16.sp
+                )
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = syncPassphraseField,
+                    onValueChange = { syncPassphraseField = it },
+                    placeholder = {
+                        Text(
+                            if (syncPassphraseStored) "Passphrase saved — type to replace" else "Set sync passphrase...",
+                            fontSize = 14.sp
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.Key, null, tint = colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
+                    },
+                    trailingIcon = {
+                        IconButton(onClick = { showSyncPassphrase = !showSyncPassphrase }) {
+                            Icon(
+                                if (showSyncPassphrase) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (showSyncPassphrase) "Hide" else "Show",
+                                tint = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    },
+                    visualTransformation = if (showSyncPassphrase) VisualTransformation.None else PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = textFieldColors,
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp)
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            if (syncPassphraseField.isNotBlank()) {
+                                onSaveSyncPassphrase(syncPassphraseField.trim())
+                                syncPassphraseField = ""
+                            }
+                            onSyncNow()
+                        },
+                        enabled = !syncInProgress && (syncPassphraseStored || syncPassphraseField.isNotBlank()),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (syncInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = colorScheme.primary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("Syncing...", fontSize = 13.sp)
+                        } else {
+                            Text("Sync now", fontSize = 13.sp)
+                        }
+                    }
+                }
+
+                syncLastResult?.let { result ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        result,
+                        fontSize = 11.sp,
+                        color = if (result.startsWith("Sync complete")) colorScheme.tertiary
+                        else colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        lineHeight = 15.sp
+                    )
                 }
 
                 Spacer(Modifier.height(20.dp))

@@ -15,6 +15,10 @@ val localProperties = Properties().apply {
     }
 }
 val geminiTestKey = localProperties.getProperty("geminiTestKey", "")
+// Optional OAuth web client id for the Drive appData integration. If absent, the
+// Android installed-app flow proceeds without a server client id (which is fine for
+// device-only sync). Set in android/local.properties as: driveOauthClientId=<value>
+val driveOauthClientId = localProperties.getProperty("driveOauthClientId", "")
 fun buildConfigString(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 val keystoreProperties = Properties().apply {
@@ -59,6 +63,7 @@ android {
     buildTypes {
         debug {
             buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(geminiTestKey))
+            buildConfigField("String", "DRIVE_OAUTH_CLIENT_ID", buildConfigString(driveOauthClientId))
         }
         release {
             isMinifyEnabled = true
@@ -66,6 +71,7 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
             buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(""))
+            buildConfigField("String", "DRIVE_OAUTH_CLIENT_ID", buildConfigString(driveOauthClientId))
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -113,6 +119,10 @@ dependencies {
 
     // On-device LLM inference (GGUF support via llama.cpp)
     implementation("io.github.ljcamargo:llamacpp-kotlin:0.4.0")
+
+    // OAuth for Drive appData scope; Drive REST calls use HttpURLConnection (same
+    // idiom as AIService) — no heavy Google API client library needed.
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
