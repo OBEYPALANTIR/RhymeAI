@@ -1,0 +1,315 @@
+package com.rhymeai.app.service
+
+import android.content.Context
+import android.media.MediaPlayer
+import android.media.MediaRecorder
+import android.os.Build
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+data class VoiceMemo(
+    val file: File,
+    /** Display label derived from the file's last-modified timestamp. */
+    val label: String,
+    val durationMs: Long
+)
+
+/**
+ * Handles recording, playback, and deletion of per-song voice memos.
+ *
+ * Files live at: context.filesDir/voice-memos/<projectId>/<timestamp>.m4a
+ *
+ * Resource discipline: every MediaRecorder and MediaPlayer is stop()ed and
+ * release()d in all exit paths — including cancellation and error — mirroring
+ * the fix applied to LocalModelService's llama handle.
+ */
+class VoiceMemoService(private val context: Context) {
+
+    // --- Recording state (exposed to Compose as observable properties) ---
+
+    var isRecording by mutableStateOf(false)
+        private set
+
+    /** Elapsed recording time in milliseconds; updated every second while recording. */
+    var recordingElapsedMs by mutableLongStateOf(0L)
+        private set
+
+    // --- Playback state ---
+
+    /** File currently playing (null when idle). */
+    var playingFile by mutableStateOf<File?>(null)
+        private set
+
+    // --- Private resource handles ---
+
+    private var recorder: MediaRecorder? = null
+    private var recordingFile: File? = null
+    private var recordingStartMs = 0L
+
+    private var player: MediaPlayer? = null
+
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var tickJob: Job? = null
+
+    // ---------------------------------------------------------------------------
+    // Recording
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Start recording a memo for [projectId]. The file is placed under
+     * filesDir/voice-memos/<projectId>/<timestamp>.m4a.
+     *
+     * Returns the File being recorded to, so the caller can display a progress
+     * indicator before stopRecording() is called. Throws if already recording.
+     */
+    fun startRecording(projectId: String): File {
+        check(!isRecording) { "Already recording — call stopRecording() first" }
+
+        // Ensure the directory exists.
+        val dir = memoDir(projectId)
+        dir.mkdirs()
+
+        val timestamp = System.currentTimeMillis()
+        val file = File(dir, "$timestamp.m4a")
+
+        val rec = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            MediaRecorder(context)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaRecorder()
+        }
+
+        try {
+            rec.setAudioSource(MediaRecorder.AudioSource.MIC)
+            rec.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            rec.setAudioEncodingBitRate(128_000)
+            rec.setAudioSamplingRate(44_100)
+            rec.setOutputFile(file.absolutePath)
+            rec.prepare()
+            rec.start()
+        } catch (e: Exception) {
+            // Release immediately on failure — never leave an orphaned handle.
+            runCatching { rec.stop() }
+            rec.release()
+            if (file.exists()) file.delete()
+            throw e
+        }
+
+        recorder = rec
+        recordingFile = file
+        recordingStartMs = System.currentTimeMillis()
+        isRecording = true
+        recordingElapsedMs = 0L
+
+        tickJob = scope.launch {
+            while (true) {
+                delay(1_000L)
+                recordingElapsedMs = System.currentTimeMillis() - recordingStartMs
+            }
+        }
+
+        return file
+    }
+
+    /**
+     * Stop an in-progress recording and return the saved [VoiceMemo], or null if
+     * nothing was being recorded. The memo file is only kept if recording produced
+     * a non-empty file; otherwise it is deleted and null is returned.
+     */
+    fun stopRecording(): VoiceMemo? {
+        if (!isRecording) return null
+
+        tickJob?.cancel()
+        tickJob = null
+
+        val rec = recorder
+        val file = recordingFile
+        recorder = null
+        recordingFile = null
+        isRecording = false
+        recordingElapsedMs = 0L
+
+        if (rec != null) {
+            try {
+                rec.stop()
+            } catch (_: Exception) {
+                // stop() can throw if recording was too short; still must release.
+            } finally {
+                rec.release()
+            }
+        }
+
+        if (file == null || !file.exists() || file.length() == 0L) {
+            file?.delete()
+            return null
+        }
+
+        return memoFromFile(file)
+    }
+
+    /**
+     * Cancel a recording in progress. The partially written file is deleted.
+     */
+    fun cancelRecording() {
+        if (!isRecording) return
+
+        tickJob?.cancel()
+        tickJob = null
+
+        val rec = recorder
+        val file = recordingFile
+        recorder = null
+        recordingFile = null
+        isRecording = false
+        recordingElapsedMs = 0L
+
+        if (rec != null) {
+            runCatching { rec.stop() }
+            rec.release()
+        }
+        file?.delete()
+    }
+
+    // ---------------------------------------------------------------------------
+    // Playback
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Start playing [memo]. If another memo is already playing it is stopped first.
+     * When playback completes naturally, [playingFile] is cleared automatically.
+     */
+    fun play(memo: VoiceMemo) {
+        stopPlayback()
+
+        val mp = MediaPlayer()
+        try {
+            mp.setDataSource(memo.file.absolutePath)
+            mp.prepare()
+            mp.setOnCompletionListener { stopPlayback() }
+            mp.start()
+        } catch (e: Exception) {
+            mp.release()
+            return
+        }
+
+        player = mp
+        playingFile = memo.file
+    }
+
+    /** Stop playback if it is in progress. Idempotent. */
+    fun stopPlayback() {
+        val mp = player
+        player = null
+        playingFile = null
+
+        if (mp != null) {
+            runCatching { mp.stop() }
+            mp.release()
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Listing and deletion
+    // ---------------------------------------------------------------------------
+
+    /** Return all memos for [projectId], sorted newest-first. */
+    fun memosForProject(projectId: String): List<VoiceMemo> {
+        val dir = memoDir(projectId)
+        if (!dir.exists()) return emptyList()
+        return dir.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".m4a") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.map { memoFromFile(it) }
+            ?: emptyList()
+    }
+
+    /** Delete a single memo. Stops playback of that file if it is currently playing. */
+    fun deleteMemo(memo: VoiceMemo) {
+        if (playingFile == memo.file) stopPlayback()
+        memo.file.delete()
+    }
+
+    /**
+     * Delete the entire memo directory for [projectId]. Called when a project is
+     * permanently deleted so orphaned audio files do not accumulate.
+     */
+    fun deleteMemoDirectory(projectId: String) {
+        // Stop playback of anything that lived in this project's directory.
+        val dir = memoDir(projectId)
+        val playing = playingFile
+        if (playing != null && playing.path.startsWith(dir.path)) stopPlayback()
+
+        dir.deleteRecursively()
+    }
+
+    // ---------------------------------------------------------------------------
+    // Release
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Release all resources. Call from the component that owns this service when
+     * it is permanently torn down (e.g. ViewModel.onCleared).
+     */
+    fun release() {
+        cancelRecording()
+        stopPlayback()
+    }
+
+    // ---------------------------------------------------------------------------
+    // Internal helpers
+    // ---------------------------------------------------------------------------
+
+    private fun memoDir(projectId: String): File =
+        File(context.filesDir, "voice-memos/$projectId")
+
+    private fun memoFromFile(file: File): VoiceMemo {
+        val durationMs = probeAudioDurationMs(file)
+        val ts = file.nameWithoutExtension.toLongOrNull() ?: file.lastModified()
+        val label = formatMemoLabel(ts)
+        return VoiceMemo(file = file, label = label, durationMs = durationMs)
+    }
+
+    private fun probeAudioDurationMs(file: File): Long {
+        // MediaMetadataRetriever would work but requires android.permission.INTERNET in some
+        // paths and adds latency. For display purposes, probing via a temporary MediaPlayer
+        // is reliable, cheap, and available at API 21+.
+        // MediaPlayer doesn't implement AutoCloseable, so use try/finally to release it.
+        val mp = MediaPlayer()
+        return try {
+            mp.setDataSource(file.absolutePath)
+            mp.prepare()
+            mp.duration.toLong().coerceAtLeast(0L)
+        } catch (_: Exception) {
+            0L
+        } finally {
+            mp.release()
+        }
+    }
+
+    companion object {
+        private val LABEL_FORMAT = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
+
+        fun formatMemoLabel(timestampMs: Long): String =
+            LABEL_FORMAT.format(Date(timestampMs))
+
+        fun formatDuration(ms: Long): String {
+            val totalSecs = (ms / 1_000).coerceAtLeast(0)
+            val mins = totalSecs / 60
+            val secs = totalSecs % 60
+            return "%d:%02d".format(mins, secs)
+        }
+    }
+}

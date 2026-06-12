@@ -21,6 +21,7 @@ import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
+import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.RhymeMatches
 import com.rhymeai.app.util.WordProsody
@@ -55,6 +56,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     private val aiService = AIService().also { it.localModelService = localModelService }
 
+    /** Owns MediaRecorder/MediaPlayer resources; released in onCleared(). */
+    val voiceMemoService = VoiceMemoService(application)
+
     // Editor state
     var title by mutableStateOf("")
     var lyricsFieldValue by mutableStateOf(TextFieldValue(""))
@@ -86,6 +90,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var showTemplatesDialog by mutableStateOf(false)
     var showStartMenu by mutableStateOf(true)
     var showExportSheet by mutableStateOf(false)
+    var showVoiceMemosSheet by mutableStateOf(false)
 
     // Settings
     var selectedProvider by mutableStateOf(AIProvider.GEMINI)
@@ -615,6 +620,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         trashedProjects = updatedTrashedProjects
         viewModelScope.launch {
             repo.saveTrashedProjects(updatedTrashedProjects)
+            // Remove any recorded memos that belonged to this project.
+            withContext(Dispatchers.IO) { voiceMemoService.deleteMemoDirectory(id) }
         }
         scheduleTrashPurge()
     }
@@ -623,9 +630,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val now = System.currentTimeMillis()
         val retainedProjects = trashedProjects.filter { it.deleteAfter > now }
         if (retainedProjects.size != trashedProjects.size) {
+            val purgedIds = trashedProjects
+                .filter { it.deleteAfter <= now }
+                .map { it.project.id }
             trashedProjects = retainedProjects
             viewModelScope.launch {
                 repo.saveTrashedProjects(retainedProjects)
+                // Purge memo directories for each project that was permanently removed.
+                withContext(Dispatchers.IO) {
+                    purgedIds.forEach { voiceMemoService.deleteMemoDirectory(it) }
+                }
             }
         }
         scheduleTrashPurge()
@@ -856,6 +870,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repo.saveSelectedProvider(provider.name)
             repo.saveModelId(selectedModel.id)
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        voiceMemoService.release()
     }
 
     fun saveModel(model: AIModel) {

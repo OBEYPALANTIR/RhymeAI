@@ -69,6 +69,17 @@
     <string name="rhyme_complexity_complex">Complex</string>
     <string name="rhyme_scheme_example">e.g. AABBCC</string>
 
+    <!-- Voice Memos -->
+    <string name="voice_memo_record">Record voice memo</string>
+    <string name="voice_memo_stop_recording">Stop recording</string>
+    <string name="voice_memo_open_sheet">Voice memos</string>
+    <string name="voice_memo_sheet_title">Voice Memos</string>
+    <string name="voice_memo_empty">No voice memos yet.\nTap the mic to record a melody idea.</string>
+    <string name="voice_memo_play">Play</string>
+    <string name="voice_memo_pause">Pause</string>
+    <string name="voice_memo_delete">Delete memo</string>
+    <string name="voice_memo_permission_denied">Microphone permission is required to record voice memos.</string>
+
     <!-- Misc -->
     <string name="dialog_got_it">Got it</string>
 </resources>

@@ -1,8 +1,11 @@
 package com.rhymeai.app.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -49,8 +52,11 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -111,6 +117,7 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.ui.components.AssistantPanel
 import com.rhymeai.app.ui.components.ExportSheet
+import com.rhymeai.app.ui.components.VoiceMemosSheet
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.RhymeHighlightedText
@@ -322,6 +329,34 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
     }
 
+    // Runtime RECORD_AUDIO permission for voice memos.
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.showVoiceMemosSheet = true
+        } else {
+            viewModel.errorMessage = context.getString(R.string.voice_memo_permission_denied)
+        }
+    }
+
+    fun onMicTap() {
+        val projectId = viewModel.currentProjectId
+        if (projectId == null) {
+            // No project loaded — open the sheet anyway; it will not show a project-specific list.
+            viewModel.showVoiceMemosSheet = true
+            return
+        }
+        val hasPerm = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hasPerm) {
+            viewModel.showVoiceMemosSheet = true
+        } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     fun launchExport(format: ExportFormat) {
         val project = viewModel.snapshotCurrentForExport()
         val safeTitle = project.title
@@ -342,7 +377,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val modalOpen = viewModel.showSettingsDialog ||
         viewModel.showProjectsDialog ||
         viewModel.showExportSheet ||
-        viewModel.showInspector
+        viewModel.showInspector ||
+        viewModel.showVoiceMemosSheet
     val rewriteReviewVisible = viewModel.hasActiveRewrite &&
         !showBottomSheet &&
         !pendingAssistantSheet &&
@@ -453,6 +489,38 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant
                         )
+                    }
+                    // Mic button — red Stop icon while recording, Mic otherwise.
+                    val memoService = viewModel.voiceMemoService
+                    IconButton(onClick = {
+                        if (memoService.isRecording) {
+                            // Stop active recording from the toolbar without opening the sheet.
+                            memoService.stopRecording()
+                        } else {
+                            onMicTap()
+                        }
+                    }) {
+                        if (memoService.isRecording) {
+                            // Red dot to signal active recording
+                            Box(contentAlignment = Alignment.Center) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(colorScheme.error, CircleShape)
+                                )
+                                Icon(
+                                    Icons.Default.Stop,
+                                    contentDescription = stringResource(R.string.voice_memo_stop_recording),
+                                    tint = colorScheme.error
+                                )
+                            }
+                        } else {
+                            Icon(
+                                Icons.Default.Mic,
+                                contentDescription = stringResource(R.string.voice_memo_open_sheet),
+                                tint = colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                     IconButton(
                         onClick = { viewModel.showExportSheet = true },
@@ -929,6 +997,21 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         modifier = Modifier.onSizeChanged { rewriteReviewBarHeightPx = it.height }
                     )
                 }
+            }
+        }
+
+        // Voice memos sheet
+        if (viewModel.showVoiceMemosSheet) {
+            val projectId = viewModel.currentProjectId
+            if (projectId != null) {
+                VoiceMemosSheet(
+                    projectId = projectId,
+                    service = viewModel.voiceMemoService,
+                    onDismiss = { viewModel.showVoiceMemosSheet = false }
+                )
+            } else {
+                // No project open — dismiss immediately.
+                viewModel.showVoiceMemosSheet = false
             }
         }
 
