@@ -511,7 +511,8 @@ final class EditorViewModel: ObservableObject {
                     fullLyrics: fullLyrics,
                     selection: original,
                     currentSection: currentSection,
-                    selectionStart: range.location,
+                    // AIService walks lyrics by Characters; range.location is UTF-16.
+                    selectionStart: Self.characterOffset(forUTF16Offset: range.location, in: fullLyrics),
                     rejectedCandidates: rejectedForRequest
                 )
                 guard !Task.isCancelled else { return }
