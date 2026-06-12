@@ -6,7 +6,9 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
+import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.util.ProsodyAnalyzer
+import com.rhymeai.app.util.RhymeConstraint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -88,6 +90,16 @@ class AIService {
         val previousWord: String?,
         val nextWord: String?,
         val isLineEnding: Boolean
+    )
+
+    // Computed once per suggestion request and shared by the prompt builders
+    // (constrain end words, over-generate) and the output filters (verify/rank).
+    internal data class SuggestionRhymeConstraint(
+        val targetLine: String,
+        val targetWord: String,
+        val candidateWords: List<String>,
+        val rhymeType: RhymeType,
+        val dictionary: PronunciationDictionary
     )
 
     private companion object {
@@ -192,7 +204,27 @@ class AIService {
     internal fun userFacingProviderMessageForError(error: Throwable): String =
         userFacingProviderException(error).message.orEmpty()
 
-    fun buildPrompt(
+    // LLMs rhyme unreliably because tokens hide phonetics. When the dictionary
+    // knows the target end word, we pin suggestions to verified rhyme words and
+    // ask for double the lines so the phonetic filter has material to rank.
+    internal fun suggestionRhymeConstraint(
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+    ): SuggestionRhymeConstraint? {
+        if (targetRhymeLine.isNullOrBlank()) return null
+        val targetWord = RhymeConstraint.lineEndWord(targetRhymeLine)
+        if (targetWord.isEmpty()) return null
+        val candidates = RhymeConstraint.candidateEndWords(targetWord, rhymeType, dictionary = dictionary)
+        if (candidates.isEmpty()) return null
+        return SuggestionRhymeConstraint(targetRhymeLine, targetWord, candidates, rhymeType, dictionary)
+    }
+
+    private fun constraintInstruction(constraint: SuggestionRhymeConstraint): String =
+        "The new line must rhyme with: \"${constraint.targetLine}\" (it ends with \"${constraint.targetWord}\").\n" +
+            "End each line with one of these rhyming words: ${constraint.candidateWords.joinToString(", ")} (choose the most natural fit)."
+
+    internal fun buildPrompt(
         theme: String,
         lyrics: String,
         targetRhymeLine: String?,
@@ -201,13 +233,16 @@ class AIService {
         currentLetter: String,
         currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
-        useWholeSongContext: Boolean
+        useWholeSongContext: Boolean,
+        constraint: SuggestionRhymeConstraint? = null
     ): String {
         val rhymeInstruction = if (targetRhymeLine != null) {
             "Crucially, the new line MUST end with a **${rhymeType.displayName}** to this specific line: \"$targetRhymeLine\"."
         } else {
             "Since this is a new rhyme sound (\"$currentLetter\"), the new line should introduce a new end-rhyme that fits the meter and theme."
         }
+        val constraintBlock = constraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
+        val requestCount = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
         val songContextInstruction = if (useWholeSongContext) {
             "Analyze the whole song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary. Make each suggestion feel connected to the entire song while still fitting the immediate target line and rhyme scheme."
         } else {
@@ -232,15 +267,15 @@ The user needs a line that follows the current lyrics.
 The current stanza follows a "$rhymeScheme" rhyme scheme, and the next line corresponds to the letter "$currentLetter".
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
-$rhymeInstruction
+$rhymeInstruction$constraintBlock
 $songContextInstruction
 
 Complexity level: ${complexity.label}. ${complexity.promptHint}
 
-Provide $SUGGESTION_COUNT creative, poetic, and contextually relevant suggestions for the next line.
+Provide $requestCount creative, poetic, and contextually relevant suggestions for the next line.
 Make sure the rhythm and meter match the style of the current lyrics${if (targetRhymeLine != null) ", and strictly adhere to the requested rhyme type (${rhymeType.displayName})" else ""}.
 
-Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No numbering, no bullets, no quotes, no markdown, no code fences, and no commentary — just the bare suggestion lines.
+Respond with exactly $requestCount lines, one suggestion per line. No numbering, no bullets, no quotes, no markdown, no code fences, and no commentary — just the bare suggestion lines.
 """.trimIndent()
     }
 
@@ -265,6 +300,7 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
+        val constraint = suggestionRhymeConstraint(targetRhymeLine, rhymeType)
         return if (provider == AIProvider.LOCAL) {
             val localPrompt = buildLocalPrompt(
                 theme = theme,
@@ -275,15 +311,16 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
                 currentLetter = currentLetter,
                 currentSection = currentSection,
                 complexity = complexity,
-                useWholeSongContext = useWholeSongContext
+                useWholeSongContext = useWholeSongContext,
+                constraint = constraint
             )
-            callLocal(localPrompt, lyrics)
+            callLocal(localPrompt, lyrics, constraint)
         } else {
-            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext)
+            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
             when (provider) {
-                AIProvider.GEMINI -> callGemini(apiKey, modelId, prompt)
-                AIProvider.OPENAI -> callOpenAI(apiKey, modelId, prompt)
-                AIProvider.CLAUDE -> callClaude(apiKey, modelId, prompt)
+                AIProvider.GEMINI -> callGemini(apiKey, modelId, prompt, constraint)
+                AIProvider.OPENAI -> callOpenAI(apiKey, modelId, prompt, constraint)
+                AIProvider.CLAUDE -> callClaude(apiKey, modelId, prompt, constraint)
                 AIProvider.LOCAL -> error("unreachable")
             }
         }
@@ -307,18 +344,19 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
+        val constraint = suggestionRhymeConstraint(targetRhymeLine, rhymeType)
         when (provider) {
             AIProvider.GEMINI -> {
-                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext)
-                streamGemini(apiKey, modelId, prompt).collect { emit(it) }
+                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
+                streamGemini(apiKey, modelId, prompt, constraint).collect { emit(it) }
             }
             AIProvider.OPENAI -> {
-                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext)
-                streamOpenAI(apiKey, modelId, prompt).collect { emit(it) }
+                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
+                streamOpenAI(apiKey, modelId, prompt, constraint).collect { emit(it) }
             }
             AIProvider.CLAUDE -> {
-                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext)
-                streamClaude(apiKey, modelId, prompt).collect { emit(it) }
+                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
+                streamClaude(apiKey, modelId, prompt, constraint).collect { emit(it) }
             }
             AIProvider.LOCAL -> {
                 // Local model already streams tokens internally; needs its own Flow surface (follow-up).
@@ -328,17 +366,17 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun streamGemini(apiKey: String, modelId: String, prompt: String): Flow<String> = flow {
+    private fun streamGemini(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): Flow<String> = flow {
         try {
             val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
             val tokens = model.generateContentStream(prompt).mapNotNull { it.text }
-            emitLinesFromTokens(tokens)
+            emitLinesFromTokens(tokens, constraint)
         } catch (error: Throwable) {
             throw userFacingProviderException(error)
         }
     }
 
-    private fun streamOpenAI(apiKey: String, modelId: String, prompt: String): Flow<String> = flow {
+    private fun streamOpenAI(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): Flow<String> = flow {
         val body = buildJsonObject {
             put("model", modelId)
             put("messages", buildJsonArray {
@@ -367,10 +405,10 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
                     ?.get("content")?.jsonPrimitive?.content
             }.getOrNull()
         }
-        emitLinesFromTokens(tokens)
+        emitLinesFromTokens(tokens, constraint)
     }
 
-    private fun streamClaude(apiKey: String, modelId: String, prompt: String): Flow<String> = flow {
+    private fun streamClaude(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): Flow<String> = flow {
         val body = buildJsonObject {
             put("model", modelId)
             put("max_tokens", 1024)
@@ -399,19 +437,35 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
                 obj["delta"]?.jsonObject?.get("text")?.jsonPrimitive?.content
             }.getOrNull()
         }
-        emitLinesFromTokens(tokens)
+        emitLinesFromTokens(tokens, constraint)
     }
 
-    private suspend fun FlowCollector<String>.emitLinesFromTokens(tokens: Flow<String>) {
+    private suspend fun FlowCollector<String>.emitLinesFromTokens(
+        tokens: Flow<String>,
+        constraint: SuggestionRhymeConstraint? = null
+    ) {
         val buffer = StringBuilder()
         val seen = mutableSetOf<String>()
+        val held = mutableListOf<String>()
+        // Constrained requests over-generate 2x, surface verified rhymes as they
+        // stream, and keep the rest as ranked backfill for the end of the stream.
+        val matches = constraint?.let {
+            ProsodyAnalyzer.findRhymes(it.targetWord, dictionary = it.dictionary)
+        }
+        val acceptLimit = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        var accepted = 0
         var emitted = 0
 
         suspend fun flushLine(rawLine: String): Boolean {
-            if (emitted >= SUGGESTION_COUNT) return false
+            if (accepted >= acceptLimit || emitted >= SUGGESTION_COUNT) return false
             val cleaned = cleanLocalSuggestionLine(rawLine) ?: return false
             val key = normalizeSuggestionKey(cleaned)
             if (key.isEmpty() || !seen.add(key)) return false
+            accepted++
+            if (matches != null && RhymeConstraint.rhymeTier(cleaned, matches) == 0) {
+                held += cleaned
+                return true
+            }
             emit(cleaned)
             emitted++
             return true
@@ -419,7 +473,7 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
 
         tokens.collect { chunk ->
             buffer.append(chunk)
-            while (emitted < SUGGESTION_COUNT) {
+            while (accepted < acceptLimit && emitted < SUGGESTION_COUNT) {
                 val newlineIdx = buffer.indexOf('\n')
                 if (newlineIdx < 0) break
                 val rawLine = buffer.substring(0, newlineIdx)
@@ -427,8 +481,17 @@ Respond with exactly $SUGGESTION_COUNT lines, one suggestion per line. No number
                 flushLine(rawLine)
             }
         }
-        if (emitted < SUGGESTION_COUNT && buffer.isNotBlank()) {
+        if (buffer.isNotBlank()) {
             flushLine(buffer.toString())
+        }
+        if (constraint != null && emitted < SUGGESTION_COUNT && held.isNotEmpty()) {
+            RhymeConstraint.filterAndRank(
+                lines = held,
+                targetLine = constraint.targetLine,
+                rhymeType = constraint.rhymeType,
+                want = SUGGESTION_COUNT - emitted,
+                dictionary = constraint.dictionary
+            ).forEach { emit(it) }
         }
     }
 
@@ -1086,18 +1149,18 @@ $outputRules
         }
     }
 
-    private suspend fun callGemini(apiKey: String, modelId: String, prompt: String): List<String> {
+    private suspend fun callGemini(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<String> {
         return try {
             val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
             val response = model.generateContent(prompt)
             val text = response.text?.trim() ?: return emptyList()
-            parseSuggestionList(text)
+            parseSuggestionList(text, constraint)
         } catch (error: Throwable) {
             throw userFacingProviderException(error)
         }
     }
 
-    private suspend fun callOpenAI(apiKey: String, modelId: String, prompt: String): List<String> {
+    private suspend fun callOpenAI(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<String> {
         val body = buildJsonObject {
             put("model", modelId)
             put("messages", buildJsonArray {
@@ -1124,10 +1187,10 @@ $outputRules
             ?.get("message")?.jsonObject
             ?.get("content")?.jsonPrimitive?.content ?: return emptyList()
 
-        return parseSuggestionList(content)
+        return parseSuggestionList(content, constraint)
     }
 
-    private suspend fun callClaude(apiKey: String, modelId: String, prompt: String): List<String> {
+    private suspend fun callClaude(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<String> {
         val body = buildJsonObject {
             put("model", modelId)
             put("max_tokens", 1024)
@@ -1154,19 +1217,28 @@ $outputRules
             ?.firstOrNull()?.jsonObject
             ?.get("text")?.jsonPrimitive?.content ?: return emptyList()
 
-        return parseSuggestionList(content)
+        return parseSuggestionList(content, constraint)
     }
 
-    internal fun parseSuggestionList(raw: String): List<String> {
-        val parsed = parseJsonArray(raw).ifEmpty { parseLines(raw) }
+    internal fun parseSuggestionList(raw: String, constraint: SuggestionRhymeConstraint? = null): List<String> {
+        val limit = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        val parsed = parseJsonArray(raw, limit).ifEmpty { parseLines(raw) }
         val seen = mutableSetOf<String>()
-        return parsed
+        val cleaned = parsed
             .mapNotNull { cleanLocalSuggestionLine(it) }
             .filter {
                 val key = normalizeSuggestionKey(it)
                 key.isNotEmpty() && seen.add(key)
             }
-            .take(SUGGESTION_COUNT)
+            .take(limit)
+        if (constraint == null) return cleaned
+        return RhymeConstraint.filterAndRank(
+            lines = cleaned,
+            targetLine = constraint.targetLine,
+            rhymeType = constraint.rhymeType,
+            want = SUGGESTION_COUNT,
+            dictionary = constraint.dictionary
+        )
     }
 
     internal fun buildLocalPrompt(
@@ -1178,13 +1250,16 @@ $outputRules
         currentLetter: String,
         currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
-        useWholeSongContext: Boolean
+        useWholeSongContext: Boolean,
+        constraint: SuggestionRhymeConstraint? = null
     ): String {
         val rhymeHint = if (targetRhymeLine != null) {
             "End every suggestion with a ${rhymeType.displayName.lowercase()} for: \"$targetRhymeLine\"."
         } else {
             "Start a new rhyme sound for letter \"$currentLetter\"."
         }
+        val constraintBlock = constraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
+        val requestCount = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
         val songContextInstruction = if (useWholeSongContext) {
             "Use the whole-song context for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
         } else {
@@ -1199,12 +1274,12 @@ $outputRules
         val userPrompt = """
 You are RhymeAI's on-device songwriting assistant.
 
-Task: write exactly $SUGGESTION_COUNT next-line options for the song.
+Task: write exactly $requestCount next-line options for the song.
 Theme: $effectiveTheme
 Rhyme scheme: "$rhymeScheme"; next line is "$currentLetter".
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
-$rhymeHint
+$rhymeHint$constraintBlock
 $songContextInstruction
 Complexity: ${complexity.label}. ${complexity.promptHint}
 
@@ -1214,7 +1289,7 @@ $lyricContext
 ${"\"\"\""}
 
 Rules:
-- Return exactly $SUGGESTION_COUNT lines.
+- Return exactly $requestCount lines.
 - One suggestion per line.
 - Return only candidate lyric lines.
 - Do not copy any existing lyric line.
@@ -1227,15 +1302,23 @@ Rules:
         return gemmaInstructionPrompt(userPrompt)
     }
 
-    private suspend fun callLocal(prompt: String, lyrics: String): List<String> {
+    private suspend fun callLocal(prompt: String, lyrics: String, constraint: SuggestionRhymeConstraint? = null): List<String> {
         val service = localModelService
             ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         if (!service.isLoaded) {
             throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         }
+        val limit = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
         val response = service.generateResponse(prompt)
-        val rawResults = parseJsonArray(response).ifEmpty { parseLines(response) }
-        val results = sanitizeLocalSuggestions(rawResults, lyrics)
+        val rawResults = parseJsonArray(response, limit).ifEmpty { parseLines(response) }
+        val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, limit)
+        val results = if (constraint == null) sanitized else RhymeConstraint.filterAndRank(
+            lines = sanitized,
+            targetLine = constraint.targetLine,
+            rhymeType = constraint.rhymeType,
+            want = SUGGESTION_COUNT,
+            dictionary = constraint.dictionary
+        )
         if (results.isEmpty()) {
             throw RuntimeException("Local model returned no usable suggestions. Try a different model or use a cloud provider.")
         }
@@ -1298,7 +1381,7 @@ Rules:
             }
         }
 
-    private fun parseJsonArray(text: String): List<String> {
+    private fun parseJsonArray(text: String, limit: Int = SUGGESTION_COUNT): List<String> {
         val cleaned = text.trim()
             .removePrefix("```json")
             .removePrefix("```")
@@ -1309,7 +1392,7 @@ Rules:
         val directArray = runCatching {
             json.decodeFromString<List<String>>(cleaned)
         }.getOrNull()
-        if (directArray != null) return directArray.take(SUGGESTION_COUNT)
+        if (directArray != null) return directArray.take(limit)
 
         return runCatching {
             json.parseToJsonElement(cleaned).jsonObject.values
@@ -1320,7 +1403,7 @@ Rules:
                         }
                     }.getOrNull()
                 }
-                ?.take(SUGGESTION_COUNT)
+                ?.take(limit)
                 ?: emptyList()
         }.getOrDefault(emptyList())
     }
@@ -1347,7 +1430,11 @@ $userPrompt
         }
     }
 
-    private fun sanitizeLocalSuggestions(candidates: List<String>, lyrics: String): List<String> {
+    private fun sanitizeLocalSuggestions(
+        candidates: List<String>,
+        lyrics: String,
+        limit: Int = SUGGESTION_COUNT
+    ): List<String> {
         val existingLines = lyrics.lines()
             .map { normalizeSuggestionKey(it) }
             .filter { it.isNotEmpty() }
@@ -1363,7 +1450,7 @@ $userPrompt
                     key !in existingLines &&
                     seen.add(key)
             }
-            .take(SUGGESTION_COUNT)
+            .take(limit)
     }
 
     private fun cleanLocalSuggestionLine(line: String): String? {

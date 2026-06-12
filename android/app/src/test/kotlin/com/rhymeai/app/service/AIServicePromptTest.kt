@@ -4,11 +4,23 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
+import com.rhymeai.app.util.PronunciationDictionary
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class AIServicePromptTest {
+    private val rhymeDictionary = PronunciationDictionary.fromLines(
+        sequenceOf(
+            "road\tR OW1 D",
+            "glowed\tG L OW1 D",
+            "showed\tSH OW1 D"
+        )
+    )
 
     @Test
     fun suggestionPromptShapesImmediateAndWholeSongContext() {
@@ -48,6 +60,76 @@ class AIServicePromptTest {
         assertContains(wholeSongPrompt, "new rhyme sound (\"B\")")
         assertContains(wholeSongPrompt, "Current song section: Chorus.")
         assertContains(wholeSongPrompt, "Complexity level: Complex")
+    }
+
+    @Test
+    fun suggestionPromptsConstrainEndWordsAndOverGenerateWhenDictionaryKnowsTarget() {
+        val service = AIService()
+        val constraint = assertNotNull(
+            service.suggestionRhymeConstraint(
+                targetRhymeLine = "Yellow lights on a midnight road",
+                rhymeType = RhymeType.PERFECT,
+                dictionary = rhymeDictionary
+            )
+        )
+        assertEquals("road", constraint.targetWord)
+        assertTrue("glowed" in constraint.candidateWords)
+
+        val prompt = service.buildPrompt(
+            theme = "late-night resolve",
+            lyrics = "[Verse]\nYellow lights on a midnight road",
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.VERSE,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false,
+            constraint = constraint
+        )
+        assertContains(prompt, "The new line must rhyme with: \"Yellow lights on a midnight road\" (it ends with \"road\").")
+        assertContains(prompt, "End each line with one of these rhyming words: glowed, showed (choose the most natural fit).")
+        assertContains(prompt, "Provide 12 creative")
+        assertContains(prompt, "Respond with exactly 12 lines")
+
+        val localPrompt = service.buildLocalPrompt(
+            theme = "late-night resolve",
+            lyrics = "[Verse]\nYellow lights on a midnight road",
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.VERSE,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false,
+            constraint = constraint
+        )
+        assertContains(localPrompt, "End each line with one of these rhyming words: glowed, showed (choose the most natural fit).")
+        assertContains(localPrompt, "Task: write exactly 12 next-line options for the song.")
+        assertContains(localPrompt, "Return exactly 12 lines.")
+    }
+
+    @Test
+    fun suggestionPromptsSkipRhymeConstraintWithoutTargetOrCandidates() {
+        val service = AIService()
+
+        assertNull(service.suggestionRhymeConstraint(null, RhymeType.PERFECT, rhymeDictionary))
+        assertNull(service.suggestionRhymeConstraint("   ", RhymeType.PERFECT, rhymeDictionary))
+        assertNull(service.suggestionRhymeConstraint("nothing rhymes with blorvex", RhymeType.PERFECT, rhymeDictionary))
+
+        val prompt = service.buildPrompt(
+            theme = "late-night resolve",
+            lyrics = "[Verse]\nYellow lights on a midnight road",
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.VERSE,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false
+        )
+        assertFalse(prompt.contains("End each line with"))
+        assertContains(prompt, "Respond with exactly 6 lines")
     }
 
     @Test
