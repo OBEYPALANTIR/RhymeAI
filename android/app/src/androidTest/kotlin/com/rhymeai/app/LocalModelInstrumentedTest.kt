@@ -125,6 +125,38 @@ class LocalModelInstrumentedTest {
         assertFalse("Local single-word rewrite should not return the selected word", singleWordRewrite.equals("glow", ignoreCase = true))
         assertNoPromptEcho("single word rewrite", listOf(singleWordRewrite))
 
+        val punchUpRewrite = timedEval(modelLabel, "punch_up") {
+            service.getRewrite(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                action = RewriteAction.PUNCH_UP,
+                fullLyrics = lyrics,
+                selection = "I hum the hook to keep it close",
+                currentSection = SongSection.VERSE
+            )
+        }
+        println("LOCAL_MODEL_SAMPLE model=$modelLabel case=punch_up text=${punchUpRewrite.replace("\n", " / ")}")
+        assertTrue("Local punch-up rewrite should return usable text", punchUpRewrite.isNotBlank())
+        assertNoPromptEcho("punch up rewrite", listOf(punchUpRewrite))
+        assertFalse("Local punch-up rewrite should change the selected text", punchUpRewrite.trim() == "I hum the hook to keep it close")
+
+        val singleWordPunchUp = timedEval(modelLabel, "single_word_punch_up") {
+            service.getRewrite(
+                provider = AIProvider.LOCAL,
+                apiKey = "",
+                modelId = AIModel.LOCAL_MODEL.id,
+                action = RewriteAction.PUNCH_UP,
+                fullLyrics = lyrics,
+                selection = "glow",
+                currentSection = SongSection.VERSE
+            )
+        }
+        println("LOCAL_MODEL_SAMPLE model=$modelLabel case=single_word_punch_up text=$singleWordPunchUp")
+        assertTrue("Local single-word punch-up should return one replacement word", singleWordPunchUp.matches(Regex("[\\p{L}\\p{N}'-]+")))
+        assertFalse("Local single-word punch-up should not return the selected word", singleWordPunchUp.equals("glow", ignoreCase = true))
+        assertNoPromptEcho("single word punch up", listOf(singleWordPunchUp))
+
         val harderSingleWordRewrite = timedEval(modelLabel, "harder_single_word_rewrite") {
             val chorusLyrics = """
                 [Chorus]

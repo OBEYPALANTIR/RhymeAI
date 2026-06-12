@@ -1259,7 +1259,10 @@ $outputRules
             "Start a new rhyme sound for letter \"$currentLetter\"."
         }
         val constraintBlock = constraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
-        val requestCount = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        // Cloud over-generates 2x for the rhyme filter; the on-device model is
+        // slow and small, and doubling its output length doubles the chance of
+        // malformed output — keep the ask at 6 and let filterAndRank re-rank.
+        val requestCount = SUGGESTION_COUNT
         val songContextInstruction = if (useWholeSongContext) {
             "Use the whole-song context for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
         } else {
@@ -1308,7 +1311,9 @@ Rules:
         if (!service.isLoaded) {
             throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         }
-        val limit = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        // The local prompt asks for SUGGESTION_COUNT lines even when constrained
+        // (see buildLocalPrompt); filterAndRank still verifies and re-ranks them.
+        val limit = SUGGESTION_COUNT
         val response = service.generateResponse(prompt)
         val rawResults = parseJsonArray(response, limit).ifEmpty { parseLines(response) }
         val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, limit)
@@ -1327,11 +1332,11 @@ Rules:
 
     private val listPrefixPattern = Regex("^\\s*(?:[-*]\\s+|\\d+[.)\\-:]\\s*)")
     private val markerOnlyPattern = Regex(
-        pattern = "^\\s*(?:_?response>|_?model_response>|assistant_response>|model_response>|<?/?(?:start_of_turn|end_of_turn)>?\\w*|<[^>]+>|user|model|assistant)\\s*$",
+        pattern = "^\\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|model_response>|<?/?(?:start_of_turn|end_of_turn)>?\\w*|<[^>]+>|>|user|model|assistant)\\s*$",
         option = RegexOption.IGNORE_CASE
     )
     private val markerPrefixPattern = Regex(
-        pattern = "^\\s*(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start_of_turn|end_of_turn)>?\\w*)\\s*",
+        pattern = "^\\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start_of_turn|end_of_turn)>?\\w*)\\s*",
         option = RegexOption.IGNORE_CASE
     )
     private val modelPayloadPrefixPattern = Regex(

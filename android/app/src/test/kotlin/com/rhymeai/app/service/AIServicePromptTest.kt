@@ -105,8 +105,8 @@ class AIServicePromptTest {
             constraint = constraint
         )
         assertContains(localPrompt, "End each line with one of these rhyming words: glowed, showed (choose the most natural fit).")
-        assertContains(localPrompt, "Task: write exactly 12 next-line options for the song.")
-        assertContains(localPrompt, "Return exactly 12 lines.")
+        assertContains(localPrompt, "Task: write exactly 6 next-line options for the song.")
+        assertContains(localPrompt, "Return exactly 6 lines.")
     }
 
     @Test
