@@ -6,5 +6,134 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<!--
+		ATS declarative certificate pinning (NSPinnedDomains).
+		Pin set must mirror Android's network_security_config.xml exactly (native parity rule).
+		Chains verified live 2026-06-12: all three API hosts terminate on Google Trust Services
+		(WR2 -> GTS Root R1 / WE1 -> GTS Root R4), cross-signed by GlobalSign Root CA.
+		ISRG Root X1 and DigiCert Global Root CA are backups in case OpenAI/Anthropic hop CAs.
+		Do not edit pins without updating the Android config in the same change.
+	-->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSPinnedDomains</key>
+		<dict>
+			<key>generativelanguage.googleapis.com</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<false/>
+				<key>NSPinnedCAIdentities</key>
+				<array>
+					<!-- GTS Root R1 -->
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</string>
+					</dict>
+					<!-- GTS Root R2 -->
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=</string>
+					</dict>
+					<!-- GTS Root R3 -->
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=</string>
+					</dict>
+					<!-- GTS Root R4 -->
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=</string>
+					</dict>
+					<!-- GlobalSign Root CA (cross-sign) -->
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>K87oWBWM9UZfyddvDfoxL+8lpNyoUB2ptGtn0fv6G2Q=</string>
+					</dict>
+					<!-- ISRG Root X1 (backup) -->
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=</string>
+					</dict>
+					<!-- DigiCert Global Root CA (backup) -->
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>r/mIkG3eEpVdm+u/ko/cwxzOMo1bk4TyHIlByibiA5E=</string>
+					</dict>
+				</array>
+			</dict>
+			<key>api.openai.com</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<false/>
+				<key>NSPinnedCAIdentities</key>
+				<array>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>K87oWBWM9UZfyddvDfoxL+8lpNyoUB2ptGtn0fv6G2Q=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>r/mIkG3eEpVdm+u/ko/cwxzOMo1bk4TyHIlByibiA5E=</string>
+					</dict>
+				</array>
+			</dict>
+			<key>api.anthropic.com</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<false/>
+				<key>NSPinnedCAIdentities</key>
+				<array>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>K87oWBWM9UZfyddvDfoxL+8lpNyoUB2ptGtn0fv6G2Q=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=</string>
+					</dict>
+					<dict>
+						<key>SPKI-SHA256-BASE64</key>
+						<string>r/mIkG3eEpVdm+u/ko/cwxzOMo1bk4TyHIlByibiA5E=</string>
+					</dict>
+				</array>
+			</dict>
+		</dict>
+	</dict>
 </dict>
 </plist>
