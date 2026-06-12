@@ -58,7 +58,7 @@ class ProviderLiveGateTest {
             )
         }
         assertTrue(suggestions.isNotEmpty(), "${provider.displayName} returned no suggestions for ${model.id}")
-        assertTrue(suggestions.all { it.isNotBlank() })
+        assertTrue(suggestions.all { it.text.isNotBlank() })
 
         val rewrite = withTimeout(60_000) {
             service.getRewrite(
@@ -90,7 +90,7 @@ class ProviderLiveGateTest {
             ).take(1).toList()
         }
         assertTrue(streamed.isNotEmpty(), "${provider.displayName} stream emitted no suggestions for ${model.id}")
-        assertTrue(streamed.all { it.isNotBlank() })
+        assertTrue(streamed.all { it.text.isNotBlank() })
     }
 
     private fun testKeyDescription(provider: AIProvider): String =

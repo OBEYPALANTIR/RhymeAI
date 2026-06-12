@@ -2,6 +2,7 @@ package com.rhymeai.app.service
 
 import com.google.ai.client.generativeai.GenerativeModel
 import com.rhymeai.app.BuildConfig
+import com.rhymeai.app.SuggestedLine
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
@@ -75,7 +76,7 @@ class GeminiSdkLiveGateTest {
                 )
             }
             assertTrue(suggestions.isNotEmpty(), "Gemini returned no suggestions for ${model.id}")
-            assertTrue(suggestions.all { it.isNotBlank() }, "Gemini returned blank suggestions for ${model.id}")
+            assertTrue(suggestions.all { it.text.isNotBlank() }, "Gemini returned blank suggestions for ${model.id}")
 
             RewriteAction.entries.forEach { action ->
                 val rewrite = withTimeout(60_000) {
@@ -109,7 +110,7 @@ class GeminiSdkLiveGateTest {
                 ).toList()
             }
             assertTrue(streamed.isNotEmpty(), "Gemini stream emitted no suggestions for ${model.id}")
-            assertTrue(streamed.all { it.isNotBlank() }, "Gemini stream emitted blank suggestions for ${model.id}")
+            assertTrue(streamed.all { it.text.isNotBlank() }, "Gemini stream emitted blank suggestions for ${model.id}")
         }
     }
 
@@ -138,7 +139,7 @@ class GeminiSdkLiveGateTest {
             }
 
             assertEquals(1, firstSuggestion.size, "Gemini stream did not cancel after first suggestion for ${model.id}")
-            assertTrue(firstSuggestion.single().isNotBlank(), "Gemini first streamed suggestion was blank for ${model.id}")
+            assertTrue(firstSuggestion.single().text.isNotBlank(), "Gemini first streamed suggestion was blank for ${model.id}")
         }
     }
 

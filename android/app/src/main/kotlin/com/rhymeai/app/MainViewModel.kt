@@ -24,6 +24,7 @@ import com.rhymeai.app.service.LocalModelService
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.RhymeMatches
+import com.rhymeai.app.util.SectionRef
 import com.rhymeai.app.util.WordProsody
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -36,12 +37,28 @@ import kotlinx.coroutines.withContext
 
 enum class SaveStatus { IDLE, SAVING, SAVED }
 
+/**
+ * A suggestion line paired with its phonetic tier and hook flag.
+ *
+ * rhymeTier: 2 = perfect/multi-syllable, 1 = near, 0 = unverified.
+ * isHook: true when this line repeats a chorus end-word from the first chorus
+ *         instance — badge shows "hook" instead of "perfect".
+ */
+data class SuggestedLine(
+    val text: String,
+    val rhymeTier: Int,
+    val isHook: Boolean = false
+)
+
 data class RhymeContext(
     val targetLine: String?,
     val currentLetter: String,
     val stanzaLines: List<String>,
     val currentLineIndex: Int,
-    val currentSection: SongSection = SongSection.UNKNOWN
+    val currentSection: SongSection = SongSection.UNKNOWN,
+    /** Full section identity including ordinal and chorus line content. Null when
+     *  the cursor is in an unrecognised position (should rarely happen). */
+    val currentSectionRef: SectionRef? = null
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -69,7 +86,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = lyricsFieldValue.selection.start.coerceIn(0, lyricsFieldValue.text.length)
 
     // UI state
-    var suggestions by mutableStateOf<List<String>>(emptyList())
+    var suggestions by mutableStateOf<List<SuggestedLine>>(emptyList())
     var isLoading by mutableStateOf(false)
     var rhymeType by mutableStateOf(RhymeType.PERFECT)
     var rhymeScheme by mutableStateOf(RhymeScheme.AABB)
@@ -273,7 +290,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 var emittedSuggestion = false
                 aiService.streamSuggestions(
                     selectedProvider, resolveApiKey(), selectedModel.id, theme, lyrics, context.targetLine,
-                    rhymeType, activeRhymeScheme, context.currentLetter, context.currentSection, rhymeComplexity, useWholeSongContext
+                    rhymeType, activeRhymeScheme, context.currentLetter, context.currentSection,
+                    rhymeComplexity, useWholeSongContext, context.currentSectionRef, lyrics
                 ).collect { line ->
                     emittedSuggestion = true
                     suggestions = suggestions + line

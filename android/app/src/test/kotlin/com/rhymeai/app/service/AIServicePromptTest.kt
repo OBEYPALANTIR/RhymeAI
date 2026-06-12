@@ -5,6 +5,7 @@ import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
 import com.rhymeai.app.util.PronunciationDictionary
+import com.rhymeai.app.util.RhymeConstraint
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -224,7 +225,221 @@ class AIServicePromptTest {
     fun emptySuggestionResponsesParseToEmptyList() {
         val service = AIService()
 
-        assertEquals(emptyList(), service.parseSuggestionList(""))
-        assertEquals(emptyList(), service.parseSuggestionList("```json\n[]\n```"))
+        assertEquals(emptyList<com.rhymeai.app.SuggestedLine>(), service.parseSuggestionList(""))
+        assertEquals(emptyList<com.rhymeai.app.SuggestedLine>(), service.parseSuggestionList("```json\n[]\n```"))
+    }
+
+    // --- Section-aware prompt directive tests ---
+
+    @Test
+    fun buildPromptIncludesVerseOrdinalDirective() {
+        val service = AIService()
+        val ref = com.rhymeai.app.util.SectionRef(
+            type = SongSection.VERSE,
+            ordinal = 2,
+            label = "Verse 2",
+            lineRange = 5 until 10
+        )
+        val constraint = service.suggestionRhymeConstraint(
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            dictionary = rhymeDictionary,
+            sectionRef = ref
+        )
+        val prompt = service.buildPrompt(
+            theme = "late-night resolve",
+            lyrics = "[Verse]\nYellow lights on a midnight road\n\n[Verse 2]\nI find the words in the city glow",
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.VERSE,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false,
+            constraint = constraint
+        )
+        assertContains(prompt, "This is Verse 2.")
+        // Existing section label must still be present.
+        assertContains(prompt, "Current song section: Verse.")
+    }
+
+    @Test
+    fun buildPromptIncludesBridgeDirective() {
+        val service = AIService()
+        val ref = com.rhymeai.app.util.SectionRef(
+            type = SongSection.BRIDGE,
+            ordinal = 1,
+            label = "Bridge",
+            lineRange = 8 until 12
+        )
+        val constraint = service.suggestionRhymeConstraint(
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.NEAR,
+            dictionary = rhymeDictionary,
+            sectionRef = ref
+        )
+        val prompt = service.buildPrompt(
+            theme = "late-night resolve",
+            lyrics = "[Chorus]\nKeep moving through the dark\n\n[Bridge]\nSomething different here",
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.NEAR,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.BRIDGE,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false,
+            constraint = constraint
+        )
+        assertContains(prompt, "This is the bridge — introduce a contrasting rhyme sound and cadence; avoid the chorus's ending words.")
+        assertContains(prompt, "Current song section: Bridge.")
+    }
+
+    @Test
+    fun buildPromptIncludesChorusRepeatDirectiveForSecondInstance() {
+        val service = AIService()
+        val lyrics = "[Verse]\nYellow lights on a midnight road\n\n[Chorus]\nKeep moving through the dark\nNever let go of the spark\n\n[Chorus]\nSecond chorus here"
+        val ref = com.rhymeai.app.util.SectionRef(
+            type = SongSection.CHORUS,
+            ordinal = 2,
+            label = "Chorus",
+            lineRange = 7 until 9
+        )
+        val constraint = service.suggestionRhymeConstraint(
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            dictionary = rhymeDictionary,
+            sectionRef = ref
+        )
+        val prompt = service.buildPrompt(
+            theme = "late-night resolve",
+            lyrics = lyrics,
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.CHORUS,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false,
+            constraint = constraint
+        )
+        assertContains(prompt, "This is the chorus (instance 2). Keep hook language and ending words consistent with the established chorus:")
+        // First chorus lines should be quoted so the LLM knows the anchor.
+        assertContains(prompt, "Keep moving through the dark")
+    }
+
+    @Test
+    fun buildPromptDoesNotAddDirectiveForFirstChorusInstance() {
+        val service = AIService()
+        val ref = com.rhymeai.app.util.SectionRef(
+            type = SongSection.CHORUS,
+            ordinal = 1,
+            label = "Chorus",
+            lineRange = 3 until 6
+        )
+        val constraint = service.suggestionRhymeConstraint(
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            dictionary = rhymeDictionary,
+            sectionRef = ref
+        )
+        val prompt = service.buildPrompt(
+            theme = "late-night resolve",
+            lyrics = "[Chorus]\nKeep moving through the dark",
+            targetRhymeLine = "Yellow lights on a midnight road",
+            rhymeType = RhymeType.PERFECT,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.CHORUS,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false,
+            constraint = constraint
+        )
+        assertFalse(prompt.contains("This is the chorus (instance"))
+    }
+
+    @Test
+    fun verseConstraintExcludesChorusEndWords() {
+        val service = AIService()
+        // Build a lyrics string where "glowed" is a chorus end-word
+        val lyrics = "[Chorus]\nI never let the fire glowed\n[Verse]\nYellow lights on a midnight road"
+        val chorusEnds = service.firstChorusEndWords(lyrics, rhymeDictionary)
+        assertTrue("glowed" in chorusEnds, "chorus end words should include 'glowed'")
+
+        val ref = com.rhymeai.app.util.SectionRef(
+            type = SongSection.VERSE,
+            ordinal = 1,
+            label = "Verse",
+            lineRange = 2 until 4
+        )
+        val constraint = assertNotNull(
+            service.suggestionRhymeConstraint(
+                targetRhymeLine = "Yellow lights on a midnight road",
+                rhymeType = RhymeType.PERFECT,
+                dictionary = rhymeDictionary,
+                sectionRef = ref,
+                chorusEndWords = chorusEnds
+            )
+        )
+        // "road" is the target word; chorus end word "glowed" is also a rhyme
+        // candidate but should be excluded from verse candidate words.
+        assertFalse("glowed" in constraint.candidateWords, "'glowed' should be excluded from verse candidates")
+        // Remaining candidates must not be empty (fallback logic).
+        assertTrue(constraint.candidateWords.isNotEmpty(), "verse candidates must remain non-empty after exclusion")
+    }
+
+    @Test
+    fun verseConstraintKeepsUnfilteredListWhenExclusionWouldEmpty() {
+        val service = AIService()
+        // All rhyme candidates happen to be chorus end-words; exclusion must not
+        // produce an empty list — the unfiltered set is kept instead.
+        val allCandidateWords = RhymeConstraint.candidateEndWords("road", RhymeType.PERFECT, dictionary = rhymeDictionary)
+        // Use ALL candidates as chorus end-words to trigger the fallback.
+        val chorusEnds = allCandidateWords.toSet()
+        val ref = com.rhymeai.app.util.SectionRef(
+            type = SongSection.VERSE,
+            ordinal = 1,
+            label = "Verse",
+            lineRange = 0 until 2
+        )
+        val constraint = assertNotNull(
+            service.suggestionRhymeConstraint(
+                targetRhymeLine = "Yellow lights on a midnight road",
+                rhymeType = RhymeType.PERFECT,
+                dictionary = rhymeDictionary,
+                sectionRef = ref,
+                chorusEndWords = chorusEnds
+            )
+        )
+        // Fallback: full candidate list retained.
+        assertEquals(allCandidateWords, constraint.candidateWords)
+    }
+
+    @Test
+    fun tierBadgeIsHookWhenChorusRepeatEndWordMatches() {
+        val service = AIService()
+        val lyrics = "[Chorus]\nI follow every road\n\n[Chorus]\nSecond chorus"
+        val chorusEnds = service.firstChorusEndWords(lyrics, rhymeDictionary)
+        val ref = com.rhymeai.app.util.SectionRef(
+            type = SongSection.CHORUS,
+            ordinal = 2,
+            label = "Chorus",
+            lineRange = 3 until 5
+        )
+        val constraint = assertNotNull(
+            service.suggestionRhymeConstraint(
+                targetRhymeLine = "Yellow lights on a midnight road",
+                rhymeType = RhymeType.PERFECT,
+                dictionary = rhymeDictionary,
+                sectionRef = ref,
+                chorusEndWords = chorusEnds
+            )
+        )
+        // "road" is in firstChorusEndWords; parseSuggestionList should mark it isHook.
+        val results = service.parseSuggestionList(
+            raw = "I walk along the road\nI glow under the showed",
+            constraint = constraint
+        )
+        val hookLine = results.firstOrNull { it.isHook }
+        assertNotNull(hookLine, "Expected at least one isHook=true suggestion when end word matches chorus")
     }
 }

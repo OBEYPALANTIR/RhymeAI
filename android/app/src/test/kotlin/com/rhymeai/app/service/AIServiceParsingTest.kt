@@ -20,7 +20,7 @@ class AIServiceParsingTest {
             2) I trade the dark for a borrowed glow
         """.trimIndent()
 
-        val suggestions = AIService().parseSuggestionList(raw)
+        val suggestions = AIService().parseSuggestionList(raw).map { it.text }
 
         assertEquals(
             listOf(
@@ -38,11 +38,11 @@ class AIServiceParsingTest {
 
         assertEquals(
             listOf("First clean line", "Second clean line"),
-            service.parseSuggestionList("""["1. First clean line", "\"Second clean line\"", "First clean line"]""")
+            service.parseSuggestionList("""["1. First clean line", "\"Second clean line\"", "First clean line"]""").map { it.text }
         )
         assertEquals(
             listOf("First wrapped line", "Second wrapped line"),
-            service.parseSuggestionList("""{"suggestions":["- First wrapped line","2) Second wrapped line"]}""")
+            service.parseSuggestionList("""{"suggestions":["- First wrapped line","2) Second wrapped line"]}""").map { it.text }
         )
     }
 
@@ -62,7 +62,7 @@ class AIServiceParsingTest {
                 "Static in the choir of the road",
                 "I trade the dark for a borrowed glow"
             ),
-            AIService().parseSuggestionList(raw)
+            AIService().parseSuggestionList(raw).map { it.text }
         )
     }
 

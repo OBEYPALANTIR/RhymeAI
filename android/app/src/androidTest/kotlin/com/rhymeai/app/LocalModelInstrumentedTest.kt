@@ -91,9 +91,9 @@ class LocalModelInstrumentedTest {
         }
         assertTrue("Local suggestions should contain at least two usable lines", suggestions.size >= 2)
         assertTrue("Local suggestions should be bounded to six lines", suggestions.size <= 6)
-        assertTrue("Local suggestions should not be blank", suggestions.all { it.isNotBlank() })
-        assertNoPromptEcho("suggestion", suggestions)
-        assertFalse("Local suggestions should not copy an existing lyric line", suggestions.any { lyrics.lines().contains(it) })
+        assertTrue("Local suggestions should not be blank", suggestions.all { it.text.isNotBlank() })
+        assertNoPromptEcho("suggestion", suggestions.map { it.text })
+        assertFalse("Local suggestions should not copy an existing lyric line", suggestions.any { lyrics.lines().contains(it.text) })
 
         val rewrite = timedEval(modelLabel, "rewrite") {
             service.getRewrite(

@@ -1,6 +1,7 @@
 package com.rhymeai.app
 
 import com.rhymeai.app.data.model.SongSection
+import com.rhymeai.app.util.SectionMap
 
 internal object RhymeContextAnalyzer {
     private val sectionHeaderRegex = Regex("^\\s*\\[.*]\\s*$")
@@ -53,7 +54,12 @@ internal object RhymeContextAnalyzer {
             lyricCount++
         }
 
-        return RhymeContext(targetLine, currentLetter, stanzaLines, rawCursorLineIndex, currentSection)
+        // Derive the full SectionRef (ordinal, chorus lines, etc.) so downstream
+        // prompt builders know which instance of a section this is.
+        val currentLineIndex = text.substring(0, pos).count { it == '\n' }
+        val sectionRef = SectionMap.parse(text).sectionAt(currentLineIndex)
+
+        return RhymeContext(targetLine, currentLetter, stanzaLines, rawCursorLineIndex, currentSection, sectionRef)
     }
 
     fun currentSongSection(text: String, cursor: Int): SongSection {

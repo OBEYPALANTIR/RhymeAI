@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.R
 import com.rhymeai.app.RhymeContext
+import com.rhymeai.app.SuggestedLine
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
@@ -532,13 +533,15 @@ fun AssistantPanel(
                         color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         fontStyle = FontStyle.Italic
                     )
-                    viewModel.suggestions.forEach { suggestion ->
+                    viewModel.suggestions.forEach { suggestedLine ->
                         SuggestionCard(
-                            suggestion = suggestion,
+                            suggestion = suggestedLine.text,
+                            rhymeTier = suggestedLine.rhymeTier,
+                            isHook = suggestedLine.isHook,
                             highlightRhyme = viewModel.isHighlightEnabled,
                             showProsody = viewModel.isStressPreviewEnabled,
                             onClick = {
-                                viewModel.insertSuggestion(suggestion)
+                                viewModel.insertSuggestion(suggestedLine.text)
                                 onSuggestionInserted()
                             }
                         )

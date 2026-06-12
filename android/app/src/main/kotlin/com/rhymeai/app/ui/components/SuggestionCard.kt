@@ -1,6 +1,7 @@
 package com.rhymeai.app.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,7 +39,11 @@ fun SuggestionCard(
     highlightRhyme: Boolean,
     showProsody: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 2 = perfect/multi, 1 = near, 0 = unverified. Drives the tier pill badge. */
+    rhymeTier: Int = 0,
+    /** True when this line repeats a first-chorus end-word; badge reads "hook". */
+    isHook: Boolean = false
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
@@ -125,6 +130,28 @@ fun SuggestionCard(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
+                )
+            }
+            // Rhyme tier pill — "hook" for chorus repeats, "perfect" for tier 2,
+            // "near" for tier 1; nothing for unverified (tier 0).
+            val tierLabel = when {
+                isHook -> "hook"
+                rhymeTier >= 2 -> "perfect"
+                rhymeTier == 1 -> "near"
+                else -> null
+            }
+            if (tierLabel != null) {
+                Text(
+                    text = tierLabel,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colorScheme.onTertiaryContainer,
+                    modifier = Modifier
+                        .background(
+                            colorScheme.tertiaryContainer,
+                            RoundedCornerShape(4.dp)
+                        )
+                        .padding(horizontal = 5.dp, vertical = 2.dp)
                 )
             }
             Icon(
