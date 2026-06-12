@@ -16,6 +16,7 @@ struct EditorView: View {
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
     @State private var rewriteAccessoryHeight: CGFloat = 0
+    @State private var showVoiceMemosSheet: Bool = false
 
     var body: some View {
         Group {
@@ -61,6 +62,15 @@ struct EditorView: View {
             defaultFilename: pendingExport.map { suggestedFilename(format: $0.format) }
         ) { _ in
             pendingExport = nil
+        }
+        .sheet(isPresented: $showVoiceMemosSheet) {
+            if let projectId = viewModel.currentProjectId {
+                VoiceMemosSheetView(
+                    projectId: projectId,
+                    onDismiss: { showVoiceMemosSheet = false }
+                )
+                .environmentObject(viewModel)
+            }
         }
         .sheet(
             isPresented: Binding(
@@ -514,6 +524,30 @@ struct EditorView: View {
                     .font(.caption2)
             }
             .foregroundStyle(.secondary)
+
+            // Voice Memos — only available when a project is open
+            if viewModel.currentProjectId != nil {
+                Button {
+                    dismissKeyboard()
+                    showVoiceMemosSheet = true
+                } label: {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: viewModel.voiceMemoService.isRecording ? "mic.fill" : "mic")
+                            .font(.body)
+                            .foregroundStyle(viewModel.voiceMemoService.isRecording ? .red : .secondary)
+                            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                        // Red dot indicates an active recording outside the sheet
+                        if viewModel.voiceMemoService.isRecording {
+                            Circle()
+                                .fill(.red)
+                                .frame(width: 7, height: 7)
+                                .offset(x: -3, y: 3)
+                        }
+                    }
+                }
+                .accessibilityLabel(viewModel.voiceMemoService.isRecording ? "Recording in progress — open voice memos" : "Voice memos")
+                .accessibilityIdentifier("voiceMemosButton")
+            }
 
             // Export
             Button {

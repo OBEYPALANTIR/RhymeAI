@@ -94,6 +94,11 @@ final class EditorViewModel: ObservableObject {
 
     @Published var showExportSheet: Bool = false
 
+    // MARK: - Voice Memos
+
+    @Published var showVoiceMemosSheet: Bool = false
+    let voiceMemoService = VoiceMemoService()
+
     // MARK: - Navigation
 
     @Published var showWelcome: Bool = true
@@ -273,6 +278,10 @@ final class EditorViewModel: ObservableObject {
         suggestionsTask?.cancel()
         inspectorSynonymsTask?.cancel()
         inspectorAnalysisTask?.cancel()
+        // Stop any in-progress recording or playback so AVAudioSession is
+        // deactivated before the service is released.
+        voiceMemoService.stopRecording()
+        voiceMemoService.stopPlayback()
     }
 
     // MARK: - Rhyme Context
@@ -767,8 +776,11 @@ final class EditorViewModel: ObservableObject {
 
     func permanentlyDeleteTrashedProject(_ trashedProject: TrashedSongProject) {
         guard let context = modelContext else { return }
+        let projectId = trashedProject.id
         context.delete(trashedProject)
         try? context.save()
+        // Remove the memo folder so orphaned audio doesn't accumulate on disk.
+        VoiceMemoService.deleteMemosFolder(for: projectId)
         scheduleTrashPurge()
     }
 
@@ -783,7 +795,10 @@ final class EditorViewModel: ObservableObject {
             return
         }
         for project in expiredProjects {
+            let projectId = project.id
             context.delete(project)
+            // Remove memo audio alongside the SwiftData row so nothing lingers.
+            VoiceMemoService.deleteMemosFolder(for: projectId)
         }
         try? context.save()
         scheduleTrashPurge()
