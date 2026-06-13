@@ -247,6 +247,62 @@ final class VoiceMemoService {
         try? FileManager.default.removeItem(at: url)
     }
 
+    // MARK: - Rename
+
+    /// Strip illegal filesystem characters from a candidate display name.
+    /// Rules: trim whitespace; remove `/`, `:`, `\0`; collapse runs of whitespace;
+    /// truncate to 255 UTF-8 code units (HFS+ limit minus .m4a overhead).
+    static func sanitizeName(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip characters that are illegal in HFS+ / APFS filenames.
+        let illegal = CharacterSet(charactersIn: "/:\u{0000}")
+        s = s.unicodeScalars
+            .filter { !illegal.contains($0) }
+            .reduce(into: "") { $0.unicodeScalars.append($1) }
+        // Collapse interior whitespace runs to a single space.
+        s = s.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        // Ensure the result, when encoded as UTF-8, fits within 255 bytes
+        // (leaving headroom for the ".m4a" extension — 4 bytes).
+        let limit = 251
+        if let data = s.data(using: .utf8), data.count > limit {
+            var truncated = s
+            while let d = truncated.data(using: .utf8), d.count > limit {
+                truncated.removeLast()
+            }
+            s = truncated
+        }
+        return s
+    }
+
+    /// Rename the memo at `url` to `newBasename` (without extension).
+    /// - The sanitized name is used; if empty after sanitization the rename is skipped.
+    /// - If a file with the target name already exists, " 2" is appended (once).
+    /// - Returns the new URL on success; throws on FileManager error.
+    @discardableResult
+    func renameMemo(at url: URL, to newBasename: String) throws -> URL {
+        let sanitized = Self.sanitizeName(newBasename)
+        guard !sanitized.isEmpty else { return url }
+
+        let folder = url.deletingLastPathComponent()
+        var targetURL = folder.appendingPathComponent(sanitized).appendingPathExtension("m4a")
+
+        // Collision avoidance: append " 2" if target already exists (and isn't the source itself).
+        if targetURL != url && FileManager.default.fileExists(atPath: targetURL.path) {
+            targetURL = folder.appendingPathComponent(sanitized + " 2").appendingPathExtension("m4a")
+        }
+
+        // No-op if names are identical.
+        guard targetURL != url else { return url }
+
+        // If active playback is on this file, stop it before rename.
+        if activePlayURL == url { stopPlayback() }
+
+        try FileManager.default.moveItem(at: url, to: targetURL)
+        return targetURL
+    }
+
     // MARK: - Callbacks from delegate forwarder
 
     fileprivate func recordingDidFinish() {

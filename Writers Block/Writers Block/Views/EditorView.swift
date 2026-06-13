@@ -16,6 +16,10 @@ struct EditorView: View {
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
     @State private var rewriteAccessoryHeight: CGFloat = 0
+    // UnBlock fall-down while mic is recording.
+    // 0 = normal position, positive = shifted down (off-screen).
+    @State private var unblockRecordingOffset: CGFloat = 0
+    @State private var unblockRecordingOpacity: Double = 1
 
     var body: some View {
         Group {
@@ -179,6 +183,15 @@ struct EditorView: View {
                 assistantSheetDragOffset = 0
             }
         }
+        // UnBlock fall-down / rise-up coordinated with mic recording.
+        // Falls away when recording starts, rises back when it stops.
+        .onChange(of: viewModel.voiceMemoService.isRecording) { _, isRecording in
+            let spring: Animation = .spring(response: 0.40, dampingFraction: 0.76)
+            withAnimation(reduceMotion ? nil : spring) {
+                unblockRecordingOffset  = isRecording ? RhymeAITokens.Touch.comfortable + RhymeAITokens.Spacing.md : 0
+                unblockRecordingOpacity = isRecording ? 0 : 1
+            }
+        }
         .simultaneousGesture(assistantBackSwipeGesture, including: viewModel.showAssistantSheet ? .all : .subviews)
     }
 
@@ -209,7 +222,8 @@ struct EditorView: View {
                     )
                     .accessibilityIdentifier("micButton")
 
-                    // UnBlock FAB
+                    // UnBlock FAB — falls away when mic starts recording,
+                    // rises back when recording stops.
                     Button {
                         presentAssistantSheet()
                     } label: {
@@ -226,6 +240,9 @@ struct EditorView: View {
                         .shadow(color: .indigo.opacity(0.26), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
                     }
                     .accessibilityIdentifier("unblockButton")
+                    .offset(y: unblockRecordingOffset)
+                    .opacity(unblockRecordingOpacity)
+                    .allowsHitTesting(unblockRecordingOpacity > 0.01)
                 }
                 .padding(.trailing, RhymeAITokens.Spacing.md)
                 .padding(.bottom, keyboardIsVisible

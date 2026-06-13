@@ -3,62 +3,63 @@ import SwiftUI
 
 // Floating mic button that lives LEFT of the UnBlock FAB in EditorView.
 //
-// Idle state:  circular mic icon (matches the FAB's corner radius family).
-// Recording:   morphs into a wider pill showing a live spectralizer
-//              (12 amplitude bars), elapsed time, and a stop affordance.
+// IDLE STATE  — circular mic icon (56 pt, matches pill corner-radius family).
 //
-// All layout is self-contained so EditorView's assistantFloatingButton
-// can simply embed this view without knowing about recording state.
+// ON RECORD PRESS — single animatable `progress` (0 → 1) drives everything
+// in one spring so nothing can desync:
+//   • Pill width:    comfortable (56) → recordingPillWidth (~220 pt)
+//   • Glyph:        mic.fill crossfades to pause.fill (kept as stop semantics)
+//   • Bars / timer: stagger-fade in once progress > 0.6
+//
+// ON STOP PRESS — progress reverses (1 → 0), bars/timer stagger out first,
+// then pill contracts back to circle, glyph reverts.
+//
+// `accessibilityReduceMotion` collapses all transitions to instant swaps.
+//
+// The UnBlock FAB fall-down / rise-up is orchestrated by EditorView, which
+// observes `service.isRecording` directly. This component stays self-contained.
 struct FloatingMicButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    // Service is owned by EditorViewModel; passed in rather than re-observed
-    // via EnvironmentObject so the component stays reusable in previews.
     let service: VoiceMemoService
-    /// Resolved at record time: a recording may be the first artifact of a
-    /// song, so the project is created on demand rather than required up front.
+    /// Called at record time to obtain (or lazily create) the project for this recording.
     let ensureProjectId: () -> String
 
-    // Bar count must be constant for the wave animation. 12 looks balanced
-    // without overwhelming the narrow pill width.
-    private static let barCount = 12
+    // MARK: - Animation state
 
-    // Phase offsets give each bar an independent animation cycle so the wave
-    // effect never looks fully correlated. Values between 0 and π give gentle
-    // asynchrony without visible synchronisation artifacts.
+    // Single progress value: 0 = fully idle, 1 = fully recording.
+    // Driven by `service.isRecording` via onChange below.
+    @State private var progress: CGFloat = 0
+
+    // Bar count is constant; phase offsets give each bar an independent
+    // animation cycle so the wave never looks fully correlated.
+    private static let barCount = 12
     private let barPhases: [Double] = (0..<FloatingMicButton.barCount).map { i in
         Double(i) * (.pi / Double(FloatingMicButton.barCount - 1))
     }
 
+    // MARK: - Layout constants
+
+    // Idle circle diameter — matches Touch.comfortable token.
+    private let idleSize: CGFloat = RhymeAITokens.Touch.comfortable          // 56
+    // Recording pill total width — wide enough to hold bars + timer + stop button
+    // and for its right edge to align with where UnBlock's right edge was before
+    // it fell away. Tuned to roughly match UnBlock's footprint (~210 pt).
+    private let recordingPillWidth: CGFloat = 220
+    // Height stays constant — same as the idle circle.
+    private let pillHeight: CGFloat = RhymeAITokens.Touch.comfortable         // 56
+
+    // MARK: - Body
+
     var body: some View {
-        Group {
-            if service.isRecording {
-                spectralPill
-            } else {
-                idleMicButton
-            }
-        }
-        .rhymeAnimation(.easeInOut(duration: 0.25), value: service.isRecording)
-    }
-
-    // MARK: - Idle
-
-    private var idleMicButton: some View {
-        Button {
-            let projectId = ensureProjectId()
-            Task { await service.startRecording(projectId: projectId) }
-        } label: {
-            Image(systemName: "mic.fill")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(
-                    width: RhymeAITokens.Touch.comfortable,
-                    height: RhymeAITokens.Touch.comfortable
-                )
+        ZStack(alignment: .trailing) {
+            // Background pill / circle — width interpolates with progress.
+            Color.clear
+                .frame(width: interpolatedWidth, height: pillHeight)
                 .liquidGlassSurface(
                     cornerRadius: RhymeAITokens.Radius.pill,
                     tint: .indigo,
-                    interactive: true,
+                    interactive: progress < 0.5,
                     fallbackOpacity: 0.35
                 )
                 .shadow(
@@ -66,8 +67,83 @@ struct FloatingMicButton: View {
                     radius: RhymeAITokens.Spacing.sm,
                     y: RhymeAITokens.Spacing.xxs
                 )
+
+            // Content layer: idle glyph on the right, recording controls
+            // growing leftward. Both are pinned to the trailing edge so the
+            // pill expands left while the stop button stays where it always was.
+            HStack(spacing: 0) {
+                // Recording region — spectralizer + timer
+                // Fades in once the pill is mostly stretched (progress > 0.55).
+                if progress > 0.01 {
+                    HStack(spacing: RhymeAITokens.Spacing.xs) {
+                        spectralBars
+                        Text(formattedElapsed)
+                            .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                            .foregroundStyle(.white)
+                            .monospacedDigit()
+                            .fixedSize()
+                    }
+                    .padding(.leading, RhymeAITokens.Spacing.sm)
+                    .opacity(recordingContentOpacity)
+                    .transition(.opacity)
+                }
+
+                Spacer(minLength: 0)
+
+                // Central glyph — mic crossfades to pause as progress advances.
+                // Wrapped in a button: when idle it starts recording; when
+                // recording the entire control is the stop affordance.
+                Button {
+                    if service.isRecording {
+                        service.stopRecording()
+                    } else {
+                        let projectId = ensureProjectId()
+                        Task { await service.startRecording(projectId: projectId) }
+                    }
+                } label: {
+                    ZStack {
+                        // Idle mic glyph
+                        Image(systemName: "mic.fill")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .opacity(Double(max(0, 1 - progress * 2.5)))
+                            .scaleEffect(max(0.6, 1 - Double(progress) * 0.4))
+
+                        // Recording pause glyph (pause per design spec; action stops + saves)
+                        Image(systemName: "pause.fill")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .opacity(Double(max(0, progress * 2.5 - 1.5)))
+                            .scaleEffect(max(0.6, Double(progress) * 0.9 + 0.1))
+                            .background(
+                                Circle()
+                                    .fill(.red.opacity(min(0.85, Double(progress))))
+                                    .frame(
+                                        width: RhymeAITokens.Touch.minimum,
+                                        height: RhymeAITokens.Touch.minimum
+                                    )
+                            )
+                    }
+                    .frame(
+                        width: RhymeAITokens.Touch.minimum,
+                        height: RhymeAITokens.Touch.minimum
+                    )
+                }
+                .accessibilityLabel(service.isRecording ? "Stop recording" : "Record voice memo")
+                .padding(.trailing, RhymeAITokens.Spacing.xs)
+            }
+            .frame(width: interpolatedWidth, height: pillHeight)
         }
-        .accessibilityLabel("Record voice memo")
+        // Accessibility identifiers are set by EditorView on the parent container.
+        .frame(width: interpolatedWidth, height: pillHeight)
+        // React to service state changes with a spring animation.
+        .onChange(of: service.isRecording) { _, isRecording in
+            let spring: Animation = .spring(response: 0.40, dampingFraction: 0.76)
+            withAnimation(reduceMotion ? nil : spring) {
+                progress = isRecording ? 1 : 0
+            }
+        }
+        // Permission denied alert lives here so the mic button is self-contained.
         .alert("Microphone Access Denied", isPresented: Bindable(service).permissionDenied) {
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -80,51 +156,20 @@ struct FloatingMicButton: View {
         }
     }
 
-    // MARK: - Recording Spectralizer Pill
+    // MARK: - Interpolated layout
 
-    private var spectralPill: some View {
-        HStack(spacing: RhymeAITokens.Spacing.xs) {
-            // Live amplitude bars
-            spectralBars
-
-            // Elapsed time — MM:SS
-            Text(formattedElapsed)
-                .font(.system(.caption2, design: .monospaced).weight(.semibold))
-                .foregroundStyle(.white)
-                .monospacedDigit()
-
-            // Stop button
-            Button {
-                service.stopRecording()
-            } label: {
-                Image(systemName: "stop.fill")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(
-                        width: RhymeAITokens.Touch.minimum,
-                        height: RhymeAITokens.Touch.minimum
-                    )
-                    .background(.red.opacity(0.85), in: Circle())
-            }
-            .accessibilityLabel("Stop recording")
-        }
-        .padding(.horizontal, RhymeAITokens.Spacing.sm)
-        .padding(.vertical, RhymeAITokens.Spacing.xs)
-        .liquidGlassSurface(
-            cornerRadius: RhymeAITokens.Radius.pill,
-            tint: .indigo,
-            interactive: false,
-            fallbackOpacity: 0.35
-        )
-        .shadow(
-            color: .indigo.opacity(0.22),
-            radius: RhymeAITokens.Spacing.sm,
-            y: RhymeAITokens.Spacing.xxs
-        )
-        .transition(.scale(scale: 0.88, anchor: .trailing).combined(with: .opacity))
+    private var interpolatedWidth: CGFloat {
+        idleSize + (recordingPillWidth - idleSize) * progress
     }
 
-    // MARK: - Bar Cluster
+    // Recording content (bars + timer) fades in after the pill is ~60% stretched.
+    private var recordingContentOpacity: Double {
+        let fadeStart = 0.55
+        let fadeEnd   = 0.85
+        return max(0, min(1, (Double(progress) - fadeStart) / (fadeEnd - fadeStart)))
+    }
+
+    // MARK: - Spectral bars
 
     private var spectralBars: some View {
         HStack(alignment: .bottom, spacing: 2) {
@@ -139,7 +184,7 @@ struct FloatingMicButton: View {
         .frame(height: 18)
     }
 
-    // MARK: - Helpers
+    // MARK: - Time formatter
 
     private var formattedElapsed: String {
         let total = Int(service.recordingElapsed)
@@ -151,17 +196,11 @@ struct FloatingMicButton: View {
 
 // MARK: - Single Spectral Bar
 
-// Each bar derives its height from the global normalised amplitude plus a
-// per-bar phase offset. The offset spreads the visual energy so bars at
-// different positions peak at slightly different moments, creating a wave
-// effect even on a steady signal.
 private struct SpectralBar: View {
     let normalizedAmplitude: Float
     let phaseOffset: Double
     let reduceMotion: Bool
 
-    // Minimum bar height keeps all bars visible at silence; maximum caps the
-    // bar at the container height (18 pt) with a small inset for breathing room.
     private static let minHeight: CGFloat = 2
     private static let maxHeight: CGFloat = 16
 
@@ -173,10 +212,6 @@ private struct SpectralBar: View {
     }
 
     private var barHeight: CGFloat {
-        // Perturb each bar's amplitude with a sine wave keyed on the phase offset
-        // so neighbouring bars peak at different times. The perturbation scale
-        // (0.15) is modest enough that all bars remain clearly data-driven rather
-        // than decorative.
         let perturb = Float(sin(phaseOffset + Double(normalizedAmplitude) * .pi)) * 0.15
         let scaled = max(0, min(1, normalizedAmplitude + perturb))
         return Self.minHeight + CGFloat(scaled) * (Self.maxHeight - Self.minHeight)

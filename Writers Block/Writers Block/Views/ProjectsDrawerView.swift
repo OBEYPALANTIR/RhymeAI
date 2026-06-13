@@ -17,8 +17,11 @@ struct ProjectsDrawerView: View {
     @State private var pendingDeleteProject: SongProject?
     @State private var trashBinPresented = false
     @State private var activeTab: DrawerTab = .songs
-    // Recordings list is refreshed on appear and after delete.
+    // Recordings list is refreshed on appear and after delete/rename.
     @State private var allRecordings: [RecordingItem] = []
+    // Rename alert state — non-nil means the alert is showing.
+    @State private var renamingItem: RecordingItem?
+    @State private var renameText: String = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum DrawerTab: String, CaseIterable {
@@ -257,6 +260,26 @@ struct ProjectsDrawerView: View {
             .padding(.top, RhymeAITokens.Spacing.md)
             .padding(.bottom, RhymeAITokens.Spacing.sm)
         }
+        // Rename alert — presented when renamingItem is non-nil.
+        .alert("Rename Recording", isPresented: Binding(
+            get: { renamingItem != nil },
+            set: { if !$0 { renamingItem = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+                .autocorrectionDisabled()
+            Button("Rename") {
+                if let item = renamingItem {
+                    _ = try? viewModel.voiceMemoService.renameMemo(at: item.url, to: renameText)
+                    reloadRecordings()
+                }
+                renamingItem = nil
+            }
+            Button("Cancel", role: .cancel) {
+                renamingItem = nil
+            }
+        } message: {
+            Text("Enter a new name for this recording.")
+        }
     }
 
     private func recordingRow(_ item: RecordingItem) -> some View {
@@ -264,7 +287,7 @@ struct ProjectsDrawerView: View {
             // Play / pause
             PlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
 
-            // Song title + date
+            // Song title + date / display name
             Button {
                 // Load the song so the user can edit it after tapping the row
                 if let project = projects.first(where: { $0.id == item.projectId }) {
@@ -277,7 +300,7 @@ struct ProjectsDrawerView: View {
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(formattedDate(url: item.url))
+                    Text(displayLabel(url: item.url))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -307,6 +330,35 @@ struct ProjectsDrawerView: View {
             tint: .white.opacity(0.03),
             fallbackOpacity: 0.05
         )
+        // Swipe from leading edge to rename.
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button {
+                let stem = item.url.deletingPathExtension().lastPathComponent
+                // Pre-fill with existing custom name or empty for timestamps.
+                renameText = isTimestampStem(stem) ? "" : stem
+                renamingItem = item
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            .tint(.indigo)
+        }
+    }
+
+    /// True when the stem is a pure millisecond-epoch timestamp (all digits,
+    /// 13 chars — matches the `VoiceMemoService.newMemoURL` naming scheme).
+    private func isTimestampStem(_ stem: String) -> Bool {
+        stem.count == 13 && stem.allSatisfy(\.isNumber)
+    }
+
+    /// Display label beneath the project title in a recording row.
+    /// Shows the custom display name when it isn't a raw timestamp; otherwise
+    /// falls back to the human-readable date string.
+    private func displayLabel(url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        if isTimestampStem(stem) {
+            return formattedDate(url: url)
+        }
+        return stem
     }
 
     private func formattedDate(url: URL) -> String {

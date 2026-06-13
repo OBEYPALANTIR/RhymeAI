@@ -128,4 +128,103 @@ struct VoiceMemoServiceTests {
         // Must not throw/crash when the folder never existed.
         VoiceMemoService.deleteMemosFolder(for: "ghost-project-\(UUID().uuidString)")
     }
+
+    // MARK: - sanitizeName
+
+    @Test func sanitizeNameTrimsWhitespace() {
+        #expect(VoiceMemoService.sanitizeName("  Hello  ") == "Hello")
+    }
+
+    @Test func sanitizeNameStripsSlash() {
+        #expect(VoiceMemoService.sanitizeName("my/memo") == "mymemo")
+    }
+
+    @Test func sanitizeNameStripsColon() {
+        #expect(VoiceMemoService.sanitizeName("verse:chorus") == "versechorus")
+    }
+
+    @Test func sanitizeNameCollapsesInternalWhitespace() {
+        #expect(VoiceMemoService.sanitizeName("hello   world") == "hello world")
+    }
+
+    @Test func sanitizeNameReturnsEmptyForBlankInput() {
+        #expect(VoiceMemoService.sanitizeName("   ") == "")
+    }
+
+    @Test func sanitizeNamePreservesNormalName() {
+        let name = "Verse 1 - Hook"
+        #expect(VoiceMemoService.sanitizeName(name) == name)
+    }
+
+    // MARK: - renameMemo
+
+    @Test func renameMemoChangesFilename() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RenameMemoTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let original = dir.appendingPathComponent("1700000000000.m4a")
+        FileManager.default.createFile(atPath: original.path, contents: Data())
+
+        let service = VoiceMemoService()
+        let renamed = try service.renameMemo(at: original, to: "Verse 1")
+
+        #expect(renamed.deletingPathExtension().lastPathComponent == "Verse 1")
+        #expect(renamed.pathExtension == "m4a")
+        #expect(FileManager.default.fileExists(atPath: renamed.path))
+        #expect(!FileManager.default.fileExists(atPath: original.path))
+    }
+
+    @Test func renameMemoHandlesCollisionByAppendingTwo() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RenameMemoCollision-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // Pre-create the target name so a collision occurs.
+        let existing = dir.appendingPathComponent("Hook.m4a")
+        FileManager.default.createFile(atPath: existing.path, contents: Data())
+
+        let source = dir.appendingPathComponent("1700000000001.m4a")
+        FileManager.default.createFile(atPath: source.path, contents: Data())
+
+        let service = VoiceMemoService()
+        let renamed = try service.renameMemo(at: source, to: "Hook")
+
+        #expect(renamed.deletingPathExtension().lastPathComponent == "Hook 2")
+        #expect(FileManager.default.fileExists(atPath: renamed.path))
+    }
+
+    @Test func renameMemoReturnsOriginalURLWhenNameSanitizesToEmpty() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RenameMemoEmpty-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let source = dir.appendingPathComponent("1700000000002.m4a")
+        FileManager.default.createFile(atPath: source.path, contents: Data())
+
+        let service = VoiceMemoService()
+        let result = try service.renameMemo(at: source, to: "  /  ")
+
+        // Empty after sanitize → no-op, original URL returned.
+        #expect(result == source)
+        #expect(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    // MARK: - displayLabel / isTimestampStem helper logic (replicated here)
+
+    @Test func timestampStemOf13DigitsIsRecognised() {
+        // Mirror the isTimestampStem logic used in ProjectsDrawerView.
+        let stem = "1700000000000"
+        let isTimestamp = stem.count == 13 && stem.allSatisfy(\.isNumber)
+        #expect(isTimestamp)
+    }
+
+    @Test func customNameStemIsNotRecognisedAsTimestamp() {
+        let stem = "Verse 1"
+        let isTimestamp = stem.count == 13 && stem.allSatisfy(\.isNumber)
+        #expect(!isTimestamp)
+    }
 }
