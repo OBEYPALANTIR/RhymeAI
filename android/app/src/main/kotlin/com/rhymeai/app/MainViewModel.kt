@@ -101,6 +101,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var rhymeScheme by mutableStateOf(RhymeScheme.AABB)
     var customRhymeScheme by mutableStateOf("")
     var rhymeComplexity by mutableStateOf(RhymeComplexity.MODERATE)
+    // Editor toggles — initialized from DataStore in init{}, persisted on every change.
     var useWholeSongContext by mutableStateOf(false)
     var isHighlightEnabled by mutableStateOf(true)
     var isSyllableColoringEnabled by mutableStateOf(true)
@@ -118,7 +119,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var showTemplatesDialog by mutableStateOf(false)
     var showStartMenu by mutableStateOf(true)
     var showExportSheet by mutableStateOf(false)
-    var showVoiceMemosSheet by mutableStateOf(false)
 
     // Settings
     var selectedProvider by mutableStateOf(AIProvider.GEMINI)
@@ -337,6 +337,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             lyricsFieldValue = TextFieldValue(savedLyrics)
             theme = savedTheme
 
+            // Load persisted editor toggles — must happen before the editor is shown.
+            val toggles = repo.editorTogglesFlow.first()
+            useWholeSongContext = toggles.useWholeSongContext
+            isHighlightEnabled = toggles.isHighlightEnabled
+            isSyllableColoringEnabled = toggles.isSyllableColoringEnabled
+            isStressPreviewEnabled = toggles.isStressIpaEnabled
+            isRhymeHighlightEnabled = toggles.isRhymeHighlightEnabled
+            isBeatGridEnabled = toggles.isBeatGridEnabled
+
             // Always show start menu on fresh launch
             showStartMenu = true
 
@@ -396,6 +405,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         suggestionsJob?.cancel()
         suggestionsJob = null
         isLoading = false
+    }
+
+    // ---------------------------------------------------------------------------
+    // Editor toggle persistence — call after any toggle change so DataStore
+    // stays in sync. Runs on a background coroutine to avoid blocking the UI.
+    // ---------------------------------------------------------------------------
+
+    fun persistEditorToggles() {
+        viewModelScope.launch {
+            repo.saveEditorToggles(
+                ProjectRepository.EditorToggles(
+                    useWholeSongContext = useWholeSongContext,
+                    isStressIpaEnabled = isStressPreviewEnabled,
+                    isHighlightEnabled = isHighlightEnabled,
+                    isSyllableColoringEnabled = isSyllableColoringEnabled,
+                    isRhymeHighlightEnabled = isRhymeHighlightEnabled,
+                    isBeatGridEnabled = isBeatGridEnabled
+                )
+            )
+        }
     }
 
     fun requestRewrite(action: RewriteAction) {
@@ -814,6 +843,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         showTemplatesDialog = false
         showStartMenu = false
         triggerAutoSave()
+    }
+
+    // A recording needs a project folder before any lyrics exist (people hum
+    // the melody first). Creates and persists an Untitled project on demand.
+    fun ensureProjectForRecording(): String {
+        currentProjectId?.let { return it }
+        val newProject = SongProject(
+            id = java.util.UUID.randomUUID().toString(),
+            title = title.ifEmpty { "Untitled Song" },
+            lyrics = lyrics,
+            theme = theme,
+            updatedAt = System.currentTimeMillis()
+        )
+        projects = listOf(newProject) + projects
+        currentProjectId = newProject.id
+        showStartMenu = false
+        viewModelScope.launch {
+            repo.saveProjects(projects)
+            repo.setCurrentProjectId(newProject.id)
+            repo.saveEditorState(title, lyrics, theme)
+        }
+        return newProject.id
     }
 
     fun triggerAutoSave() {

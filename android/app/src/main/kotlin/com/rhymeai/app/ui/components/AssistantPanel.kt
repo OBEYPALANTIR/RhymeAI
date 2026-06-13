@@ -40,8 +40,6 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -373,149 +371,69 @@ fun AssistantPanel(
                 )
             }
 
-            // Toggles
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // Suggest button — moved directly after Complexity; turns into Stop while streaming.
+            Button(
+                onClick = {
+                    if (viewModel.isLoading) viewModel.cancelSuggestions()
+                    else viewModel.getSuggestions()
+                },
+                enabled = viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth().height(DesignTokens.Touch.minTarget),
+                shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary,
+                    disabledContainerColor = colorScheme.surfaceVariant,
+                    disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
             ) {
-                FeatureHelpLabel(
-                    text = "Whole Song Context",
-                    help = FeatureHelp.WHOLE_SONG_CONTEXT,
-                    onHelp = { activeHelp = it },
-                    color = colorScheme.onSurfaceVariant
-                )
-                Switch(
-                    checked = viewModel.useWholeSongContext,
-                    onCheckedChange = { viewModel.useWholeSongContext = it },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = colorScheme.onPrimary,
-                        checkedTrackColor = colorScheme.primary,
-                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
-                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
+                if (viewModel.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
+                        color = colorScheme.onPrimary,
+                        strokeWidth = 2.dp
                     )
-                )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.assistant_stop), fontWeight = FontWeight.Medium)
+                } else {
+                    Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.assistant_suggest_next_line), fontWeight = FontWeight.Medium)
+                }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FeatureHelpLabel(
-                    text = "Stress + IPA",
-                    help = FeatureHelp.STRESS_IPA,
-                    onHelp = { activeHelp = it },
-                    color = colorScheme.onSurfaceVariant
-                )
-                Switch(
-                    checked = viewModel.isStressPreviewEnabled,
-                    onCheckedChange = { viewModel.isStressPreviewEnabled = it },
-                    modifier = Modifier.semantics { contentDescription = "Toggle Stress + IPA" },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = colorScheme.onPrimary,
-                        checkedTrackColor = colorScheme.primary,
-                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
-                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
-                    )
-                )
+            // Error message
+            viewModel.errorMessage?.let {
+                Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FeatureHelpLabel(
-                    text = "Highlight Rhymes",
-                    help = FeatureHelp.HIGHLIGHT_RHYMES,
-                    onHelp = { activeHelp = it },
-                    color = colorScheme.onSurfaceVariant
-                )
-                Switch(
-                    checked = viewModel.isHighlightEnabled,
-                    onCheckedChange = { viewModel.isHighlightEnabled = it },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = colorScheme.onPrimary,
-                        checkedTrackColor = colorScheme.primary,
-                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
-                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
+            // Suggestions
+            if (viewModel.suggestions.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                    Text(stringResource(R.string.assistant_suggestions_header), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                    Text(
+                        stringResource(R.string.assistant_suggestions_caveat),
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        fontStyle = FontStyle.Italic
                     )
-                )
+                    viewModel.suggestions.forEach { suggestedLine ->
+                        SuggestionCard(
+                            suggestion = suggestedLine.text,
+                            rhymeTier = suggestedLine.rhymeTier,
+                            isHook = suggestedLine.isHook,
+                            highlightRhyme = viewModel.isHighlightEnabled,
+                            showProsody = viewModel.isStressPreviewEnabled,
+                            onClick = {
+                                viewModel.insertSuggestion(suggestedLine.text)
+                                onSuggestionInserted()
+                            }
+                        )
+                    }
+                }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FeatureHelpLabel(
-                    text = "Underline Syllables",
-                    help = FeatureHelp.UNDERLINE_SYLLABLES,
-                    onHelp = { activeHelp = it },
-                    color = colorScheme.onSurfaceVariant
-                )
-                Switch(
-                    checked = viewModel.isSyllableColoringEnabled,
-                    onCheckedChange = { viewModel.isSyllableColoringEnabled = it },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = colorScheme.onPrimary,
-                        checkedTrackColor = colorScheme.primary,
-                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
-                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
-                    )
-                )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FeatureHelpLabel(
-                    text = "Color Rhymes",
-                    help = FeatureHelp.COLOR_RHYMES,
-                    onHelp = { activeHelp = it },
-                    color = colorScheme.onSurfaceVariant
-                )
-                Switch(
-                    checked = viewModel.isRhymeHighlightEnabled,
-                    onCheckedChange = { viewModel.isRhymeHighlightEnabled = it },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = colorScheme.onPrimary,
-                        checkedTrackColor = colorScheme.primary,
-                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
-                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
-                    )
-                )
-            }
-
-            // Beat Grid toggle
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FeatureHelpLabel(
-                    text = "Beat Grid",
-                    help = FeatureHelp.BEAT_GRID,
-                    onHelp = { activeHelp = it },
-                    color = colorScheme.onSurfaceVariant
-                )
-                Switch(
-                    checked = viewModel.isBeatGridEnabled,
-                    onCheckedChange = { viewModel.isBeatGridEnabled = it },
-                    modifier = Modifier.semantics { contentDescription = "Toggle Beat Grid" },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = colorScheme.onPrimary,
-                        checkedTrackColor = colorScheme.primary,
-                        uncheckedThumbColor = colorScheme.onSurfaceVariant,
-                        uncheckedTrackColor = colorScheme.surfaceContainerHighest
-                    )
-                )
-            }
-
-            // Tempo control + per-line grid — shown only when Beat Grid is enabled.
+            // Tempo control + per-line grid — shown only when Beat Grid is enabled (toggled in Settings).
             if (viewModel.isBeatGridEnabled) {
                 // Tap-tempo state: keep the last 4 tap timestamps in memory.
                 var tapTimestamps by remember { mutableStateOf(emptyList<Long>()) }
@@ -595,68 +513,6 @@ fun AssistantPanel(
                         lyrics = viewModel.lyrics,
                         bpm = viewModel.beatGridBpm
                     )
-                }
-            }
-
-            // Suggest button — turns into Stop while streaming.
-            Button(
-                onClick = {
-                    if (viewModel.isLoading) viewModel.cancelSuggestions()
-                    else viewModel.getSuggestions()
-                },
-                enabled = viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().height(DesignTokens.Touch.minTarget),
-                shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colorScheme.primary,
-                    contentColor = colorScheme.onPrimary,
-                    disabledContainerColor = colorScheme.surfaceVariant,
-                    disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                if (viewModel.isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
-                        color = colorScheme.onPrimary,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.assistant_stop), fontWeight = FontWeight.Medium)
-                } else {
-                    Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.assistant_suggest_next_line), fontWeight = FontWeight.Medium)
-                }
-            }
-
-            // Error message
-            viewModel.errorMessage?.let {
-                Text(it, color = colorScheme.error, fontSize = 12.sp)
-            }
-
-            // Suggestions
-            if (viewModel.suggestions.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                    Text(stringResource(R.string.assistant_suggestions_header), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
-                    Text(
-                        stringResource(R.string.assistant_suggestions_caveat),
-                        fontSize = 11.sp,
-                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        fontStyle = FontStyle.Italic
-                    )
-                    viewModel.suggestions.forEach { suggestedLine ->
-                        SuggestionCard(
-                            suggestion = suggestedLine.text,
-                            rhymeTier = suggestedLine.rhymeTier,
-                            isHook = suggestedLine.isHook,
-                            highlightRhyme = viewModel.isHighlightEnabled,
-                            showProsody = viewModel.isStressPreviewEnabled,
-                            onClick = {
-                                viewModel.insertSuggestion(suggestedLine.text)
-                                onSuggestionInserted()
-                            }
-                        )
-                    }
                 }
             }
 

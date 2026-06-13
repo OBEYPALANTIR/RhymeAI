@@ -3,6 +3,7 @@ package com.rhymeai.app.data.repository
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -33,7 +34,26 @@ class ProjectRepository(
         private val CLAUDE_API_KEY = stringPreferencesKey("claude_api_key")
         private val SELECTED_PROVIDER_KEY = stringPreferencesKey("selected_provider")
         private val GEMINI_MODEL_KEY = stringPreferencesKey("gemini_model_id")
+
+        // Editor toggle keys — persisted separately from project data so they
+        // survive project switches and app restart without loading an entire project.
+        private val EDITOR_WHOLE_SONG_CONTEXT = booleanPreferencesKey("editor_use_whole_song_context")
+        private val EDITOR_STRESS_IPA = booleanPreferencesKey("editor_stress_ipa")
+        private val EDITOR_HIGHLIGHT_RHYMES = booleanPreferencesKey("editor_highlight_rhymes")
+        private val EDITOR_SYLLABLE_COLORING = booleanPreferencesKey("editor_syllable_coloring")
+        private val EDITOR_RHYME_HIGHLIGHT = booleanPreferencesKey("editor_rhyme_highlight")
+        private val EDITOR_BEAT_GRID = booleanPreferencesKey("editor_beat_grid")
     }
+
+    // Snapshot of all 6 editor-toggle preferences, with sensible on-first-install defaults.
+    data class EditorToggles(
+        val useWholeSongContext: Boolean = false,
+        val isStressIpaEnabled: Boolean = false,
+        val isHighlightEnabled: Boolean = true,
+        val isSyllableColoringEnabled: Boolean = true,
+        val isRhymeHighlightEnabled: Boolean = false,
+        val isBeatGridEnabled: Boolean = false
+    )
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -121,6 +141,30 @@ class ProjectRepository(
     suspend fun saveModelId(id: String) {
         context.dataStore.edit { prefs ->
             prefs[GEMINI_MODEL_KEY] = id
+        }
+    }
+
+    /** Flow of editor toggle preferences; emits immediately with current values. */
+    val editorTogglesFlow: Flow<EditorToggles> = context.dataStore.data.map { prefs ->
+        EditorToggles(
+            useWholeSongContext = prefs[EDITOR_WHOLE_SONG_CONTEXT] ?: false,
+            isStressIpaEnabled = prefs[EDITOR_STRESS_IPA] ?: false,
+            isHighlightEnabled = prefs[EDITOR_HIGHLIGHT_RHYMES] ?: true,
+            isSyllableColoringEnabled = prefs[EDITOR_SYLLABLE_COLORING] ?: true,
+            isRhymeHighlightEnabled = prefs[EDITOR_RHYME_HIGHLIGHT] ?: false,
+            isBeatGridEnabled = prefs[EDITOR_BEAT_GRID] ?: false
+        )
+    }
+
+    /** Persist all 6 editor toggles atomically. */
+    suspend fun saveEditorToggles(toggles: EditorToggles) {
+        context.dataStore.edit { prefs ->
+            prefs[EDITOR_WHOLE_SONG_CONTEXT] = toggles.useWholeSongContext
+            prefs[EDITOR_STRESS_IPA] = toggles.isStressIpaEnabled
+            prefs[EDITOR_HIGHLIGHT_RHYMES] = toggles.isHighlightEnabled
+            prefs[EDITOR_SYLLABLE_COLORING] = toggles.isSyllableColoringEnabled
+            prefs[EDITOR_RHYME_HIGHLIGHT] = toggles.isRhymeHighlightEnabled
+            prefs[EDITOR_BEAT_GRID] = toggles.isBeatGridEnabled
         }
     }
 

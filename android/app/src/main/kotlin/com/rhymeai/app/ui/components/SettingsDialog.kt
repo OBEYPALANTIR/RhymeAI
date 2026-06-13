@@ -54,8 +54,12 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -103,6 +107,19 @@ fun SettingsDialog(
     syncLastResult: String? = null,
     onSaveSyncPassphrase: (String) -> Unit = {},
     onSyncNow: () -> Unit = {},
+    // Editor toggles — moved from AssistantPanel to Settings so the panel stays clean.
+    useWholeSongContext: Boolean = false,
+    onWholeSongContextChange: (Boolean) -> Unit = {},
+    isStressPreviewEnabled: Boolean = false,
+    onStressPreviewChange: (Boolean) -> Unit = {},
+    isHighlightEnabled: Boolean = true,
+    onHighlightChange: (Boolean) -> Unit = {},
+    isSyllableColoringEnabled: Boolean = true,
+    onSyllableColoringChange: (Boolean) -> Unit = {},
+    isRhymeHighlightEnabled: Boolean = false,
+    onRhymeHighlightChange: (Boolean) -> Unit = {},
+    isBeatGridEnabled: Boolean = false,
+    onBeatGridChange: (Boolean) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -118,6 +135,14 @@ fun SettingsDialog(
     }
     val recommendedModel = remember(deviceTotalRamBytes) {
         recommendedGemmaModel(deviceTotalRamBytes)
+    }
+
+    // "General" = 0, "Editor" = 1 — which tab of the settings dialog is shown.
+    var settingsTab by remember { mutableStateOf(0) }
+    var activeHelp by remember { mutableStateOf<FeatureHelp?>(null) }
+
+    activeHelp?.let { help ->
+        FeatureHelpDialog(help = help, onDismiss = { activeHelp = null })
     }
 
     var selectedProvider by remember { mutableStateOf(currentProvider) }
@@ -332,6 +357,52 @@ fun SettingsDialog(
                 }
 
                 Spacer(Modifier.height(16.dp))
+
+                // General | Editor tab switcher — lightweight, reuses the segmented control already present in the dialog.
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    listOf("General", "Editor").forEachIndexed { index, label ->
+                        SegmentedButton(
+                            selected = settingsTab == index,
+                            onClick = { settingsTab = index },
+                            shape = SegmentedButtonDefaults.itemShape(index, 2),
+                            colors = SegmentedButtonDefaults.colors(
+                                activeContainerColor = colorScheme.primary,
+                                activeContentColor = colorScheme.onPrimary,
+                                inactiveContainerColor = colorScheme.surfaceContainerLow,
+                                inactiveContentColor = colorScheme.onSurfaceVariant,
+                                activeBorderColor = colorScheme.primary,
+                                inactiveBorderColor = colorScheme.outlineVariant
+                            )
+                        ) {
+                            Text(label, fontSize = 13.sp)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                if (settingsTab == 1) {
+                    // ── Editor tab ────────────────────────────────────────────
+                    // The six toggles previously living in the assistant panel,
+                    // now here so the panel stays focused on generation controls.
+                    EditorTogglesSection(
+                        useWholeSongContext = useWholeSongContext,
+                        onWholeSongContextChange = onWholeSongContextChange,
+                        isStressPreviewEnabled = isStressPreviewEnabled,
+                        onStressPreviewChange = onStressPreviewChange,
+                        isHighlightEnabled = isHighlightEnabled,
+                        onHighlightChange = onHighlightChange,
+                        isSyllableColoringEnabled = isSyllableColoringEnabled,
+                        onSyllableColoringChange = onSyllableColoringChange,
+                        isRhymeHighlightEnabled = isRhymeHighlightEnabled,
+                        onRhymeHighlightChange = onRhymeHighlightChange,
+                        isBeatGridEnabled = isBeatGridEnabled,
+                        onBeatGridChange = onBeatGridChange,
+                        onHelp = { activeHelp = it },
+                        colorScheme = colorScheme
+                    )
+                } else {
+                // ── General tab (existing content) ────────────────────────────
 
                 // Provider selector
                 Text("AI Provider", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
@@ -836,7 +907,133 @@ fun SettingsDialog(
                         color = colorScheme.tertiary
                     )
                 }
+
+                } // end else (General tab)
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Editor toggles section — shown inside the "Editor" tab of SettingsDialog
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun EditorTogglesSection(
+    useWholeSongContext: Boolean,
+    onWholeSongContextChange: (Boolean) -> Unit,
+    isStressPreviewEnabled: Boolean,
+    onStressPreviewChange: (Boolean) -> Unit,
+    isHighlightEnabled: Boolean,
+    onHighlightChange: (Boolean) -> Unit,
+    isSyllableColoringEnabled: Boolean,
+    onSyllableColoringChange: (Boolean) -> Unit,
+    isRhymeHighlightEnabled: Boolean,
+    onRhymeHighlightChange: (Boolean) -> Unit,
+    isBeatGridEnabled: Boolean,
+    onBeatGridChange: (Boolean) -> Unit,
+    onHelp: (FeatureHelp) -> Unit,
+    colorScheme: androidx.compose.material3.ColorScheme
+) {
+    val switchColors = SwitchDefaults.colors(
+        checkedThumbColor = colorScheme.onPrimary,
+        checkedTrackColor = colorScheme.primary,
+        uncheckedThumbColor = colorScheme.onSurfaceVariant,
+        uncheckedTrackColor = colorScheme.surfaceContainerHighest
+    )
+
+    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)) {
+        EditorToggleRow(
+            label = "Whole Song Context",
+            help = FeatureHelp.WHOLE_SONG_CONTEXT,
+            checked = useWholeSongContext,
+            onCheckedChange = onWholeSongContextChange,
+            onHelp = onHelp,
+            switchColors = switchColors,
+            colorScheme = colorScheme
+        )
+        EditorToggleRow(
+            label = "Stress + IPA",
+            help = FeatureHelp.STRESS_IPA,
+            checked = isStressPreviewEnabled,
+            onCheckedChange = onStressPreviewChange,
+            onHelp = onHelp,
+            switchColors = switchColors,
+            colorScheme = colorScheme,
+            contentDescription = "Toggle Stress + IPA"
+        )
+        EditorToggleRow(
+            label = "Highlight Rhymes",
+            help = FeatureHelp.HIGHLIGHT_RHYMES,
+            checked = isHighlightEnabled,
+            onCheckedChange = onHighlightChange,
+            onHelp = onHelp,
+            switchColors = switchColors,
+            colorScheme = colorScheme
+        )
+        EditorToggleRow(
+            label = "Underline Syllables",
+            help = FeatureHelp.UNDERLINE_SYLLABLES,
+            checked = isSyllableColoringEnabled,
+            onCheckedChange = onSyllableColoringChange,
+            onHelp = onHelp,
+            switchColors = switchColors,
+            colorScheme = colorScheme
+        )
+        EditorToggleRow(
+            label = "Color Rhymes",
+            help = FeatureHelp.COLOR_RHYMES,
+            checked = isRhymeHighlightEnabled,
+            onCheckedChange = onRhymeHighlightChange,
+            onHelp = onHelp,
+            switchColors = switchColors,
+            colorScheme = colorScheme
+        )
+        EditorToggleRow(
+            label = "Beat Grid",
+            help = FeatureHelp.BEAT_GRID,
+            checked = isBeatGridEnabled,
+            onCheckedChange = onBeatGridChange,
+            onHelp = onHelp,
+            switchColors = switchColors,
+            colorScheme = colorScheme,
+            contentDescription = "Toggle Beat Grid"
+        )
+    }
+}
+
+@Composable
+private fun EditorToggleRow(
+    label: String,
+    help: FeatureHelp,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onHelp: (FeatureHelp) -> Unit,
+    switchColors: androidx.compose.material3.SwitchColors,
+    colorScheme: androidx.compose.material3.ColorScheme,
+    contentDescription: String? = null
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FeatureHelpLabel(
+            text = label,
+            help = help,
+            onHelp = onHelp,
+            color = colorScheme.onSurfaceVariant
+        )
+        val switchModifier = if (contentDescription != null) {
+            Modifier.semantics { this.contentDescription = contentDescription }
+        } else {
+            Modifier
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = switchModifier,
+            colors = switchColors
+        )
     }
 }

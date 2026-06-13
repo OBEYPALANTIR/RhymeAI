@@ -143,7 +143,8 @@ class MainActivity : ComponentActivity() {
                                     popUpTo(0) { inclusive = true }
                                 }
                             },
-                            onDismiss = { viewModel.showProjectsDialog = false }
+                            onDismiss = { viewModel.showProjectsDialog = false },
+                            service = viewModel.voiceMemoService
                         )
                     }
 
@@ -178,6 +179,19 @@ class MainActivity : ComponentActivity() {
                             syncLastResult = viewModel.syncLastResult,
                             onSaveSyncPassphrase = { viewModel.saveSyncPassphrase(it) },
                             onSyncNow = { viewModel.triggerSync() },
+                            // Editor toggles — each change is persisted via viewModel.persistEditorToggles().
+                            useWholeSongContext = viewModel.useWholeSongContext,
+                            onWholeSongContextChange = { viewModel.useWholeSongContext = it; viewModel.persistEditorToggles() },
+                            isStressPreviewEnabled = viewModel.isStressPreviewEnabled,
+                            onStressPreviewChange = { viewModel.isStressPreviewEnabled = it; viewModel.persistEditorToggles() },
+                            isHighlightEnabled = viewModel.isHighlightEnabled,
+                            onHighlightChange = { viewModel.isHighlightEnabled = it; viewModel.persistEditorToggles() },
+                            isSyllableColoringEnabled = viewModel.isSyllableColoringEnabled,
+                            onSyllableColoringChange = { viewModel.isSyllableColoringEnabled = it; viewModel.persistEditorToggles() },
+                            isRhymeHighlightEnabled = viewModel.isRhymeHighlightEnabled,
+                            onRhymeHighlightChange = { viewModel.isRhymeHighlightEnabled = it; viewModel.persistEditorToggles() },
+                            isBeatGridEnabled = viewModel.isBeatGridEnabled,
+                            onBeatGridChange = { viewModel.isBeatGridEnabled = it; viewModel.persistEditorToggles() },
                             onDismiss = { viewModel.showSettingsDialog = false }
                         )
                     }

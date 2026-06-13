@@ -64,6 +64,20 @@ class VoiceMemoService(private val context: Context) {
     private var tickJob: Job? = null
 
     // ---------------------------------------------------------------------------
+    // Amplitude (for spectralizer UI)
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Return the peak amplitude since the last call, normalized to 0..1.
+     * Wraps MediaRecorder.getMaxAmplitude() — only meaningful while isRecording.
+     * Calling when not recording returns 0f.
+     */
+    fun currentAmplitude(): Float {
+        val raw = recorder?.maxAmplitude ?: 0
+        return (raw / 32767f).coerceIn(0f, 1f)
+    }
+
+    // ---------------------------------------------------------------------------
     // Recording
     // ---------------------------------------------------------------------------
 

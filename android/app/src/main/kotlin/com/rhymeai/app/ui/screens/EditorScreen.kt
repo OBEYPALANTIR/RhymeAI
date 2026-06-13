@@ -117,7 +117,6 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.ui.components.AssistantPanel
 import com.rhymeai.app.ui.components.ExportSheet
-import com.rhymeai.app.ui.components.VoiceMemosSheet
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.RhymeHighlightedText
@@ -329,29 +328,27 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
     }
 
-    // Runtime RECORD_AUDIO permission for voice memos.
+    // Runtime RECORD_AUDIO permission for the mic FAB — grants lead straight to recording start.
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            viewModel.showVoiceMemosSheet = true
+            val projectId = viewModel.ensureProjectForRecording()
+            runCatching { viewModel.voiceMemoService.startRecording(projectId) }
         } else {
             viewModel.errorMessage = context.getString(R.string.voice_memo_permission_denied)
         }
     }
 
-    fun onMicTap() {
-        val projectId = viewModel.currentProjectId
-        if (projectId == null) {
-            // No project loaded — open the sheet anyway; it will not show a project-specific list.
-            viewModel.showVoiceMemosSheet = true
-            return
-        }
+    // Called when the mic FAB is tapped while not recording. Checks permission then
+    // starts recording immediately — no sheet involved.
+    fun onMicFabTap() {
         val hasPerm = ContextCompat.checkSelfPermission(
             context, Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
         if (hasPerm) {
-            viewModel.showVoiceMemosSheet = true
+            val projectId = viewModel.ensureProjectForRecording()
+            runCatching { viewModel.voiceMemoService.startRecording(projectId) }
         } else {
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -377,8 +374,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val modalOpen = viewModel.showSettingsDialog ||
         viewModel.showProjectsDialog ||
         viewModel.showExportSheet ||
-        viewModel.showInspector ||
-        viewModel.showVoiceMemosSheet
+        viewModel.showInspector
     val rewriteReviewVisible = viewModel.hasActiveRewrite &&
         !showBottomSheet &&
         !pendingAssistantSheet &&
@@ -489,38 +485,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant
                         )
-                    }
-                    // Mic button — red Stop icon while recording, Mic otherwise.
-                    val memoService = viewModel.voiceMemoService
-                    IconButton(onClick = {
-                        if (memoService.isRecording) {
-                            // Stop active recording from the toolbar without opening the sheet.
-                            memoService.stopRecording()
-                        } else {
-                            onMicTap()
-                        }
-                    }) {
-                        if (memoService.isRecording) {
-                            // Red dot to signal active recording
-                            Box(contentAlignment = Alignment.Center) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(colorScheme.error, CircleShape)
-                                )
-                                Icon(
-                                    Icons.Default.Stop,
-                                    contentDescription = stringResource(R.string.voice_memo_stop_recording),
-                                    tint = colorScheme.error
-                                )
-                            }
-                        } else {
-                            Icon(
-                                Icons.Default.Mic,
-                                contentDescription = stringResource(R.string.voice_memo_open_sheet),
-                                tint = colorScheme.onSurfaceVariant
-                            )
-                        }
                     }
                     IconButton(
                         onClick = { viewModel.showExportSheet = true },
@@ -858,9 +822,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
 
-        // UnBlock FAB — visible only when the editor is unobstructed.
+        // FAB row: mic FAB (left) + UnBlock FAB (right). Shared AnimatedVisibility so
+        // both show/hide together under the same conditions as the old UnBlock FAB.
+        val fabRowVisible = !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite
         AnimatedVisibility(
-            visible = !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite,
+            visible = fabRowVisible,
             enter = fadeIn(
                 animationSpec = tween(
                     durationMillis = DesignTokens.Motion.assistantPresentMillis,
@@ -885,23 +851,77 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 ),
                 targetOffsetY = { it }
             ),
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
+            modifier = Modifier.align(Alignment.BottomEnd)
         ) {
             KeyboardSafeActionArea(
                 modifier = Modifier.padding(end = DesignTokens.Spacing.xl),
                 extra = DesignTokens.Spacing.xxl,
                 horizontalAlignment = Alignment.End
             ) {
-                ExtendedFloatingActionButton(
-                    onClick = { openAssistantSheet() },
-                    containerColor = colorScheme.primary,
-                    contentColor = colorScheme.onPrimary,
-                    shape = RoundedCornerShape(DesignTokens.Radius.pill)
+                val memoService = viewModel.voiceMemoService
+                // Amplitude + elapsed polling while recording — drives the spectralizer pill.
+                var amplitudeBars by remember { mutableStateOf(FloatArray(14) { 0f }) }
+                var smoothedBars by remember { mutableStateOf(FloatArray(14) { 0f }) }
+
+                LaunchedEffect(memoService.isRecording) {
+                    if (!memoService.isRecording) {
+                        amplitudeBars = FloatArray(14) { 0f }
+                        smoothedBars = FloatArray(14) { 0f }
+                        return@LaunchedEffect
+                    }
+                    while (memoService.isRecording) {
+                        delay(100)
+                        val raw = memoService.currentAmplitude()
+                        // Shift bars left and push new reading on the right side.
+                        val next = FloatArray(14)
+                        for (i in 0 until 13) next[i] = smoothedBars[i + 1]
+                        // Exponential moving average smoothing so bars don't jump abruptly.
+                        next[13] = smoothedBars[13] * 0.7f + raw * 0.3f
+                        smoothedBars = next
+                        amplitudeBars = next
+                    }
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    UnBlockWordmark()
+                    // Mic FAB — visible exactly when UnBlock is; recording before any
+                    // lyrics exist creates the project on demand. Morphs to spectralizer
+                    // pill while recording.
+                    run {
+                        if (memoService.isRecording) {
+                            // Spectralizer pill — tap to stop and save.
+                            SpectralMicPill(
+                                bars = amplitudeBars,
+                                elapsedMs = memoService.recordingElapsedMs,
+                                onStop = {
+                                    runCatching { memoService.stopRecording() }
+                                },
+                                colorScheme = colorScheme
+                            )
+                        } else {
+                            androidx.compose.material3.FloatingActionButton(
+                                onClick = { onMicFabTap() },
+                                containerColor = colorScheme.surfaceContainerHigh,
+                                contentColor = colorScheme.onSurfaceVariant,
+                                shape = CircleShape
+                            ) {
+                                Icon(Icons.Default.Mic, contentDescription = stringResource(R.string.voice_memo_open_sheet))
+                            }
+                        }
+                    }
+
+                    ExtendedFloatingActionButton(
+                        onClick = { openAssistantSheet() },
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary,
+                        shape = RoundedCornerShape(DesignTokens.Radius.pill)
+                    ) {
+                        Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        UnBlockWordmark()
+                    }
                 }
             }
         }
@@ -1000,21 +1020,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
 
-        // Voice memos sheet
-        if (viewModel.showVoiceMemosSheet) {
-            val projectId = viewModel.currentProjectId
-            if (projectId != null) {
-                VoiceMemosSheet(
-                    projectId = projectId,
-                    service = viewModel.voiceMemoService,
-                    onDismiss = { viewModel.showVoiceMemosSheet = false }
-                )
-            } else {
-                // No project open — dismiss immediately.
-                viewModel.showVoiceMemosSheet = false
-            }
-        }
-
         // Export sheet
         if (viewModel.showExportSheet) {
             ExportSheet(
@@ -1087,6 +1092,76 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         .fillMaxWidth()
                         .weight(1f)
                         .bottomSafeActionPadding(extra = DesignTokens.Spacing.lg)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Pill-shaped spectralizer shown while recording. Displays ~14 amplitude bars polled from
+ * VoiceMemoService.currentAmplitude(), elapsed time, and a stop button.
+ *
+ * Tapping the pill calls [onStop]; the parent then calls memoService.stopRecording() which
+ * saves the memo to the current project's voice-memos dir.
+ */
+@Composable
+private fun SpectralMicPill(
+    bars: FloatArray,
+    elapsedMs: Long,
+    onStop: () -> Unit,
+    colorScheme: androidx.compose.material3.ColorScheme
+) {
+    val barColor = colorScheme.error
+    Box(
+        modifier = Modifier
+            .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.pill))
+            .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.pill))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Amplitude bars drawn on a Canvas
+            Canvas(
+                modifier = Modifier
+                    .width((bars.size * 5).dp) // 5dp per bar (3dp bar + 2dp gap)
+                    .height(28.dp)
+            ) {
+                val barWidthPx = 3.dp.toPx()
+                val gapPx = 2.dp.toPx()
+                val maxHeightPx = size.height
+                bars.forEachIndexed { i, amplitude ->
+                    val barHeight = (amplitude * maxHeightPx).coerceAtLeast(2.dp.toPx())
+                    val x = i * (barWidthPx + gapPx)
+                    drawRoundRect(
+                        color = barColor,
+                        topLeft = Offset(x, (maxHeightPx - barHeight) / 2f),
+                        size = androidx.compose.ui.geometry.Size(barWidthPx, barHeight),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidthPx / 2f)
+                    )
+                }
+            }
+
+            // Elapsed MM:SS
+            Text(
+                text = com.rhymeai.app.service.VoiceMemoService.formatDuration(elapsedMs),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = colorScheme.onSurface
+            )
+
+            // Stop button
+            IconButton(
+                onClick = onStop,
+                modifier = Modifier.size(DesignTokens.Touch.minTarget)
+            ) {
+                Icon(
+                    Icons.Default.Stop,
+                    contentDescription = stringResource(R.string.voice_memo_stop_recording),
+                    tint = colorScheme.error,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }

@@ -83,14 +83,24 @@ class NewFeatureUiTest {
 
     @Test
     fun stressAndIpaToggleRendersProsodyPreviewInAssistant() {
+        // Stress + IPA was moved from the assistant panel to Settings → Editor tab.
+        // Enable it there first, then open the assistant panel to verify prosody renders.
         composeRule.onNodeWithText("New Song").performClick()
         composeRule.onNodeWithTag("lyricsEditor").performClick()
         composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music\nfollow music")
 
-        composeRule.onNodeWithText("UnBlock").performClick()
-        composeRule.onNodeWithText("Stress + IPA").performScrollTo().assertIsDisplayed()
+        // Open Settings and navigate to the Editor tab.
+        composeRule.onNodeWithContentDescription("Settings").performClick()
+        composeRule.onNodeWithText("Editor").performScrollTo().performClick()
+
+        // Enable Stress + IPA in the Editor tab.
         composeRule.onNodeWithContentDescription("Toggle Stress + IPA").performScrollTo().performClick()
 
+        // Dismiss Settings.
+        composeRule.onNodeWithContentDescription("Close").performClick()
+
+        // Now open the assistant panel and verify prosody preview is rendered.
+        composeRule.onNodeWithText("UnBlock").performClick()
         composeRule.onNodeWithText("ˈDA da | ˈDA da").performScrollTo().assertIsDisplayed()
         composeRule.onNode(hasText("jɛloʊ", substring = true)).performScrollTo().assertIsDisplayed()
     }

@@ -45,9 +45,13 @@ import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +60,9 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -79,6 +86,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
+import com.rhymeai.app.service.VoiceMemo
+import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.ui.theme.DesignTokens
 import java.text.SimpleDateFormat
@@ -94,6 +103,7 @@ private val DrawerAnimationMillis: Int get() = DesignTokens.Motion.drawerPresent
 private val DialogBottomActionMinClearance = 120.dp
 private const val MillisPerDay = 24L * 60L * 60L * 1000L
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProjectsDrawer(
     projects: List<SongProject>,
@@ -106,7 +116,8 @@ fun ProjectsDrawer(
     onPermanentlyDeleteProject: (String) -> Unit,
     onPurgeExpiredTrash: () -> Unit,
     onImportProject: (SongProject) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    service: VoiceMemoService? = null
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val configuration = LocalConfiguration.current
@@ -119,6 +130,8 @@ fun ProjectsDrawer(
     var isClosing by remember { mutableStateOf(false) }
     var projectPendingDelete by remember { mutableStateOf<SongProject?>(null) }
     var showTrashBin by remember { mutableStateOf(false) }
+    // 0 = Songs, 1 = Recordings
+    var selectedTab by remember { mutableStateOf(0) }
 
     BackHandler(enabled = showTrashBin) {
         showTrashBin = false
@@ -308,46 +321,77 @@ fun ProjectsDrawer(
                                 Text("Create New Song", fontWeight = FontWeight.Medium)
                             }
 
-                            Text(
-                                "Recent Songs",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.sp,
-                                color = colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = DesignTokens.Spacing.lg, bottom = DesignTokens.Spacing.sm)
-                            )
-
-                            LazyColumn(
+                            // Songs | Recordings tab switcher
+                            Spacer(Modifier.height(DesignTokens.Spacing.md))
+                            SingleChoiceSegmentedButtonRow(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+                                    .padding(bottom = DesignTokens.Spacing.sm)
                             ) {
-                                if (projects.isEmpty()) {
-                                    item {
-                                        EmptyDrawerState(
-                                            icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
-                                            text = "No saved songs yet."
+                                listOf("Songs", "Recordings").forEachIndexed { index, label ->
+                                    SegmentedButton(
+                                        selected = selectedTab == index,
+                                        onClick = { selectedTab = index },
+                                        shape = SegmentedButtonDefaults.itemShape(index, 2),
+                                        colors = SegmentedButtonDefaults.colors(
+                                            activeContainerColor = colorScheme.primary,
+                                            activeContentColor = colorScheme.onPrimary,
+                                            inactiveContainerColor = colorScheme.surfaceContainerLow,
+                                            inactiveContentColor = colorScheme.onSurfaceVariant,
+                                            activeBorderColor = colorScheme.primary,
+                                            inactiveBorderColor = colorScheme.outlineVariant
                                         )
-                                    }
-                                } else if (filteredProjects.isEmpty()) {
-                                    item {
-                                        EmptyDrawerState(
-                                            icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                                            text = if (isSearching) "No songs match your search." else "No saved songs yet."
-                                        )
-                                    }
-                                } else {
-                                    items(filteredProjects, key = { it.id }) { project ->
-                                        ProjectDrawerRow(
-                                            project = project,
-                                            isActive = project.id == currentProjectId,
-                                            onLoadProject = { selected ->
-                                                closeDrawer { onLoadProject(selected) }
-                                            },
-                                            onDeleteProject = { projectPendingDelete = it }
-                                        )
+                                    ) {
+                                        Text(label, fontSize = 13.sp)
                                     }
                                 }
+                            }
+
+                            if (selectedTab == 0) {
+                                // ── Songs tab ──
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+                                ) {
+                                    if (projects.isEmpty()) {
+                                        item {
+                                            EmptyDrawerState(
+                                                icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
+                                                text = "No saved songs yet."
+                                            )
+                                        }
+                                    } else if (filteredProjects.isEmpty()) {
+                                        item {
+                                            EmptyDrawerState(
+                                                icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                                text = if (isSearching) "No songs match your search." else "No saved songs yet."
+                                            )
+                                        }
+                                    } else {
+                                        items(filteredProjects, key = { it.id }) { project ->
+                                            ProjectDrawerRow(
+                                                project = project,
+                                                isActive = project.id == currentProjectId,
+                                                onLoadProject = { selected ->
+                                                    closeDrawer { onLoadProject(selected) }
+                                                },
+                                                onDeleteProject = { projectPendingDelete = it }
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                // ── Recordings tab ──
+                                RecordingsTab(
+                                    service = service,
+                                    projects = projects,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                    onLoadProject = { selected -> closeDrawer { onLoadProject(selected) } }
+                                )
                             }
 
                             importError?.let {
@@ -489,6 +533,153 @@ fun ProjectsDialog(
         onImportProject = onImportProject,
         onDismiss = onDismiss
     )
+}
+
+/**
+ * Recordings tab — scans all voice-memo dirs across every project and shows them
+ * newest-first. Orphaned memos (project no longer in [projects]) are labeled
+ * "Deleted song" so they can still be played or cleaned up.
+ */
+@Composable
+private fun RecordingsTab(
+    service: VoiceMemoService?,
+    projects: List<SongProject>,
+    modifier: Modifier = Modifier,
+    onLoadProject: (SongProject) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+
+    if (service == null) {
+        // Service unavailable — show a graceful empty state.
+        EmptyDrawerState(
+            icon = { Icon(Icons.Default.Mic, contentDescription = null) },
+            text = "Recordings not available."
+        )
+        return
+    }
+
+    // Build a flat list of (songTitle, VoiceMemo) across all projects by scanning
+    // the filesDir/voice-memos/ directory tree.
+    val context = LocalContext.current
+    val allEntries: List<Pair<String, VoiceMemo>> = remember(projects) {
+        val memosRoot = java.io.File(context.filesDir, "voice-memos")
+        if (!memosRoot.exists()) return@remember emptyList()
+
+        val projectById = projects.associateBy { it.id }
+        memosRoot.listFiles()?.flatMap { dir ->
+            if (!dir.isDirectory) return@flatMap emptyList()
+            val title = projectById[dir.name]?.title?.ifEmpty { "Untitled" }
+                ?: "Deleted song"
+            service.memosForProject(dir.name).map { memo -> title to memo }
+        }?.sortedByDescending { it.second.file.lastModified() } ?: emptyList()
+    }
+
+    if (allEntries.isEmpty()) {
+        EmptyDrawerState(
+            icon = { Icon(Icons.Default.Mic, contentDescription = null) },
+            text = "No recordings yet. Tap the mic to start."
+        )
+        return
+    }
+
+    LazyColumn(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+        contentPadding = PaddingValues(vertical = DesignTokens.Spacing.sm)
+    ) {
+        items(allEntries, key = { it.second.file.absolutePath }) { (songTitle, memo) ->
+            val projectForTitle = projects.firstOrNull { it.title == songTitle || it.title.ifEmpty { "Untitled" } == songTitle }
+            RecordingMemoRow(
+                songTitle = songTitle,
+                memo = memo,
+                service = service,
+                onTapSongTitle = { if (projectForTitle != null) onLoadProject(projectForTitle) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecordingMemoRow(
+    songTitle: String,
+    memo: VoiceMemo,
+    service: VoiceMemoService,
+    onTapSongTitle: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val isPlaying = service.playingFile == memo.file
+    var pendingDelete by remember { mutableStateOf(false) }
+
+    if (pendingDelete) {
+        AlertDialog(
+            onDismissRequest = { pendingDelete = false },
+            title = { Text("Delete recording?") },
+            text = { Text("This recording will be permanently deleted.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    service.deleteMemo(memo)
+                    pendingDelete = false
+                }) { Text("Delete", color = colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = colorScheme.surfaceContainerLow
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Play / Pause
+            IconButton(
+                onClick = {
+                    if (isPlaying) service.stopPlayback() else service.play(memo)
+                },
+                modifier = Modifier.size(DesignTokens.Touch.minTarget)
+            ) {
+                Icon(
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    tint = colorScheme.primary
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                // Tapping the song title navigates to that project.
+                Text(
+                    text = songTitle,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (songTitle == "Deleted song") colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            else colorScheme.primary,
+                    modifier = if (songTitle != "Deleted song") Modifier.clickable(onClick = onTapSongTitle) else Modifier
+                )
+                Text(
+                    text = "${memo.label}  ·  ${VoiceMemoService.formatDuration(memo.durationMs)}",
+                    fontSize = 11.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Delete
+            IconButton(
+                onClick = { pendingDelete = true },
+                modifier = Modifier.size(DesignTokens.Touch.minTarget)
+            ) {
+                Icon(Icons.Default.Delete, contentDescription = "Delete recording", tint = colorScheme.onSurfaceVariant)
+            }
+        }
+    }
 }
 
 @Composable
