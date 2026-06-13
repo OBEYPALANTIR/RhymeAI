@@ -57,6 +57,13 @@ enum RhymeAITokens {
         static let dialog: Animation = .easeInOut(duration: stateDuration)
         static let presentation: Animation = .spring(response: presentationDuration, dampingFraction: 0.88)
         static let settle: Animation = .spring(response: settleDuration, dampingFraction: 0.72)
+
+        /// Expressive spring for the mic↔pill choreography and the UnBlock FAB
+        /// fall-down — a ~0.4s glide with a subtle settle (no hard snap). Drives the
+        /// pill stretch, glyph crossfade, and FAB fall on one clock.
+        /// Android equivalent: `DesignTokens.Motion.expressiveSpring()`
+        /// (dampingRatio 0.76, stiffness 247 ≈ (2π / 0.40)²).
+        static let expressive: Animation = .spring(response: 0.40, dampingFraction: 0.76)
     }
 }
 

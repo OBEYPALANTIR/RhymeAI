@@ -186,8 +186,7 @@ struct EditorView: View {
         // UnBlock fall-down / rise-up coordinated with mic recording.
         // Falls away when recording starts, rises back when it stops.
         .onChange(of: viewModel.voiceMemoService.isRecording) { _, isRecording in
-            let spring: Animation = .spring(response: 0.40, dampingFraction: 0.76)
-            withAnimation(reduceMotion ? nil : spring) {
+            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
                 unblockRecordingOffset  = isRecording ? RhymeAITokens.Touch.comfortable + RhymeAITokens.Spacing.md : 0
                 unblockRecordingOpacity = isRecording ? 0 : 1
             }
