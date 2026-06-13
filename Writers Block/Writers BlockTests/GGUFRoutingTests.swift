@@ -65,6 +65,9 @@ struct GGUFMarkerStrippingTests {
 
 // MARK: - GGUFEngineChoice
 
+// Serialized: every test reads/writes the same UserDefaults key, so the
+// default parallel execution makes them clobber each other.
+@Suite(.serialized)
 struct GGUFEngineChoiceTests {
     @Test func defaultIsAppleIntelligence() {
         // When no value is stored, current() returns .appleIntelligence.

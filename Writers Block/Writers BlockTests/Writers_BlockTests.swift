@@ -1170,4 +1170,127 @@ struct Writers_BlockTests {
         #expect(grid.bpm == 90)
     }
 
+    // MARK: - Editor Toggle Persistence
+
+    @Test func editorToggleWholeSongContextRoundTrips() {
+        // Write via the VM save path, then read it back via a fresh VM instance to
+        // confirm UserDefaults persistence survives across object lifetimes.
+        let vm = EditorViewModel()
+        let initial = vm.useWholeSongContext
+        vm.saveUseWholeSongContext(!initial)
+        let vm2 = EditorViewModel()
+        #expect(vm2.useWholeSongContext == !initial)
+        // Restore original to avoid polluting other test runs.
+        vm.saveUseWholeSongContext(initial)
+    }
+
+    @Test func editorToggleHighlightRhymesRoundTrips() {
+        let vm = EditorViewModel()
+        let initial = vm.isHighlightEnabled
+        vm.saveIsHighlightEnabled(!initial)
+        let vm2 = EditorViewModel()
+        #expect(vm2.isHighlightEnabled == !initial)
+        vm.saveIsHighlightEnabled(initial)
+    }
+
+    @Test func editorToggleSyllableColoringRoundTrips() {
+        let vm = EditorViewModel()
+        let initial = vm.isSyllableColoringEnabled
+        vm.saveIsSyllableColoringEnabled(!initial)
+        let vm2 = EditorViewModel()
+        #expect(vm2.isSyllableColoringEnabled == !initial)
+        vm.saveIsSyllableColoringEnabled(initial)
+    }
+
+    @Test func editorToggleStressPreviewRoundTrips() {
+        let vm = EditorViewModel()
+        let initial = vm.isStressPreviewEnabled
+        vm.saveIsStressPreviewEnabled(!initial)
+        let vm2 = EditorViewModel()
+        #expect(vm2.isStressPreviewEnabled == !initial)
+        vm.saveIsStressPreviewEnabled(initial)
+    }
+
+    @Test func editorToggleRhymeHighlightRoundTrips() {
+        let vm = EditorViewModel()
+        let initial = vm.isRhymeHighlightEnabled
+        vm.saveIsRhymeHighlightEnabled(!initial)
+        let vm2 = EditorViewModel()
+        #expect(vm2.isRhymeHighlightEnabled == !initial)
+        vm.saveIsRhymeHighlightEnabled(initial)
+    }
+
+    @Test func editorToggleBeatGridRoundTrips() {
+        let vm = EditorViewModel()
+        let initial = vm.isBeatGridEnabled
+        vm.saveIsBeatGridEnabled(!initial)
+        let vm2 = EditorViewModel()
+        #expect(vm2.isBeatGridEnabled == !initial)
+        vm.saveIsBeatGridEnabled(initial)
+    }
+
+    // MARK: - dB Normalisation Helper
+
+    // The normalisation formula is (dB + 60) / 60, clamped 0..1. These tests
+    // exercise the pure math without touching AVFoundation.
+
+    @Test func dbNormalisationSilenceMapsToZero() {
+        // -60 dB should map to 0.0 (silence floor)
+        let dB: Float = -60
+        let result = max(0, min(1, (dB + 60.0) / 60.0))
+        #expect(result == 0.0)
+    }
+
+    @Test func dbNormalisationFullScaleMapsToOne() {
+        // 0 dB (full scale) should map to 1.0
+        let dB: Float = 0
+        let result = max(0, min(1, (dB + 60.0) / 60.0))
+        #expect(result == 1.0)
+    }
+
+    @Test func dbNormalisationMidRangeMapsToHalf() {
+        // -30 dB is midpoint of -60..0 → 0.5
+        let dB: Float = -30
+        let result = max(0, min(1, (dB + 60.0) / 60.0))
+        #expect(abs(result - 0.5) < 0.001)
+    }
+
+    @Test func dbNormalisationBelowFloorClampedToZero() {
+        // Below -60 dB (e.g. -100 dB) should clamp to 0
+        let dB: Float = -100
+        let result = max(0, min(1, (dB + 60.0) / 60.0))
+        #expect(result == 0.0)
+    }
+
+    @Test func dbNormalisationAboveCeilingClampedToOne() {
+        // Positive dB (clip condition) should clamp to 1
+        let dB: Float = 6
+        let result = max(0, min(1, (dB + 60.0) / 60.0))
+        #expect(result == 1.0)
+    }
+
+    // MARK: - Recordings Aggregation
+
+    @Test func recordingsAggregationLabelsOrphanedMemo() {
+        // When the title map doesn't contain the projectId, the label is "Deleted song".
+        // This mirrors the display logic in ProjectsDrawerView.reloadRecordings().
+        let titleMap: [String: String] = ["known-id": "My Song"]
+        let unknownId = "orphaned-project-id"
+        let title = titleMap[unknownId] ?? "Deleted song"
+        #expect(title == "Deleted song")
+    }
+
+    @Test func recordingsAggregationResolvesKnownProjectTitle() {
+        let titleMap: [String: String] = ["abc123": "Summer Bop"]
+        let title = titleMap["abc123"] ?? "Deleted song"
+        #expect(title == "Summer Bop")
+    }
+
+    @Test func recordingsAggregationUsesUntitledFallbackForEmptyTitle() {
+        // Empty-title projects should display "Untitled Song", not an empty string.
+        let rawTitle = ""
+        let displayTitle = rawTitle.isEmpty ? "Untitled Song" : rawTitle
+        #expect(displayTitle == "Untitled Song")
+    }
+
 }

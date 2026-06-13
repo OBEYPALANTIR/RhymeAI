@@ -16,7 +16,6 @@ struct EditorView: View {
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
     @State private var rewriteAccessoryHeight: CGFloat = 0
-    @State private var showVoiceMemosSheet: Bool = false
 
     var body: some View {
         Group {
@@ -62,15 +61,6 @@ struct EditorView: View {
             defaultFilename: pendingExport.map { suggestedFilename(format: $0.format) }
         ) { _ in
             pendingExport = nil
-        }
-        .sheet(isPresented: $showVoiceMemosSheet) {
-            if let projectId = viewModel.currentProjectId {
-                VoiceMemosSheetView(
-                    projectId: projectId,
-                    onDismiss: { showVoiceMemosSheet = false }
-                )
-                .environmentObject(viewModel)
-            }
         }
         .sheet(
             isPresented: Binding(
@@ -204,11 +194,22 @@ struct EditorView: View {
         // otherwise show through behind the chip bar. (Android keeps its FAB up
         // during selection because its bottom-end FAB and centered chip bar do
         // not overlap.) Keyboard does NOT hide the button — it rides above it.
+        // The mic button shares this exact condition so both appear/disappear together.
         if !viewModel.showAssistantSheet && !assistantModalOpen && !viewModel.hasActiveRewrite && !shouldShowRewriteChipBar {
             VStack {
                 Spacer()
-                HStack {
+                HStack(alignment: .bottom, spacing: RhymeAITokens.Spacing.sm) {
                     Spacer()
+
+                    // Floating mic — visible exactly when UnBlock is. Recording
+                    // before any lyrics exist creates the project on demand.
+                    FloatingMicButton(
+                        service: viewModel.voiceMemoService,
+                        ensureProjectId: { viewModel.ensureProjectForRecording() }
+                    )
+                    .accessibilityIdentifier("micButton")
+
+                    // UnBlock FAB
                     Button {
                         presentAssistantSheet()
                     } label: {
@@ -225,11 +226,11 @@ struct EditorView: View {
                         .shadow(color: .indigo.opacity(0.26), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
                     }
                     .accessibilityIdentifier("unblockButton")
-                    .padding(.trailing, RhymeAITokens.Spacing.md)
-                    .padding(.bottom, keyboardIsVisible
-                             ? keyboardHeight + RhymeAITokens.Spacing.sm
-                             : RhymeAITokens.Spacing.md)
                 }
+                .padding(.trailing, RhymeAITokens.Spacing.md)
+                .padding(.bottom, keyboardIsVisible
+                         ? keyboardHeight + RhymeAITokens.Spacing.sm
+                         : RhymeAITokens.Spacing.md)
             }
             .transition(.scale(scale: 0.92, anchor: .bottomTrailing).combined(with: .opacity))
         }
@@ -524,30 +525,6 @@ struct EditorView: View {
                     .font(.caption2)
             }
             .foregroundStyle(.secondary)
-
-            // Voice Memos — only available when a project is open
-            if viewModel.currentProjectId != nil {
-                Button {
-                    dismissKeyboard()
-                    showVoiceMemosSheet = true
-                } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: viewModel.voiceMemoService.isRecording ? "mic.fill" : "mic")
-                            .font(.body)
-                            .foregroundStyle(viewModel.voiceMemoService.isRecording ? .red : .secondary)
-                            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                        // Red dot indicates an active recording outside the sheet
-                        if viewModel.voiceMemoService.isRecording {
-                            Circle()
-                                .fill(.red)
-                                .frame(width: 7, height: 7)
-                                .offset(x: -3, y: 3)
-                        }
-                    }
-                }
-                .accessibilityLabel(viewModel.voiceMemoService.isRecording ? "Recording in progress — open voice memos" : "Voice memos")
-                .accessibilityIdentifier("voiceMemosButton")
-            }
 
             // Export
             Button {

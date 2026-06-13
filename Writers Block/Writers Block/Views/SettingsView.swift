@@ -48,6 +48,7 @@ struct SettingsView: View {
     @State private var downloadError: String?
     @State private var downloadTask: Task<Void, Never>?
     @State private var ggufEngineChoice: GGUFEngineChoice = GGUFEngineChoice.current
+    @State private var activeHelp: FeatureHelp?
 
     var body: some View {
         NavigationStack {
@@ -73,6 +74,9 @@ struct SettingsView: View {
             }
             .onDisappear {
                 downloadTask?.cancel()
+            }
+            .sheet(item: $activeHelp) { help in
+                FeatureHelpSheet(help: help)
             }
         }
     }
@@ -122,6 +126,9 @@ struct SettingsView: View {
             providerSpecificSection
 
             modelSection
+
+            editorSection
+
             saveSection
         }
         .rhymeAnimation(providerSectionAnimation, value: viewModel.selectedProvider)
@@ -373,6 +380,106 @@ struct SettingsView: View {
         .buttonStyle(.plain)
         .disabled(activeDownloadID != nil || isDownloaded)
         .accessibilityIdentifier("gemmaDownload.\(option.id)")
+    }
+
+    // MARK: - Editor Section
+
+    private var editorSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SettingsSectionTitle("Editor", systemImage: "textformat")
+
+            settingsToggleRow(
+                "Whole Song Context",
+                help: .wholeSongContext,
+                isOn: Binding(
+                    get: { viewModel.useWholeSongContext },
+                    set: { viewModel.saveUseWholeSongContext($0) }
+                )
+            )
+
+            settingsToggleRow(
+                "Highlight Rhymes",
+                help: .highlightRhymes,
+                isOn: Binding(
+                    get: { viewModel.isHighlightEnabled },
+                    set: { viewModel.saveIsHighlightEnabled($0) }
+                )
+            )
+
+            settingsToggleRow(
+                "Underline Syllables",
+                help: .underlineSyllables,
+                isOn: Binding(
+                    get: { viewModel.isSyllableColoringEnabled },
+                    set: { viewModel.saveIsSyllableColoringEnabled($0) }
+                )
+            )
+
+            settingsToggleRow(
+                "Stress + IPA",
+                help: .stressIPA,
+                isOn: Binding(
+                    get: { viewModel.isStressPreviewEnabled },
+                    set: { viewModel.saveIsStressPreviewEnabled($0) }
+                )
+            )
+
+            settingsToggleRow(
+                "Color Rhymes",
+                help: .colorRhymes,
+                isOn: Binding(
+                    get: { viewModel.isRhymeHighlightEnabled },
+                    set: { viewModel.saveIsRhymeHighlightEnabled($0) }
+                )
+            )
+
+            settingsToggleRow(
+                "Beat Grid",
+                help: .beatGrid,
+                isOn: Binding(
+                    get: { viewModel.isBeatGridEnabled },
+                    set: { viewModel.saveIsBeatGridEnabled($0) }
+                )
+            )
+        }
+        .padding(16)
+        .liquidGlassSurface(cornerRadius: 22, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
+    }
+
+    // Replicates AssistantPanelView's toggleHelpRow pattern with the persisting
+    // save functions, keeping FeatureHelp affordances alongside each toggle.
+    private func settingsToggleRow(
+        _ text: String,
+        help: FeatureHelp,
+        isOn: Binding<Bool>
+    ) -> some View {
+        HStack {
+            HStack(spacing: RhymeAITokens.Spacing.xs) {
+                Text(text)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                settingsHelpButton(help)
+            }
+            Spacer()
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .tint(.indigo)
+                .accessibilityLabel(text)
+        }
+    }
+
+    private func settingsHelpButton(_ help: FeatureHelp) -> some View {
+        Button {
+            activeHelp = help
+        } label: {
+            Image(systemName: "questionmark.circle")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum, alignment: .center)
+        }
+        .buttonStyle(.rhymePress)
+        .contentShape(Rectangle())
+        .accessibilityLabel("\(help.title) help")
     }
 
     private var apiKeyBinding: Binding<String> {

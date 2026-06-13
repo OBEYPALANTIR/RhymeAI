@@ -44,6 +44,9 @@ final class EditorViewModel: ObservableObject {
         }
     }
     @Published var rhymeComplexity: RhymeComplexity = .moderate
+    // These six are persisted to UserDefaults so the user's editor preferences
+    // survive app restarts. Defaults match the previous hard-coded in-memory values.
+    // Keys use an "editor." prefix to namespace them away from provider/model keys.
     @Published var useWholeSongContext: Bool = false
     @Published var isHighlightEnabled: Bool = true
     @Published var isSyllableColoringEnabled: Bool = true
@@ -98,7 +101,6 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Voice Memos
 
-    @Published var showVoiceMemosSheet: Bool = false
     let voiceMemoService = VoiceMemoService()
 
     // MARK: - Navigation
@@ -246,6 +248,22 @@ final class EditorViewModel: ObservableObject {
         } else {
             selectedModel = AIModel.models(for: selectedProvider).first ?? .default
         }
+
+        // Restore editor toggle states. Booleans default false when the key is absent,
+        // which matches the desired default for all except isHighlightEnabled and
+        // isSyllableColoringEnabled — those default true, so we treat a missing key
+        // as "never set" and leave the in-memory default in place rather than reading
+        // the UserDefaults zero-value.
+        useWholeSongContext = UserDefaults.standard.bool(forKey: "editor.useWholeSongContext")
+        if UserDefaults.standard.object(forKey: "editor.isHighlightEnabled") != nil {
+            isHighlightEnabled = UserDefaults.standard.bool(forKey: "editor.isHighlightEnabled")
+        }
+        if UserDefaults.standard.object(forKey: "editor.isSyllableColoringEnabled") != nil {
+            isSyllableColoringEnabled = UserDefaults.standard.bool(forKey: "editor.isSyllableColoringEnabled")
+        }
+        isStressPreviewEnabled = UserDefaults.standard.bool(forKey: "editor.isStressPreviewEnabled")
+        isRhymeHighlightEnabled = UserDefaults.standard.bool(forKey: "editor.isRhymeHighlightEnabled")
+        isBeatGridEnabled = UserDefaults.standard.bool(forKey: "editor.isBeatGridEnabled")
 
         _ = ApiKeyMigration.apply(legacyDefaults: .standard, secure: resolvedStore)
         let secured = resolvedStore.allKeys()
@@ -1008,6 +1026,24 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Auto-Save
 
+    /// A recording needs a project folder before any lyrics exist (people hum
+    /// the melody first). Creates and persists an Untitled project on demand.
+    func ensureProjectForRecording() -> String {
+        if let projectId = currentProjectId { return projectId }
+        let project = SongProject(
+            title: title.isEmpty ? "Untitled Song" : title,
+            lyrics: lyrics,
+            theme: theme
+        )
+        if let context = modelContext {
+            context.insert(project)
+            try? context.save()
+        }
+        currentProjectId = project.id
+        showWelcome = false
+        return project.id
+    }
+
     func triggerAutoSave() {
         autoSaveTask?.cancel()
         let projectIdAtTrigger = currentProjectId
@@ -1088,5 +1124,37 @@ final class EditorViewModel: ObservableObject {
     func saveModel(_ model: AIModel) {
         selectedModel = model
         UserDefaults.standard.set(model.rawValue, forKey: "selectedModel")
+    }
+
+    // MARK: - Editor Toggle Persistence
+
+    func saveUseWholeSongContext(_ value: Bool) {
+        useWholeSongContext = value
+        UserDefaults.standard.set(value, forKey: "editor.useWholeSongContext")
+    }
+
+    func saveIsHighlightEnabled(_ value: Bool) {
+        isHighlightEnabled = value
+        UserDefaults.standard.set(value, forKey: "editor.isHighlightEnabled")
+    }
+
+    func saveIsSyllableColoringEnabled(_ value: Bool) {
+        isSyllableColoringEnabled = value
+        UserDefaults.standard.set(value, forKey: "editor.isSyllableColoringEnabled")
+    }
+
+    func saveIsStressPreviewEnabled(_ value: Bool) {
+        isStressPreviewEnabled = value
+        UserDefaults.standard.set(value, forKey: "editor.isStressPreviewEnabled")
+    }
+
+    func saveIsRhymeHighlightEnabled(_ value: Bool) {
+        isRhymeHighlightEnabled = value
+        UserDefaults.standard.set(value, forKey: "editor.isRhymeHighlightEnabled")
+    }
+
+    func saveIsBeatGridEnabled(_ value: Bool) {
+        isBeatGridEnabled = value
+        UserDefaults.standard.set(value, forKey: "editor.isBeatGridEnabled")
     }
 }

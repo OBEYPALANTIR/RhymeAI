@@ -216,54 +216,9 @@ struct AssistantPanelView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // MARK: - Toggles
-            toggleHelpRow(
-                "Whole Song Context",
-                help: .wholeSongContext,
-                isOn: $viewModel.useWholeSongContext
-            )
-
-            toggleHelpRow(
-                "Highlight Rhymes",
-                help: .highlightRhymes,
-                isOn: $viewModel.isHighlightEnabled
-            )
-
-            toggleHelpRow(
-                "Underline Syllables",
-                help: .underlineSyllables,
-                isOn: Binding(
-                    get: { viewModel.isSyllableColoringEnabled },
-                    set: { viewModel.isSyllableColoringEnabled = $0 }
-                )
-            )
-
-            toggleHelpRow(
-                "Stress + IPA",
-                help: .stressIPA,
-                isOn: Binding(
-                    get: { viewModel.isStressPreviewEnabled },
-                    set: { viewModel.isStressPreviewEnabled = $0 }
-                )
-            )
-
-            toggleHelpRow(
-                "Color Rhymes",
-                help: .colorRhymes,
-                isOn: Binding(
-                    get: { viewModel.isRhymeHighlightEnabled },
-                    set: { viewModel.isRhymeHighlightEnabled = $0 }
-                )
-            )
-
-            // MARK: - Beat Grid toggle
-            toggleHelpRow(
-                "Beat Grid",
-                help: .beatGrid,
-                isOn: $viewModel.isBeatGridEnabled
-            )
-
-            // Tempo control + per-line grid — shown only when Beat Grid is enabled.
+            // Beat Grid tempo controls remain in the panel (not Settings) so the
+            // user can adjust tempo while editing without leaving the assistant.
+            // Visible only when Beat Grid is enabled (controlled in Settings).
             if viewModel.isBeatGridEnabled {
                 BeatGridTempoControl(bpm: $viewModel.beatGridBpm)
 

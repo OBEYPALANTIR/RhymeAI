@@ -27,11 +27,15 @@ final class Writers_BlockUITests: XCTestCase {
 
         let unblockButton = app.buttons["unblockButton"]
         XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        // Mic button visible alongside UnBlock when a project is open
+        XCTAssertTrue(app.buttons["micButton"].waitForExistence(timeout: 5))
         unblockButton.tap()
 
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["unblockButton"].exists)
         XCTAssertFalse(app.buttons["UnBlock"].exists)
+        // Mic button also hidden when assistant sheet is open (same hide condition)
+        XCTAssertFalse(app.buttons["micButton"].exists)
     }
 
     @MainActor
@@ -47,17 +51,20 @@ final class Writers_BlockUITests: XCTestCase {
 
         let unblockButton = app.buttons["unblockButton"]
         XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["micButton"].waitForExistence(timeout: 5))
 
         let lyricsEditor = app.textViews.firstMatch
         XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
         lyricsEditor.tap()
         lyricsEditor.typeText("Testing keyboard overlap")
 
-        // Button rides above the keyboard instead of hiding — matches Android.
+        // Both buttons ride above the keyboard instead of hiding — matches Android.
         XCTAssertTrue(unblockButton.exists)
+        XCTAssertTrue(app.buttons["micButton"].exists)
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
         XCTAssertLessThanOrEqual(unblockButton.frame.maxY, keyboard.frame.minY + 4)
+        XCTAssertLessThanOrEqual(app.buttons["micButton"].frame.maxY, keyboard.frame.minY + 4)
     }
 
     @MainActor
@@ -103,10 +110,12 @@ final class Writers_BlockUITests: XCTestCase {
         // The selection rewrite bar is up (forced for the test)...
         XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
 
-        // ...so the UnBlock FAB must yield. On iPhone both anchor to the bottom,
-        // and the FAB would otherwise show through behind the chip bar.
+        // ...so the UnBlock FAB and mic button must both yield. On iPhone both
+        // anchor to the bottom, and the FABs would otherwise show through
+        // behind the chip bar.
         XCTAssertFalse(app.buttons["unblockButton"].exists)
         XCTAssertFalse(app.buttons["UnBlock"].exists)
+        XCTAssertFalse(app.buttons["micButton"].exists)
     }
 
     @MainActor

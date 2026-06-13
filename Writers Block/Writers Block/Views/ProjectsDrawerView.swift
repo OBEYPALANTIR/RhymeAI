@@ -16,7 +16,23 @@ struct ProjectsDrawerView: View {
     @State private var isClosing = false
     @State private var pendingDeleteProject: SongProject?
     @State private var trashBinPresented = false
+    @State private var activeTab: DrawerTab = .songs
+    // Recordings list is refreshed on appear and after delete.
+    @State private var allRecordings: [RecordingItem] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private enum DrawerTab: String, CaseIterable {
+        case songs = "Songs"
+        case recordings = "Recordings"
+    }
+
+    // Flat list of every memo URL plus resolved project title.
+    private struct RecordingItem: Identifiable {
+        let id: String          // memo URL absoluteString
+        let url: URL
+        let projectId: String
+        let projectTitle: String // "Deleted song" when projectId not in SwiftData
+    }
 
     private var filteredProjects: [SongProject] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -98,8 +114,16 @@ struct ProjectsDrawerView: View {
         let resolvedTopInset = topInset > 0 ? topInset : 45
 
         return VStack(alignment: .leading, spacing: 0) {
+            // Top bar: search/close + tab picker
             HStack(spacing: RhymeAITokens.Spacing.xs) {
-                searchField
+                if activeTab == .songs {
+                    searchField
+                } else {
+                    // No search on Recordings tab — title serves as context
+                    Text("Recordings")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 Button {
                     closeDrawer()
@@ -115,6 +139,31 @@ struct ProjectsDrawerView: View {
             }
             .padding(.top, RhymeAITokens.Spacing.lg)
 
+            // Tab picker — spans Songs and Recordings
+            Picker("Tab", selection: $activeTab) {
+                ForEach(DrawerTab.allCases, id: \.self) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.top, RhymeAITokens.Spacing.sm)
+
+            if activeTab == .songs {
+                songsTabContent
+            } else {
+                recordingsTabContent
+            }
+        }
+        .padding(.horizontal, RhymeAITokens.Spacing.lg)
+        .padding(.top, resolvedTopInset + RhymeAITokens.Spacing.sm)
+        .padding(.bottom, bottomInset + RhymeAITokens.Spacing.lg)
+        .onAppear { reloadRecordings() }
+    }
+
+    // MARK: - Songs Tab
+
+    private var songsTabContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
                 viewModel.newProject()
                 closeDrawer()
@@ -189,9 +238,120 @@ struct ProjectsDrawerView: View {
                     .padding(.top, RhymeAITokens.Spacing.xs)
             }
         }
-        .padding(.horizontal, RhymeAITokens.Spacing.lg)
-        .padding(.top, resolvedTopInset + RhymeAITokens.Spacing.sm)
-        .padding(.bottom, bottomInset + RhymeAITokens.Spacing.lg)
+    }
+
+    // MARK: - Recordings Tab
+
+    private var recordingsTabContent: some View {
+        ScrollView {
+            LazyVStack(spacing: RhymeAITokens.Spacing.sm) {
+                if allRecordings.isEmpty {
+                    emptyState(systemImage: "mic.slash", title: "No recordings yet.")
+                        .padding(.top, RhymeAITokens.Spacing.md)
+                } else {
+                    ForEach(allRecordings) { item in
+                        recordingRow(item)
+                    }
+                }
+            }
+            .padding(.top, RhymeAITokens.Spacing.md)
+            .padding(.bottom, RhymeAITokens.Spacing.sm)
+        }
+    }
+
+    private func recordingRow(_ item: RecordingItem) -> some View {
+        HStack(spacing: RhymeAITokens.Spacing.sm) {
+            // Play / pause
+            PlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
+
+            // Song title + date
+            Button {
+                // Load the song so the user can edit it after tapping the row
+                if let project = projects.first(where: { $0.id == item.projectId }) {
+                    viewModel.loadProject(project)
+                    closeDrawer()
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.projectTitle)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(formattedDate(url: item.url))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.rhymePress)
+            .disabled(item.projectTitle == "Deleted song")
+
+            // Delete
+            Button(role: .destructive) {
+                viewModel.voiceMemoService.deleteMemo(at: item.url)
+                reloadRecordings()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.body)
+                    .foregroundStyle(.red.opacity(0.75))
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+            }
+            .buttonStyle(.rhymePress)
+            .accessibilityLabel("Delete recording")
+        }
+        .padding(.horizontal, RhymeAITokens.Spacing.sm)
+        .padding(.vertical, RhymeAITokens.Spacing.xs)
+        .liquidGlassSurface(
+            cornerRadius: RhymeAITokens.Radius.sm,
+            tint: .white.opacity(0.03),
+            fallbackOpacity: 0.05
+        )
+    }
+
+    private func formattedDate(url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        if let ms = Double(stem) {
+            let date = Date(timeIntervalSince1970: ms / 1000)
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+            return formatter.string(from: date)
+        }
+        return stem
+    }
+
+    private func reloadRecordings() {
+        // Build a lookup from projectId → display title using the SwiftData query
+        // results. Unknown IDs (orphaned memos from deleted songs) show "Deleted song".
+        let titleMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) })
+        let root = VoiceMemoService.memosRoot()
+
+        guard let subfolders = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: nil,
+            options: .skipsHiddenFiles
+        ) else {
+            allRecordings = []
+            return
+        }
+
+        var items: [RecordingItem] = []
+        for folder in subfolders {
+            let projectId = folder.lastPathComponent
+            let title = titleMap[projectId] ?? "Deleted song"
+            let memos = VoiceMemoService.memos(for: projectId)
+            for url in memos {
+                items.append(RecordingItem(
+                    id: url.absoluteString,
+                    url: url,
+                    projectId: projectId,
+                    projectTitle: title
+                ))
+            }
+        }
+        // Newest first — filenames are ms timestamps so descending sort works directly
+        allRecordings = items.sorted { $0.url.lastPathComponent > $1.url.lastPathComponent }
     }
 
     private var trashBinButtonLabel: some View {
@@ -321,6 +481,31 @@ struct ProjectsDrawerView: View {
         case .failure:
             importError = "Could not open the selected file."
         }
+    }
+}
+
+// MARK: - Play / Pause Helper
+
+// Isolated view so each recording row tracks its own playing state independently.
+// The service serialises playback — tapping a second row stops the first — so the
+// worst case is one extra render cycle where both rows show "playing".
+private struct PlayPauseButton: View {
+    let url: URL
+    let service: VoiceMemoService
+
+    @State private var rowIsPlaying = false
+
+    var body: some View {
+        Button {
+            rowIsPlaying.toggle()
+            service.togglePlayback(url: url)
+        } label: {
+            Image(systemName: rowIsPlaying ? "pause.circle.fill" : "play.circle.fill")
+                .font(.title2)
+                .foregroundStyle(rowIsPlaying ? .red : .accentColor)
+                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+        }
+        .accessibilityLabel(rowIsPlaying ? "Pause recording" : "Play recording")
     }
 }
 
