@@ -93,15 +93,18 @@ object DesignTokens {
         )
 
         /**
-         * Expressive spring for personality-forward shape/size transitions — used by
-         * the mic↔pill choreography. dampingRatio 0.65 gives a gentle overshoot;
-         * StiffnessMedium (~400 N/m) keeps the total duration under ~400ms.
+         * Expressive spring for the mic↔pill choreography AND the UnBlock FAB
+         * fall-down, so both travel on one clock the way iOS does.
          *
-         * iOS equivalent: spring(response: 0.38, dampingFraction: 0.65)
+         * Tuned to match the iOS reference `spring(response: 0.40, dampingFraction: 0.76)`.
+         * SwiftUI's `response` maps to Compose stiffness via stiffness = (2π / response)²
+         * ≈ 247, and `dampingFraction` maps directly to `dampingRatio`. Result is a
+         * ~0.4s glide with a subtle settle — no hard snap — identical in feel to iOS.
+         * (The previous StiffnessMedium = 1500 gave a ~0.16s snap that desynced from iOS.)
          */
         fun <T> expressiveSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
-            dampingRatio = 0.65f,
-            stiffness = Spring.StiffnessMedium,
+            dampingRatio = 0.76f,
+            stiffness = 247f,
             visibilityThreshold = visibilityThreshold
         )
     }

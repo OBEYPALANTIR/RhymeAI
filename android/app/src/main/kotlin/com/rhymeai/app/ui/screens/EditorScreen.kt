@@ -9,7 +9,6 @@ import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -903,47 +902,19 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 168.dp else 56.dp }
 
-                // UnBlock vertical exit: slides down 72dp (full height + gap) on record start.
+                // UnBlock vertical fall + fade ride the SAME expressive spring as the
+                // pill, both directions, so the pill stretch and the FAB fall-away travel
+                // on one clock (matches iOS, where a single spring drives everything).
+                // Slides down 72dp (full height + gap) on record start, rises back on stop.
                 val unBlockOffsetDp by micTransition.animateDp(
                     label = "unBlockOffset",
-                    transitionSpec = {
-                        if (targetState) {
-                            // Accelerate out: faster exit
-                            tween(
-                                durationMillis = 200,
-                                easing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
-                            )
-                        } else {
-                            // Decelerate back in with spring settle
-                            DesignTokens.Motion.settleSpring()
-                        }
-                    }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 72.dp else 0.dp }
 
-                // UnBlock alpha: fades out as it slides down, fades in as it rises.
                 val unBlockAlpha by micTransition.animateFloat(
                     label = "unBlockAlpha",
-                    transitionSpec = {
-                        if (targetState) {
-                            tween(durationMillis = 160, easing = DesignTokens.Motion.exitEasing)
-                        } else {
-                            tween(
-                                durationMillis = 220,
-                                delayMillis = 180,
-                                easing = DesignTokens.Motion.emphasizedEasing
-                            )
-                        }
-                    }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 0f else 1f }
-
-                // Icon crossfade: mic (false) ↔ pause (true).
-                // Drives Crossfade's target — the transition handles the frame clock.
-                val showPauseIcon by micTransition.animateFloat(
-                    label = "iconProgress",
-                    transitionSpec = {
-                        tween(durationMillis = 160, easing = DesignTokens.Motion.emphasizedEasing)
-                    }
-                ) { recording -> if (recording) 1f else 0f }
 
                 // Spectralizer content (bars + elapsed time) fades in AFTER pill has
                 // mostly expanded — stagger delay of 180ms into the transition.
@@ -1006,17 +977,18 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             modifier = Modifier.padding(horizontal = 10.dp)
                         ) {
-                            // Icon: mic ↔ pause crossfade
+                            // Icon: mic ↔ pause crossfade, driven straight off the
+                            // recording state (Crossfade runs its own clock).
                             Crossfade(
-                                targetState = showPauseIcon > 0.5f,
+                                targetState = memoService.isRecording,
                                 animationSpec = tween(
                                     durationMillis = 160,
                                     easing = DesignTokens.Motion.emphasizedEasing
                                 ),
                                 label = "micPauseIcon"
-                            ) { showPause ->
+                            ) { recording ->
                                 Icon(
-                                    imageVector = if (showPause) Icons.Default.Pause else Icons.Default.Mic,
+                                    imageVector = if (recording) Icons.Default.Pause else Icons.Default.Mic,
                                     contentDescription = null,
                                     tint = if (memoService.isRecording) colorScheme.error
                                            else colorScheme.onSurfaceVariant,
