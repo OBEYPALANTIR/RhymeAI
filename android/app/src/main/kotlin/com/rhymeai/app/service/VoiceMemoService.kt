@@ -257,6 +257,35 @@ class VoiceMemoService(private val context: Context) {
     }
 
     /**
+     * Rename [memo] to [newBasename] (without extension). The basename is sanitized:
+     * leading/trailing whitespace is stripped, characters illegal on FAT32/ext4 paths
+     * (`/ \ : * ? " < > |`) are removed, and runs of whitespace collapsed to a single
+     * space. If the sanitized string is empty the rename is rejected (returns null).
+     *
+     * Collision: if `<sanitized>.m4a` already exists in the same directory, suffixes
+     * " 2", " 3", … are tried until a free name is found (mirrors iOS behavior).
+     *
+     * Returns the renamed [VoiceMemo] on success, null on failure (bad name or
+     * rename I/O error).
+     */
+    fun renameMemo(memo: VoiceMemo, newBasename: String): VoiceMemo? {
+        val sanitized = sanitizeBasename(newBasename)
+        if (sanitized.isEmpty()) return null
+
+        val dir = memo.file.parentFile ?: return null
+        val targetFile = resolveCollision(dir, sanitized)
+
+        // Stop playback of this file before touching it on disk.
+        if (playingFile == memo.file) stopPlayback()
+
+        return if (memo.file.renameTo(targetFile)) {
+            memoFromFile(targetFile)
+        } else {
+            null
+        }
+    }
+
+    /**
      * Delete the entire memo directory for [projectId]. Called when a project is
      * permanently deleted so orphaned audio files do not accumulate.
      */
@@ -324,6 +353,49 @@ class VoiceMemoService(private val context: Context) {
             val mins = totalSecs / 60
             val secs = totalSecs % 60
             return "%d:%02d".format(mins, secs)
+        }
+
+        /**
+         * Human-readable display name for a memo file.
+         *
+         * If the filename (without `.m4a`) is a raw millisecond timestamp (all digits),
+         * return the formatted date label. Otherwise return the custom basename — this is
+         * what the user named it via [renameMemo].
+         */
+        fun displayName(file: File): String {
+            val base = file.nameWithoutExtension
+            return if (base.toLongOrNull() != null) {
+                formatMemoLabel(base.toLong())
+            } else {
+                base
+            }
+        }
+
+        /**
+         * Strip characters that are illegal in file paths on Android (FAT32 + ext4),
+         * collapse whitespace, and trim. Returns an empty string if nothing remains
+         * after sanitization — the caller must reject empty results.
+         */
+        internal fun sanitizeBasename(raw: String): String =
+            raw
+                .replace(Regex("""[/\\:*?"<>|]"""), "")
+                .replace(Regex("""\s+"""), " ")
+                .trim()
+
+        /**
+         * Find a free filename for [base].m4a inside [dir]. If [base].m4a already
+         * exists (and is not the source file being renamed), append " 2", " 3", … until
+         * a free slot is found. The loop is capped at 999 to avoid an infinite cycle in
+         * degenerate cases.
+         */
+        internal fun resolveCollision(dir: File, base: String): File {
+            var candidate = File(dir, "$base.m4a")
+            var suffix = 2
+            while (candidate.exists() && suffix < 1000) {
+                candidate = File(dir, "$base $suffix.m4a")
+                suffix++
+            }
+            return candidate
         }
     }
 }

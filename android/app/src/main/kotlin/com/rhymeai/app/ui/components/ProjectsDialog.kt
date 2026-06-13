@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Search
@@ -69,6 +70,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -558,10 +560,14 @@ private fun RecordingsTab(
         return
     }
 
+    // Version counter: incremented after any mutation (delete, rename) so the
+    // remember cache below is invalidated and the list is re-scanned from disk.
+    var memoListVersion by remember { mutableIntStateOf(0) }
+
     // Build a flat list of (songTitle, VoiceMemo) across all projects by scanning
     // the filesDir/voice-memos/ directory tree.
     val context = LocalContext.current
-    val allEntries: List<Pair<String, VoiceMemo>> = remember(projects) {
+    val allEntries: List<Pair<String, VoiceMemo>> = remember(projects, memoListVersion) {
         val memosRoot = java.io.File(context.filesDir, "voice-memos")
         if (!memosRoot.exists()) return@remember emptyList()
 
@@ -593,7 +599,8 @@ private fun RecordingsTab(
                 songTitle = songTitle,
                 memo = memo,
                 service = service,
-                onTapSongTitle = { if (projectForTitle != null) onLoadProject(projectForTitle) }
+                onTapSongTitle = { if (projectForTitle != null) onLoadProject(projectForTitle) },
+                onMemoListChanged = { memoListVersion++ }
             )
         }
     }
@@ -604,11 +611,16 @@ private fun RecordingMemoRow(
     songTitle: String,
     memo: VoiceMemo,
     service: VoiceMemoService,
-    onTapSongTitle: () -> Unit
+    onTapSongTitle: () -> Unit,
+    onMemoListChanged: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val isPlaying = service.playingFile == memo.file
     var pendingDelete by remember { mutableStateOf(false) }
+    var pendingRename by remember { mutableStateOf(false) }
+    var renameText by remember(memo.file.absolutePath) {
+        mutableStateOf(VoiceMemoService.displayName(memo.file))
+    }
 
     if (pendingDelete) {
         AlertDialog(
@@ -619,10 +631,37 @@ private fun RecordingMemoRow(
                 TextButton(onClick = {
                     service.deleteMemo(memo)
                     pendingDelete = false
+                    onMemoListChanged()
                 }) { Text("Delete", color = colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (pendingRename) {
+        AlertDialog(
+            onDismissRequest = { pendingRename = false },
+            title = { Text("Rename recording") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val renamed = service.renameMemo(memo, renameText)
+                    pendingRename = false
+                    if (renamed != null) onMemoListChanged()
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRename = false }) { Text("Cancel") }
             }
         )
     }
@@ -669,6 +708,17 @@ private fun RecordingMemoRow(
                     fontSize = 11.sp,
                     color = colorScheme.onSurfaceVariant
                 )
+            }
+
+            // Rename
+            IconButton(
+                onClick = {
+                    renameText = VoiceMemoService.displayName(memo.file)
+                    pendingRename = true
+                },
+                modifier = Modifier.size(DesignTokens.Touch.minTarget)
+            ) {
+                Icon(Icons.Default.Edit, contentDescription = "Rename recording", tint = colorScheme.onSurfaceVariant)
             }
 
             // Delete

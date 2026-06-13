@@ -91,5 +91,18 @@ object DesignTokens {
             stiffness = Spring.StiffnessLow,
             visibilityThreshold = visibilityThreshold
         )
+
+        /**
+         * Expressive spring for personality-forward shape/size transitions — used by
+         * the mic↔pill choreography. dampingRatio 0.65 gives a gentle overshoot;
+         * StiffnessMedium (~400 N/m) keeps the total duration under ~400ms.
+         *
+         * iOS equivalent: spring(response: 0.38, dampingFraction: 0.65)
+         */
+        fun <T> expressiveSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
+            dampingRatio = 0.65f,
+            stiffness = Spring.StiffnessMedium,
+            visibilityThreshold = visibilityThreshold
+        )
     }
 }

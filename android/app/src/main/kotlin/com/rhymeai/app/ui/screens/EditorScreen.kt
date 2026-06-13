@@ -7,21 +7,27 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -53,6 +59,7 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -80,6 +87,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -107,6 +115,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
@@ -882,41 +891,184 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     }
                 }
 
+                // Single transition drives ALL animated properties — nothing desyncs.
+                val micTransition = updateTransition(
+                    targetState = memoService.isRecording,
+                    label = "micRecording"
+                )
+
+                // Pill width: 56dp (circle FAB size) → 168dp (pill to match UnBlock).
+                val pillWidth by micTransition.animateDp(
+                    label = "pillWidth",
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
+                ) { recording -> if (recording) 168.dp else 56.dp }
+
+                // UnBlock vertical exit: slides down 72dp (full height + gap) on record start.
+                val unBlockOffsetDp by micTransition.animateDp(
+                    label = "unBlockOffset",
+                    transitionSpec = {
+                        if (targetState) {
+                            // Accelerate out: faster exit
+                            tween(
+                                durationMillis = 200,
+                                easing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
+                            )
+                        } else {
+                            // Decelerate back in with spring settle
+                            DesignTokens.Motion.settleSpring()
+                        }
+                    }
+                ) { recording -> if (recording) 72.dp else 0.dp }
+
+                // UnBlock alpha: fades out as it slides down, fades in as it rises.
+                val unBlockAlpha by micTransition.animateFloat(
+                    label = "unBlockAlpha",
+                    transitionSpec = {
+                        if (targetState) {
+                            tween(durationMillis = 160, easing = DesignTokens.Motion.exitEasing)
+                        } else {
+                            tween(
+                                durationMillis = 220,
+                                delayMillis = 180,
+                                easing = DesignTokens.Motion.emphasizedEasing
+                            )
+                        }
+                    }
+                ) { recording -> if (recording) 0f else 1f }
+
+                // Icon crossfade: mic (false) ↔ pause (true).
+                // Drives Crossfade's target — the transition handles the frame clock.
+                val showPauseIcon by micTransition.animateFloat(
+                    label = "iconProgress",
+                    transitionSpec = {
+                        tween(durationMillis = 160, easing = DesignTokens.Motion.emphasizedEasing)
+                    }
+                ) { recording -> if (recording) 1f else 0f }
+
+                // Spectralizer content (bars + elapsed time) fades in AFTER pill has
+                // mostly expanded — stagger delay of 180ms into the transition.
+                val contentAlpha by micTransition.animateFloat(
+                    label = "contentAlpha",
+                    transitionSpec = {
+                        if (targetState) {
+                            tween(
+                                durationMillis = 180,
+                                delayMillis = 200,
+                                easing = DesignTokens.Motion.emphasizedEasing
+                            )
+                        } else {
+                            tween(durationMillis = 100, easing = DesignTokens.Motion.exitEasing)
+                        }
+                    }
+                ) { recording -> if (recording) 1f else 0f }
+
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Mic FAB — visible exactly when UnBlock is; recording before any
-                    // lyrics exist creates the project on demand. Morphs to spectralizer
-                    // pill while recording.
-                    run {
-                        if (memoService.isRecording) {
-                            // Spectralizer pill — tap to stop and save.
-                            SpectralMicPill(
-                                bars = amplitudeBars,
-                                elapsedMs = memoService.recordingElapsedMs,
-                                onStop = {
-                                    runCatching { memoService.stopRecording() }
-                                },
-                                colorScheme = colorScheme
+                    // Animated mic/pill — stretches right to fill the space UnBlock vacated.
+                    val micPillInteractionSource = remember { MutableInteractionSource() }
+                    Box(
+                        modifier = Modifier
+                            .width(pillWidth)
+                            .height(56.dp)
+                            .background(
+                                colorScheme.surfaceContainerHigh,
+                                RoundedCornerShape(DesignTokens.Radius.pill)
                             )
-                        } else {
-                            androidx.compose.material3.FloatingActionButton(
-                                onClick = { onMicFabTap() },
-                                containerColor = colorScheme.surfaceContainerHigh,
-                                contentColor = colorScheme.onSurfaceVariant,
-                                shape = CircleShape
+                            .border(
+                                1.dp,
+                                colorScheme.outlineVariant,
+                                RoundedCornerShape(DesignTokens.Radius.pill)
+                            )
+                            .clickable(
+                                interactionSource = micPillInteractionSource,
+                                indication = null
                             ) {
-                                Icon(Icons.Default.Mic, contentDescription = stringResource(R.string.voice_memo_open_sheet))
+                                if (memoService.isRecording) {
+                                    runCatching { memoService.stopRecording() }
+                                } else {
+                                    onMicFabTap()
+                                }
+                            }
+                            .semantics {
+                                contentDescription = if (memoService.isRecording)
+                                    "Stop recording"
+                                else
+                                    context.getString(R.string.voice_memo_open_sheet)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(modifier = Modifier.matchParentSize())
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp)
+                        ) {
+                            // Icon: mic ↔ pause crossfade
+                            Crossfade(
+                                targetState = showPauseIcon > 0.5f,
+                                animationSpec = tween(
+                                    durationMillis = 160,
+                                    easing = DesignTokens.Motion.emphasizedEasing
+                                ),
+                                label = "micPauseIcon"
+                            ) { showPause ->
+                                Icon(
+                                    imageVector = if (showPause) Icons.Default.Pause else Icons.Default.Mic,
+                                    contentDescription = null,
+                                    tint = if (memoService.isRecording) colorScheme.error
+                                           else colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
+                            // Spectralizer content fades in staggered after pill stretches.
+                            if (contentAlpha > 0f) {
+                                Canvas(
+                                    modifier = Modifier
+                                        .width((amplitudeBars.size * 5).dp)
+                                        .height(24.dp)
+                                        .alpha(contentAlpha)
+                                ) {
+                                    val barWidthPx = 3.dp.toPx()
+                                    val gapPx = 2.dp.toPx()
+                                    val maxHeightPx = size.height
+                                    amplitudeBars.forEachIndexed { i, amplitude ->
+                                        val barHeight = (amplitude * maxHeightPx).coerceAtLeast(2.dp.toPx())
+                                        val x = i * (barWidthPx + gapPx)
+                                        drawRoundRect(
+                                            color = colorScheme.error,
+                                            topLeft = androidx.compose.ui.geometry.Offset(x, (maxHeightPx - barHeight) / 2f),
+                                            size = androidx.compose.ui.geometry.Size(barWidthPx, barHeight),
+                                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidthPx / 2f)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = com.rhymeai.app.service.VoiceMemoService.formatDuration(
+                                        memoService.recordingElapsedMs
+                                    ),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = colorScheme.onSurface,
+                                    modifier = Modifier.alpha(contentAlpha)
+                                )
                             }
                         }
                     }
 
+                    // UnBlock pill — slides down and fades out while recording; reverses on stop.
+                    // graphicsLayer doesn't affect layout bounds, so the Row height stays stable.
                     ExtendedFloatingActionButton(
                         onClick = { openAssistantSheet() },
                         containerColor = colorScheme.primary,
                         contentColor = colorScheme.onPrimary,
-                        shape = RoundedCornerShape(DesignTokens.Radius.pill)
+                        shape = RoundedCornerShape(DesignTokens.Radius.pill),
+                        modifier = Modifier
+                            .alpha(unBlockAlpha)
+                            .offset { IntOffset(0, unBlockOffsetDp.roundToPx()) }
                     ) {
                         Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))

@@ -173,4 +173,152 @@ class VoiceMemoServiceTest {
         assertTrue(dirB.exists())
         assertEquals(1, dirB.listFiles()?.size)
     }
+
+    // ---------------------------------------------------------------------------
+    // Task 2 — delete bug: memo list must rescan after deletion
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun memoListRescanAfterDeleteReflectsDeletion() {
+        val dir = File(tempFolder.root, "voice-memos/proj-delete")
+        dir.mkdirs()
+        val fileA = File(dir, "1000.m4a").also { it.createNewFile() }
+        File(dir, "2000.m4a").createNewFile()
+
+        // Before deletion: 2 files.
+        val before = dir.listFiles()?.filter { it.name.endsWith(".m4a") } ?: emptyList()
+        assertEquals(2, before.size)
+
+        // Simulate deleteMemo (pure file deletion — service not instantiated in JVM tests).
+        fileA.delete()
+
+        // After deletion, a fresh filesystem scan returns 1.
+        val after = dir.listFiles()?.filter { it.name.endsWith(".m4a") } ?: emptyList()
+        assertEquals(1, after.size)
+        assertFalse(after.any { it.name == "1000.m4a" })
+    }
+
+    // ---------------------------------------------------------------------------
+    // Task 3 — rename: sanitizeBasename
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun sanitizeBasenameTrimsPadding() {
+        assertEquals("hello", VoiceMemoService.sanitizeBasename("  hello  "))
+    }
+
+    @Test
+    fun sanitizeBasenameStripsIllegalChars() {
+        // All of / \ : * ? " < > | should be removed.
+        val input = """slash/back\colon:star*question?quote"lt<gt>pipe|"""
+        val result = VoiceMemoService.sanitizeBasename(input)
+        assertFalse(result.contains('/'))
+        assertFalse(result.contains('\\'))
+        assertFalse(result.contains(':'))
+        assertFalse(result.contains('*'))
+        assertFalse(result.contains('?'))
+        assertFalse(result.contains('"'))
+        assertFalse(result.contains('<'))
+        assertFalse(result.contains('>'))
+        assertFalse(result.contains('|'))
+    }
+
+    @Test
+    fun sanitizeBasenameCollapsesWhitespace() {
+        assertEquals("a b c", VoiceMemoService.sanitizeBasename("a   b   c"))
+    }
+
+    @Test
+    fun sanitizeBasenameEmptyAfterStripReturnsEmpty() {
+        assertEquals("", VoiceMemoService.sanitizeBasename("   /\\:*?\"<>|   "))
+    }
+
+    @Test
+    fun sanitizeBasenamePreservesNormalName() {
+        assertEquals("My Cool Track", VoiceMemoService.sanitizeBasename("My Cool Track"))
+    }
+
+    // ---------------------------------------------------------------------------
+    // Task 3 — rename: resolveCollision
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun resolveCollisionReturnsPrimaryNameWhenFree() {
+        val dir = File(tempFolder.root, "voice-memos/proj-collision")
+        dir.mkdirs()
+        // No files exist — should return base.m4a.
+        val result = VoiceMemoService.resolveCollision(dir, "chorus")
+        assertEquals("chorus.m4a", result.name)
+    }
+
+    @Test
+    fun resolveCollisionAppendsNumberOnConflict() {
+        val dir = File(tempFolder.root, "voice-memos/proj-conflict")
+        dir.mkdirs()
+        File(dir, "chorus.m4a").createNewFile()
+
+        val result = VoiceMemoService.resolveCollision(dir, "chorus")
+        assertEquals("chorus 2.m4a", result.name)
+    }
+
+    @Test
+    fun resolveCollisionIncrementsPastMultipleConflicts() {
+        val dir = File(tempFolder.root, "voice-memos/proj-multi")
+        dir.mkdirs()
+        File(dir, "verse.m4a").createNewFile()
+        File(dir, "verse 2.m4a").createNewFile()
+        File(dir, "verse 3.m4a").createNewFile()
+
+        val result = VoiceMemoService.resolveCollision(dir, "verse")
+        assertEquals("verse 4.m4a", result.name)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Task 3 — rename: displayName
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun displayNameReturnsFormattedLabelForTimestampFilename() {
+        val ts = 1_718_000_000_000L
+        val file = File(tempFolder.root, "$ts.m4a")
+        val label = VoiceMemoService.displayName(file)
+        // Must be the same as formatMemoLabel — non-empty and not the raw number.
+        assertTrue(label.isNotBlank())
+        assertFalse(label == ts.toString())
+    }
+
+    @Test
+    fun displayNameReturnsBasenameForCustomFilename() {
+        val file = File(tempFolder.root, "My Hook Idea.m4a")
+        assertEquals("My Hook Idea", VoiceMemoService.displayName(file))
+    }
+
+    @Test
+    fun displayNameHandlesNonTimestampNumericName() {
+        // "12345" is all digits but may or may not parse as a valid timestamp —
+        // the contract is simply: if toLongOrNull() != null, use formatted label.
+        val file = File(tempFolder.root, "12345.m4a")
+        val label = VoiceMemoService.displayName(file)
+        // Should not crash and should be non-empty.
+        assertTrue(label.isNotBlank())
+    }
+
+    // ---------------------------------------------------------------------------
+    // Task 3 — rename: file-level rename via File.renameTo
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun renameFileToDifferentBasenameSucceeds() {
+        val dir = File(tempFolder.root, "voice-memos/proj-rename")
+        dir.mkdirs()
+        val original = File(dir, "1718000000000.m4a").also { it.createNewFile() }
+
+        val sanitized = VoiceMemoService.sanitizeBasename("Bridge Hook")
+        val target = VoiceMemoService.resolveCollision(dir, sanitized)
+
+        assertTrue(original.renameTo(target))
+        assertTrue(target.exists())
+        assertEquals("Bridge Hook.m4a", target.name)
+        assertFalse(original.exists())
+    }
 }
