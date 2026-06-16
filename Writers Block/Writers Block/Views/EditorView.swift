@@ -213,35 +213,39 @@ struct EditorView: View {
                 HStack(alignment: .bottom, spacing: RhymeAITokens.Spacing.sm) {
                     Spacer()
 
-                    // Floating mic — visible exactly when UnBlock is. Recording
-                    // before any lyrics exist creates the project on demand.
-                    FloatingMicButton(
-                        service: viewModel.voiceMemoService,
-                        ensureProjectId: { viewModel.ensureProjectForRecording() }
-                    )
-                    .accessibilityIdentifier("micButton")
-
-                    // UnBlock FAB — falls away when mic starts recording,
-                    // rises back when recording stops.
-                    Button {
-                        presentAssistantSheet()
-                    } label: {
-                        HStack(spacing: RhymeAITokens.Spacing.xs) {
-                            Image(systemName: "pencil")
-                                .font(.body.weight(.semibold))
-                            UnBlockWordmark()
+                    ZStack(alignment: .trailing) {
+                        // UnBlock FAB — overlay; falls away when mic starts recording,
+                        // rises back when recording stops.
+                        Button {
+                            presentAssistantSheet()
+                        } label: {
+                            HStack(spacing: RhymeAITokens.Spacing.xs) {
+                                Image(systemName: "pencil")
+                                    .font(.body.weight(.semibold))
+                                UnBlockWordmark()
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, RhymeAITokens.Spacing.md)
+                            .padding(.vertical, RhymeAITokens.Spacing.sm)
+                            .frame(minHeight: RhymeAITokens.Touch.minimum)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo, interactive: true, fallbackOpacity: 0.35)
+                            .shadow(color: .indigo.opacity(0.26), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
                         }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, RhymeAITokens.Spacing.md)
-                        .padding(.vertical, RhymeAITokens.Spacing.sm)
-                        .frame(minHeight: RhymeAITokens.Touch.minimum)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo, interactive: true, fallbackOpacity: 0.35)
-                        .shadow(color: .indigo.opacity(0.26), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
+                        .accessibilityIdentifier("unblockButton")
+                        .offset(y: unblockRecordingOffset)
+                        .opacity(unblockRecordingOpacity)
+                        .allowsHitTesting(unblockRecordingOpacity > 0.01)
+
+                        // Floating mic — visible exactly when UnBlock is. Recording
+                        // before any lyrics exist creates the project on demand.
+                        FloatingMicButton(
+                            service: viewModel.voiceMemoService,
+                            ensureProjectId: { viewModel.ensureProjectForRecording() }
+                        )
+                        .accessibilityIdentifier("micButton")
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .accessibilityIdentifier("unblockButton")
-                    .offset(y: unblockRecordingOffset)
-                    .opacity(unblockRecordingOpacity)
-                    .allowsHitTesting(unblockRecordingOpacity > 0.01)
+                    .frame(width: 220, alignment: .trailing)
                 }
                 .padding(.trailing, RhymeAITokens.Spacing.md)
                 .padding(.bottom, keyboardIsVisible
