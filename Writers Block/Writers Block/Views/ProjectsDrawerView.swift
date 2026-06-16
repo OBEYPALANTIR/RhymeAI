@@ -22,6 +22,7 @@ struct ProjectsDrawerView: View {
     // Rename alert state — non-nil means the alert is showing.
     @State private var renamingItem: RecordingItem?
     @State private var renameText: String = ""
+    @State private var pendingDeleteRecording: RecordingItem?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum DrawerTab: String, CaseIterable {
@@ -259,6 +260,14 @@ struct ProjectsDrawerView: View {
             }
             .padding(.top, RhymeAITokens.Spacing.md)
             .padding(.bottom, RhymeAITokens.Spacing.sm)
+            .alert("Delete Failed", isPresented: Binding(
+                get: { viewModel.voiceMemoService.lastError != nil },
+                set: { if !$0 { viewModel.voiceMemoService.lastError = nil } }
+            )) {
+                Button("OK", role: .cancel) { viewModel.voiceMemoService.lastError = nil }
+            } message: {
+                Text(viewModel.voiceMemoService.lastError ?? "")
+            }
         }
         // Rename alert — presented when renamingItem is non-nil.
         .alert("Rename Recording", isPresented: Binding(
@@ -279,6 +288,19 @@ struct ProjectsDrawerView: View {
             }
         } message: {
             Text("Enter a new name for this recording.")
+        }
+        .confirmationDialog("Delete Recording?", isPresented: Binding(
+            get: { pendingDeleteRecording != nil },
+            set: { if !$0 { pendingDeleteRecording = nil } }
+        ), titleVisibility: .visible, presenting: pendingDeleteRecording) { item in
+            Button("Delete", role: .destructive) {
+                viewModel.voiceMemoService.deleteMemo(at: item.url)
+                reloadRecordings()
+                pendingDeleteRecording = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeleteRecording = nil }
+        } message: { _ in
+            Text("This recording will be permanently deleted.")
         }
     }
 
@@ -310,10 +332,23 @@ struct ProjectsDrawerView: View {
             .buttonStyle(.rhymePress)
             .disabled(item.projectTitle == "Deleted song")
 
+            // Rename
+            Button {
+                let stem = item.url.deletingPathExtension().lastPathComponent
+                renameText = isTimestampStem(stem) ? "" : stem
+                renamingItem = item
+            } label: {
+                Image(systemName: "pencil")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+            }
+            .buttonStyle(.rhymePress)
+            .accessibilityLabel("Rename recording")
+
             // Delete
             Button(role: .destructive) {
-                viewModel.voiceMemoService.deleteMemo(at: item.url)
-                reloadRecordings()
+                pendingDeleteRecording = item
             } label: {
                 Image(systemName: "trash")
                     .font(.body)
@@ -330,18 +365,6 @@ struct ProjectsDrawerView: View {
             tint: .white.opacity(0.03),
             fallbackOpacity: 0.05
         )
-        // Swipe from leading edge to rename.
-        .swipeActions(edge: .leading, allowsFullSwipe: false) {
-            Button {
-                let stem = item.url.deletingPathExtension().lastPathComponent
-                // Pre-fill with existing custom name or empty for timestamps.
-                renameText = isTimestampStem(stem) ? "" : stem
-                renamingItem = item
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            .tint(.indigo)
-        }
     }
 
     /// True when the stem is a pure millisecond-epoch timestamp (all digits,

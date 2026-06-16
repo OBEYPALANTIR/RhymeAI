@@ -24,6 +24,9 @@ final class VoiceMemoService {
     // Not private(set) — the .alert(isPresented:) binding needs write access
     // to reset the flag when the user dismisses the alert.
     var permissionDenied: Bool = false
+    // Set when a destructive file op fails so the UI can surface it instead of
+    // swallowing the error. Writable so the alert binding can clear it.
+    var lastError: String?
 
     // MARK: - Private (not tracked by @Observable)
 
@@ -244,7 +247,11 @@ final class VoiceMemoService {
 
     func deleteMemo(at url: URL) {
         if activePlayURL == url { stopPlayback() }
-        try? FileManager.default.removeItem(at: url)
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            lastError = "Couldn't delete recording: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Rename
