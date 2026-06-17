@@ -467,13 +467,13 @@ fun SettingsDialog(
 
                 Crossfade(
                     targetState = selectedProvider == AIProvider.LOCAL,
-                    animationSpec = tween(durationMillis = 120),
+                    animationSpec = tween(durationMillis = DesignTokens.Motion.standardMillis),
                     label = "settingsProviderContent"
                 ) { isLocalProvider ->
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .animateContentSize(animationSpec = tween(durationMillis = 260))
+                            .animateContentSize(animationSpec = tween(durationMillis = DesignTokens.Motion.standardMillis))
                     ) {
                         if (isLocalProvider) {
                             // Local model section

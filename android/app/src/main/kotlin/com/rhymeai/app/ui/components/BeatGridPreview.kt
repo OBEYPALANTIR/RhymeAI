@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.Warning
 import com.rhymeai.app.util.BeatGrid
 
 /**
@@ -63,12 +64,12 @@ private fun BeatGridLineRow(line: BeatGrid.LineResult) {
     // Fit color: normal accent = fits, amber = tight, red = overflow.
     val barColor: Color = when (line.fit) {
         BeatGrid.Fit.FITS -> colorScheme.primary
-        BeatGrid.Fit.TIGHT -> Color(0xFFFFA000)   // amber warning
+        BeatGrid.Fit.TIGHT -> Warning   // amber warning
         BeatGrid.Fit.OVERFLOW -> colorScheme.error
     }
     val labelColor: Color = when (line.fit) {
         BeatGrid.Fit.FITS -> colorScheme.onSurfaceVariant
-        BeatGrid.Fit.TIGHT -> Color(0xFFFFA000)
+        BeatGrid.Fit.TIGHT -> Warning
         BeatGrid.Fit.OVERFLOW -> colorScheme.error
     }
 

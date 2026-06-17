@@ -11,6 +11,7 @@ val Indigo500 = Color(0xFF6366F1)
 val Indigo600 = Color(0xFF4F46E5)
 val Purple400 = Color(0xFFC084FC)
 
+val Warning = Color(0xFFFFA000)
 val SyllableEmerald = Color(0xFF6EE7B7)
 val SyllableBlue = Color(0xFF93C5FD)
 val SyllablePurple = Color(0xFFD8B4FE)
