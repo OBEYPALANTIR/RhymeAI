@@ -414,27 +414,22 @@ struct ProjectsDrawerView: View {
 
     private func folderHeaderRow(_ folder: RecordingFolder) -> some View {
         HStack(spacing: RhymeAITokens.Spacing.sm) {
-            Image(systemName: "folder")
-                .foregroundStyle(.secondary)
-            Text("Song")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                .padding(.vertical, 3)
-                .background(.secondary.opacity(0.12), in: Capsule())
-            Text(folder.title)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(folder.title == "Deleted song" ? .secondary : .primary)
-                .lineLimit(1)
-            Spacer()
-            Text("\(folder.items.count)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                Text(folder.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(folder.title == "Deleted song" ? .secondary : .primary)
+                    .lineLimit(1)
+                Text("\(folder.items.count) \(folder.items.count == 1 ? "recording" : "recordings")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
             Image(systemName: isRecordingFolderExpanded(folder) ? "chevron.down" : "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, RhymeAITokens.Spacing.xs)
+        .frame(minHeight: 56)
+        .padding(.vertical, RhymeAITokens.Spacing.sm)
         .contentShape(Rectangle())
         .onTapGesture {
             withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
@@ -489,6 +484,7 @@ struct ProjectsDrawerView: View {
             .accessibilityLabel("Rename recording")
         }
         .padding(.vertical, RhymeAITokens.Spacing.xxs)
+        .padding(.leading, RhymeAITokens.Spacing.md)
         .contentShape(Rectangle())
         .onTapGesture {
             if isSelecting {
