@@ -25,6 +25,9 @@ the remaining known issues are closed.
 - iOS Release visual walkthrough captures and reviews welcome, populated editor,
   export sheet, assistant panel, no-key assistant error, and no-key rewrite error
   screenshots.
+- Cross-platform UI polish keeps Android Material and iOS Liquid Glass surfaces
+  consistent with the shipped design tokens, including recordings search,
+  transient error feedback, motion timing, and warning color treatment.
 - Android local GGUF inference has a dedicated emulator/device smoke gate with
   passing evidence from a real ignored GGUF fixture.
 - OpenAI and Claude happy paths have a BYO-key cross-platform provider smoke

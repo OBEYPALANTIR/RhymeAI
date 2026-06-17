@@ -31,7 +31,7 @@ colors:
   error: "#FFB4AB"
   on-error: "#690005"
   success: "#6EE7B7"
-  warning: "#FCD34D"
+  warning: "#FFA000"
   app-icon-coral: "#FF7A73"
   app-icon-burgundy: "#4A000B"
   app-icon-light: "#FFFFFF"
@@ -552,7 +552,7 @@ The product is shared across Android and iOS, but each platform speaks its nativ
 
 The canonical palette is near-black with indigo, purple, and emerald accents. Black is the dominant working surface. Indigo is the main action color, purple supports brand expression, emerald marks successful or local states, and a coral app-icon family provides warmth when dynamic color or brand imagery is present.
 
-Android may adapt the primary accent to the user's Material You palette. When that happens, keep the same tonal relationships: a very dark canvas, a high-contrast primary action, subdued card outlines, and muted secondary text. Dynamic colors should not make the lyric editor feel bright or decorative.
+Android enables Material You dynamic color by default in `Theme.kt`, so the authored indigo, purple, and emerald palette is the non-dynamic baseline; on Android 12+ it can be replaced by the user's wallpaper palette. When that happens, keep the same tonal relationships: a very dark canvas, a high-contrast primary action, subdued card outlines, and muted secondary text.
 
 iOS should bias toward black, indigo, purple, and translucent blue-gray glass. Glass surfaces should be visible through border, tint, blur, and shadow rather than through solid fill. Avoid opaque cards on iOS unless the content is modal and needs firm legibility.
 
@@ -576,11 +576,15 @@ Assistant controls live in a bottom sheet on phones and a persistent side panel 
 
 Spacing should follow a 4px base with 8px, 12px, 16px, 20px, 24px, 32px, and 48px as the normal visible rhythm. Avoid odd one-off gaps unless they solve a specific safe-area or keyboard problem.
 
+The spacing table describes relative rhythm, not exact per-platform pixels; shipped values live in Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt` and iOS `RhymeAITokens` in `Writers Block/Writers Block/Views/LiquidGlassSupport.swift`, with dp/pt scales tuned independently.
+
 Major structure should use φ=1.618 as a practical proportion rule, especially the relationship between the lyric editor and assistant or drawer surfaces. Size supporting panels with inverse-φ relationships to the editor, then round to the shared visible rhythm: 8px, 12/13px, 20/21px, 32/34px, and 52/55px. This ratio is a hierarchy tool, not a rigid grid; minimum touch targets and system geometry override it: 48px on web, 48dp on Android, 44pt on iOS, plus any keyboard or safe-area offsets needed to keep writing usable.
 
 ## Elevation & Depth
 
 Depth is subtle. Android surfaces mostly use Material tonal elevation, 1px outlines, and dark containers. iOS surfaces use material blur, translucent tint, a 1px light border, and soft shadows.
+
+On iOS 26+, native `.glassEffect` renders Liquid Glass with its own edge; the explicit 1px light border applies to the pre-iOS-26 `.ultraThinMaterial` fallback in `LiquidGlassSurfaceModifier`, while soft shadows remain part of the broader iOS surface treatment where callers apply them.
 
 The app icon can glow. Primary action buttons can cast a small accent shadow. Drawers can cast a directional shadow to reinforce lateral motion. Standard editor content should remain flat so the lyric text stays dominant.
 
@@ -594,9 +598,13 @@ Motion must explain cause, state, or spatial origin. Use 180ms for immediate fee
 
 The shape language is soft but not bubbly. Cards and rows use 16px corners. Settings and glass grouped surfaces can use 18px to 22px. Floating actions use a 28px pill. App icon artwork keeps a 22px inner corner with a 30px glass shell on iOS.
 
+The rounded table describes shape intent, not exact per-platform pixels; shipped radii live in Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt` and iOS `RhymeAITokens` in `Writers Block/Writers Block/Views/LiquidGlassSupport.swift`, with platform-specific dp/pt tuning.
+
 Drawers are squared to the screen edge. Bottom sheets are full-width and full-height when active, with the drag handle carrying the affordance instead of a rounded container edge.
 
 ## Components
+
+Component dimensions and radii below express relative rhythm and intent, not exact per-platform pixels. Shipped per-platform values are authoritative in Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt` and iOS `RhymeAITokens` in `Writers Block/Writers Block/Views/LiquidGlassSupport.swift`, and their dp/pt scales intentionally differ where native feel requires it.
 
 Welcome cards are large repeated actions. Android cards are outlined Material surfaces. iOS cards are translucent glass surfaces with tinted icon tiles. Both should share the same information order: icon, title, supporting text, and an optional trailing affordance.
 
