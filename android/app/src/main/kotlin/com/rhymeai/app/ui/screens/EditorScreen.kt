@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -1076,7 +1077,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     .graphicsLayer { alpha = unBlockWordmarkAlpha }
                                     .clipToBounds()
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    modifier = Modifier.requiredWidth(76.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Spacer(Modifier.width(8.dp))
                                     UnBlockWordmark()
                                 }
@@ -1462,7 +1466,7 @@ private fun UnBlockWordmark() {
     val color = MaterialTheme.colorScheme.onPrimary
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("UnBlock", fontWeight = FontWeight.Medium)
+        Text("UnBlock", fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false)
         Canvas(
             modifier = Modifier
                 .width(68.dp)
