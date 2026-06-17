@@ -72,6 +72,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -165,6 +168,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val fullSheetHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
     val assistantSheetHandleHeightPx = with(density) { DesignTokens.Sheet.handleArea.toPx() }
     val assistantSheetCloseThresholdPx =
@@ -302,8 +306,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         ?: throw Exception("Cannot open destination for writing")
                 }
             } catch (_: Exception) {
-                // Surface via existing errorMessage channel
-                viewModel.errorMessage = "Export failed. Try a different location."
+                snackbarHostState.showSnackbar("Export failed. Try a different location.")
             }
         }
     }
@@ -345,7 +348,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             val projectId = viewModel.ensureProjectForRecording()
             runCatching { viewModel.voiceMemoService.startRecording(projectId) }
         } else {
-            viewModel.errorMessage = context.getString(R.string.voice_memo_permission_denied)
+            scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_permission_denied)) }
         }
     }
 
@@ -940,7 +943,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         modifier = Modifier
                             .width(pillWidth)
                             .height(56.dp)
-                            .clip(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
                                 colorScheme.surfaceContainerHigh,
                                 RoundedCornerShape(DesignTokens.Radius.pill)
@@ -950,9 +952,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 colorScheme.outlineVariant,
                                 RoundedCornerShape(DesignTokens.Radius.pill)
                             )
+                            .clip(RoundedCornerShape(DesignTokens.Radius.pill))
                             .clickable(
                                 interactionSource = micPillInteractionSource,
-                                indication = null
+                                indication = ripple()
                             ) {
                                 if (memoService.isRecording) {
                                     runCatching { memoService.stopRecording() }
@@ -1045,7 +1048,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             .clickable(
                                 enabled = !memoService.isRecording,
                                 interactionSource = unBlockInteractionSource,
-                                indication = null
+                                indication = ripple()
                             ) {
                                 openAssistantSheet()
                             }
@@ -1253,6 +1256,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 )
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .bottomSafeActionPadding()
+        )
     }
 }
 
