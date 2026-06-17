@@ -4,8 +4,10 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -34,6 +36,18 @@ fun RhymeHighlightedText(
         return
     }
 
+    val annotated = remember(text, baseTextColor, palette) {
+        buildRhymeAnnotatedString(text, baseTextColor, palette)
+    }
+
+    Text(text = annotated, modifier = modifier, style = style)
+}
+
+private fun buildRhymeAnnotatedString(
+    text: String,
+    baseTextColor: Color,
+    palette: List<Color>
+): AnnotatedString {
     val tokens = wordPattern.findAll(text)
         .map { Token(it.value, it.range.first, it.range.last + 1) }
         .toList()
@@ -49,7 +63,7 @@ fun RhymeHighlightedText(
         keys.lastOrNull { (keyOccurrences[it] ?: 0) >= 2 }
     }
 
-    val annotated = buildAnnotatedString {
+    return buildAnnotatedString {
         var cursor = 0
         for ((i, tok) in tokens.withIndex()) {
             if (tok.start > cursor) {
@@ -80,8 +94,6 @@ fun RhymeHighlightedText(
             }
         }
     }
-
-    Text(text = annotated, modifier = modifier, style = style)
 }
 
 private fun colorFor(familyKey: String, palette: List<Color>): Color {

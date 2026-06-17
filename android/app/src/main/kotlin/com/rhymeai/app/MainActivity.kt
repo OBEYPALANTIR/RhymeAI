@@ -115,7 +115,7 @@ class MainActivity : ComponentActivity() {
                         startDestination = startDest
                     )
 
-                    // Handle dialog navigation from welcome screen
+                    // Handle dialog navigation to the editor without rebuilding it unnecessarily.
                     if (viewModel.showProjectsDialog) {
                         ProjectsDrawer(
                             projects = viewModel.projects,
@@ -123,14 +123,24 @@ class MainActivity : ComponentActivity() {
                             currentProjectId = viewModel.currentProjectId,
                             onLoadProject = { project ->
                                 viewModel.loadProject(project)
-                                navController.navigate(Routes.EDITOR) {
-                                    popUpTo(0) { inclusive = true }
+                                if (navController.currentDestination?.route == Routes.EDITOR) {
+                                    // State update only; keep the existing editor destination alive.
+                                } else {
+                                    navController.navigate(Routes.EDITOR) {
+                                        launchSingleTop = true
+                                        popUpTo(Routes.WELCOME) { inclusive = true }
+                                    }
                                 }
                             },
                             onNewProject = {
                                 viewModel.newProject()
-                                navController.navigate(Routes.EDITOR) {
-                                    popUpTo(0) { inclusive = true }
+                                if (navController.currentDestination?.route == Routes.EDITOR) {
+                                    // State update only; keep the existing editor destination alive.
+                                } else {
+                                    navController.navigate(Routes.EDITOR) {
+                                        launchSingleTop = true
+                                        popUpTo(Routes.WELCOME) { inclusive = true }
+                                    }
                                 }
                             },
                             onDeleteProject = { viewModel.moveProjectToTrash(it) },
@@ -139,8 +149,13 @@ class MainActivity : ComponentActivity() {
                             onPurgeExpiredTrash = { viewModel.purgeExpiredTrashedProjects() },
                             onImportProject = { project ->
                                 viewModel.importProject(project)
-                                navController.navigate(Routes.EDITOR) {
-                                    popUpTo(0) { inclusive = true }
+                                if (navController.currentDestination?.route == Routes.EDITOR) {
+                                    // State update only; keep the existing editor destination alive.
+                                } else {
+                                    navController.navigate(Routes.EDITOR) {
+                                        launchSingleTop = true
+                                        popUpTo(Routes.WELCOME) { inclusive = true }
+                                    }
                                 }
                             },
                             onDismiss = { viewModel.showProjectsDialog = false },
@@ -152,8 +167,13 @@ class MainActivity : ComponentActivity() {
                         TemplatesDialog(
                             onSelectTemplate = { name, theme, lyrics ->
                                 viewModel.applyTemplate(name, theme, lyrics)
-                                navController.navigate(Routes.EDITOR) {
-                                    popUpTo(0) { inclusive = true }
+                                if (navController.currentDestination?.route == Routes.EDITOR) {
+                                    // State update only; keep the existing editor destination alive.
+                                } else {
+                                    navController.navigate(Routes.EDITOR) {
+                                        launchSingleTop = true
+                                        popUpTo(Routes.WELCOME) { inclusive = true }
+                                    }
                                 }
                             },
                             onDismiss = { viewModel.showTemplatesDialog = false }
