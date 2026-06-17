@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -63,6 +64,7 @@ class VoiceMemoService(private val context: Context) {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var tickJob: Job? = null
+    private val durationCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     // ---------------------------------------------------------------------------
     // Amplitude (for spectralizer UI)
@@ -95,7 +97,7 @@ class VoiceMemoService(private val context: Context) {
      * Returns the File being recorded to, so the caller can display a progress
      * indicator before stopRecording() is called. Throws if already recording.
      */
-    fun startRecording(projectId: String): File {
+    suspend fun startRecording(projectId: String): File = withContext(Dispatchers.IO) {
         check(!isRecording) { "Already recording — call stopRecording() first" }
 
         // Ensure the directory exists.
@@ -142,7 +144,7 @@ class VoiceMemoService(private val context: Context) {
             }
         }
 
-        return file
+        file
     }
 
     /**
@@ -150,8 +152,8 @@ class VoiceMemoService(private val context: Context) {
      * nothing was being recorded. The memo file is only kept if recording produced
      * a non-empty file; otherwise it is deleted and null is returned.
      */
-    fun stopRecording(): VoiceMemo? {
-        if (!isRecording) return null
+    suspend fun stopRecording(): VoiceMemo? = withContext(Dispatchers.IO) {
+        if (!isRecording) return@withContext null
 
         tickJob?.cancel()
         tickJob = null
@@ -175,10 +177,10 @@ class VoiceMemoService(private val context: Context) {
 
         if (file == null || !file.exists() || file.length() == 0L) {
             file?.delete()
-            return null
+            return@withContext null
         }
 
-        return memoFromFile(file)
+        memoFromFile(file)
     }
 
     /**
@@ -218,9 +220,17 @@ class VoiceMemoService(private val context: Context) {
         val mp = MediaPlayer()
         try {
             mp.setDataSource(memo.file.absolutePath)
-            mp.prepare()
-            mp.setOnCompletionListener { stopPlayback() }
-            mp.start()
+            mp.setOnPreparedListener { prepared ->
+                if (player === prepared) prepared.start()
+            }
+            mp.setOnCompletionListener { completed ->
+                if (player === completed) stopPlayback()
+            }
+            mp.setOnErrorListener { errored, _, _ ->
+                if (player === errored) stopPlayback()
+                true
+            }
+            mp.prepareAsync()
         } catch (e: Exception) {
             mp.release()
             return
@@ -247,10 +257,10 @@ class VoiceMemoService(private val context: Context) {
     // ---------------------------------------------------------------------------
 
     /** Return all memos for [projectId], sorted newest-first. */
-    fun memosForProject(projectId: String): List<VoiceMemo> {
+    suspend fun memosForProject(projectId: String): List<VoiceMemo> = withContext(Dispatchers.IO) {
         val dir = memoDir(projectId)
-        if (!dir.exists()) return emptyList()
-        return dir.listFiles()
+        if (!dir.exists()) return@withContext emptyList()
+        dir.listFiles()
             ?.filter { it.isFile && it.name.endsWith(".m4a") }
             ?.sortedByDescending { it.lastModified() }
             ?.map { memoFromFile(it) }
@@ -258,9 +268,11 @@ class VoiceMemoService(private val context: Context) {
     }
 
     /** Delete a single memo. Stops playback of that file if it is currently playing. */
-    fun deleteMemo(memo: VoiceMemo) {
+    suspend fun deleteMemo(memo: VoiceMemo) {
         if (playingFile == memo.file) stopPlayback()
-        memo.file.delete()
+        withContext(Dispatchers.IO) {
+            memo.file.delete()
+        }
     }
 
     /**
@@ -275,20 +287,21 @@ class VoiceMemoService(private val context: Context) {
      * Returns the renamed [VoiceMemo] on success, null on failure (bad name or
      * rename I/O error).
      */
-    fun renameMemo(memo: VoiceMemo, newBasename: String): VoiceMemo? {
+    suspend fun renameMemo(memo: VoiceMemo, newBasename: String): VoiceMemo? {
         val sanitized = sanitizeBasename(newBasename)
         if (sanitized.isEmpty()) return null
 
-        val dir = memo.file.parentFile ?: return null
-        val targetFile = resolveCollision(dir, sanitized)
-
-        // Stop playback of this file before touching it on disk.
         if (playingFile == memo.file) stopPlayback()
 
-        return if (memo.file.renameTo(targetFile)) {
-            memoFromFile(targetFile)
-        } else {
-            null
+        return withContext(Dispatchers.IO) {
+            val dir = memo.file.parentFile ?: return@withContext null
+            val targetFile = resolveCollision(dir, sanitized)
+
+            if (memo.file.renameTo(targetFile)) {
+                memoFromFile(targetFile)
+            } else {
+                null
+            }
         }
     }
 
@@ -296,13 +309,14 @@ class VoiceMemoService(private val context: Context) {
      * Delete the entire memo directory for [projectId]. Called when a project is
      * permanently deleted so orphaned audio files do not accumulate.
      */
-    fun deleteMemoDirectory(projectId: String) {
-        // Stop playback of anything that lived in this project's directory.
+    suspend fun deleteMemoDirectory(projectId: String) {
         val dir = memoDir(projectId)
         val playing = playingFile
         if (playing != null && playing.path.startsWith(dir.path)) stopPlayback()
 
-        dir.deleteRecursively()
+        withContext(Dispatchers.IO) {
+            dir.deleteRecursively()
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -333,12 +347,15 @@ class VoiceMemoService(private val context: Context) {
     }
 
     private fun probeAudioDurationMs(file: File): Long {
+        val key = "${file.absolutePath}:${file.lastModified()}"
+        durationCache[key]?.let { return it }
+
         // MediaMetadataRetriever would work but requires android.permission.INTERNET in some
         // paths and adds latency. For display purposes, probing via a temporary MediaPlayer
         // is reliable, cheap, and available at API 21+.
         // MediaPlayer doesn't implement AutoCloseable, so use try/finally to release it.
         val mp = MediaPlayer()
-        return try {
+        val duration = try {
             mp.setDataSource(file.absolutePath)
             mp.prepare()
             mp.duration.toLong().coerceAtLeast(0L)
@@ -347,6 +364,8 @@ class VoiceMemoService(private val context: Context) {
         } finally {
             mp.release()
         }
+        durationCache[key] = duration
+        return duration
     }
 
     companion object {

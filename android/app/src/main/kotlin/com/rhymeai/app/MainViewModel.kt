@@ -751,7 +751,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repo.saveTrashedProjects(updatedTrashedProjects)
             // Remove any recorded memos that belonged to this project.
-            withContext(Dispatchers.IO) { voiceMemoService.deleteMemoDirectory(id) }
+            voiceMemoService.deleteMemoDirectory(id)
         }
         scheduleTrashPurge()
     }
@@ -767,9 +767,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             viewModelScope.launch {
                 repo.saveTrashedProjects(retainedProjects)
                 // Purge memo directories for each project that was permanently removed.
-                withContext(Dispatchers.IO) {
-                    purgedIds.forEach { voiceMemoService.deleteMemoDirectory(it) }
-                }
+                purgedIds.forEach { voiceMemoService.deleteMemoDirectory(it) }
             }
         }
         scheduleTrashPurge()

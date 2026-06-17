@@ -58,6 +58,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,11 +79,12 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -105,6 +107,7 @@ import com.rhymeai.app.service.VoiceMemo
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.ui.theme.DesignTokens
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -187,8 +190,8 @@ fun ProjectsDrawer(
         }
     }
 
-    val sortedProjects = projects.sortedByDescending { it.updatedAt }
-    val filteredProjects = searchProjects(sortedProjects, searchQuery)
+    val sortedProjects = remember(projects) { projects.sortedByDescending { it.updatedAt } }
+    val filteredProjects = remember(sortedProjects, searchQuery) { searchProjects(sortedProjects, searchQuery) }
     val isSearching = searchQuery.isNotBlank()
     val drawerWidth = (configuration.screenWidthDp.dp - DesignTokens.Spacing.xxl)
         .coerceAtLeast(DesignTokens.Drawer.compactWidth)
@@ -589,50 +592,61 @@ private fun RecordingsTab(
     }
 
     // Version counter: incremented after any mutation (delete, rename) so the
-    // remember cache below is invalidated and the list is re-scanned from disk.
+    // async loader below is restarted and the list is re-scanned from disk.
     var memoListVersion by remember { mutableIntStateOf(0) }
 
     val context = LocalContext.current
-    val folders: List<RecordingFolder> = remember(projects, memoListVersion) {
-        val memosRoot = java.io.File(context.filesDir, "voice-memos")
-        if (!memosRoot.exists()) return@remember emptyList()
-
-        val projectById = projects.associateBy { it.id }
-        memosRoot.listFiles()
-            ?.filter { it.isDirectory }
-            ?.mapNotNull { dir ->
-                val memos = service.memosForProject(dir.name)
-                if (memos.isEmpty()) return@mapNotNull null
-                val title = projectById[dir.name]?.title?.ifEmpty { "Untitled" }
-                    ?: "Deleted song"
-                RecordingFolder(
-                    projectId = dir.name,
-                    title = title,
-                    memos = memos,
-                )
-            }
-            ?.sortedByDescending { it.memos.first().file.lastModified() }
-            ?: emptyList()
-    }
-    val query = searchQuery.trim()
-    val visibleFolders = if (query.isEmpty()) {
-        folders
-    } else {
-        folders.mapNotNull { folder ->
-            if (folder.title.contains(query, ignoreCase = true)) {
-                folder
+    val scope = rememberCoroutineScope()
+    val projectById = remember(projects) { projects.associateBy { it.id } }
+    val folders: List<RecordingFolder>? by produceState<List<RecordingFolder>?>(
+        initialValue = null,
+        projects,
+        memoListVersion
+    ) {
+        value = withContext(Dispatchers.IO) {
+            val memosRoot = File(context.filesDir, "voice-memos")
+            if (!memosRoot.exists()) {
+                emptyList()
             } else {
-                val matches = folder.memos.filter { memo ->
-                    VoiceMemoService.displayName(memo.file).contains(query, ignoreCase = true)
-                }
-                if (matches.isEmpty()) {
-                    null
+                memosRoot.listFiles()
+                    ?.filter { it.isDirectory }
+                    ?.mapNotNull { dir ->
+                        val memos = service.memosForProject(dir.name)
+                        if (memos.isEmpty()) return@mapNotNull null
+                        val title = projectById[dir.name]?.title?.ifEmpty { "Untitled" }
+                            ?: "Deleted song"
+                        RecordingFolder(
+                            projectId = dir.name,
+                            title = title,
+                            memos = memos,
+                        )
+                    }
+                    ?.sortedByDescending { it.memos.first().file.lastModified() }
+                    ?: emptyList()
+            }
+        }
+    }
+    val query = remember(searchQuery) { searchQuery.trim() }
+    val visibleFolders = remember(folders, query) {
+        if (query.isEmpty()) {
+            folders.orEmpty()
+        } else {
+            folders.orEmpty().mapNotNull { folder ->
+                if (folder.title.contains(query, ignoreCase = true)) {
+                    folder
                 } else {
-                    RecordingFolder(
-                        projectId = folder.projectId,
-                        title = folder.title,
-                        memos = matches,
-                    )
+                    val matches = folder.memos.filter { memo ->
+                        VoiceMemoService.displayName(memo.file).contains(query, ignoreCase = true)
+                    }
+                    if (matches.isEmpty()) {
+                        null
+                    } else {
+                        RecordingFolder(
+                            projectId = folder.projectId,
+                            title = folder.title,
+                            memos = matches,
+                        )
+                    }
                 }
             }
         }
@@ -649,20 +663,32 @@ private fun RecordingsTab(
             text = { Text("${selectedMemoPaths.size} recordings will be permanently deleted.") },
             confirmButton = {
                 TextButton(onClick = {
-                    folders
-                        .flatMap { it.memos }
-                        .filter { it.file.absolutePath in selectedMemoPaths }
-                        .forEach(service::deleteMemo)
-                    pendingBulkDelete = false
-                    isSelecting = false
-                    selectedMemoPaths = emptySet()
-                    memoListVersion++
+                    scope.launch {
+                        folders.orEmpty()
+                            .flatMap { it.memos }
+                            .filter { it.file.absolutePath in selectedMemoPaths }
+                            .forEach { service.deleteMemo(it) }
+                        pendingBulkDelete = false
+                        isSelecting = false
+                        selectedMemoPaths = emptySet()
+                        memoListVersion++
+                    }
                 }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingBulkDelete = false }) { Text("Cancel") }
             }
         )
+    }
+
+    if (folders == null) {
+        Box(
+            modifier = modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
+        }
+        return
     }
 
     if (visibleFolders.isEmpty()) {
@@ -900,6 +926,7 @@ private fun RecordingMemoRow(
     onMemoListChanged: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
     val isPlaying = service.playingFile == memo.file
     var pendingDelete by remember { mutableStateOf(false) }
     var pendingRename by remember { mutableStateOf(false) }
@@ -914,9 +941,11 @@ private fun RecordingMemoRow(
             text = { Text("This recording will be permanently deleted.") },
             confirmButton = {
                 TextButton(onClick = {
-                    service.deleteMemo(memo)
-                    pendingDelete = false
-                    onMemoListChanged()
+                    scope.launch {
+                        service.deleteMemo(memo)
+                        pendingDelete = false
+                        onMemoListChanged()
+                    }
                 }) { Text("Delete", color = colorScheme.error) }
             },
             dismissButton = {
@@ -940,9 +969,11 @@ private fun RecordingMemoRow(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val renamed = service.renameMemo(memo, renameText)
-                    pendingRename = false
-                    if (renamed != null) onMemoListChanged()
+                    scope.launch {
+                        val renamed = service.renameMemo(memo, renameText)
+                        pendingRename = false
+                        if (renamed != null) onMemoListChanged()
+                    }
                 }) { Text("OK") }
             },
             dismissButton = {

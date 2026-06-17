@@ -169,6 +169,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
+    var micBusy by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val fullSheetHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
     val assistantSheetHandleHeightPx = with(density) { DesignTokens.Sheet.handleArea.toPx() }
@@ -346,8 +347,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            val projectId = viewModel.ensureProjectForRecording()
-            runCatching { viewModel.voiceMemoService.startRecording(projectId) }
+            if (!micBusy) {
+                micBusy = true
+                scope.launch {
+                    try {
+                        val projectId = viewModel.ensureProjectForRecording()
+                        runCatching { viewModel.voiceMemoService.startRecording(projectId) }
+                    } finally {
+                        micBusy = false
+                    }
+                }
+            }
         } else {
             scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_permission_denied)) }
         }
@@ -360,8 +370,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             context, Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
         if (hasPerm) {
-            val projectId = viewModel.ensureProjectForRecording()
-            runCatching { viewModel.voiceMemoService.startRecording(projectId) }
+            if (micBusy) return
+            micBusy = true
+            scope.launch {
+                try {
+                    val projectId = viewModel.ensureProjectForRecording()
+                    runCatching { viewModel.voiceMemoService.startRecording(projectId) }
+                } finally {
+                    micBusy = false
+                }
+            }
         } else {
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -958,8 +976,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 interactionSource = micPillInteractionSource,
                                 indication = ripple()
                             ) {
+                                if (micBusy) return@clickable
                                 if (memoService.isRecording) {
-                                    runCatching { memoService.stopRecording() }
+                                    micBusy = true
+                                    scope.launch {
+                                        try {
+                                            runCatching { memoService.stopRecording() }
+                                        } finally {
+                                            micBusy = false
+                                        }
+                                    }
                                 } else {
                                     onMicFabTap()
                                 }
