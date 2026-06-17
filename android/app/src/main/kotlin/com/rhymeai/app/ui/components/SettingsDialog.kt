@@ -7,13 +7,18 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.launch
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,10 +26,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -58,6 +64,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
@@ -66,10 +73,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -85,6 +92,7 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -124,7 +132,6 @@ fun SettingsDialog(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val context = LocalContext.current
-    val density = LocalDensity.current
 
     // Read total RAM once — used to show which Gemma model fits this device.
     val deviceTotalRamBytes = remember(context) {
@@ -306,38 +313,59 @@ fun SettingsDialog(
         focusedPlaceholderColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
     )
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(DesignTokens.Spacing.lg)
-                .bottomSafeActionPadding(extra = DesignTokens.Spacing.lg),
-            contentAlignment = Alignment.Center
-        ) {
-            val dialogMaxHeight = maxHeight.coerceAtMost(640.dp)
-            val dialogVerticalOffset = remember(context, density) {
-                val statusBarResourceId = context.resources.getIdentifier("status_bar_height", "dimen", "android")
-                if (statusBarResourceId > 0) {
-                    with(density) { context.resources.getDimensionPixelSize(statusBarResourceId).toDp() / 2 }
-                } else {
-                    0.dp
-                }
-            }
+    // Full-screen page slide-in/out lifecycle (mirrors ProjectsDrawer). pageVisible
+    // drives the enter/exit animation; closePage() plays the exit before the host
+    // (MainActivity's `if (showSettingsDialog)`) removes us via onDismiss().
+    var pageVisible by remember { mutableStateOf(false) }
+    var isClosing by remember { mutableStateOf(false) }
+    fun closePage() {
+        if (isClosing) return
+        isClosing = true
+        pageVisible = false
+        coroutineScope.launch {
+            delay(DesignTokens.Motion.drawerPresentMillis.toLong())
+            onDismiss()
+        }
+    }
+    LaunchedEffect(Unit) { pageVisible = true }
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = dialogMaxHeight)
-                    .offset(y = -dialogVerticalOffset)
-                    .background(colorScheme.surfaceContainerLow, RoundedCornerShape(16.dp))
-                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(16.dp))
-                    .animateContentSize(animationSpec = tween(durationMillis = 260))
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState())
+    Dialog(
+        onDismissRequest = { closePage() },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AnimatedVisibility(
+                visible = pageVisible,
+                enter = slideInHorizontally(
+                    animationSpec = tween(DesignTokens.Motion.drawerPresentMillis),
+                    initialOffsetX = { it }
+                ) + fadeIn(animationSpec = tween(DesignTokens.Motion.drawerPresentMillis)),
+                exit = slideOutHorizontally(
+                    animationSpec = tween(DesignTokens.Motion.drawerPresentMillis),
+                    targetOffsetX = { it }
+                ) + fadeOut(animationSpec = tween(DesignTokens.Motion.drawerPresentMillis))
             ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .imePadding(),
+                    shape = RoundedCornerShape(0.dp),
+                    color = colorScheme.surfaceContainerLow,
+                    contentColor = colorScheme.onSurface,
+                    tonalElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .padding(horizontal = 20.dp)
+                            .padding(top = DesignTokens.Spacing.lg)
+                            .bottomSafeActionPadding(extra = DesignTokens.Spacing.lg)
+                            .verticalScroll(rememberScrollState())
+                    ) {
                 // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -351,7 +379,7 @@ fun SettingsDialog(
                         Icon(Icons.Default.Settings, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
                         Text("Settings", fontWeight = FontWeight.Medium, fontSize = 18.sp, color = colorScheme.onSurface)
                     }
-                    IconButton(onClick = onDismiss) {
+                    IconButton(onClick = { closePage() }) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = colorScheme.onSurfaceVariant)
                     }
                 }
@@ -909,6 +937,8 @@ fun SettingsDialog(
                 }
 
                 } // end else (General tab)
+            }
+                }
             }
         }
     }

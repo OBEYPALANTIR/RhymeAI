@@ -52,7 +52,7 @@ fun SyllableColoredText(
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default
 ) {
-    val baseTextColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f)
+    val baseTextColor = MaterialTheme.colorScheme.onBackground
     val isDark = isSystemInDarkTheme()
     var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     val density = LocalDensity.current

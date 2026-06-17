@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -14,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -42,8 +45,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Mic
@@ -52,6 +57,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,6 +74,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -75,13 +82,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -95,6 +108,7 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -391,8 +405,7 @@ fun ProjectsDrawer(
                                     projects = projects,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .weight(1f),
-                                    onLoadProject = { selected -> closeDrawer { onLoadProject(selected) } }
+                                        .weight(1f)
                                 )
                             }
 
@@ -538,19 +551,23 @@ fun ProjectsDialog(
 }
 
 /**
- * Recordings tab — scans all voice-memo dirs across every project and shows them
- * newest-first. Orphaned memos (project no longer in [projects]) are labeled
- * "Deleted song" so they can still be played or cleaned up.
+ * Recordings tab — scans all voice-memo dirs across every project and groups
+ * recordings by their owning project folder. Orphaned memos (project no longer
+ * in [projects]) are labeled "Deleted song" so they can still be played or
+ * cleaned up.
  */
+private data class RecordingFolder(
+    val projectId: String,
+    val title: String,
+    val memos: List<VoiceMemo>,
+)
+
 @Composable
 private fun RecordingsTab(
     service: VoiceMemoService?,
     projects: List<SongProject>,
-    modifier: Modifier = Modifier,
-    onLoadProject: (SongProject) -> Unit
+    modifier: Modifier = Modifier
 ) {
-    val colorScheme = MaterialTheme.colorScheme
-
     if (service == null) {
         // Service unavailable — show a graceful empty state.
         EmptyDrawerState(
@@ -564,23 +581,57 @@ private fun RecordingsTab(
     // remember cache below is invalidated and the list is re-scanned from disk.
     var memoListVersion by remember { mutableIntStateOf(0) }
 
-    // Build a flat list of (songTitle, VoiceMemo) across all projects by scanning
-    // the filesDir/voice-memos/ directory tree.
     val context = LocalContext.current
-    val allEntries: List<Pair<String, VoiceMemo>> = remember(projects, memoListVersion) {
+    val folders: List<RecordingFolder> = remember(projects, memoListVersion) {
         val memosRoot = java.io.File(context.filesDir, "voice-memos")
         if (!memosRoot.exists()) return@remember emptyList()
 
         val projectById = projects.associateBy { it.id }
-        memosRoot.listFiles()?.flatMap { dir ->
-            if (!dir.isDirectory) return@flatMap emptyList()
-            val title = projectById[dir.name]?.title?.ifEmpty { "Untitled" }
-                ?: "Deleted song"
-            service.memosForProject(dir.name).map { memo -> title to memo }
-        }?.sortedByDescending { it.second.file.lastModified() } ?: emptyList()
+        memosRoot.listFiles()
+            ?.filter { it.isDirectory }
+            ?.mapNotNull { dir ->
+                val memos = service.memosForProject(dir.name)
+                if (memos.isEmpty()) return@mapNotNull null
+                val title = projectById[dir.name]?.title?.ifEmpty { "Untitled" }
+                    ?: "Deleted song"
+                RecordingFolder(
+                    projectId = dir.name,
+                    title = title,
+                    memos = memos,
+                )
+            }
+            ?.sortedByDescending { it.memos.first().file.lastModified() }
+            ?: emptyList()
+    }
+    val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    var isSelecting by remember { mutableStateOf(false) }
+    var selectedMemoPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingBulkDelete by remember { mutableStateOf(false) }
+
+    if (pendingBulkDelete) {
+        AlertDialog(
+            onDismissRequest = { pendingBulkDelete = false },
+            title = { Text("Delete recordings?") },
+            text = { Text("${selectedMemoPaths.size} recordings will be permanently deleted.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    folders
+                        .flatMap { it.memos }
+                        .filter { it.file.absolutePath in selectedMemoPaths }
+                        .forEach(service::deleteMemo)
+                    pendingBulkDelete = false
+                    isSelecting = false
+                    selectedMemoPaths = emptySet()
+                    memoListVersion++
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingBulkDelete = false }) { Text("Cancel") }
+            }
+        )
     }
 
-    if (allEntries.isEmpty()) {
+    if (folders.isEmpty()) {
         EmptyDrawerState(
             icon = { Icon(Icons.Default.Mic, contentDescription = null) },
             text = "No recordings yet. Tap the mic to start."
@@ -588,30 +639,224 @@ private fun RecordingsTab(
         return
     }
 
-    LazyColumn(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
-        contentPadding = PaddingValues(vertical = DesignTokens.Spacing.sm)
+    Column(modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = DesignTokens.Spacing.xs),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isSelecting) {
+                TextButton(onClick = {
+                    isSelecting = false
+                    selectedMemoPaths = emptySet()
+                }) {
+                    Text("Cancel")
+                }
+                TextButton(
+                    onClick = { pendingBulkDelete = true },
+                    enabled = selectedMemoPaths.isNotEmpty()
+                ) {
+                    Text("Delete (${selectedMemoPaths.size})", color = MaterialTheme.colorScheme.error)
+                }
+            } else {
+                TextButton(onClick = { isSelecting = true }) {
+                    Text("Select")
+                }
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+            contentPadding = PaddingValues(vertical = DesignTokens.Spacing.sm)
+        ) {
+            folders.forEach { folder ->
+                item(key = "folder-${folder.projectId}") {
+                    FolderHeaderRow(
+                        folder = folder,
+                        isExpanded = expanded[folder.projectId] == true,
+                        onToggle = {
+                            expanded[folder.projectId] = !(expanded[folder.projectId] ?: false)
+                        }
+                    )
+                }
+                if (expanded[folder.projectId] == true) {
+                    items(folder.memos, key = { it.file.absolutePath }) { memo ->
+                        val memoPath = memo.file.absolutePath
+                        RecordingMemoRow(
+                            memo = memo,
+                            service = service,
+                            isSelecting = isSelecting,
+                            isSelected = memoPath in selectedMemoPaths,
+                            onSelectionChanged = { selected ->
+                                selectedMemoPaths = if (selected) {
+                                    selectedMemoPaths + memoPath
+                                } else {
+                                    selectedMemoPaths - memoPath
+                                }
+                            },
+                            onMemoListChanged = { memoListVersion++ }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderHeaderRow(
+    folder: RecordingFolder,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(DesignTokens.Radius.md))
+            .clickable(onClick = onToggle)
+            .heightIn(min = DesignTokens.Touch.minTarget)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(allEntries, key = { it.second.file.absolutePath }) { (songTitle, memo) ->
-            val projectForTitle = projects.firstOrNull { it.title == songTitle || it.title.ifEmpty { "Untitled" } == songTitle }
-            RecordingMemoRow(
-                songTitle = songTitle,
-                memo = memo,
-                service = service,
-                onTapSongTitle = { if (projectForTitle != null) onLoadProject(projectForTitle) },
-                onMemoListChanged = { memoListVersion++ }
+        Icon(
+            Icons.Default.Folder,
+            contentDescription = null,
+            tint = colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp)
+        )
+        Surface(
+            shape = RoundedCornerShape(DesignTokens.Radius.pill),
+            color = colorScheme.secondaryContainer.copy(alpha = 0.7f)
+        ) {
+            Text(
+                text = "Song",
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = colorScheme.onSecondaryContainer
             )
+        }
+        Text(
+            text = folder.title,
+            modifier = Modifier.weight(1f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (folder.title == "Deleted song") {
+                colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            } else {
+                colorScheme.onSurface
+            }
+        )
+        Text(
+            text = "${folder.memos.size}",
+            fontSize = 12.sp,
+            color = colorScheme.onSurfaceVariant
+        )
+        Icon(
+            Icons.Default.KeyboardArrowDown,
+            contentDescription = if (isExpanded) "Collapse" else "Expand",
+            tint = colorScheme.onSurfaceVariant,
+            modifier = Modifier.rotate(if (isExpanded) 180f else 0f)
+        )
+    }
+}
+
+@Composable
+private fun SwipeToRevealDelete(
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val rowShape = RoundedCornerShape(DesignTokens.Radius.lg)
+    val density = LocalDensity.current
+    val revealWidth = 64.dp
+    val revealPx = with(density) { revealWidth.toPx() }
+    val revealPxInt = revealPx.roundToInt()
+    val offsetX = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    // Only compose the red reveal layer when the rendered row offset is visibly open.
+    // At rest the stationary container and moving foreground both paint the row surface,
+    // so anti-aliased rounded edges cannot blend with red and leave a halo.
+    val displayOffsetPx by remember {
+        derivedStateOf { offsetX.value.roundToInt().coerceIn(-revealPxInt, 0) }
+    }
+    val revealVisible by remember { derivedStateOf { displayOffsetPx < 0 } }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(rowShape)
+            .background(colorScheme.surfaceContainerLow)
+            .border(1.dp, colorScheme.outlineVariant, rowShape)
+    ) {
+        if (revealVisible) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(colorScheme.errorContainer),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                IconButton(
+                    onClick = {
+                        scope.launch { offsetX.animateTo(0f, tween(DesignTokens.Motion.standardMillis)) }
+                        onDelete()
+                    },
+                    modifier = Modifier.width(revealWidth)
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete recording",
+                        tint = colorScheme.onErrorContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(displayOffsetPx, 0) }
+                .background(colorScheme.surfaceContainerLow)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { _, dragAmount ->
+                            scope.launch {
+                                offsetX.snapTo((offsetX.value + dragAmount).coerceIn(-revealPx, 0f))
+                            }
+                        },
+                        onDragEnd = {
+                            val target = if (offsetX.value < -revealPx / 2f) -revealPx else 0f
+                            scope.launch {
+                                offsetX.animateTo(target, tween(DesignTokens.Motion.standardMillis))
+                            }
+                        },
+                        onDragCancel = {
+                            val target = if (offsetX.value < -revealPx / 2f) -revealPx else 0f
+                            scope.launch {
+                                offsetX.animateTo(target, tween(DesignTokens.Motion.standardMillis))
+                            }
+                        }
+                    )
+                }
+        ) {
+            content()
         }
     }
 }
 
 @Composable
 private fun RecordingMemoRow(
-    songTitle: String,
     memo: VoiceMemo,
     service: VoiceMemoService,
-    onTapSongTitle: () -> Unit,
+    isSelecting: Boolean,
+    isSelected: Boolean,
+    onSelectionChanged: (Boolean) -> Unit,
     onMemoListChanged: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -666,67 +911,67 @@ private fun RecordingMemoRow(
         )
     }
 
-    OutlinedCard(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.outlinedCardColors(
-            containerColor = colorScheme.surfaceContainerLow
-        )
-    ) {
-        Row(
+    SwipeToRevealDelete(onDelete = { pendingDelete = true }) {
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .then(if (isSelecting) Modifier.clickable { onSelectionChanged(!isSelected) } else Modifier),
+            color = colorScheme.surfaceContainerLow,
+            contentColor = colorScheme.onSurface
         ) {
-            // Play / Pause
-            IconButton(
-                onClick = {
-                    if (isPlaying) service.stopPlayback() else service.play(memo)
-                },
-                modifier = Modifier.size(DesignTokens.Touch.minTarget)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                    tint = colorScheme.primary
-                )
-            }
+                if (isSelecting) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = onSelectionChanged
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        if (isPlaying) service.stopPlayback() else service.play(memo)
+                    },
+                    modifier = Modifier.size(DesignTokens.Touch.minTarget)
+                ) {
+                    Icon(
+                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = colorScheme.primary
+                    )
+                }
 
-            Column(modifier = Modifier.weight(1f)) {
-                // Tapping the song title navigates to that project.
-                Text(
-                    text = songTitle,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = if (songTitle == "Deleted song") colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            else colorScheme.primary,
-                    modifier = if (songTitle != "Deleted song") Modifier.clickable(onClick = onTapSongTitle) else Modifier
-                )
-                Text(
-                    text = "${memo.label}  ·  ${VoiceMemoService.formatDuration(memo.durationMs)}",
-                    fontSize = 11.sp,
-                    color = colorScheme.onSurfaceVariant
-                )
-            }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = VoiceMemoService.displayName(memo.file),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        text = VoiceMemoService.formatDuration(memo.durationMs),
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
 
-            // Rename
-            IconButton(
-                onClick = {
-                    renameText = VoiceMemoService.displayName(memo.file)
-                    pendingRename = true
-                },
-                modifier = Modifier.size(DesignTokens.Touch.minTarget)
-            ) {
-                Icon(Icons.Default.Edit, contentDescription = "Rename recording", tint = colorScheme.onSurfaceVariant)
-            }
-
-            // Delete
-            IconButton(
-                onClick = { pendingDelete = true },
-                modifier = Modifier.size(DesignTokens.Touch.minTarget)
-            ) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete recording", tint = colorScheme.onSurfaceVariant)
+                IconButton(
+                    onClick = {
+                        renameText = VoiceMemoService.displayName(memo.file)
+                        pendingRename = true
+                    },
+                    modifier = Modifier.size(DesignTokens.Touch.minTarget)
+                ) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = "Rename recording",
+                        tint = colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }

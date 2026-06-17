@@ -18,6 +18,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.log10
 
 data class VoiceMemo(
     val file: File,
@@ -68,13 +69,19 @@ class VoiceMemoService(private val context: Context) {
     // ---------------------------------------------------------------------------
 
     /**
-     * Return the peak amplitude since the last call, normalized to 0..1.
-     * Wraps MediaRecorder.getMaxAmplitude() — only meaningful while isRecording.
+     * Return the peak amplitude since the last call, normalized perceptually to 0..1.
+     *
+     * MediaRecorder exposes a linear peak in 0..32767; mapping it through decibels
+     * over a -60..0 dB range makes normal speech visibly move the spectralizer.
      * Calling when not recording returns 0f.
      */
     fun currentAmplitude(): Float {
         val raw = recorder?.maxAmplitude ?: 0
-        return (raw / 32767f).coerceIn(0f, 1f)
+        if (raw <= 0) return 0f
+
+        val amplitude = raw / 32767f
+        val db = 20.0 * log10(amplitude.toDouble())
+        return (((db + 60.0) / 60.0).toFloat()).coerceIn(0f, 1f)
     }
 
     // ---------------------------------------------------------------------------

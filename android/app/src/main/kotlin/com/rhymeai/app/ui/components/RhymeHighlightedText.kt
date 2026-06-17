@@ -26,7 +26,7 @@ fun RhymeHighlightedText(
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default
 ) {
-    val baseTextColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f)
+    val baseTextColor = MaterialTheme.colorScheme.onBackground
     val palette = rhymePalette(isSystemInDarkTheme())
 
     if (!enabled || text.isEmpty()) {

@@ -7,7 +7,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -59,7 +58,6 @@ import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.foundation.shape.CircleShape
@@ -68,7 +66,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -85,14 +82,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -777,7 +778,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 color = if (rhymeOverlayActive)
                                     Color.Transparent
                                 else
-                                    colorScheme.onBackground.copy(alpha = 0.9f)
+                                    colorScheme.onBackground
                             ),
                             cursorBrush = SolidColor(colorScheme.primary),
                             modifier = Modifier
@@ -867,24 +868,25 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 horizontalAlignment = Alignment.End
             ) {
                 val memoService = viewModel.voiceMemoService
+                val barCount = 22
                 // Amplitude + elapsed polling while recording — drives the spectralizer pill.
-                var amplitudeBars by remember { mutableStateOf(FloatArray(14) { 0f }) }
-                var smoothedBars by remember { mutableStateOf(FloatArray(14) { 0f }) }
+                var amplitudeBars by remember { mutableStateOf(FloatArray(barCount) { 0f }) }
+                var smoothedBars by remember { mutableStateOf(FloatArray(barCount) { 0f }) }
 
                 LaunchedEffect(memoService.isRecording) {
                     if (!memoService.isRecording) {
-                        amplitudeBars = FloatArray(14) { 0f }
-                        smoothedBars = FloatArray(14) { 0f }
+                        amplitudeBars = FloatArray(barCount) { 0f }
+                        smoothedBars = FloatArray(barCount) { 0f }
                         return@LaunchedEffect
                     }
                     while (memoService.isRecording) {
                         delay(100)
                         val raw = memoService.currentAmplitude()
                         // Shift bars left and push new reading on the right side.
-                        val next = FloatArray(14)
-                        for (i in 0 until 13) next[i] = smoothedBars[i + 1]
+                        val next = FloatArray(barCount)
+                        for (i in 0 until barCount - 1) next[i] = smoothedBars[i + 1]
                         // Exponential moving average smoothing so bars don't jump abruptly.
-                        next[13] = smoothedBars[13] * 0.7f + raw * 0.3f
+                        next[barCount - 1] = smoothedBars[barCount - 1] * 0.7f + raw * 0.3f
                         smoothedBars = next
                         amplitudeBars = next
                     }
@@ -896,53 +898,49 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     label = "micRecording"
                 )
 
-                // Pill width: 56dp (circle FAB size) → 168dp (pill to match UnBlock).
+                val micRecordingWidth = 216.dp
+                val unBlockExtendedWidth = 150.dp
+
+                // Pill width: 56dp (circle FAB size) → 216dp recording pill.
+                // The enclosing action area is right-aligned, so the Row grows left.
                 val pillWidth by micTransition.animateDp(
                     label = "pillWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
-                ) { recording -> if (recording) 168.dp else 56.dp }
+                ) { recording -> if (recording) micRecordingWidth else 56.dp }
 
-                // UnBlock vertical fall + fade ride the SAME expressive spring as the
-                // pill, both directions, so the pill stretch and the FAB fall-away travel
-                // on one clock (matches iOS, where a single spring drives everything).
-                // Slides down 72dp (full height + gap) on record start, rises back on stop.
-                val unBlockOffsetDp by micTransition.animateDp(
-                    label = "unBlockOffset",
+                val unBlockWidth by micTransition.animateDp(
+                    label = "unBlockWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
-                ) { recording -> if (recording) 72.dp else 0.dp }
+                ) { recording -> if (recording) 56.dp else unBlockExtendedWidth }
 
-                val unBlockAlpha by micTransition.animateFloat(
-                    label = "unBlockAlpha",
+                val unBlockWordmarkAlpha by micTransition.animateFloat(
+                    label = "unBlockWordmarkAlpha",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 0f else 1f }
 
-                // Spectralizer content (bars + elapsed time) fades in AFTER pill has
-                // mostly expanded — stagger delay of 180ms into the transition.
-                val contentAlpha by micTransition.animateFloat(
-                    label = "contentAlpha",
-                    transitionSpec = {
-                        if (targetState) {
-                            tween(
-                                durationMillis = 180,
-                                delayMillis = 200,
-                                easing = DesignTokens.Motion.emphasizedEasing
-                            )
-                        } else {
-                            tween(durationMillis = 100, easing = DesignTokens.Motion.exitEasing)
-                        }
-                    }
+                val unBlockWordmarkWidth by micTransition.animateDp(
+                    label = "unBlockWordmarkWidth",
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
+                ) { recording -> if (recording) 0.dp else 76.dp }
+
+                val recProgress by micTransition.animateFloat(
+                    label = "recProgress",
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 1f else 0f }
 
+                val barsAlpha = ((recProgress - 0.55f) / 0.30f).coerceIn(0f, 1f)
+
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
                 ) {
-                    // Animated mic/pill — stretches right to fill the space UnBlock vacated.
+                    // Animated mic/pill — the right-aligned row makes this expand left.
                     val micPillInteractionSource = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
                             .width(pillWidth)
                             .height(56.dp)
+                            .clip(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
                                 colorScheme.surfaceContainerHigh,
                                 RoundedCornerShape(DesignTokens.Radius.pill)
@@ -967,84 +965,120 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     "Stop recording"
                                 else
                                     context.getString(R.string.voice_memo_open_sheet)
-                            },
-                        contentAlignment = Alignment.Center
+                            }
                     ) {
-                        Box(modifier = Modifier.matchParentSize())
-
+                        // Spectralizer content fades in from the same spring progress.
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.padding(horizontal = 10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, end = 56.dp)
+                                .alpha(barsAlpha)
                         ) {
-                            // Icon: mic ↔ pause crossfade, driven straight off the
-                            // recording state (Crossfade runs its own clock).
-                            Crossfade(
-                                targetState = memoService.isRecording,
-                                animationSpec = tween(
-                                    durationMillis = 160,
-                                    easing = DesignTokens.Motion.emphasizedEasing
-                                ),
-                                label = "micPauseIcon"
-                            ) { recording ->
-                                Icon(
-                                    imageVector = if (recording) Icons.Default.Pause else Icons.Default.Mic,
-                                    contentDescription = null,
-                                    tint = if (memoService.isRecording) colorScheme.error
-                                           else colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-
-                            // Spectralizer content fades in staggered after pill stretches.
-                            if (contentAlpha > 0f) {
-                                Canvas(
-                                    modifier = Modifier
-                                        .width((amplitudeBars.size * 5).dp)
-                                        .height(24.dp)
-                                        .alpha(contentAlpha)
-                                ) {
-                                    val barWidthPx = 3.dp.toPx()
-                                    val gapPx = 2.dp.toPx()
-                                    val maxHeightPx = size.height
-                                    amplitudeBars.forEachIndexed { i, amplitude ->
-                                        val barHeight = (amplitude * maxHeightPx).coerceAtLeast(2.dp.toPx())
-                                        val x = i * (barWidthPx + gapPx)
-                                        drawRoundRect(
-                                            color = colorScheme.error,
-                                            topLeft = androidx.compose.ui.geometry.Offset(x, (maxHeightPx - barHeight) / 2f),
-                                            size = androidx.compose.ui.geometry.Size(barWidthPx, barHeight),
-                                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidthPx / 2f)
-                                        )
-                                    }
+                            Canvas(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(24.dp)
+                            ) {
+                                val pitch = size.width / amplitudeBars.size
+                                val barWidthPx = pitch * 0.6f
+                                amplitudeBars.forEachIndexed { i, amplitude ->
+                                    val barHeight = (amplitude * size.height).coerceAtLeast(2.dp.toPx())
+                                    val x = i * pitch + (pitch - barWidthPx) / 2f
+                                    drawRoundRect(
+                                        color = colorScheme.error,
+                                        topLeft = Offset(x, (size.height - barHeight) / 2f),
+                                        size = androidx.compose.ui.geometry.Size(barWidthPx, barHeight),
+                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidthPx / 2f)
+                                    )
                                 }
-                                Text(
-                                    text = com.rhymeai.app.service.VoiceMemoService.formatDuration(
-                                        memoService.recordingElapsedMs
-                                    ),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = colorScheme.onSurface,
-                                    modifier = Modifier.alpha(contentAlpha)
-                                )
                             }
+                            Text(
+                                text = com.rhymeai.app.service.VoiceMemoService.formatDuration(
+                                    memoService.recordingElapsedMs
+                                ),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colorScheme.onSurface
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .align(BiasAlignment(horizontalBias = recProgress, verticalBias = 0f))
+                                .padding(horizontal = 16.dp)
+                                .size(24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = null,
+                                tint = colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .alpha(1f - recProgress)
+                            )
+                            Icon(
+                                imageVector = Icons.Default.Pause,
+                                contentDescription = null,
+                                tint = colorScheme.error,
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .alpha(recProgress)
+                            )
                         }
                     }
 
-                    // UnBlock pill — slides down and fades out while recording; reverses on stop.
-                    // graphicsLayer doesn't affect layout bounds, so the Row height stays stable.
-                    ExtendedFloatingActionButton(
-                        onClick = { openAssistantSheet() },
-                        containerColor = colorScheme.primary,
-                        contentColor = colorScheme.onPrimary,
-                        shape = RoundedCornerShape(DesignTokens.Radius.pill),
+                    // UnBlock collapses toward its fixed right edge, leaving a pencil circle.
+                    val unBlockInteractionSource = remember { MutableInteractionSource() }
+                    Box(
                         modifier = Modifier
-                            .alpha(unBlockAlpha)
-                            .offset { IntOffset(0, unBlockOffsetDp.roundToPx()) }
+                            .width(unBlockWidth)
+                            .height(56.dp)
+                            .clip(RoundedCornerShape(DesignTokens.Radius.pill))
+                            .background(
+                                colorScheme.primary,
+                                RoundedCornerShape(DesignTokens.Radius.pill)
+                            )
+                            .clickable(
+                                enabled = !memoService.isRecording,
+                                interactionSource = unBlockInteractionSource,
+                                indication = null
+                            ) {
+                                openAssistantSheet()
+                            }
+                            .semantics {
+                                contentDescription = if (memoService.isRecording)
+                                    "AI suggestions unavailable while recording"
+                                else
+                                    "Open AI suggestions"
+                            },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        UnBlockWordmark()
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = null,
+                                tint = colorScheme.onPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .width(unBlockWordmarkWidth)
+                                    .graphicsLayer { alpha = unBlockWordmarkAlpha }
+                                    .clipToBounds()
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Spacer(Modifier.width(8.dp))
+                                    UnBlockWordmark()
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1222,75 +1256,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     }
 }
 
-/**
- * Pill-shaped spectralizer shown while recording. Displays ~14 amplitude bars polled from
- * VoiceMemoService.currentAmplitude(), elapsed time, and a stop button.
- *
- * Tapping the pill calls [onStop]; the parent then calls memoService.stopRecording() which
- * saves the memo to the current project's voice-memos dir.
- */
-@Composable
-private fun SpectralMicPill(
-    bars: FloatArray,
-    elapsedMs: Long,
-    onStop: () -> Unit,
-    colorScheme: androidx.compose.material3.ColorScheme
-) {
-    val barColor = colorScheme.error
-    Box(
-        modifier = Modifier
-            .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.pill))
-            .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.pill))
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // Amplitude bars drawn on a Canvas
-            Canvas(
-                modifier = Modifier
-                    .width((bars.size * 5).dp) // 5dp per bar (3dp bar + 2dp gap)
-                    .height(28.dp)
-            ) {
-                val barWidthPx = 3.dp.toPx()
-                val gapPx = 2.dp.toPx()
-                val maxHeightPx = size.height
-                bars.forEachIndexed { i, amplitude ->
-                    val barHeight = (amplitude * maxHeightPx).coerceAtLeast(2.dp.toPx())
-                    val x = i * (barWidthPx + gapPx)
-                    drawRoundRect(
-                        color = barColor,
-                        topLeft = Offset(x, (maxHeightPx - barHeight) / 2f),
-                        size = androidx.compose.ui.geometry.Size(barWidthPx, barHeight),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidthPx / 2f)
-                    )
-                }
-            }
-
-            // Elapsed MM:SS
-            Text(
-                text = com.rhymeai.app.service.VoiceMemoService.formatDuration(elapsedMs),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = colorScheme.onSurface
-            )
-
-            // Stop button
-            IconButton(
-                onClick = onStop,
-                modifier = Modifier.size(DesignTokens.Touch.minTarget)
-            ) {
-                Icon(
-                    Icons.Default.Stop,
-                    contentDescription = stringResource(R.string.voice_memo_stop_recording),
-                    tint = colorScheme.error,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-    }
-}
 
 private data class TextVerticalRangePx(
     val top: Int,
