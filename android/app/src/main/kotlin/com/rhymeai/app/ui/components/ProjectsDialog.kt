@@ -308,7 +308,16 @@ fun ProjectsDrawer(
                                             }
                                         }
                                     },
-                                    placeholder = { Text("Search songs", fontSize = 14.sp) },
+                                    placeholder = {
+                                        Text(
+                                            text = if (selectedTab == 0) {
+                                                "Search songs"
+                                            } else {
+                                                "Search recordings"
+                                            },
+                                            fontSize = 14.sp
+                                        )
+                                    },
                                     modifier = Modifier.weight(1f),
                                     colors = textFieldColors,
                                     shape = RoundedCornerShape(DesignTokens.Radius.xl)
@@ -403,6 +412,7 @@ fun ProjectsDrawer(
                                 RecordingsTab(
                                     service = service,
                                     projects = projects,
+                                    searchQuery = searchQuery,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .weight(1f)
@@ -566,6 +576,7 @@ private data class RecordingFolder(
 private fun RecordingsTab(
     service: VoiceMemoService?,
     projects: List<SongProject>,
+    searchQuery: String,
     modifier: Modifier = Modifier
 ) {
     if (service == null) {
@@ -603,6 +614,29 @@ private fun RecordingsTab(
             ?.sortedByDescending { it.memos.first().file.lastModified() }
             ?: emptyList()
     }
+    val query = searchQuery.trim()
+    val visibleFolders = if (query.isEmpty()) {
+        folders
+    } else {
+        folders.mapNotNull { folder ->
+            if (folder.title.contains(query, ignoreCase = true)) {
+                folder
+            } else {
+                val matches = folder.memos.filter { memo ->
+                    VoiceMemoService.displayName(memo.file).contains(query, ignoreCase = true)
+                }
+                if (matches.isEmpty()) {
+                    null
+                } else {
+                    RecordingFolder(
+                        projectId = folder.projectId,
+                        title = folder.title,
+                        memos = matches,
+                    )
+                }
+            }
+        }
+    }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     var isSelecting by remember { mutableStateOf(false) }
     var selectedMemoPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -631,10 +665,21 @@ private fun RecordingsTab(
         )
     }
 
-    if (folders.isEmpty()) {
+    if (visibleFolders.isEmpty()) {
         EmptyDrawerState(
-            icon = { Icon(Icons.Default.Mic, contentDescription = null) },
-            text = "No recordings yet. Tap the mic to start."
+            icon = {
+                val icon = if (query.isNotEmpty()) {
+                    Icons.Default.Search
+                } else {
+                    Icons.Default.Mic
+                }
+                Icon(icon, contentDescription = null)
+            },
+            text = if (query.isNotEmpty()) {
+                "No recordings match your search."
+            } else {
+                "No recordings yet. Tap the mic to start."
+            }
         )
         return
     }
@@ -672,17 +717,17 @@ private fun RecordingsTab(
             verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
             contentPadding = PaddingValues(vertical = DesignTokens.Spacing.sm)
         ) {
-            folders.forEach { folder ->
+            visibleFolders.forEach { folder ->
                 item(key = "folder-${folder.projectId}") {
                     FolderHeaderRow(
                         folder = folder,
-                        isExpanded = expanded[folder.projectId] == true,
+                        isExpanded = expanded[folder.projectId] == true || query.isNotEmpty(),
                         onToggle = {
                             expanded[folder.projectId] = !(expanded[folder.projectId] ?: false)
                         }
                     )
                 }
-                if (expanded[folder.projectId] == true) {
+                if (expanded[folder.projectId] == true || query.isNotEmpty()) {
                     items(folder.memos, key = { it.file.absolutePath }) { memo ->
                         val memoPath = memo.file.absolutePath
                         RecordingMemoRow(
