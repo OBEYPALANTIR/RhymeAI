@@ -31,12 +31,12 @@ struct FloatingMicButton: View {
     // Driven by `service.isRecording` via onChange below.
     @State private var progress: CGFloat = 0
 
-    // Bar count is constant; phase offsets give each bar an independent
-    // animation cycle so the wave never looks fully correlated.
-    private static let barCount = 12
-    private let barPhases: [Double] = (0..<FloatingMicButton.barCount).map { i in
-        Double(i) * (.pi / Double(FloatingMicButton.barCount - 1))
-    }
+    // Bar history is a scrolling level meter: newest sample lives at the right edge.
+    private static let barCount = 22
+    @State private var barHistory: [Float] = Array(
+        repeating: 0,
+        count: FloatingMicButton.barCount
+    )
 
     // MARK: - Layout constants
 
@@ -48,6 +48,8 @@ struct FloatingMicButton: View {
     private let recordingPillWidth: CGFloat = 220
     // Height stays constant — same as the idle circle.
     private let pillHeight: CGFloat = RhymeAITokens.Touch.comfortable         // 56
+    // Right-side glyph slot: 44 pt touch target + 8 pt trailing padding.
+    private let glyphSlot: CGFloat = RhymeAITokens.Touch.minimum + RhymeAITokens.Spacing.xs
 
     // MARK: - Body
 
@@ -85,6 +87,7 @@ struct FloatingMicButton: View {
                     }
                     .padding(.leading, RhymeAITokens.Spacing.sm)
                     .opacity(recordingContentOpacity)
+                    .frame(width: max(0, interpolatedWidth - glyphSlot), alignment: .leading)
                     .transition(.opacity)
                 }
 
@@ -142,6 +145,26 @@ struct FloatingMicButton: View {
                 progress = isRecording ? 1 : 0
             }
         }
+        .task(id: service.isRecording) {
+            guard service.isRecording else {
+                barHistory = Array(repeating: 0, count: Self.barCount)
+                return
+            }
+
+            while service.isRecording && !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                } catch {
+                    break
+                }
+
+                guard service.isRecording && !Task.isCancelled else { break }
+                var next = barHistory
+                next.removeFirst()
+                next.append(service.averagePowerNormalized)
+                barHistory = next
+            }
+        }
         // Permission denied alert lives here so the mic button is self-contained.
         .alert("Microphone Access Denied", isPresented: Bindable(service).permissionDenied) {
             Button("Open Settings") {
@@ -171,16 +194,29 @@ struct FloatingMicButton: View {
     // MARK: - Spectral bars
 
     private var spectralBars: some View {
-        HStack(alignment: .bottom, spacing: 2) {
-            ForEach(0..<Self.barCount, id: \.self) { index in
-                SpectralBar(
-                    normalizedAmplitude: service.averagePowerNormalized,
-                    phaseOffset: barPhases[index],
-                    reduceMotion: reduceMotion
+        Canvas { ctx, size in
+            let n = barHistory.count
+            guard n > 0, size.width > 0 else { return }
+
+            let pitch = size.width / CGFloat(n)
+            let barW = pitch * 0.6
+
+            for (i, sample) in barHistory.enumerated() {
+                let h = max(2, CGFloat(sample) * size.height)
+                let x = CGFloat(i) * pitch + (pitch - barW) / 2
+                let rect = CGRect(
+                    x: x,
+                    y: (size.height - h) / 2,
+                    width: barW,
+                    height: h
+                )
+                ctx.fill(
+                    Path(roundedRect: rect, cornerRadius: barW / 2),
+                    with: .color(.white.opacity(0.9))
                 )
             }
         }
-        .frame(height: 18)
+        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
     }
 
     // MARK: - Time formatter
@@ -190,29 +226,5 @@ struct FloatingMicButton: View {
         let m = total / 60
         let s = total % 60
         return String(format: "%d:%02d", m, s)
-    }
-}
-
-// MARK: - Single Spectral Bar
-
-private struct SpectralBar: View {
-    let normalizedAmplitude: Float
-    let phaseOffset: Double
-    let reduceMotion: Bool
-
-    private static let minHeight: CGFloat = 2
-    private static let maxHeight: CGFloat = 16
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 1.5)
-            .fill(.white.opacity(0.9))
-            .frame(width: 2, height: barHeight)
-            .rhymeAnimation(reduceMotion ? .none : .easeOut(duration: 0.1), value: barHeight)
-    }
-
-    private var barHeight: CGFloat {
-        let perturb = Float(sin(phaseOffset + Double(normalizedAmplitude) * .pi)) * 0.15
-        let scaled = max(0, min(1, normalizedAmplitude + perturb))
-        return Self.minHeight + CGFloat(scaled) * (Self.maxHeight - Self.minHeight)
     }
 }

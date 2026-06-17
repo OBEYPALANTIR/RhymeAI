@@ -213,6 +213,36 @@ struct VoiceMemoServiceTests {
         #expect(FileManager.default.fileExists(atPath: source.path))
     }
 
+    // MARK: - deleteMemo
+
+    @Test func deleteMemoRemovesFileAndLeavesNoError() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DeleteMemoTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let file = dir.appendingPathComponent("1700000000000.m4a")
+        FileManager.default.createFile(atPath: file.path, contents: Data())
+
+        let service = VoiceMemoService()
+        service.deleteMemo(at: file)
+
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(service.lastError == nil)
+    }
+
+    @Test func deleteMemoSetsLastErrorWhenFileAbsent() {
+        // Removing a non-existent file must NOT be swallowed silently — the
+        // service records lastError so the UI can surface the failure.
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("absent-\(UUID().uuidString).m4a")
+
+        let service = VoiceMemoService()
+        service.deleteMemo(at: missing)
+
+        #expect(service.lastError != nil)
+    }
+
     // MARK: - displayLabel / isTimestampStem helper logic (replicated here)
 
     @Test func timestampStemOf13DigitsIsRecognised() {
@@ -226,5 +256,23 @@ struct VoiceMemoServiceTests {
         let stem = "Verse 1"
         let isTimestamp = stem.count == 13 && stem.allSatisfy(\.isNumber)
         #expect(!isTimestamp)
+    }
+
+    // MARK: - Spectralizer history
+
+    @Test func spectralizerHistoryShiftsLeftAndAppendsNewestSample() {
+        var history = Array(repeating: Float(0), count: 22)
+        history[0] = -1
+
+        for sample in [Float(0.1), 0.4, 0.9] {
+            history.removeFirst()
+            history.append(sample)
+        }
+
+        #expect(history.count == 22)
+        #expect(!history.contains(-1))
+        #expect(history[19] == 0.1)
+        #expect(history[20] == 0.4)
+        #expect(history[21] == 0.9)
     }
 }

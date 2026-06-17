@@ -24,7 +24,7 @@ struct LyricsTextView: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.font = UIFont.systemFont(ofSize: 16, weight: .regular)
         textView.backgroundColor = .clear
-        textView.textColor = isTransparentText ? .clear : UIColor.label.withAlphaComponent(0.9)
+        textView.textColor = isTransparentText ? .clear : UIColor.label
         textView.tintColor = UIColor(Color.indigo)
         textView.autocorrectionType = .no
         textView.spellCheckingType = .no
@@ -52,7 +52,7 @@ struct LyricsTextView: UIViewRepresentable {
         }
         textView.isEditable = isEditable
         textView.isSelectable = isEditable
-        textView.textColor = isTransparentText ? .clear : UIColor.label.withAlphaComponent(0.9)
+        textView.textColor = isTransparentText ? .clear : UIColor.label
         textView.tintColor = isEditable ? UIColor(Color.indigo) : .clear
         context.coordinator.updatePlaceholder(textView, text: currentRenderedText)
         context.coordinator.updateRewriteHighlight(textView, highlight: rewriteHighlight)

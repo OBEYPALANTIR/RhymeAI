@@ -16,10 +16,11 @@ struct EditorView: View {
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
     @State private var rewriteAccessoryHeight: CGFloat = 0
-    // UnBlock fall-down while mic is recording.
-    // 0 = normal position, positive = shifted down (off-screen).
-    @State private var unblockRecordingOffset: CGFloat = 0
-    @State private var unblockRecordingOpacity: Double = 1
+    // UnBlock collapses into a pencil circle while the mic is recording.
+    @State private var unblockWordmarkOpacity: Double = 1
+    @State private var unblockButtonWidth: CGFloat = 136
+    @State private var unblockWordmarkWidth: CGFloat = 76
+    @State private var unblockCollapsed: Bool = false
 
     var body: some View {
         Group {
@@ -183,12 +184,13 @@ struct EditorView: View {
                 assistantSheetDragOffset = 0
             }
         }
-        // UnBlock fall-down / rise-up coordinated with mic recording.
-        // Falls away when recording starts, rises back when it stops.
+        // UnBlock collapse / expand coordinated with mic recording.
         .onChange(of: viewModel.voiceMemoService.isRecording) { _, isRecording in
             withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
-                unblockRecordingOffset  = isRecording ? RhymeAITokens.Touch.comfortable + RhymeAITokens.Spacing.md : 0
-                unblockRecordingOpacity = isRecording ? 0 : 1
+                unblockWordmarkOpacity = isRecording ? 0 : 1
+                unblockButtonWidth = isRecording ? RhymeAITokens.Touch.comfortable : 136
+                unblockWordmarkWidth = isRecording ? 0 : 76
+                unblockCollapsed = isRecording
             }
         }
         .simultaneousGesture(assistantBackSwipeGesture, including: viewModel.showAssistantSheet ? .all : .subviews)
@@ -213,35 +215,39 @@ struct EditorView: View {
                 HStack(alignment: .bottom, spacing: RhymeAITokens.Spacing.sm) {
                     Spacer()
 
-                    // Floating mic — visible exactly when UnBlock is. Recording
-                    // before any lyrics exist creates the project on demand.
-                    FloatingMicButton(
-                        service: viewModel.voiceMemoService,
-                        ensureProjectId: { viewModel.ensureProjectForRecording() }
-                    )
-                    .accessibilityIdentifier("micButton")
+                    HStack(spacing: RhymeAITokens.Spacing.xs) {
+                        // Floating mic — visible exactly when UnBlock is. Recording
+                        // before any lyrics exist creates the project on demand.
+                        FloatingMicButton(
+                            service: viewModel.voiceMemoService,
+                            ensureProjectId: { viewModel.ensureProjectForRecording() }
+                        )
+                        .accessibilityIdentifier("micButton")
 
-                    // UnBlock FAB — falls away when mic starts recording,
-                    // rises back when recording stops.
-                    Button {
-                        presentAssistantSheet()
-                    } label: {
-                        HStack(spacing: RhymeAITokens.Spacing.xs) {
-                            Image(systemName: "pencil")
-                                .font(.body.weight(.semibold))
-                            UnBlockWordmark()
+                        // UnBlock collapses toward its fixed right edge into a pencil circle.
+                        Button {
+                            presentAssistantSheet()
+                        } label: {
+                            HStack(spacing: unblockCollapsed ? 0 : RhymeAITokens.Spacing.xs) {
+                                Image(systemName: "pencil")
+                                    .font(.body.weight(.semibold))
+                                UnBlockWordmark()
+                                    .opacity(unblockWordmarkOpacity)
+                                    .frame(width: unblockWordmarkWidth)
+                                    .clipped()
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.vertical, RhymeAITokens.Spacing.sm)
+                            .frame(
+                                width: unblockButtonWidth,
+                                height: RhymeAITokens.Touch.comfortable
+                            )
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo, interactive: true, fallbackOpacity: 0.35)
+                            .shadow(color: .indigo.opacity(0.26), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
                         }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, RhymeAITokens.Spacing.md)
-                        .padding(.vertical, RhymeAITokens.Spacing.sm)
-                        .frame(minHeight: RhymeAITokens.Touch.minimum)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo, interactive: true, fallbackOpacity: 0.35)
-                        .shadow(color: .indigo.opacity(0.26), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
+                        .accessibilityIdentifier("unblockButton")
+                        .allowsHitTesting(!viewModel.voiceMemoService.isRecording)
                     }
-                    .accessibilityIdentifier("unblockButton")
-                    .offset(y: unblockRecordingOffset)
-                    .opacity(unblockRecordingOpacity)
-                    .allowsHitTesting(unblockRecordingOpacity > 0.01)
                 }
                 .padding(.trailing, RhymeAITokens.Spacing.md)
                 .padding(.bottom, keyboardIsVisible

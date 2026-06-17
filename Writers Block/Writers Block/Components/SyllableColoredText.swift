@@ -13,7 +13,7 @@ struct SyllableColoredText: View {
         } else {
             Text(text)
                 .font(.system(size: 16))
-                .foregroundStyle(.primary.opacity(0.9))
+                .foregroundStyle(.primary)
         }
     }
 
@@ -32,14 +32,14 @@ struct SyllableColoredText: View {
             // Append non-word characters before this match
             if lastEnd < matchRange.lowerBound {
                 var segment = AttributedString(String(text[lastEnd..<matchRange.lowerBound]))
-                segment.foregroundColor = .primary.opacity(0.9)
+                segment.foregroundColor = .primary
                 result += segment
             }
 
             let word = String(text[matchRange])
             let count = SyllableCounter.count(word)
             var segment = AttributedString(word)
-            segment.foregroundColor = .primary.opacity(0.9)
+            segment.foregroundColor = .primary
             segment.underlineStyle = Text.LineStyle(
                 pattern: .solid,
                 color: syllableColor(for: count)
@@ -52,7 +52,7 @@ struct SyllableColoredText: View {
         // Append remaining text
         if lastEnd < text.endIndex {
             var segment = AttributedString(String(text[lastEnd...]))
-            segment.foregroundColor = .primary.opacity(0.9)
+            segment.foregroundColor = .primary
             result += segment
         }
 

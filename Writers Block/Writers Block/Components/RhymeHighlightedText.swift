@@ -92,7 +92,7 @@ struct RhymeHighlightedText: View, Equatable {
         } else {
             Text(text)
                 .font(.system(size: 16))
-                .foregroundStyle(.primary.opacity(0.9))
+                .foregroundStyle(.primary)
         }
     }
 
@@ -128,7 +128,7 @@ struct RhymeHighlightedText: View, Equatable {
         for (i, tok) in tokens.enumerated() {
             if cursor < tok.range.lowerBound {
                 var pre = AttributedString(String(text[cursor..<tok.range.lowerBound]))
-                pre.foregroundColor = .primary.opacity(0.9)
+                pre.foregroundColor = .primary
                 result += pre
             }
             var seg = AttributedString(tok.value)
@@ -136,7 +136,7 @@ struct RhymeHighlightedText: View, Equatable {
                 seg.foregroundColor = colorFor(key: familyKey)
                 seg.font = .system(size: 16, weight: .semibold)
             } else {
-                seg.foregroundColor = .primary.opacity(0.9)
+                seg.foregroundColor = .primary
             }
             if syllablesEnabled {
                 let count = analyses[i].syllableCount
@@ -151,7 +151,7 @@ struct RhymeHighlightedText: View, Equatable {
 
         if cursor < text.endIndex {
             var tail = AttributedString(String(text[cursor...]))
-            tail.foregroundColor = .primary.opacity(0.9)
+            tail.foregroundColor = .primary
             result += tail
         }
 

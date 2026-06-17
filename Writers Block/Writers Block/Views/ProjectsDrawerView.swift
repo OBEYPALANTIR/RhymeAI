@@ -17,11 +17,16 @@ struct ProjectsDrawerView: View {
     @State private var pendingDeleteProject: SongProject?
     @State private var trashBinPresented = false
     @State private var activeTab: DrawerTab = .songs
-    // Recordings list is refreshed on appear and after delete/rename.
-    @State private var allRecordings: [RecordingItem] = []
+    // Recordings folders refresh on appear and after delete/rename.
+    @State private var recordingFolders: [RecordingFolder] = []
+    @State private var expandedFolders: Set<String> = []
+    @State private var isSelectingRecordings = false
+    @State private var selectedRecordingIDs: Set<String> = []
+    @State private var pendingBulkDelete = false
     // Rename alert state — non-nil means the alert is showing.
     @State private var renamingItem: RecordingItem?
     @State private var renameText: String = ""
+    @State private var pendingDeleteRecording: RecordingItem?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum DrawerTab: String, CaseIterable {
@@ -29,12 +34,18 @@ struct ProjectsDrawerView: View {
         case recordings = "Recordings"
     }
 
-    // Flat list of every memo URL plus resolved project title.
+    // Flat memo URL plus resolved project title, used inside a grouped folder.
     private struct RecordingItem: Identifiable {
         let id: String          // memo URL absoluteString
         let url: URL
         let projectId: String
         let projectTitle: String // "Deleted song" when projectId not in SwiftData
+    }
+
+    private struct RecordingFolder: Identifiable {
+        let id: String          // projectId
+        let title: String
+        let items: [RecordingItem]
     }
 
     private var filteredProjects: [SongProject] {
@@ -246,19 +257,84 @@ struct ProjectsDrawerView: View {
     // MARK: - Recordings Tab
 
     private var recordingsTabContent: some View {
-        ScrollView {
-            LazyVStack(spacing: RhymeAITokens.Spacing.sm) {
-                if allRecordings.isEmpty {
+        Group {
+            if recordingFolders.isEmpty {
+                ScrollView {
                     emptyState(systemImage: "mic.slash", title: "No recordings yet.")
                         .padding(.top, RhymeAITokens.Spacing.md)
-                } else {
-                    ForEach(allRecordings) { item in
-                        recordingRow(item)
+                }
+            } else {
+                VStack(spacing: RhymeAITokens.Spacing.xs) {
+                    HStack {
+                        Spacer()
+                        if isSelectingRecordings {
+                            Button("Cancel") {
+                                isSelectingRecordings = false
+                                selectedRecordingIDs = []
+                            }
+                            .buttonStyle(.rhymePress)
+
+                            Button("Delete (\(selectedRecordingIDs.count))", role: .destructive) {
+                                pendingBulkDelete = true
+                            }
+                            .buttonStyle(.rhymePress)
+                            .disabled(selectedRecordingIDs.isEmpty)
+                        } else {
+                            Button("Select") {
+                                isSelectingRecordings = true
+                            }
+                            .buttonStyle(.rhymePress)
+                        }
                     }
+                    .padding(.horizontal, RhymeAITokens.Spacing.xs)
+
+                    List {
+                        ForEach(recordingFolders) { folder in
+                            Section {
+                                folderHeaderRow(folder)
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+
+                                if expandedFolders.contains(folder.id) {
+                                    ForEach(folder.items) { item in
+                                        recordingRow(
+                                            item,
+                                            isSelecting: isSelectingRecordings,
+                                            isSelected: selectedRecordingIDs.contains(item.id),
+                                            onSelectionChanged: { selected in
+                                                if selected {
+                                                    selectedRecordingIDs.insert(item.id)
+                                                } else {
+                                                    selectedRecordingIDs.remove(item.id)
+                                                }
+                                            }
+                                        )
+                                        .listRowBackground(Color.clear)
+                                        .listRowSeparator(.hidden)
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                            Button(role: .destructive) {
+                                                pendingDeleteRecording = item
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
-            .padding(.top, RhymeAITokens.Spacing.md)
-            .padding(.bottom, RhymeAITokens.Spacing.sm)
+        }
+        .alert("Delete Failed", isPresented: Binding(
+            get: { viewModel.voiceMemoService.lastError != nil },
+            set: { if !$0 { viewModel.voiceMemoService.lastError = nil } }
+        )) {
+            Button("OK", role: .cancel) { viewModel.voiceMemoService.lastError = nil }
+        } message: {
+            Text(viewModel.voiceMemoService.lastError ?? "")
         }
         // Rename alert — presented when renamingItem is non-nil.
         .alert("Rename Recording", isPresented: Binding(
@@ -280,67 +356,119 @@ struct ProjectsDrawerView: View {
         } message: {
             Text("Enter a new name for this recording.")
         }
-    }
-
-    private func recordingRow(_ item: RecordingItem) -> some View {
-        HStack(spacing: RhymeAITokens.Spacing.sm) {
-            // Play / pause
-            PlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
-
-            // Song title + date / display name
-            Button {
-                // Load the song so the user can edit it after tapping the row
-                if let project = projects.first(where: { $0.id == item.projectId }) {
-                    viewModel.loadProject(project)
-                    closeDrawer()
-                }
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.projectTitle)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(displayLabel(url: item.url))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.rhymePress)
-            .disabled(item.projectTitle == "Deleted song")
-
-            // Delete
-            Button(role: .destructive) {
+        .confirmationDialog("Delete Recording?", isPresented: Binding(
+            get: { pendingDeleteRecording != nil },
+            set: { if !$0 { pendingDeleteRecording = nil } }
+        ), titleVisibility: .visible, presenting: pendingDeleteRecording) { item in
+            Button("Delete", role: .destructive) {
                 viewModel.voiceMemoService.deleteMemo(at: item.url)
                 reloadRecordings()
-            } label: {
-                Image(systemName: "trash")
-                    .font(.body)
-                    .foregroundStyle(.red.opacity(0.75))
-                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                pendingDeleteRecording = nil
             }
-            .buttonStyle(.rhymePress)
-            .accessibilityLabel("Delete recording")
+            Button("Cancel", role: .cancel) { pendingDeleteRecording = nil }
+        } message: { _ in
+            Text("This recording will be permanently deleted.")
         }
-        .padding(.horizontal, RhymeAITokens.Spacing.sm)
+        .confirmationDialog("Delete Recordings?", isPresented: $pendingBulkDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                let selectedIDs = selectedRecordingIDs
+                recordingFolders
+                    .flatMap(\.items)
+                    .filter { selectedIDs.contains($0.id) }
+                    .forEach { viewModel.voiceMemoService.deleteMemo(at: $0.url) }
+                pendingBulkDelete = false
+                isSelectingRecordings = false
+                selectedRecordingIDs = []
+                reloadRecordings()
+            }
+            Button("Cancel", role: .cancel) { pendingBulkDelete = false }
+        } message: {
+            Text("\(selectedRecordingIDs.count) recordings will be permanently deleted.")
+        }
+    }
+
+    private func folderHeaderRow(_ folder: RecordingFolder) -> some View {
+        HStack(spacing: RhymeAITokens.Spacing.sm) {
+            Image(systemName: "folder")
+                .foregroundStyle(.secondary)
+            Text("Song")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, RhymeAITokens.Spacing.xs)
+                .padding(.vertical, 3)
+                .background(.secondary.opacity(0.12), in: Capsule())
+            Text(folder.title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(folder.title == "Deleted song" ? .secondary : .primary)
+                .lineLimit(1)
+            Spacer()
+            Text("\(folder.items.count)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Image(systemName: expandedFolders.contains(folder.id) ? "chevron.down" : "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
         .padding(.vertical, RhymeAITokens.Spacing.xs)
-        .liquidGlassSurface(
-            cornerRadius: RhymeAITokens.Radius.sm,
-            tint: .white.opacity(0.03),
-            fallbackOpacity: 0.05
-        )
-        // Swipe from leading edge to rename.
-        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
+                if expandedFolders.contains(folder.id) {
+                    expandedFolders.remove(folder.id)
+                } else {
+                    expandedFolders.insert(folder.id)
+                }
+            }
+        }
+    }
+
+    private func recordingRow(
+        _ item: RecordingItem,
+        isSelecting: Bool,
+        isSelected: Bool,
+        onSelectionChanged: @escaping (Bool) -> Void
+    ) -> some View {
+        HStack(spacing: RhymeAITokens.Spacing.sm) {
+            if isSelecting {
+                Button {
+                    onSelectionChanged(!isSelected)
+                } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? .red : .secondary)
+                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                }
+                .buttonStyle(.rhymePress)
+                .accessibilityLabel(isSelected ? "Deselect recording" : "Select recording")
+            }
+
+            PlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
+
+            Text(displayLabel(url: item.url))
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             Button {
                 let stem = item.url.deletingPathExtension().lastPathComponent
-                // Pre-fill with existing custom name or empty for timestamps.
                 renameText = isTimestampStem(stem) ? "" : stem
                 renamingItem = item
             } label: {
-                Label("Rename", systemImage: "pencil")
+                Image(systemName: "pencil")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
             }
-            .tint(.indigo)
+            .buttonStyle(.rhymePress)
+            .accessibilityLabel("Rename recording")
+        }
+        .padding(.vertical, RhymeAITokens.Spacing.xxs)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isSelecting {
+                onSelectionChanged(!isSelected)
+            }
         }
     }
 
@@ -384,26 +512,32 @@ struct ProjectsDrawerView: View {
             includingPropertiesForKeys: nil,
             options: .skipsHiddenFiles
         ) else {
-            allRecordings = []
+            recordingFolders = []
             return
         }
 
-        var items: [RecordingItem] = []
+        var folders: [RecordingFolder] = []
         for folder in subfolders {
             let projectId = folder.lastPathComponent
-            let title = titleMap[projectId] ?? "Deleted song"
             let memos = VoiceMemoService.memos(for: projectId)
-            for url in memos {
-                items.append(RecordingItem(
-                    id: url.absoluteString,
-                    url: url,
-                    projectId: projectId,
-                    projectTitle: title
-                ))
-            }
+            guard !memos.isEmpty else { continue }
+            let title = titleMap[projectId] ?? "Deleted song"
+            let items = memos
+                .map {
+                    RecordingItem(
+                        id: $0.absoluteString,
+                        url: $0,
+                        projectId: projectId,
+                        projectTitle: title
+                    )
+                }
+                .sorted { $0.url.lastPathComponent > $1.url.lastPathComponent }
+            folders.append(RecordingFolder(id: projectId, title: title, items: items))
         }
-        // Newest first — filenames are ms timestamps so descending sort works directly
-        allRecordings = items.sorted { $0.url.lastPathComponent > $1.url.lastPathComponent }
+
+        recordingFolders = folders.sorted {
+            ($0.items.first?.url.lastPathComponent ?? "") > ($1.items.first?.url.lastPathComponent ?? "")
+        }
     }
 
     private var trashBinButtonLabel: some View {
