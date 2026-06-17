@@ -14,13 +14,13 @@ final class EditorViewModel: ObservableObject {
     @Published var title: String = ""
     @Published var lyrics: String = "" {
         didSet {
-            refreshLyricsDerivedState()
+            scheduleDerivedStateRefresh()
         }
     }
     @Published var theme: String = ""
     @Published var cursorPosition: Int = 0 {
         didSet {
-            refreshRhymeContext()
+            scheduleDerivedStateRefresh()
         }
     }
 
@@ -35,12 +35,12 @@ final class EditorViewModel: ObservableObject {
     @Published var rhymeType: RhymeType = .perfect
     @Published var rhymeScheme: RhymeScheme = .aabb {
         didSet {
-            refreshRhymeContext()
+            scheduleDerivedStateRefresh()
         }
     }
     @Published var customRhymeScheme: String = "" {
         didSet {
-            refreshRhymeContext()
+            scheduleDerivedStateRefresh()
         }
     }
     @Published var rhymeComplexity: RhymeComplexity = .moderate
@@ -66,6 +66,7 @@ final class EditorViewModel: ObservableObject {
     private var rewriteRange: NSRange?
     private var rewriteTask: Task<Void, Never>?
     private var suggestionsTask: Task<Void, Never>?
+    private var derivedStateTask: Task<Void, Never>?
     private var rewriteRejectedCandidates: Set<String> = []
 
     // MARK: - Word Inspector
@@ -296,6 +297,7 @@ final class EditorViewModel: ObservableObject {
         autoSaveTask?.cancel()
         rewriteTask?.cancel()
         suggestionsTask?.cancel()
+        derivedStateTask?.cancel()
         inspectorSynonymsTask?.cancel()
         inspectorAnalysisTask?.cancel()
         // Stop any in-progress recording or playback so AVAudioSession is
@@ -305,6 +307,15 @@ final class EditorViewModel: ObservableObject {
     }
 
     // MARK: - Rhyme Context
+
+    private func scheduleDerivedStateRefresh() {
+        derivedStateTask?.cancel()
+        derivedStateTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.refreshLyricsDerivedState()
+        }
+    }
 
     private func refreshLyricsDerivedState() {
         wordCount = SyllableCounter.wordCount(lyrics)

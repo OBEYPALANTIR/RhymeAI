@@ -33,8 +33,7 @@ final class VoiceMemoService {
     @ObservationIgnored private var audioRecorder: AVAudioRecorder?
     @ObservationIgnored private var audioPlayer: AVAudioPlayer?
     @ObservationIgnored private var elapsedTimer: Timer?
-    // Separate low-frequency timer for metering so the 60 Hz elapsed clock
-    // is not taxed with dB reads on every tick.
+    // Separate metering timer so elapsed-clock updates do not drive dB reads.
     @ObservationIgnored private var meteringTimer: Timer?
     @ObservationIgnored private var recordingStartTime: Date?
     @ObservationIgnored private var activePlayURL: URL?
@@ -44,17 +43,17 @@ final class VoiceMemoService {
 
     // Root under Application Support so iOS backs it up and excludes it from
     // iCloud Documents — memos are device-local scratch recordings, not synced content.
-    static func memosRoot() -> URL {
+    nonisolated static func memosRoot() -> URL {
         let appSupport = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return appSupport.appendingPathComponent("voice-memos", isDirectory: true)
     }
 
-    static func memoFolder(for projectId: String) -> URL {
+    nonisolated static func memoFolder(for projectId: String) -> URL {
         memosRoot().appendingPathComponent(projectId, isDirectory: true)
     }
 
-    static func newMemoURL(for projectId: String) -> URL {
+    nonisolated static func newMemoURL(for projectId: String) -> URL {
         let folder = memoFolder(for: projectId)
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
         return folder.appendingPathComponent("\(timestamp).m4a")
@@ -62,7 +61,7 @@ final class VoiceMemoService {
 
     /// Returns all memo URLs for a project, sorted oldest-first by filename
     /// (filenames are millisecond timestamps, so lexicographic == chronological).
-    static func memos(for projectId: String) -> [URL] {
+    nonisolated static func memos(for projectId: String) -> [URL] {
         let folder = memoFolder(for: projectId)
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: folder,
@@ -76,7 +75,7 @@ final class VoiceMemoService {
 
     /// Remove a project's entire memo folder — called on permanent delete and
     /// on trash-purge expiry so orphaned audio doesn't accumulate on disk.
-    static func deleteMemosFolder(for projectId: String) {
+    nonisolated static func deleteMemosFolder(for projectId: String) {
         let folder = memoFolder(for: projectId)
         try? FileManager.default.removeItem(at: folder)
     }
@@ -154,14 +153,15 @@ final class VoiceMemoService {
         recordingStartTime = Date()
         isRecording = true
 
-        // Update the elapsed clock on every UI tick — displayed as mm:ss so a
-        // 1-second interval would feel laggy.
-        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1 / 60, repeats: true) { [weak self] _ in
+        // Update the elapsed clock once per displayed second; the UI formats it
+        // as mm:ss, so sub-second updates redraw the same text.
+        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self, let start = self.recordingStartTime else { return }
             Task { @MainActor [weak self] in
                 self?.recordingElapsed = Date().timeIntervalSince(start)
             }
         }
+        elapsedTimer?.tolerance = 0.1
 
         // Poll AVAudioRecorder at ~10 Hz for amplitude. dB range is approximately
         // -160..0 dB (silence to full scale); we map -60..0 → 0..1 so typical

@@ -17,7 +17,7 @@ struct ProjectsDrawerView: View {
     @State private var pendingDeleteProject: SongProject?
     @State private var trashBinPresented = false
     @State private var activeTab: DrawerTab = .songs
-    // Recordings folders refresh on appear and after delete/rename.
+    // Recordings folders refresh when the Recordings tab is shown and after delete/rename.
     @State private var recordingFolders: [RecordingFolder] = []
     @State private var expandedFolders: Set<String> = []
     @State private var isSelectingRecordings = false
@@ -35,14 +35,14 @@ struct ProjectsDrawerView: View {
     }
 
     // Flat memo URL plus resolved project title, used inside a grouped folder.
-    private struct RecordingItem: Identifiable {
+    nonisolated private struct RecordingItem: Identifiable, Sendable {
         let id: String          // memo URL absoluteString
         let url: URL
         let projectId: String
         let projectTitle: String // "Deleted song" when projectId not in SwiftData
     }
 
-    private struct RecordingFolder: Identifiable {
+    nonisolated private struct RecordingFolder: Identifiable, Sendable {
         let id: String          // projectId
         let title: String
         let items: [RecordingItem]
@@ -183,7 +183,11 @@ struct ProjectsDrawerView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.lg)
         .padding(.top, resolvedTopInset + RhymeAITokens.Spacing.sm)
         .padding(.bottom, bottomInset + RhymeAITokens.Spacing.lg)
-        .onAppear { reloadRecordings() }
+        .onChange(of: activeTab) { _, tab in
+            if tab == .recordings {
+                reloadRecordings()
+            }
+        }
     }
 
     // MARK: - Songs Tab
@@ -510,54 +514,65 @@ struct ProjectsDrawerView: View {
         return stem
     }
 
+    private static let recordingDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
     private func formattedDate(url: URL) -> String {
         let stem = url.deletingPathExtension().lastPathComponent
         if let ms = Double(stem) {
             let date = Date(timeIntervalSince1970: ms / 1000)
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .short
-            return formatter.string(from: date)
+            return Self.recordingDateFormatter.string(from: date)
         }
         return stem
     }
 
     private func reloadRecordings() {
-        // Build a lookup from projectId → display title using the SwiftData query
-        // results. Unknown IDs (orphaned memos from deleted songs) show "Deleted song".
+        // Snapshot SwiftData-backed project titles on the main actor before
+        // doing file-system work in a detached task.
         let titleMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) })
         let root = VoiceMemoService.memosRoot()
 
-        guard let subfolders = try? FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: nil,
-            options: .skipsHiddenFiles
-        ) else {
-            recordingFolders = []
-            return
-        }
-
-        var folders: [RecordingFolder] = []
-        for folder in subfolders {
-            let projectId = folder.lastPathComponent
-            let memos = VoiceMemoService.memos(for: projectId)
-            guard !memos.isEmpty else { continue }
-            let title = titleMap[projectId] ?? "Deleted song"
-            let items = memos
-                .map {
-                    RecordingItem(
-                        id: $0.absoluteString,
-                        url: $0,
-                        projectId: projectId,
-                        projectTitle: title
-                    )
+        Task {
+            let folders = await Task.detached(priority: .userInitiated) { () -> [RecordingFolder] in
+                guard let subfolders = try? FileManager.default.contentsOfDirectory(
+                    at: root,
+                    includingPropertiesForKeys: nil,
+                    options: .skipsHiddenFiles
+                ) else {
+                    return []
                 }
-                .sorted { $0.url.lastPathComponent > $1.url.lastPathComponent }
-            folders.append(RecordingFolder(id: projectId, title: title, items: items))
-        }
 
-        recordingFolders = folders.sorted {
-            ($0.items.first?.url.lastPathComponent ?? "") > ($1.items.first?.url.lastPathComponent ?? "")
+                var folders: [RecordingFolder] = []
+                for folder in subfolders {
+                    let projectId = folder.lastPathComponent
+                    let memos = VoiceMemoService.memos(for: projectId)
+                    guard !memos.isEmpty else { continue }
+                    let title = titleMap[projectId] ?? "Deleted song"
+                    let items = memos
+                        .map {
+                            RecordingItem(
+                                id: $0.absoluteString,
+                                url: $0,
+                                projectId: projectId,
+                                projectTitle: title
+                            )
+                        }
+                        .sorted { $0.url.lastPathComponent > $1.url.lastPathComponent }
+                    folders.append(RecordingFolder(id: projectId, title: title, items: items))
+                }
+
+                return folders.sorted {
+                    ($0.items.first?.url.lastPathComponent ?? "") > ($1.items.first?.url.lastPathComponent ?? "")
+                }
+            }.value
+
+            await MainActor.run {
+                recordingFolders = folders
+            }
         }
     }
 
