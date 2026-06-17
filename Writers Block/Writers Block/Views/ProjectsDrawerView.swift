@@ -60,6 +60,25 @@ struct ProjectsDrawerView: View {
         }
     }
 
+    private var filteredRecordingFolders: [RecordingFolder] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return recordingFolders }
+
+        return recordingFolders.compactMap { folder in
+            if folder.title.localizedCaseInsensitiveContains(query) {
+                return folder
+            }
+
+            let matchingItems = folder.items.filter { item in
+                displayLabel(url: item.url).localizedCaseInsensitiveContains(query)
+            }
+
+            return matchingItems.isEmpty
+                ? nil
+                : RecordingFolder(id: folder.id, title: folder.title, items: matchingItems)
+        }
+    }
+
     var body: some View {
         ZStack {
             GeometryReader { proxy in
@@ -130,14 +149,7 @@ struct ProjectsDrawerView: View {
         return VStack(alignment: .leading, spacing: 0) {
             // Top bar: search/close + tab picker
             HStack(spacing: RhymeAITokens.Spacing.xs) {
-                if activeTab == .songs {
-                    searchField
-                } else {
-                    // No search on Recordings tab — title serves as context
-                    Text("Recordings")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                searchField
 
                 Button {
                     closeDrawer()
@@ -258,7 +270,12 @@ struct ProjectsDrawerView: View {
 
     private var recordingsTabContent: some View {
         Group {
-            if recordingFolders.isEmpty {
+            if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && filteredRecordingFolders.isEmpty {
+                ScrollView {
+                    emptyState(systemImage: "magnifyingglass", title: "No recordings match your search.")
+                        .padding(.top, RhymeAITokens.Spacing.md)
+                }
+            } else if recordingFolders.isEmpty {
                 ScrollView {
                     emptyState(systemImage: "mic.slash", title: "No recordings yet.")
                         .padding(.top, RhymeAITokens.Spacing.md)
@@ -289,7 +306,7 @@ struct ProjectsDrawerView: View {
                     .padding(.horizontal, RhymeAITokens.Spacing.xs)
 
                     List {
-                        ForEach(recordingFolders) { folder in
+                        ForEach(filteredRecordingFolders) { folder in
                             Section {
                                 folderHeaderRow(folder)
                                     .listRowBackground(Color.clear)
@@ -553,7 +570,7 @@ struct ProjectsDrawerView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
 
-            TextField("Search songs", text: $searchText)
+            TextField(activeTab == .songs ? "Search songs" : "Search recordings", text: $searchText)
                 .textInputAutocapitalization(.never)
                 .foregroundStyle(.primary)
 
