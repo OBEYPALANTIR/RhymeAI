@@ -714,7 +714,7 @@ private fun RecordingsTab(
 
         LazyColumn(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md),
             contentPadding = PaddingValues(vertical = DesignTokens.Spacing.sm)
         ) {
             visibleFolders.forEach { folder ->
@@ -730,20 +730,22 @@ private fun RecordingsTab(
                 if (expanded[folder.projectId] == true || query.isNotEmpty()) {
                     items(folder.memos, key = { it.file.absolutePath }) { memo ->
                         val memoPath = memo.file.absolutePath
-                        RecordingMemoRow(
-                            memo = memo,
-                            service = service,
-                            isSelecting = isSelecting,
-                            isSelected = memoPath in selectedMemoPaths,
-                            onSelectionChanged = { selected ->
-                                selectedMemoPaths = if (selected) {
-                                    selectedMemoPaths + memoPath
-                                } else {
-                                    selectedMemoPaths - memoPath
-                                }
-                            },
-                            onMemoListChanged = { memoListVersion++ }
-                        )
+                        Box(modifier = Modifier.padding(start = DesignTokens.Spacing.md)) {
+                            RecordingMemoRow(
+                                memo = memo,
+                                service = service,
+                                isSelecting = isSelecting,
+                                isSelected = memoPath in selectedMemoPaths,
+                                onSelectionChanged = { selected ->
+                                    selectedMemoPaths = if (selected) {
+                                        selectedMemoPaths + memoPath
+                                    } else {
+                                        selectedMemoPaths - memoPath
+                                    }
+                                },
+                                onMemoListChanged = { memoListVersion++ }
+                            )
+                        }
                     }
                 }
             }
@@ -758,56 +760,49 @@ private fun FolderHeaderRow(
     onToggle: () -> Unit,
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    Row(
+    OutlinedCard(
+        onClick = onToggle,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(DesignTokens.Radius.md))
-            .clickable(onClick = onToggle)
-            .heightIn(min = DesignTokens.Touch.minTarget)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+            .heightIn(min = DesignTokens.Touch.minTarget),
+        shape = RoundedCornerShape(DesignTokens.Radius.xl),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = colorScheme.surfaceContainer,
+            contentColor = colorScheme.onSurface
+        ),
+        border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
-        Icon(
-            Icons.Default.Folder,
-            contentDescription = null,
-            tint = colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp)
-        )
-        Surface(
-            shape = RoundedCornerShape(DesignTokens.Radius.pill),
-            color = colorScheme.secondaryContainer.copy(alpha = 0.7f)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(DesignTokens.Spacing.md),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "Song",
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                color = colorScheme.onSecondaryContainer
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = folder.title,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    color = if (folder.title == "Deleted song") {
+                        colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    } else {
+                        colorScheme.onSurface
+                    }
+                )
+                Text(
+                    text = "${folder.memos.size} ${if (folder.memos.size == 1) "recording" else "recordings"}",
+                    fontSize = 13.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.Default.KeyboardArrowDown,
+                contentDescription = if (isExpanded) "Collapse" else "Expand",
+                tint = colorScheme.onSurfaceVariant,
+                modifier = Modifier.rotate(if (isExpanded) 180f else 0f)
             )
         }
-        Text(
-            text = folder.title,
-            modifier = Modifier.weight(1f),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (folder.title == "Deleted song") {
-                colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-            } else {
-                colorScheme.onSurface
-            }
-        )
-        Text(
-            text = "${folder.memos.size}",
-            fontSize = 12.sp,
-            color = colorScheme.onSurfaceVariant
-        )
-        Icon(
-            Icons.Default.KeyboardArrowDown,
-            contentDescription = if (isExpanded) "Collapse" else "Expand",
-            tint = colorScheme.onSurfaceVariant,
-            modifier = Modifier.rotate(if (isExpanded) 180f else 0f)
-        )
     }
 }
 
