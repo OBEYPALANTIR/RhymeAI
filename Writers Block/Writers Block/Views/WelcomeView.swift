@@ -39,13 +39,7 @@ struct WelcomeView: View {
                 // Title
                 Text("Writers Block")
                     .font(.system(.largeTitle, design: .serif, weight: .bold))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.indigo, .purple],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+                    .foregroundStyle(Color.indigo)
                     .padding(.bottom, 8)
 
                 // Subtitle

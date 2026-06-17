@@ -88,7 +88,7 @@ struct TrashBinView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.md)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
-        .background(Color(UIColor.secondarySystemBackground).opacity(0.88))
+        .background(.ultraThinMaterial)
         .overlay(Divider().opacity(0.18), alignment: .bottom)
     }
 
@@ -213,7 +213,6 @@ struct TrashBinView: View {
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
         .background(.ultraThinMaterial)
-        .background(Color(UIColor.systemBackground).opacity(0.74))
     }
 
     private func selectionCircle(selected: Bool) -> some View {
