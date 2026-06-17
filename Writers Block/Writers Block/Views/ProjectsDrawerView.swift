@@ -312,7 +312,7 @@ struct ProjectsDrawerView: View {
                                     .listRowBackground(Color.clear)
                                     .listRowSeparator(.hidden)
 
-                                if expandedFolders.contains(folder.id) {
+                                if isRecordingFolderExpanded(folder) {
                                     ForEach(folder.items) { item in
                                         recordingRow(
                                             item,
@@ -404,6 +404,14 @@ struct ProjectsDrawerView: View {
         }
     }
 
+    private var isSearchingRecordings: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func isRecordingFolderExpanded(_ folder: RecordingFolder) -> Bool {
+        isSearchingRecordings || expandedFolders.contains(folder.id)
+    }
+
     private func folderHeaderRow(_ folder: RecordingFolder) -> some View {
         HStack(spacing: RhymeAITokens.Spacing.sm) {
             Image(systemName: "folder")
@@ -422,7 +430,7 @@ struct ProjectsDrawerView: View {
             Text("\(folder.items.count)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Image(systemName: expandedFolders.contains(folder.id) ? "chevron.down" : "chevron.right")
+            Image(systemName: isRecordingFolderExpanded(folder) ? "chevron.down" : "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
