@@ -517,6 +517,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rewriteLoading = false
     }
 
+    fun seedRewriteLoadingForTesting(action: RewriteAction, range: TextRange, original: String) {
+        check(BuildConfig.DEBUG) { "Rewrite loading seeding is only available in debug builds." }
+        rewriteJob?.cancel()
+        pendingRewriteRange = null
+        rewriteAction = action
+        rewriteOriginal = original
+        rewriteRange = range
+        rewriteRejectedCandidates = setOf(original)
+        rewritePreview = null
+        rewriteError = null
+        rewriteLoading = true
+    }
+
     fun applyRewrite() {
         val preview = rewritePreview ?: return
         val range = rewriteRange ?: return

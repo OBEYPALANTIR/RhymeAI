@@ -170,6 +170,21 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testRewriteLoadingShowsShimmerOverSelection() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song",
+            "--ui-test-seed-rewrite-loading"
+        ])
+        app.launch()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5),
+            "seeded rewrite loading state did not show the inline review bar"
+        )
+        attachScreenshot(app, name: "rewrite-loading-shimmer")
+    }
+
+    @MainActor
     func testLiveGeminiSelectedRewriteActionsProducePreviewForConfiguredModels() throws {
         let geminiTestKey = Self.geminiTestKey
         guard !geminiTestKey.isEmpty else {

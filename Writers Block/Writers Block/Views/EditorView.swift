@@ -487,8 +487,15 @@ struct EditorView: View {
     }
 
     private var selectionAvoidanceInset: CGFloat {
-        guard shouldShowRewriteChipBar || viewModel.hasActiveRewrite else { return 0 }
-        return rewriteAccessoryHeight + RhymeAITokens.Spacing.md
+        // Rewrite chip bar / active rewrite reserve their own bar height.
+        if shouldShowRewriteChipBar || viewModel.hasActiveRewrite {
+            return rewriteAccessoryHeight + RhymeAITokens.Spacing.md
+        }
+        // Otherwise reserve the iPhone-only mic + UnBlock FAB so the caret does not scroll behind it.
+        if horizontalSizeClass != .regular && !viewModel.showAssistantSheet && !assistantModalOpen {
+            return RhymeAITokens.Touch.comfortable + RhymeAITokens.Spacing.md
+        }
+        return 0
     }
 
     private var overlayActive: Bool {

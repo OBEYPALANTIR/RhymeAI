@@ -277,6 +277,7 @@ final class EditorViewModel: ObservableObject {
             title = "UI Prosody Song"
             lyrics = seededLyrics
             positionSeededProsodyCursorForUITests()
+            seedRewriteLoadingForUITestsIfNeeded()
             isStressPreviewEnabled = ProcessInfo.processInfo.arguments.contains("--ui-test-enable-stress-preview")
             showWelcome = false
             showAssistantSheet = ProcessInfo.processInfo.arguments.contains("--ui-test-open-assistant")
@@ -937,6 +938,19 @@ final class EditorViewModel: ObservableObject {
         } else {
             cursorPosition = max(lyrics.utf16.count - 1, 0)
         }
+    }
+
+    func seedRewriteLoadingForUITestsIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("--ui-test-seed-rewrite-loading"),
+              let range = rewriteSelectionSeedRange() else { return }
+        let original = (lyrics as NSString).substring(with: range)
+        selectedRange = range
+        rewriteAction = .rephrase
+        rewriteOriginal = original
+        rewriteRange = range
+        rewritePreview = nil
+        rewriteError = nil
+        rewriteLoading = true
     }
 
     private func seedTrashProjectForUITestsIfNeeded() {

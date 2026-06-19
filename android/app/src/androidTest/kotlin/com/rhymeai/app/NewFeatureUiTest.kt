@@ -276,6 +276,40 @@ class NewFeatureUiTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test
+    fun rewriteLoadingShowsShimmerOverSelection() {
+        composeRule.mainClock.autoAdvance = false
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val lyrics = """
+            [Verse]
+            yellow music
+            follow music
+        """.trimIndent()
+        val selectedText = "yellow music"
+        val selectionStart = lyrics.indexOf(selectedText)
+        val selection = TextRange(selectionStart, selectionStart + selectedText.length)
+
+        composeRule.onNodeWithTag("lyricsEditor").performClick()
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
+        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
+
+        scenario?.onActivity { activity ->
+            ViewModelProvider(activity)[MainViewModel::class.java]
+                .seedRewriteLoadingForTesting(
+                    action = RewriteAction.PUNCH_UP,
+                    range = selection,
+                    original = selectedText
+                )
+        }
+
+        composeRule.mainClock.advanceTimeBy(600)
+        composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
+        composeRule.onNodeWithTag("lyricsEditor").assertIsDisplayed()
+        captureRootScreenshot("rewrite-loading-shimmer.png")
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
     fun harderRhymeReportedExamplesRenderSafePreviewAndRefusal() {
         composeRule.onNodeWithText("New Song").performClick()
 

@@ -342,7 +342,7 @@ private final class RewriteHighlightOverlayView: UIView {
         self.isLoading = isLoading
         self.isError = isError
 
-        if isLoading && !rects.isEmpty {
+        if isLoading && !rects.isEmpty && !UIAccessibility.isReduceMotionEnabled {
             startScan()
         } else {
             stopScan()
@@ -370,17 +370,29 @@ private final class RewriteHighlightOverlayView: UIView {
             context.drawPath(using: .fillStroke)
         }
 
-        guard isLoading else { return }
-
-        context.setStrokeColor(UIColor.white.withAlphaComponent(0.82).cgColor)
-        context.setLineWidth(2.0)
-        context.setLineCap(.round)
+        guard isLoading, !UIAccessibility.isReduceMotionEnabled else { return }
 
         for highlightRect in rects {
-            let x = highlightRect.minX + highlightRect.width * scanProgress
-            context.move(to: CGPoint(x: x, y: highlightRect.minY + 1))
-            context.addLine(to: CGPoint(x: x, y: highlightRect.maxY - 1))
-            context.strokePath()
+            let bandWidth = max(highlightRect.width * 0.45, 24)
+            let travel = highlightRect.width + bandWidth * 2
+            let centerX = highlightRect.minX - bandWidth + travel * scanProgress
+            context.saveGState()
+            UIBezierPath(roundedRect: highlightRect, cornerRadius: RhymeAITokens.Radius.xs).addClip()
+            let colors = [
+                UIColor.systemIndigo.withAlphaComponent(0).cgColor,
+                UIColor.systemIndigo.withAlphaComponent(0.6).cgColor,
+                UIColor.systemIndigo.withAlphaComponent(0).cgColor
+            ] as CFArray
+            let locations: [CGFloat] = [0, 0.5, 1]
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
+                context.drawLinearGradient(
+                    gradient,
+                    start: CGPoint(x: centerX - bandWidth, y: highlightRect.midY),
+                    end: CGPoint(x: centerX + bandWidth, y: highlightRect.midY),
+                    options: []
+                )
+            }
+            context.restoreGState()
         }
     }
 
@@ -398,7 +410,9 @@ private final class RewriteHighlightOverlayView: UIView {
     }
 
     @objc private func stepScan() {
-        scanProgress += 0.018
+        guard !UIAccessibility.isReduceMotionEnabled else { stopScan(); return }
+        let frameDuration = displayLink?.duration ?? (1.0 / 60.0)
+        scanProgress += CGFloat((frameDuration > 0 ? frameDuration : 1.0 / 60.0) / 1.2)
         if scanProgress > 1 {
             scanProgress = 0
         }

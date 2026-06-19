@@ -91,9 +91,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -139,6 +142,7 @@ import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.components.keyboardAwareBottomPadding
 import com.rhymeai.app.ui.components.syllableUnderlines
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.util.LyricsExporter
 import com.rhymeai.app.util.SyllableCounter
 import kotlin.math.abs
@@ -444,6 +448,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             .fillMaxSize()
             .background(colorScheme.background)
     ) {
+        val fabRowVisible = !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite
         Column(modifier = Modifier.fillMaxSize()) {
             // Top bar — always visible
             TopAppBar(
@@ -567,9 +572,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 val bottomActionPadding = keyboardAwareBottomPadding(
                     extra = DesignTokens.Spacing.lg
                 )
-                val bottomObstruction = bottomActionPadding +
-                    activeRewriteSurfaceHeight +
-                    DesignTokens.Spacing.md
+                // Reserve the full FAB footprint so the caret never scrolls behind it.
+                val fabFootprint = if (fabRowVisible) {
+                    keyboardAwareBottomPadding(extra = DesignTokens.Spacing.xxl) + 56.dp + DesignTokens.Spacing.md
+                } else {
+                    0.dp
+                }
+                // Use whichever bottom surface is taller: rewrite bar stack or FAB.
+                val bottomObstruction = maxOf(
+                    bottomActionPadding + activeRewriteSurfaceHeight + DesignTokens.Spacing.md,
+                    fabFootprint
+                )
                 val keyboardScrollSpace = maxOf(
                     keyboardAwareBottomPadding(extra = DesignTokens.Spacing.golden) + DesignTokens.Touch.minTarget,
                     bottomObstruction + DesignTokens.Spacing.golden
@@ -756,9 +769,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             )
                         )
                     }
-                    val rewriteScanProgress = if (viewModel.hasActiveRewrite && viewModel.rewriteLoading) {
-                        val animatedProgress by rememberInfiniteTransition(
-                            label = "rewriteScan"
+                    val animationsEnabled = LocalAnimationsEnabled.current
+                    val rewriteShimmerActive = viewModel.hasActiveRewrite &&
+                        viewModel.rewriteLoading &&
+                        animationsEnabled
+                    val rewriteShimmerProgress: () -> Float = if (rewriteShimmerActive) {
+                        val shimmerState = rememberInfiniteTransition(
+                            label = "rewriteShimmer"
                         ).animateFloat(
                             initialValue = 0f,
                             targetValue = 1f,
@@ -769,11 +786,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 ),
                                 repeatMode = RepeatMode.Restart
                             ),
-                            label = "rewriteScanProgress"
+                            label = "rewriteShimmerProgress"
                         )
-                        animatedProgress
+                        val readShimmerProgress: () -> Float = { shimmerState.value }
+                        readShimmerProgress
                     } else {
-                        0f
+                        { 0f }
                     }
                     Box(modifier = Modifier.fillMaxWidth()) {
                         // Colored overlay behind the transparent field only when rhyme coloring is active.
@@ -809,9 +827,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 .inlineRewriteHighlight(
                                     textLayoutResult = lyricsTextLayout,
                                     range = rewriteHighlightRange,
-                                    loading = viewModel.hasActiveRewrite && viewModel.rewriteLoading,
+                                    shimmer = rewriteShimmerActive,
                                     error = viewModel.hasActiveRewrite && viewModel.rewriteError != null,
-                                    scanProgress = rewriteScanProgress,
+                                    shimmerProgress = rewriteShimmerProgress,
                                     highlightColor = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
                                         colorScheme.error.copy(alpha = 0.22f)
                                     } else {
@@ -822,7 +840,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     } else {
                                         colorScheme.tertiary.copy(alpha = 0.78f)
                                     },
-                                    scanColor = colorScheme.onPrimary.copy(alpha = 0.86f)
+                                    shimmerColor = colorScheme.primary.copy(alpha = 0.6f)
                                 )
                                 .syllableUnderlines(
                                     spans = syllableUnderlineSpans,
@@ -855,7 +873,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
         // FAB row: mic FAB (left) + UnBlock FAB (right). Shared AnimatedVisibility so
         // both show/hide together under the same conditions as the old UnBlock FAB.
-        val fabRowVisible = !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite
         AnimatedVisibility(
             visible = fabRowVisible,
             enter = fadeIn(
@@ -1338,38 +1355,71 @@ private fun selectedTextVerticalRange(
 private fun Modifier.inlineRewriteHighlight(
     textLayoutResult: TextLayoutResult?,
     range: TextRange?,
-    loading: Boolean,
+    shimmer: Boolean,
     error: Boolean,
-    scanProgress: Float,
+    shimmerProgress: () -> Float,
     highlightColor: Color,
     strokeColor: Color,
-    scanColor: Color
+    shimmerColor: Color
 ): Modifier {
     if (range == null) return this
 
-    return drawBehind {
-        val layout = textLayoutResult ?: return@drawBehind
-        val textLength = layout.layoutInput.text.text.length
+    return drawWithContent {
+        val layout = textLayoutResult
+        val textLength = layout?.layoutInput?.text?.text?.length ?: 0
         val start = range.min.coerceIn(0, textLength)
         val end = range.max.coerceIn(0, textLength)
-        if (start >= end) return@drawBehind
 
-        val path = layout.getPathForRange(start, end)
-        drawPath(path = path, color = highlightColor)
-        drawPath(path = path, color = strokeColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()))
+        if (layout != null && start < end) {
+            val path = layout.getPathForRange(start, end)
+            // Highlight fill + stroke render behind the text.
+            drawPath(path = path, color = highlightColor)
+            drawPath(path = path, color = strokeColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()))
 
-        if (loading && !error) {
-            val bounds = path.getBounds()
-            if (bounds.width > 0f && bounds.height > 0f) {
-                val x = bounds.left + bounds.width * scanProgress
-                drawLine(
-                    color = scanColor,
-                    start = Offset(x, bounds.top),
-                    end = Offset(x, bounds.bottom),
-                    strokeWidth = 2.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
+            // The lyric text itself.
+            drawContent()
+
+            // Shimmer glint sweeps over the text, like the iOS overlay.
+            if (shimmer && !error) {
+                val progress = shimmerProgress()
+                val startLine = layout.getLineForOffset(start)
+                val endLine = layout.getLineForOffset(end)
+                clipPath(path) {
+                    for (line in startLine..endLine) {
+                        val top = layout.getLineTop(line)
+                        val bottom = layout.getLineBottom(line)
+                        val left = if (line == startLine) {
+                            layout.getHorizontalPosition(start, usePrimaryDirection = true)
+                        } else {
+                            layout.getLineLeft(line)
+                        }
+                        val right = if (line == endLine) {
+                            layout.getHorizontalPosition(end, usePrimaryDirection = true)
+                        } else {
+                            layout.getLineRight(line)
+                        }
+                        val lineWidth = right - left
+                        if (lineWidth <= 0f) continue
+                        val bandWidth = (lineWidth * 0.45f).coerceAtLeast(24.dp.toPx())
+                        val travel = lineWidth + bandWidth * 2f
+                        val centerX = left - bandWidth + travel * progress
+                        val brush = Brush.horizontalGradient(
+                            0f to Color.Transparent,
+                            0.5f to shimmerColor,
+                            1f to Color.Transparent,
+                            startX = centerX - bandWidth,
+                            endX = centerX + bandWidth
+                        )
+                        drawRect(
+                            brush = brush,
+                            topLeft = Offset(left, top),
+                            size = Size(lineWidth, bottom - top)
+                        )
+                    }
+                }
             }
+        } else {
+            drawContent()
         }
     }
 }
