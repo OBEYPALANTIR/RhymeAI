@@ -11,6 +11,18 @@ private struct GemmaDownloadOption: Identifiable, Equatable {
     let url: URL
 }
 
+private func validatedDownloadURL(_ string: String) -> URL {
+    guard let url = URL(string: string) else {
+        preconditionFailure("Invalid Gemma download URL: \(string)")
+    }
+    return url
+}
+
+private enum GemmaDownloadURL {
+    static let e2b = validatedDownloadURL("https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf?download=true")
+    static let e4b = validatedDownloadURL("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf?download=true")
+}
+
 private let gemmaDownloadOptions: [GemmaDownloadOption] = [
     GemmaDownloadOption(
         id: "gemma-4-e2b",
@@ -19,7 +31,7 @@ private let gemmaDownloadOptions: [GemmaDownloadOption] = [
         size: "3.18 GB",
         fileName: "gemma-4-E2B-it-UD-Q4_K_XL.gguf",
         expectedBytes: 3_184_494_720,
-        url: URL(string: "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf?download=true")!
+        url: GemmaDownloadURL.e2b
     ),
     GemmaDownloadOption(
         id: "gemma-4-e4b",
@@ -28,7 +40,7 @@ private let gemmaDownloadOptions: [GemmaDownloadOption] = [
         size: "5.13 GB",
         fileName: "gemma-4-E4B-it-UD-Q4_K_XL.gguf",
         expectedBytes: 5_126_304_928,
-        url: URL(string: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf?download=true")!
+        url: GemmaDownloadURL.e4b
     )
 ]
 

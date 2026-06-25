@@ -9,7 +9,7 @@ import kotlin.math.abs
  * rhyme words up front and verify/rank the over-generated output afterwards.
  */
 object RhymeConstraint {
-    private val wordPattern = Regex("[a-zA-Z']+")
+    private val wordPattern = LyricTokenizer.wordPattern
     private val normalizedLinePattern = Regex("[^a-z0-9]+")
 
     fun lineEndWord(line: String): String {

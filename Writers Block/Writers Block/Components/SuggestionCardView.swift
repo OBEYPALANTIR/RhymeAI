@@ -81,10 +81,8 @@ struct SuggestionCardView: View {
         }
     }
 
-    private static let lastWordPattern = try! NSRegularExpression(pattern: "(.*?)(\\b\\w+\\b)([^\\w]*)$")
-
     private func highlightLastWord(in text: String) -> AttributedString? {
-        let regex = Self.lastWordPattern
+        let regex = LyricRegex.lastWord
         guard let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               match.numberOfRanges == 4 else {
             return nil

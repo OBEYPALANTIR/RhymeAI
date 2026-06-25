@@ -78,7 +78,7 @@ class PronunciationDictionary private constructor(
 }
 
 object ProsodyAnalyzer {
-    private val wordPattern = Regex("[a-zA-Z']+")
+    private val wordPattern = LyricTokenizer.wordPattern
     private val vowels = setOf(
         "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY",
         "OW", "OY", "UH", "UW"

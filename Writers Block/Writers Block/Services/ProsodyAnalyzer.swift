@@ -188,7 +188,6 @@ nonisolated struct PronunciationDictionary: Sendable {
 }
 
 nonisolated enum ProsodyAnalyzer {
-    private static let wordPattern = try! NSRegularExpression(pattern: "[a-zA-Z']+")
     private static let vowels: Set<String> = [
         "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY",
         "OW", "OY", "UH", "UW"
@@ -297,7 +296,7 @@ nonisolated enum ProsodyAnalyzer {
         dictionary: PronunciationDictionary = .shared
     ) -> LineProsody {
         let nsText = text as NSString
-        let words = wordPattern.matches(in: text, range: NSRange(location: 0, length: nsText.length)).map { match in
+        let words = LyricRegex.word.matches(in: text, range: NSRange(location: 0, length: nsText.length)).map { match in
             analyzeWord(nsText.substring(with: match.range), dictionary: dictionary)
         }
         let stressPattern = words.flatMap(\.stressPattern)

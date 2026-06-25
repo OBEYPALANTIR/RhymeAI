@@ -154,7 +154,9 @@ actor GGUFLlamaService: LocalGGUFRunner {
         }
 
         let fullPrompt = GGUFModelService.gemmaPrompt(prompt)
-        let cStr = fullPrompt.cString(using: .utf8)!
+        guard let cStr = fullPrompt.cString(using: .utf8) else {
+            throw AIServiceError.localModelUnavailable(reason: "Failed to encode prompt for the local model.")
+        }
         let estimatedTokenCount = Int32(fullPrompt.count / 3 + 64)
         var tokens = [llama_token](repeating: 0, count: Int(estimatedTokenCount))
         let nTokens = llama_tokenize(model, cStr, Int32(fullPrompt.utf8.count), &tokens, estimatedTokenCount, true, false)
@@ -189,7 +191,7 @@ actor GGUFLlamaService: LocalGGUFRunner {
                 )
             }
 
-            let sampler = makeSampler()
+            let sampler = try makeSampler()
             defer { llama_sampler_free(sampler) }
             let nextToken = llama_sampler_sample(sampler, ctx, -1)
             if nextToken == eosToken { break }
@@ -221,8 +223,10 @@ actor GGUFLlamaService: LocalGGUFRunner {
         loadedPath = nil
     }
 
-    private func makeSampler() -> OpaquePointer {
-        let chain = llama_sampler_chain_init(llama_sampler_chain_default_params())!
+    private func makeSampler() throws -> OpaquePointer {
+        guard let chain = llama_sampler_chain_init(llama_sampler_chain_default_params()) else {
+            throw AIServiceError.localModelUnavailable(reason: "Failed to create llama sampler.")
+        }
         llama_sampler_chain_add(chain, llama_sampler_init_top_k(40))
         llama_sampler_chain_add(chain, llama_sampler_init_top_p(0.95, 1))
         llama_sampler_chain_add(chain, llama_sampler_init_temp(0.8))

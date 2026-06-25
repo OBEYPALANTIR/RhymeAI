@@ -14,10 +14,11 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import com.rhymeai.app.ui.theme.rhymePalette
+import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.RhymePhonetics
 import kotlin.math.absoluteValue
 
-private val wordPattern = Regex("[a-zA-Z']+")
+private val wordPattern = LyricTokenizer.wordPattern
 
 private data class Token(val text: String, val start: Int, val end: Int)
 

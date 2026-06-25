@@ -442,23 +442,17 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         val constraint = suggestionRhymeConstraint(
             targetRhymeLine, rhymeType, sectionRef = sectionRef, chorusEndWords = chorusEnds
         )
-        when (provider) {
-            AIProvider.GEMINI -> {
-                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
-                streamGemini(apiKey, modelId, prompt, constraint).collect { emit(it) }
-            }
-            AIProvider.OPENAI -> {
-                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
-                streamOpenAI(apiKey, modelId, prompt, constraint).collect { emit(it) }
-            }
-            AIProvider.CLAUDE -> {
-                val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
-                streamClaude(apiKey, modelId, prompt, constraint).collect { emit(it) }
-            }
-            AIProvider.LOCAL -> {
-                // Local model already streams tokens internally; needs its own Flow surface (follow-up).
-                getSuggestions(provider, apiKey, modelId, theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, sectionRef, fullLyrics)
-                    .forEach { emit(it) }
+        if (provider == AIProvider.LOCAL) {
+            // Local model already streams tokens internally; needs its own Flow surface (follow-up).
+            getSuggestions(provider, apiKey, modelId, theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, sectionRef, fullLyrics)
+                .forEach { emit(it) }
+        } else {
+            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
+            when (provider) {
+                AIProvider.GEMINI -> streamGemini(apiKey, modelId, prompt, constraint).collect { emit(it) }
+                AIProvider.OPENAI -> streamOpenAI(apiKey, modelId, prompt, constraint).collect { emit(it) }
+                AIProvider.CLAUDE -> streamClaude(apiKey, modelId, prompt, constraint).collect { emit(it) }
+                AIProvider.LOCAL -> error("unreachable")
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -474,17 +468,6 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
     }
 
     private fun streamOpenAI(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): Flow<SuggestedLine> = flow {
-        val body = buildJsonObject {
-            put("model", modelId)
-            put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "user")
-                    put("content", prompt)
-                })
-            })
-            put("temperature", 0.8)
-            put("stream", true)
-        }
         val payloads = httpPostStream(
             url = "https://api.openai.com/v1/chat/completions",
             headers = mapOf(
@@ -492,31 +475,18 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 "Content-Type" to "application/json",
                 "Accept" to "text/event-stream"
             ),
-            body = body.toString()
+            body = buildOpenAIChatRequestBody(
+                modelId = modelId,
+                prompt = prompt,
+                temperature = 0.8,
+                stream = true
+            ).toString()
         )
-        val tokens = payloads.mapNotNull { payload ->
-            runCatching {
-                json.parseToJsonElement(payload).jsonObject["choices"]
-                    ?.jsonArray?.firstOrNull()?.jsonObject
-                    ?.get("delta")?.jsonObject
-                    ?.get("content")?.jsonPrimitive?.content
-            }.getOrNull()
-        }
+        val tokens = payloads.mapNotNull(::parseOpenAIStreamToken)
         emitLinesFromTokens(tokens, constraint)
     }
 
     private fun streamClaude(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): Flow<SuggestedLine> = flow {
-        val body = buildJsonObject {
-            put("model", modelId)
-            put("max_tokens", 1024)
-            put("stream", true)
-            put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "user")
-                    put("content", prompt)
-                })
-            })
-        }
         val payloads = httpPostStream(
             url = "https://api.anthropic.com/v1/messages",
             headers = mapOf(
@@ -525,17 +495,114 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 "Content-Type" to "application/json",
                 "Accept" to "text/event-stream"
             ),
-            body = body.toString()
+            body = buildClaudeMessagesRequestBody(
+                modelId = modelId,
+                prompt = prompt,
+                stream = true
+            ).toString()
         )
-        val tokens = payloads.mapNotNull { payload ->
-            runCatching {
-                val obj = json.parseToJsonElement(payload).jsonObject
-                if (obj["type"]?.jsonPrimitive?.content != "content_block_delta") return@runCatching null
-                obj["delta"]?.jsonObject?.get("text")?.jsonPrimitive?.content
-            }.getOrNull()
-        }
+        val tokens = payloads.mapNotNull(::parseClaudeStreamToken)
         emitLinesFromTokens(tokens, constraint)
     }
+
+    private fun buildOpenAIChatRequestBody(
+        modelId: String,
+        prompt: String,
+        temperature: Double,
+        stream: Boolean = false,
+        jsonResponse: Boolean = false
+    ) = buildJsonObject {
+        put("model", modelId)
+        put("messages", buildJsonArray {
+            add(buildJsonObject {
+                put("role", "user")
+                put("content", prompt)
+            })
+        })
+        put("temperature", temperature)
+        if (jsonResponse) {
+            put("response_format", buildJsonObject {
+                put("type", "json_object")
+            })
+        }
+        if (stream) {
+            put("stream", true)
+        }
+    }
+
+    private fun parseOpenAIMessageContent(responseText: String): String? {
+        val responseJson = json.parseToJsonElement(responseText).jsonObject
+        return responseJson["choices"]?.jsonArray
+            ?.firstOrNull()?.jsonObject
+            ?.get("message")?.jsonObject
+            ?.get("content")?.jsonPrimitive?.content
+    }
+
+    private fun parseOpenAIStreamToken(payload: String): String? =
+        runCatching {
+            json.parseToJsonElement(payload).jsonObject["choices"]
+                ?.jsonArray?.firstOrNull()?.jsonObject
+                ?.get("delta")?.jsonObject
+                ?.get("content")?.jsonPrimitive?.content
+        }.getOrNull()
+
+    private fun buildClaudeMessagesRequestBody(
+        modelId: String,
+        prompt: String,
+        stream: Boolean = false
+    ) = buildJsonObject {
+        put("model", modelId)
+        put("max_tokens", 1024)
+        if (stream) {
+            put("stream", true)
+        }
+        put("messages", buildJsonArray {
+            add(buildJsonObject {
+                put("role", "user")
+                put("content", prompt)
+            })
+        })
+    }
+
+    private fun parseClaudeMessageText(responseText: String): String? {
+        val responseJson = json.parseToJsonElement(responseText).jsonObject
+        return responseJson["content"]?.jsonArray
+            ?.firstOrNull()?.jsonObject
+            ?.get("text")?.jsonPrimitive?.content
+    }
+
+    private fun parseClaudeStreamToken(payload: String): String? =
+        runCatching {
+            val obj = json.parseToJsonElement(payload).jsonObject
+            if (obj["type"]?.jsonPrimitive?.content != "content_block_delta") return@runCatching null
+            obj["delta"]?.jsonObject?.get("text")?.jsonPrimitive?.content
+        }.getOrNull()
+
+    private fun geminiModel(
+        apiKey: String,
+        modelId: String,
+        mimeType: String? = null
+    ): GenerativeModel =
+        mimeType?.let { responseType ->
+            GenerativeModel(
+                modelName = modelId,
+                apiKey = apiKey,
+                generationConfig = generationConfig {
+                    responseMimeType = responseType
+                }
+            )
+        } ?: GenerativeModel(modelName = modelId, apiKey = apiKey)
+
+    private suspend fun generateGeminiText(
+        apiKey: String,
+        modelId: String,
+        prompt: String,
+        responseMimeType: String? = null
+    ): String? =
+        geminiModel(apiKey, modelId, responseMimeType)
+            .generateContent(prompt)
+            .text
+            ?.trim()
 
     private suspend fun FlowCollector<SuggestedLine>.emitLinesFromTokens(
         tokens: Flow<String>,
@@ -667,18 +734,16 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
-        val raw = when (provider) {
-            AIProvider.GEMINI -> callGeminiRaw(apiKey, modelId, buildSynonymsPrompt(target, lineContext, limit))
-            AIProvider.OPENAI -> callOpenAIRaw(apiKey, modelId, buildSynonymsPrompt(target, lineContext, limit))
-            AIProvider.CLAUDE -> callClaudeRaw(apiKey, modelId, buildSynonymsPrompt(target, lineContext, limit))
-            AIProvider.LOCAL -> {
-                val service = localModelService
-                    ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
-                if (!service.isLoaded) {
-                    throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
-                }
-                service.generateResponse(buildLocalSynonymsPrompt(target, lineContext, limit))
+        val raw = if (provider == AIProvider.LOCAL) {
+            val service = localModelService
+                ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
+            if (!service.isLoaded) {
+                throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
             }
+            service.generateResponse(buildLocalSynonymsPrompt(target, lineContext, limit))
+        } else {
+            val prompt = buildSynonymsPrompt(target, lineContext, limit)
+            callCloudRaw(provider, apiKey, modelId, prompt)
         }
         return extractSynonyms(raw, exclude = target).take(limit)
     }
@@ -787,12 +852,7 @@ Rules:
             )
         } else {
             val prompt = buildRewritePrompt(action, fullLyrics, selection, currentSection)
-            val raw = when (provider) {
-                AIProvider.GEMINI -> callGeminiRaw(apiKey, modelId, prompt)
-                AIProvider.OPENAI -> callOpenAIRaw(apiKey, modelId, prompt)
-                AIProvider.CLAUDE -> callClaudeRaw(apiKey, modelId, prompt)
-                AIProvider.LOCAL -> error("unreachable")
-            }
+            val raw = callCloudRaw(provider, apiKey, modelId, prompt)
             extractRewriteField(raw)?.takeIf { it.isNotBlank() }
                 ?: throw RuntimeException("AI did not return a rewrite. Try again.")
         }
@@ -901,60 +961,35 @@ $outputRules
 
     private suspend fun callGeminiRaw(apiKey: String, modelId: String, prompt: String): String {
         return try {
-            val model = GenerativeModel(
-                modelName = modelId,
+            generateGeminiText(
                 apiKey = apiKey,
-                generationConfig = generationConfig {
-                    responseMimeType = "application/json"
-                }
-            )
-            model.generateContent(prompt).text?.trim().orEmpty()
+                modelId = modelId,
+                prompt = prompt,
+                responseMimeType = "application/json"
+            ).orEmpty()
         } catch (error: Throwable) {
             throw userFacingProviderException(error)
         }
     }
 
     private suspend fun callOpenAIRaw(apiKey: String, modelId: String, prompt: String): String {
-        val body = buildJsonObject {
-            put("model", modelId)
-            put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "user")
-                    put("content", prompt)
-                })
-            })
-            put("temperature", 0.7)
-            put("response_format", buildJsonObject {
-                put("type", "json_object")
-            })
-        }
         val responseText = httpPost(
             url = "https://api.openai.com/v1/chat/completions",
             headers = mapOf(
                 "Authorization" to "Bearer $apiKey",
                 "Content-Type" to "application/json"
             ),
-            body = body.toString()
+            body = buildOpenAIChatRequestBody(
+                modelId = modelId,
+                prompt = prompt,
+                temperature = 0.7,
+                jsonResponse = true
+            ).toString()
         )
-        val responseJson = json.parseToJsonElement(responseText).jsonObject
-        return responseJson["choices"]?.jsonArray
-            ?.firstOrNull()?.jsonObject
-            ?.get("message")?.jsonObject
-            ?.get("content")?.jsonPrimitive?.content
-            .orEmpty()
+        return parseOpenAIMessageContent(responseText).orEmpty()
     }
 
     private suspend fun callClaudeRaw(apiKey: String, modelId: String, prompt: String): String {
-        val body = buildJsonObject {
-            put("model", modelId)
-            put("max_tokens", 1024)
-            put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "user")
-                    put("content", prompt)
-                })
-            })
-        }
         val responseText = httpPost(
             url = "https://api.anthropic.com/v1/messages",
             headers = mapOf(
@@ -962,14 +997,23 @@ $outputRules
                 "anthropic-version" to "2023-06-01",
                 "Content-Type" to "application/json"
             ),
-            body = body.toString()
+            body = buildClaudeMessagesRequestBody(modelId, prompt).toString()
         )
-        val responseJson = json.parseToJsonElement(responseText).jsonObject
-        return responseJson["content"]?.jsonArray
-            ?.firstOrNull()?.jsonObject
-            ?.get("text")?.jsonPrimitive?.content
-            .orEmpty()
+        return parseClaudeMessageText(responseText).orEmpty()
     }
+
+    private suspend fun callCloudRaw(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        prompt: String
+    ): String =
+        when (provider) {
+            AIProvider.GEMINI -> callGeminiRaw(apiKey, modelId, prompt)
+            AIProvider.OPENAI -> callOpenAIRaw(apiKey, modelId, prompt)
+            AIProvider.CLAUDE -> callClaudeRaw(apiKey, modelId, prompt)
+            AIProvider.LOCAL -> error("unreachable")
+        }
 
     private suspend fun callLocalRewrite(
         action: RewriteAction,
@@ -1268,9 +1312,7 @@ $outputRules
 
     private suspend fun callGemini(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
         return try {
-            val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
-            val response = model.generateContent(prompt)
-            val text = response.text?.trim() ?: return emptyList()
+            val text = generateGeminiText(apiKey, modelId, prompt) ?: return emptyList()
             parseSuggestionList(text, constraint)
         } catch (error: Throwable) {
             throw userFacingProviderException(error)
@@ -1278,47 +1320,23 @@ $outputRules
     }
 
     private suspend fun callOpenAI(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val body = buildJsonObject {
-            put("model", modelId)
-            put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "user")
-                    put("content", prompt)
-                })
-            })
-            put("temperature", 0.8)
-        }
-
         val responseText = httpPost(
             url = "https://api.openai.com/v1/chat/completions",
             headers = mapOf(
                 "Authorization" to "Bearer $apiKey",
                 "Content-Type" to "application/json"
             ),
-            body = body.toString()
+            body = buildOpenAIChatRequestBody(
+                modelId = modelId,
+                prompt = prompt,
+                temperature = 0.8
+            ).toString()
         )
-
-        val responseJson = json.parseToJsonElement(responseText).jsonObject
-        val content = responseJson["choices"]?.jsonArray
-            ?.firstOrNull()?.jsonObject
-            ?.get("message")?.jsonObject
-            ?.get("content")?.jsonPrimitive?.content ?: return emptyList()
-
+        val content = parseOpenAIMessageContent(responseText) ?: return emptyList()
         return parseSuggestionList(content, constraint)
     }
 
     private suspend fun callClaude(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val body = buildJsonObject {
-            put("model", modelId)
-            put("max_tokens", 1024)
-            put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "user")
-                    put("content", prompt)
-                })
-            })
-        }
-
         val responseText = httpPost(
             url = "https://api.anthropic.com/v1/messages",
             headers = mapOf(
@@ -1326,14 +1344,9 @@ $outputRules
                 "anthropic-version" to "2023-06-01",
                 "Content-Type" to "application/json"
             ),
-            body = body.toString()
+            body = buildClaudeMessagesRequestBody(modelId, prompt).toString()
         )
-
-        val responseJson = json.parseToJsonElement(responseText).jsonObject
-        val content = responseJson["content"]?.jsonArray
-            ?.firstOrNull()?.jsonObject
-            ?.get("text")?.jsonPrimitive?.content ?: return emptyList()
-
+        val content = parseClaudeMessageText(responseText) ?: return emptyList()
         return parseSuggestionList(content, constraint)
     }
 

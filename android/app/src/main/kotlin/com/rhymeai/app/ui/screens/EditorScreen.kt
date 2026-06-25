@@ -158,6 +158,15 @@ private data class LyricStats(
     val syllableCount: Int
 )
 
+@Composable
+private fun rememberExportDocumentLauncher(
+    format: ExportFormat,
+    onExportUriSelected: (android.net.Uri?) -> Unit
+) = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.CreateDocument(format.mimeType),
+    onResult = onExportUriSelected
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
@@ -317,34 +326,18 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
     }
 
-    val txtLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(ExportFormat.TXT.mimeType)
-    ) { uri ->
+    fun consumeExportUri(uri: android.net.Uri?) {
         val pending = pendingExport
         pendingExport = null
-        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
+        if (uri != null && pending != null) {
+            writeExport(pending.first, pending.second, uri)
+        }
     }
-    val jsonLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(ExportFormat.JSON.mimeType)
-    ) { uri ->
-        val pending = pendingExport
-        pendingExport = null
-        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
-    }
-    val pdfLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(ExportFormat.PDF.mimeType)
-    ) { uri ->
-        val pending = pendingExport
-        pendingExport = null
-        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
-    }
-    val lrcLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(ExportFormat.LRC.mimeType)
-    ) { uri ->
-        val pending = pendingExport
-        pendingExport = null
-        if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
-    }
+
+    val txtLauncher = rememberExportDocumentLauncher(ExportFormat.TXT, ::consumeExportUri)
+    val jsonLauncher = rememberExportDocumentLauncher(ExportFormat.JSON, ::consumeExportUri)
+    val pdfLauncher = rememberExportDocumentLauncher(ExportFormat.PDF, ::consumeExportUri)
+    val lrcLauncher = rememberExportDocumentLauncher(ExportFormat.LRC, ::consumeExportUri)
 
     // Runtime RECORD_AUDIO permission for the mic FAB — grants lead straight to recording start.
     val audioPermissionLauncher = rememberLauncherForActivityResult(
@@ -465,11 +458,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     when (viewModel.saveStatus) {
                         SaveStatus.SAVING -> Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.EditorChrome.saveStatusSavingGap)
                         ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(DesignTokens.Indicator.spinnerSm),
-                                strokeWidth = 2.dp,
+                                strokeWidth = DesignTokens.EditorChrome.saveStatusStrokeWidth,
                                 color = colorScheme.onSurfaceVariant
                             )
                             Text(
@@ -481,12 +474,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
                         SaveStatus.SAVED -> Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.EditorChrome.saveStatusSavedGap)
                         ) {
                             Icon(
                                 Icons.Default.Check,
                                 contentDescription = null,
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(DesignTokens.EditorChrome.saveStatusIconSize),
                                 tint = colorScheme.tertiary
                             )
                             Text(
@@ -509,7 +502,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     Column(
                         horizontalAlignment = Alignment.End,
                         verticalArrangement = Arrangement.Center,
-                        modifier = Modifier.padding(end = 4.dp)
+                        modifier = Modifier.padding(end = DesignTokens.EditorChrome.statsEndPadding)
                     ) {
                         Text(
                             "${lyricStats.wordCount} words",
@@ -574,7 +567,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 )
                 // Reserve the full FAB footprint so the caret never scrolls behind it.
                 val fabFootprint = if (fabRowVisible) {
-                    keyboardAwareBottomPadding(extra = DesignTokens.Spacing.xxl) + 56.dp + DesignTokens.Spacing.md
+                    keyboardAwareBottomPadding(extra = DesignTokens.Spacing.xxl) + DesignTokens.EditorChrome.fabSize + DesignTokens.Spacing.md
                 } else {
                     0.dp
                 }
@@ -596,7 +589,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 val editorWidthPx = with(density) {
                     (maxWidth - DesignTokens.Editor.horizontalPadding - DesignTokens.Editor.horizontalPadding).roundToPx()
                 }
-                val estimatedCharsPerLine = (editorWidthPx / with(density) { 8.5.dp.roundToPx() })
+                val estimatedCharsPerLine = (editorWidthPx / with(density) { DesignTokens.Editor.estimatedCharacterWidth.roundToPx() })
                     .coerceAtLeast(1)
                 val activeRangeStart = activeEditorRange.min.coerceIn(0, activeEditorText.length)
                 val activeRangeEnd = activeEditorRange.max.coerceIn(0, activeEditorText.length)
@@ -614,7 +607,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 val lyricsTopPx = with(density) {
                     (DesignTokens.Spacing.lg + DesignTokens.Spacing.xl).roundToPx()
                 } + titleHeightPx
-                val lineHeightPx = with(density) { 28.dp.roundToPx() }
+                val lineHeightPx = with(density) { DesignTokens.Editor.lyricMeasureLineHeight.roundToPx() }
                 val activeRangeInLyricsPx = selectedTextVerticalRange(
                     textLayoutResult = lyricsTextLayout,
                     text = activeEditorText,
@@ -736,12 +729,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         !viewModel.hasActiveRewrite &&
                         lyricAnalysisReady
                     val lyricsTextStyle = TextStyle(
-                        fontSize = 16.sp,
-                        lineHeight = 28.sp,
+                        fontSize = DesignTokens.Editor.lyricFontSize,
+                        lineHeight = DesignTokens.Editor.lyricLineHeight,
                         fontFamily = FontFamily.Default
                     )
-                    val syllableUnderlineGap = with(density) { 2.dp.toPx() }
-                    val syllableUnderlineWidth = with(density) { 3.dp.toPx() }
+                    val syllableUnderlineGap = with(density) { DesignTokens.Editor.syllableUnderlineGap.toPx() }
+                    val syllableUnderlineWidth = with(density) { DesignTokens.Editor.syllableUnderlineWidth.toPx() }
                     val syllableIsDark = isSystemInDarkTheme()
                     val syllableUnderlineSpans = remember(analyzedLyrics, syllableUnderlineActive, syllableIsDark) {
                         buildSyllableUnderlineSpans(
@@ -781,7 +774,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             targetValue = 1f,
                             animationSpec = infiniteRepeatable(
                                 animation = tween(
-                                    durationMillis = 1200,
+                                    durationMillis = DesignTokens.Motion.rewriteShimmerMillis,
                                     easing = LinearEasing
                                 ),
                                 repeatMode = RepeatMode.Restart
@@ -854,8 +847,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     if (viewModel.lyrics.isEmpty()) {
                                         Text(
                                             "Start writing your lyrics here...",
-                                            fontSize = 16.sp,
-                                            lineHeight = 28.sp,
+                                            fontSize = DesignTokens.Editor.lyricFontSize,
+                                            lineHeight = DesignTokens.Editor.lyricLineHeight,
                                             color = colorScheme.onBackground.copy(alpha = 0.2f)
                                         )
                                     }
@@ -907,7 +900,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 horizontalAlignment = Alignment.End
             ) {
                 val memoService = viewModel.voiceMemoService
-                val barCount = 22
+                val barCount = DesignTokens.EditorChrome.recordingBarCount
                 // Amplitude + elapsed polling while recording — drives the spectralizer pill.
                 var amplitudeBars by remember { mutableStateOf(FloatArray(barCount) { 0f }) }
                 var smoothedBars by remember { mutableStateOf(FloatArray(barCount) { 0f }) }
@@ -937,20 +930,20 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     label = "micRecording"
                 )
 
-                val micRecordingWidth = 216.dp
-                val unBlockExtendedWidth = 150.dp
+                val micRecordingWidth = DesignTokens.EditorChrome.micRecordingWidth
+                val unBlockExtendedWidth = DesignTokens.EditorChrome.unBlockExtendedWidth
 
-                // Pill width: 56dp (circle FAB size) → 216dp recording pill.
+                // Pill width: compact FAB size → recording pill.
                 // The enclosing action area is right-aligned, so the Row grows left.
                 val pillWidth by micTransition.animateDp(
                     label = "pillWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
-                ) { recording -> if (recording) micRecordingWidth else 56.dp }
+                ) { recording -> if (recording) micRecordingWidth else DesignTokens.EditorChrome.fabSize }
 
                 val unBlockWidth by micTransition.animateDp(
                     label = "unBlockWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
-                ) { recording -> if (recording) 56.dp else unBlockExtendedWidth }
+                ) { recording -> if (recording) DesignTokens.EditorChrome.fabSize else unBlockExtendedWidth }
 
                 val unBlockWordmarkAlpha by micTransition.animateFloat(
                     label = "unBlockWordmarkAlpha",
@@ -960,14 +953,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 val unBlockWordmarkWidth by micTransition.animateDp(
                     label = "unBlockWordmarkWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
-                ) { recording -> if (recording) 0.dp else 76.dp }
+                ) { recording -> if (recording) 0.dp else DesignTokens.EditorChrome.unBlockWordmarkWidth }
 
                 val recProgress by micTransition.animateFloat(
                     label = "recProgress",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 1f else 0f }
 
-                val barsAlpha = ((recProgress - 0.55f) / 0.30f).coerceIn(0f, 1f)
+                val barsAlpha = ((recProgress - DesignTokens.EditorChrome.recordingBarsFadeStart) / DesignTokens.EditorChrome.recordingBarsFadeDistance).coerceIn(0f, 1f)
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -978,7 +971,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     Box(
                         modifier = Modifier
                             .width(pillWidth)
-                            .height(56.dp)
+                            .height(DesignTokens.EditorChrome.fabSize)
                             .background(
                                 colorScheme.surfaceContainerHigh,
                                 RoundedCornerShape(DesignTokens.Radius.pill)
@@ -1017,22 +1010,22 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         // Spectralizer content fades in from the same spring progress.
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.EditorChrome.recordingContentGap),
                             modifier = Modifier
                                 .align(Alignment.CenterStart)
                                 .fillMaxWidth()
-                                .padding(start = 16.dp, end = 56.dp)
+                                .padding(start = DesignTokens.EditorChrome.recordingContentStartPadding, end = DesignTokens.EditorChrome.fabSize)
                                 .alpha(barsAlpha)
                         ) {
                             Canvas(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .height(24.dp)
+                                    .height(DesignTokens.EditorChrome.recordingMeterHeight)
                             ) {
                                 val pitch = size.width / amplitudeBars.size
                                 val barWidthPx = pitch * 0.6f
                                 amplitudeBars.forEachIndexed { i, amplitude ->
-                                    val barHeight = (amplitude * size.height).coerceAtLeast(2.dp.toPx())
+                                    val barHeight = (amplitude * size.height).coerceAtLeast(DesignTokens.EditorChrome.recordingMinBarHeight.toPx())
                                     val x = i * pitch + (pitch - barWidthPx) / 2f
                                     drawRoundRect(
                                         color = colorScheme.error,
@@ -1046,7 +1039,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 text = com.rhymeai.app.service.VoiceMemoService.formatDuration(
                                     memoService.recordingElapsedMs
                                 ),
-                                fontSize = 12.sp,
+                                fontSize = DesignTokens.EditorChrome.recordingElapsedFontSize,
                                 fontWeight = FontWeight.Medium,
                                 color = colorScheme.onSurface
                             )
@@ -1055,8 +1048,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         Box(
                             modifier = Modifier
                                 .align(BiasAlignment(horizontalBias = recProgress, verticalBias = 0f))
-                                .padding(horizontal = 16.dp)
-                                .size(24.dp),
+                                .padding(horizontal = DesignTokens.EditorChrome.recordingContentStartPadding)
+                                .size(DesignTokens.EditorChrome.recordingIconSize),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -1064,7 +1057,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 contentDescription = null,
                                 tint = colorScheme.onSurfaceVariant,
                                 modifier = Modifier
-                                    .size(24.dp)
+                                    .size(DesignTokens.EditorChrome.recordingIconSize)
                                     .alpha(1f - recProgress)
                             )
                             Icon(
@@ -1072,7 +1065,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 contentDescription = null,
                                 tint = colorScheme.error,
                                 modifier = Modifier
-                                    .size(24.dp)
+                                    .size(DesignTokens.EditorChrome.recordingIconSize)
                                     .alpha(recProgress)
                             )
                         }
@@ -1083,7 +1076,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     Box(
                         modifier = Modifier
                             .width(unBlockWidth)
-                            .height(56.dp)
+                            .height(DesignTokens.EditorChrome.fabSize)
                             .clip(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
                                 colorScheme.primary,
@@ -1112,7 +1105,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 imageVector = Icons.Default.Edit,
                                 contentDescription = null,
                                 tint = colorScheme.onPrimary,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(DesignTokens.EditorChrome.unBlockIconSize)
                             )
                             Box(
                                 modifier = Modifier
@@ -1121,10 +1114,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     .clipToBounds()
                             ) {
                                 Row(
-                                    modifier = Modifier.requiredWidth(76.dp),
+                                    modifier = Modifier.requiredWidth(DesignTokens.EditorChrome.unBlockWordmarkWidth),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Spacer(Modifier.width(8.dp))
+                                    Spacer(Modifier.width(DesignTokens.EditorChrome.unBlockWordmarkGap))
                                     UnBlockWordmark()
                                 }
                             }

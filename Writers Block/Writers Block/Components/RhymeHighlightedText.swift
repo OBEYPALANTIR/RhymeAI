@@ -83,8 +83,6 @@ struct RhymeHighlightedText: View, Equatable {
         colorScheme == .dark ? Self.palettePastel : Self.paletteDark
     }
 
-    private static let wordPattern = try! NSRegularExpression(pattern: "[a-zA-Z']+")
-
     var body: some View {
         if (enabled || syllablesEnabled) && !text.isEmpty {
             Text(highlightedAttributedString)
@@ -98,7 +96,7 @@ struct RhymeHighlightedText: View, Equatable {
 
     private var highlightedAttributedString: AttributedString {
         let nsText = text as NSString
-        let matches = Self.wordPattern.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        let matches = LyricRegex.word.matches(in: text, range: NSRange(location: 0, length: nsText.length))
 
         struct Token {
             let value: String

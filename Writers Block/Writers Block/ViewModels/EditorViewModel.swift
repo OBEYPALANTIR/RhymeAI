@@ -144,6 +144,8 @@ final class EditorViewModel: ObservableObject {
     private(set) var wordCount: Int = 0
     private(set) var syllableCount: Int = 0
     private(set) lazy var rhymeContext = RhymeContext.emptyContext(currentLetter: String(activeRhymeScheme.first ?? Character("A")))
+    private static let untitledProjectTitle = "Untitled Song"
+    private static let importedProjectTitle = "Imported Song"
 
     // MARK: - Computed
 
@@ -217,7 +219,7 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Init
 
     init(keychainStore: KeychainStore? = nil) {
-        let runningUITestInMemory = ProcessInfo.processInfo.arguments.contains("--ui-test-in-memory-store")
+        let runningUITestInMemory = UITestFlags.isEnabled(UITestFlags.inMemoryStore)
         let resolvedStore: KeychainStore = keychainStore
             ?? (runningUITestInMemory ? InMemoryKeychainStore() : SystemKeychainStore())
         self.keychainStore = resolvedStore
@@ -272,18 +274,18 @@ final class EditorViewModel: ObservableObject {
             apiKeyPresence[provider.rawValue] = (secured[provider.rawValue] ?? "").isEmpty == false
         }
 
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-seed-prosody-song") {
+        if UITestFlags.isEnabled(UITestFlags.seedProsodySong) {
             let seededLyrics = "[Verse]\nyellow music\nfollow music\nmellow music"
             title = "UI Prosody Song"
             lyrics = seededLyrics
             positionSeededProsodyCursorForUITests()
             seedRewriteLoadingForUITestsIfNeeded()
-            isStressPreviewEnabled = ProcessInfo.processInfo.arguments.contains("--ui-test-enable-stress-preview")
+            isStressPreviewEnabled = UITestFlags.isEnabled(UITestFlags.enableStressPreview)
             showWelcome = false
-            showAssistantSheet = ProcessInfo.processInfo.arguments.contains("--ui-test-open-assistant")
+            showAssistantSheet = UITestFlags.isEnabled(UITestFlags.openAssistant)
         }
 
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-seed-rewrite-selection") {
+        if UITestFlags.isEnabled(UITestFlags.seedRewriteSelection) {
             let seededLyrics = "yellow music\nfollow music"
             title = "UI Rewrite Song"
             lyrics = seededLyrics
@@ -357,18 +359,14 @@ final class EditorViewModel: ObservableObject {
         let textBeforeCursor = String(lyrics.prefix(pos))
         let globalCursorLineIndex = textBeforeCursor.components(separatedBy: "\n").count - 1
 
-        // Look up section and ordinal from the map.
-        let sectionRef = sectionMap.sectionAt(lineIndex: globalCursorLineIndex)
-        let currentSection = sectionRef?.type ?? .unknown
-        let sectionOrdinal = sectionRef?.ordinal ?? 1
-
-        // First-chorus lines for consistency prompting on repeat choruses.
-        let firstChorusLines: [String]?
-        if currentSection == .chorus, sectionOrdinal >= 2 {
-            firstChorusLines = sectionMap.lines(forFirstOf: .chorus, in: rawLines)
-        } else {
-            firstChorusLines = nil
-        }
+        let sectionContext = Self.sectionContext(
+            forLineIndex: globalCursorLineIndex,
+            sectionMap: sectionMap,
+            rawLines: rawLines
+        )
+        let currentSection = sectionContext.currentSection
+        let sectionOrdinal = sectionContext.sectionOrdinal
+        let firstChorusLines = sectionContext.firstChorusLines
 
         let textIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
         let textAfterCursor = String(lyrics.suffix(lyrics.count - pos))
@@ -397,7 +395,7 @@ final class EditorViewModel: ObservableObject {
         let stanzaTextBeforeCursor = String(lyrics[stanzaStart..<textIndex])
         let rawCursorLineIndex = stanzaTextBeforeCursor.components(separatedBy: "\n").count - 1
         let lyricLinePosition = stanzaLines.prefix(rawCursorLineIndex + 1).filter { line in
-            !isSectionHeader(line) && !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !Self.isSectionHeader(line) && !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }.count - 1
         let effectiveLineIndex = max(lyricLinePosition, 0)
 
@@ -408,20 +406,12 @@ final class EditorViewModel: ObservableObject {
 
         let currentLetter = String(schemeLetters[effectiveLineIndex % schemeLetters.count])
 
-        var targetLine: String?
-        var lyricCount = 0
-        for i in stanzaLines.indices {
-            if i >= rawCursorLineIndex { break }
-
-            let line = stanzaLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
-            if isSectionHeader(line) || line.isEmpty { continue }
-
-            let letter = String(schemeLetters[lyricCount % schemeLetters.count])
-            if letter == currentLetter {
-                targetLine = line
-            }
-            lyricCount += 1
-        }
+        let targetLine = Self.targetLine(
+            in: stanzaLines,
+            before: rawCursorLineIndex,
+            matching: currentLetter,
+            schemeLetters: schemeLetters
+        )
 
         return RhymeContext(
             targetLine: targetLine,
@@ -434,7 +424,58 @@ final class EditorViewModel: ObservableObject {
         )
     }
 
-    private func isSectionHeader(_ line: String) -> Bool {
+    private struct RhymeSectionContext {
+        let currentSection: SongSection
+        let sectionOrdinal: Int
+        let firstChorusLines: [String]?
+    }
+
+    private static func sectionContext(
+        forLineIndex lineIndex: Int,
+        sectionMap: SectionMap,
+        rawLines: [String]
+    ) -> RhymeSectionContext {
+        let sectionRef = sectionMap.sectionAt(lineIndex: lineIndex)
+        let currentSection = sectionRef?.type ?? .unknown
+        let sectionOrdinal = sectionRef?.ordinal ?? 1
+        let firstChorusLines: [String]?
+        if currentSection == .chorus, sectionOrdinal >= 2 {
+            firstChorusLines = sectionMap.lines(forFirstOf: .chorus, in: rawLines)
+        } else {
+            firstChorusLines = nil
+        }
+
+        return RhymeSectionContext(
+            currentSection: currentSection,
+            sectionOrdinal: sectionOrdinal,
+            firstChorusLines: firstChorusLines
+        )
+    }
+
+    private static func targetLine(
+        in stanzaLines: [String],
+        before rawCursorLineIndex: Int,
+        matching currentLetter: String,
+        schemeLetters: [Character]
+    ) -> String? {
+        var targetLine: String?
+        var lyricCount = 0
+        for i in stanzaLines.indices {
+            if i >= rawCursorLineIndex { break }
+
+            let line = stanzaLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if Self.isSectionHeader(line) || line.isEmpty { continue }
+
+            let letter = String(schemeLetters[lyricCount % schemeLetters.count])
+            if letter == currentLetter {
+                targetLine = line
+            }
+            lyricCount += 1
+        }
+        return targetLine
+    }
+
+    private static func isSectionHeader(_ line: String) -> Bool {
         SectionMap.headerTitle(line.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
     }
 
@@ -541,7 +582,7 @@ final class EditorViewModel: ObservableObject {
 
     private func selectedRangeForRewriteRequest() -> NSRange {
         guard selectedRange.length == 0,
-              ProcessInfo.processInfo.arguments.contains("--ui-test-seed-rewrite-selection"),
+              UITestFlags.isEnabled(UITestFlags.seedRewriteSelection),
               let seedRange = rewriteSelectionSeedRange() else {
             return selectedRange
         }
@@ -932,7 +973,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func positionSeededProsodyCursorForUITests() {
-        guard ProcessInfo.processInfo.arguments.contains("--ui-test-seed-prosody-song") else { return }
+        guard UITestFlags.isEnabled(UITestFlags.seedProsodySong) else { return }
         if let range = lyrics.range(of: "follow music") {
             cursorPosition = lyrics.utf16.distance(from: lyrics.utf16.startIndex, to: range.lowerBound)
         } else {
@@ -941,7 +982,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func seedRewriteLoadingForUITestsIfNeeded() {
-        guard ProcessInfo.processInfo.arguments.contains("--ui-test-seed-rewrite-loading"),
+        guard UITestFlags.isEnabled(UITestFlags.seedRewriteLoading),
               let range = rewriteSelectionSeedRange() else { return }
         let original = (lyrics as NSString).substring(with: range)
         selectedRange = range
@@ -954,7 +995,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func seedTrashProjectForUITestsIfNeeded() {
-        guard ProcessInfo.processInfo.arguments.contains("--ui-test-seed-trash-song"),
+        guard UITestFlags.isEnabled(UITestFlags.seedTrashSong),
               !didSeedTrashProjectForUITests,
               let context = modelContext else {
             return
@@ -1000,13 +1041,7 @@ final class EditorViewModel: ObservableObject {
 
     func importProject(_ exported: SongProjectExport) {
         guard let context = modelContext else { return }
-        let project = SongProject(
-            id: UUID().uuidString,
-            title: exported.title.isEmpty ? "Imported Song" : exported.title,
-            lyrics: exported.lyrics,
-            theme: exported.theme,
-            updatedAt: Date()
-        )
+        let project = makeImportedProject(from: exported)
         context.insert(project)
         try? context.save()
 
@@ -1023,13 +1058,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func snapshotForExport() -> SongProject {
-        SongProject(
-            id: currentProjectId ?? UUID().uuidString,
-            title: title.isEmpty ? "Untitled Song" : title,
-            lyrics: lyrics,
-            theme: theme,
-            updatedAt: Date()
-        )
+        makeUntitledSongProject(id: currentProjectId ?? UUID().uuidString)
     }
 
     func applyTemplate(_ template: SongTemplate) {
@@ -1055,11 +1084,7 @@ final class EditorViewModel: ObservableObject {
     /// the melody first). Creates and persists an Untitled project on demand.
     func ensureProjectForRecording() -> String {
         if let projectId = currentProjectId { return projectId }
-        let project = SongProject(
-            title: title.isEmpty ? "Untitled Song" : title,
-            lyrics: lyrics,
-            theme: theme
-        )
+        let project = makeUntitledSongProject()
         if let context = modelContext {
             context.insert(project)
             try? context.save()
@@ -1101,17 +1126,13 @@ final class EditorViewModel: ObservableObject {
                     predicate: #Predicate<SongProject> { $0.id == projectId }
                 )
                 if let existing = try? context.fetch(descriptor).first {
-                    existing.title = title.isEmpty ? "Untitled Song" : title
+                    existing.title = normalizedProjectTitle()
                     existing.lyrics = lyrics
                     existing.theme = theme
                     existing.updatedAt = Date()
                 }
             } else {
-                let project = SongProject(
-                    title: title.isEmpty ? "Untitled Song" : title,
-                    lyrics: lyrics,
-                    theme: theme
-                )
+                let project = makeUntitledSongProject()
                 context.insert(project)
                 currentProjectId = project.id
             }
@@ -1119,6 +1140,33 @@ final class EditorViewModel: ObservableObject {
             try? context.save()
             saveStatus = .saved
         }
+    }
+
+    private func normalizedProjectTitle() -> String {
+        title.isEmpty ? Self.untitledProjectTitle : title
+    }
+
+    private func makeUntitledSongProject(
+        id: String = UUID().uuidString,
+        updatedAt: Date = Date()
+    ) -> SongProject {
+        SongProject(
+            id: id,
+            title: normalizedProjectTitle(),
+            lyrics: lyrics,
+            theme: theme,
+            updatedAt: updatedAt
+        )
+    }
+
+    private func makeImportedProject(from exported: SongProjectExport) -> SongProject {
+        SongProject(
+            id: UUID().uuidString,
+            title: exported.title.isEmpty ? Self.importedProjectTitle : exported.title,
+            lyrics: exported.lyrics,
+            theme: exported.theme,
+            updatedAt: Date()
+        )
     }
 
     // MARK: - Settings

@@ -6,6 +6,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.spring
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 object DesignTokens {
     object Phi {
@@ -38,6 +39,35 @@ object DesignTokens {
         val horizontalPadding = 24.dp
         val bottomRest = 300.dp
         val keyboardOffset = 72.dp
+        val estimatedCharacterWidth = 8.5.dp
+        val lyricMeasureLineHeight = 28.dp
+        val lyricFontSize = 16.sp
+        val lyricLineHeight = 28.sp
+        val syllableUnderlineGap = 2.dp
+        val syllableUnderlineWidth = 3.dp
+    }
+
+    object EditorChrome {
+        val saveStatusSavingGap = 6.dp
+        val saveStatusSavedGap = 5.dp
+        val saveStatusStrokeWidth = 2.dp
+        val saveStatusIconSize = 16.dp
+        val statsEndPadding = 4.dp
+        val fabSize = 56.dp
+        val micRecordingWidth = 216.dp
+        val unBlockExtendedWidth = 150.dp
+        val unBlockWordmarkWidth = 76.dp
+        val recordingContentGap = 8.dp
+        val recordingContentStartPadding = 16.dp
+        val recordingMeterHeight = 24.dp
+        val recordingMinBarHeight = 2.dp
+        val recordingIconSize = 24.dp
+        val recordingElapsedFontSize = 12.sp
+        val unBlockIconSize = 18.dp
+        val unBlockWordmarkGap = 8.dp
+        const val recordingBarCount = 22
+        const val recordingBarsFadeStart = 0.55f
+        const val recordingBarsFadeDistance = 0.30f
     }
 
     object Sheet {
@@ -75,6 +105,7 @@ object DesignTokens {
         const val sheetPresentMillis = 340
         const val drawerPresentMillis = 340
         const val dragSettleMillis = 420
+        const val rewriteShimmerMillis = 1200
 
         val standardEasing: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
         val emphasizedEasing: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)

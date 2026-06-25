@@ -17,12 +17,10 @@ struct SyllableColoredText: View {
         }
     }
 
-    private static let wordPattern = try! NSRegularExpression(pattern: "[a-zA-Z0-9']+")
-
     private var coloredAttributedString: AttributedString {
         var result = AttributedString()
         let nsText = text as NSString
-        let matches = Self.wordPattern.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        let matches = LyricRegex.alphanumericWord.matches(in: text, range: NSRange(location: 0, length: nsText.length))
 
         var lastEnd = text.startIndex
 

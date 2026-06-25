@@ -94,7 +94,7 @@ nonisolated struct SectionMap {
             }
 
             ordinalsPerType[sectionType, default: 0] += 1
-            let ordinal = ordinalsPerType[sectionType]!
+            let ordinal = ordinalsPerType[sectionType, default: 0]
 
             results.append(SectionRef(type: sectionType, ordinal: ordinal, label: label, lineRange: range))
         }

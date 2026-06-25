@@ -164,16 +164,14 @@ struct AIService {
             useWholeSongContext: useWholeSongContext
         )
 
-        switch provider {
-        case .gemini:
-            return try await callGemini(apiKey: apiKey, modelId: modelId, prompt: prompt)
-        case .openai:
-            return try await callOpenAI(apiKey: apiKey, modelId: modelId, prompt: prompt)
-        case .claude:
-            return try await callClaude(apiKey: apiKey, modelId: modelId, prompt: prompt)
-        case .local:
-            throw AIServiceError.invalidResponse
-        }
+        let raw = try await callCloudText(
+            provider: provider,
+            apiKey: apiKey,
+            modelId: modelId,
+            prompt: prompt,
+            kind: .suggestions
+        )
+        return parseSuggestionList(raw)
     }
 
     // MARK: - Streaming
@@ -238,18 +236,12 @@ struct AIService {
                         useWholeSongContext: useWholeSongContext
                     )
 
-                    let tokens: AsyncThrowingStream<String, Error>
-                    switch provider {
-                    case .gemini:
-                        tokens = streamGeminiTokens(apiKey: apiKey, modelId: modelId, prompt: prompt)
-                    case .openai:
-                        tokens = streamOpenAITokens(apiKey: apiKey, modelId: modelId, prompt: prompt)
-                    case .claude:
-                        tokens = streamClaudeTokens(apiKey: apiKey, modelId: modelId, prompt: prompt)
-                    case .local:
-                        continuation.finish()
-                        return
-                    }
+                    let tokens = streamCloudTokens(
+                        provider: provider,
+                        apiKey: apiKey,
+                        modelId: modelId,
+                        prompt: prompt
+                    )
 
                     try await emitLines(
                         from: tokens,
@@ -329,7 +321,8 @@ struct AIService {
         }
     }
 
-    private func streamGeminiTokens(
+    private func streamCloudTokens(
+        provider: AIProvider,
         apiKey: String,
         modelId: String,
         prompt: String
@@ -337,111 +330,20 @@ struct AIService {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let url = try Self.geminiURL(modelId: modelId, method: "streamGenerateContent", query: "alt=sse")
-                    let body: [String: Any] = [
-                        "contents": [["parts": [["text": prompt]]]]
-                    ]
+                    let request = try makeProviderRequest(
+                        provider: provider,
+                        apiKey: apiKey,
+                        modelId: modelId,
+                        prompt: prompt,
+                        kind: .stream
+                    )
                     let payloads = httpPostStream(
-                        url: url,
-                        headers: [
-                            "Content-Type": "application/json",
-                            "x-goog-api-key": apiKey
-                        ],
-                        body: try JSONSerialization.data(withJSONObject: body)
+                        url: request.url,
+                        headers: request.headers,
+                        body: request.body
                     )
                     for try await payload in payloads {
-                        if let chunk = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-                           let candidates = chunk["candidates"] as? [[String: Any]],
-                           let content = candidates.first?["content"] as? [String: Any],
-                           let parts = content["parts"] as? [[String: Any]],
-                           let text = parts.first?["text"] as? String {
-                            continuation.yield(text)
-                        }
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    private func streamOpenAITokens(
-        apiKey: String,
-        modelId: String,
-        prompt: String
-    ) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
-                        throw AIServiceError.invalidResponse
-                    }
-                    let body: [String: Any] = [
-                        "model": modelId,
-                        "messages": [["role": "user", "content": prompt]],
-                        "stream": true,
-                        "temperature": 0.8
-                    ]
-                    let payloads = httpPostStream(
-                        url: url,
-                        headers: [
-                            "Content-Type": "application/json",
-                            "Authorization": "Bearer \(apiKey)",
-                            "Accept": "text/event-stream"
-                        ],
-                        body: try JSONSerialization.data(withJSONObject: body)
-                    )
-                    for try await payload in payloads {
-                        if let chunk = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-                           let choices = chunk["choices"] as? [[String: Any]],
-                           let delta = choices.first?["delta"] as? [String: Any],
-                           let content = delta["content"] as? String {
-                            continuation.yield(content)
-                        }
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    private func streamClaudeTokens(
-        apiKey: String,
-        modelId: String,
-        prompt: String
-    ) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
-                        throw AIServiceError.invalidResponse
-                    }
-                    let body: [String: Any] = [
-                        "model": modelId,
-                        "max_tokens": 1024,
-                        "stream": true,
-                        "messages": [["role": "user", "content": prompt]]
-                    ]
-                    let payloads = httpPostStream(
-                        url: url,
-                        headers: [
-                            "Content-Type": "application/json",
-                            "x-api-key": apiKey,
-                            "anthropic-version": "2023-06-01",
-                            "Accept": "text/event-stream"
-                        ],
-                        body: try JSONSerialization.data(withJSONObject: body)
-                    )
-                    for try await payload in payloads {
-                        if let chunk = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-                           chunk["type"] as? String == "content_block_delta",
-                           let delta = chunk["delta"] as? [String: Any],
-                           let text = delta["text"] as? String {
+                        if let text = Self.streamText(provider: provider, payload: payload) {
                             continuation.yield(text)
                         }
                     }
@@ -703,18 +605,88 @@ struct AIService {
         }
     }
 
-    // MARK: - Gemini
+    // MARK: - Cloud providers
 
-    private func callGemini(apiKey: String, modelId: String, prompt: String) async throws -> [String] {
-        let url = try Self.geminiURL(modelId: modelId, method: "generateContent")
+    private enum ProviderRequestKind {
+        case suggestions
+        case rawJSON
+        case stream
 
-        let body: [String: Any] = [
-            "contents": [
-                ["parts": [["text": prompt]]]
-            ]
+        var isStreaming: Bool {
+            if case .stream = self { return true }
+            return false
+        }
+
+        var requestsJSON: Bool {
+            if case .rawJSON = self { return true }
+            return false
+        }
+    }
+
+    private struct ProviderHTTPRequest {
+        let url: URL
+        let headers: [String: String]
+        let body: Data
+    }
+
+    private func callCloudText(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        prompt: String,
+        kind: ProviderRequestKind
+    ) async throws -> String {
+        let request = try makeProviderRequest(
+            provider: provider,
+            apiKey: apiKey,
+            modelId: modelId,
+            prompt: prompt,
+            kind: kind
+        )
+        let data = try await httpPost(url: request.url, headers: request.headers, body: request.body)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AIServiceError.decodingError
+        }
+        return try Self.responseText(provider: provider, from: json)
+    }
+
+    private func makeProviderRequest(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        prompt: String,
+        kind: ProviderRequestKind
+    ) throws -> ProviderHTTPRequest {
+        switch provider {
+        case .gemini:
+            return try makeGeminiRequest(apiKey: apiKey, modelId: modelId, prompt: prompt, kind: kind)
+        case .openai:
+            return try makeOpenAIRequest(apiKey: apiKey, modelId: modelId, prompt: prompt, kind: kind)
+        case .claude:
+            return try makeClaudeRequest(apiKey: apiKey, modelId: modelId, prompt: prompt, kind: kind)
+        case .local:
+            throw AIServiceError.invalidResponse
+        }
+    }
+
+    private func makeGeminiRequest(
+        apiKey: String,
+        modelId: String,
+        prompt: String,
+        kind: ProviderRequestKind
+    ) throws -> ProviderHTTPRequest {
+        let url = try Self.geminiURL(
+            modelId: modelId,
+            method: kind.isStreaming ? "streamGenerateContent" : "generateContent",
+            query: kind.isStreaming ? "alt=sse" : nil
+        )
+        var body: [String: Any] = [
+            "contents": [["parts": [["text": prompt]]]]
         ]
-
-        let data = try await httpPost(
+        if kind.requestsJSON {
+            body["generationConfig"] = ["responseMimeType": "application/json"]
+        }
+        return ProviderHTTPRequest(
             url: url,
             headers: [
                 "Content-Type": "application/json",
@@ -722,80 +694,133 @@ struct AIService {
             ],
             body: try JSONSerialization.data(withJSONObject: body)
         )
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AIServiceError.decodingError
-        }
-        let text = try Self.geminiText(from: json)
-
-        return parseSuggestionList(text)
     }
 
-    // MARK: - OpenAI
-
-    private func callOpenAI(apiKey: String, modelId: String, prompt: String) async throws -> [String] {
+    private func makeOpenAIRequest(
+        apiKey: String,
+        modelId: String,
+        prompt: String,
+        kind: ProviderRequestKind
+    ) throws -> ProviderHTTPRequest {
         guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
             throw AIServiceError.invalidResponse
         }
-
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": modelId,
-            "messages": [
-                ["role": "user", "content": prompt]
-            ]
+            "messages": [["role": "user", "content": prompt]]
         ]
-
-        let data = try await httpPost(
+        if kind.isStreaming {
+            body["stream"] = true
+            body["temperature"] = 0.8
+        } else if kind.requestsJSON {
+            body["response_format"] = ["type": "json_object"]
+        }
+        var headers = [
+            "Content-Type": "application/json",
+            "Authorization": "Bearer \(apiKey)"
+        ]
+        if kind.isStreaming {
+            headers["Accept"] = "text/event-stream"
+        }
+        return ProviderHTTPRequest(
             url: url,
-            headers: [
-                "Content-Type": "application/json",
-                "Authorization": "Bearer \(apiKey)"
-            ],
+            headers: headers,
             body: try JSONSerialization.data(withJSONObject: body)
         )
+    }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
+    private func makeClaudeRequest(
+        apiKey: String,
+        modelId: String,
+        prompt: String,
+        kind: ProviderRequestKind
+    ) throws -> ProviderHTTPRequest {
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
+            throw AIServiceError.invalidResponse
+        }
+        var body: [String: Any] = [
+            "model": modelId,
+            "max_tokens": 1024,
+            "messages": [["role": "user", "content": prompt]]
+        ]
+        if kind.isStreaming {
+            body["stream"] = true
+        }
+        var headers = [
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01"
+        ]
+        if kind.isStreaming {
+            headers["Accept"] = "text/event-stream"
+        }
+        return ProviderHTTPRequest(
+            url: url,
+            headers: headers,
+            body: try JSONSerialization.data(withJSONObject: body)
+        )
+    }
+
+    private static func responseText(provider: AIProvider, from json: [String: Any]) throws -> String {
+        switch provider {
+        case .gemini:
+            return try geminiText(from: json)
+        case .openai:
+            return try openAIText(from: json)
+        case .claude:
+            return try claudeText(from: json)
+        case .local:
+            throw AIServiceError.invalidResponse
+        }
+    }
+
+    private static func openAIText(from json: [String: Any]) throws -> String {
+        guard let choices = json["choices"] as? [[String: Any]],
               let message = choices.first?["message"] as? [String: Any],
               let content = message["content"] as? String else {
             throw AIServiceError.decodingError
         }
-
-        return parseSuggestionList(content)
+        return content
     }
 
-    // MARK: - Claude
-
-    private func callClaude(apiKey: String, modelId: String, prompt: String) async throws -> [String] {
-        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
-            throw AIServiceError.invalidResponse
-        }
-
-        let body: [String: Any] = [
-            "model": modelId,
-            "max_tokens": 1024,
-            "messages": [
-                ["role": "user", "content": prompt]
-            ]
-        ]
-
-        let data = try await httpPost(
-            url: url,
-            headers: [
-                "Content-Type": "application/json",
-                "x-api-key": apiKey,
-                "anthropic-version": "2023-06-01"
-            ],
-            body: try JSONSerialization.data(withJSONObject: body)
-        )
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let contentArray = json["content"] as? [[String: Any]],
+    private static func claudeText(from json: [String: Any]) throws -> String {
+        guard let contentArray = json["content"] as? [[String: Any]],
               let text = contentArray.first?["text"] as? String else {
             throw AIServiceError.decodingError
         }
+        return text
+    }
 
-        return parseSuggestionList(text)
+    private static func streamText(provider: AIProvider, payload: String) -> String? {
+        guard let chunk = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any] else {
+            return nil
+        }
+        switch provider {
+        case .gemini:
+            guard let candidates = chunk["candidates"] as? [[String: Any]],
+                  let content = candidates.first?["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]],
+                  let text = parts.first?["text"] as? String else {
+                return nil
+            }
+            return text
+        case .openai:
+            guard let choices = chunk["choices"] as? [[String: Any]],
+                  let delta = choices.first?["delta"] as? [String: Any],
+                  let content = delta["content"] as? String else {
+                return nil
+            }
+            return content
+        case .claude:
+            guard chunk["type"] as? String == "content_block_delta",
+                  let delta = chunk["delta"] as? [String: Any],
+                  let text = delta["text"] as? String else {
+                return nil
+            }
+            return text
+        case .local:
+            return nil
+        }
     }
 
     // MARK: - Local
@@ -1107,39 +1132,34 @@ struct AIService {
         let target = word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else { return [] }
 
+        let prompt = buildSynonymsPrompt(word: target, lineContext: lineContext, limit: limit)
+
         if provider == .local {
-            let synPrompt = buildSynonymsPrompt(word: target, lineContext: lineContext, limit: limit)
+            let raw: String
 
             // Gemma engine: route through downloaded GGUF model.
             if Self.shouldUseGemma() {
-                let raw = try await callGGUF(prompt: synPrompt)
-                return extractSynonyms(raw, exclude: target, limit: limit)
+                raw = try await callGGUF(prompt: prompt)
+            } else if #available(iOS 26.0, *) {
+                // Apple Intelligence fallback.
+                raw = try await callLocalRaw(prompt: prompt, instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object.")
+            } else {
+                throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence synonyms require iOS 26 or later.")
             }
-
-            // Apple Intelligence fallback.
-            if #available(iOS 26.0, *) {
-                let raw = try await callLocalRaw(prompt: synPrompt, instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object.")
-                return extractSynonyms(raw, exclude: target, limit: limit)
-            }
-            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence synonyms require iOS 26 or later.")
+            return extractSynonyms(raw, exclude: target, limit: limit)
         }
 
         guard !apiKey.isEmpty else {
             throw AIServiceError.noApiKey(provider: provider.displayName)
         }
 
-        let prompt = buildSynonymsPrompt(word: target, lineContext: lineContext, limit: limit)
-        let raw: String
-        switch provider {
-        case .gemini:
-            raw = try await callGeminiRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
-        case .openai:
-            raw = try await callOpenAIRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
-        case .claude:
-            raw = try await callClaudeRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
-        case .local:
-            throw AIServiceError.invalidResponse
-        }
+        let raw = try await callCloudText(
+            provider: provider,
+            apiKey: apiKey,
+            modelId: modelId,
+            prompt: prompt,
+            kind: .rawJSON
+        )
         return extractSynonyms(raw, exclude: target, limit: limit)
     }
 
@@ -1271,17 +1291,13 @@ struct AIService {
         }
 
         let prompt = buildRewritePrompt(action: action, lyrics: fullLyrics, selection: selection, currentSection: currentSection)
-        let raw: String
-        switch provider {
-        case .gemini:
-            raw = try await callGeminiRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
-        case .openai:
-            raw = try await callOpenAIRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
-        case .claude:
-            raw = try await callClaudeRaw(apiKey: apiKey, modelId: modelId, prompt: prompt)
-        case .local:
-            throw AIServiceError.invalidResponse
-        }
+        let raw = try await callCloudText(
+            provider: provider,
+            apiKey: apiKey,
+            modelId: modelId,
+            prompt: prompt,
+            kind: .rawJSON
+        )
 
         if let extracted = extractRewriteField(raw)?.trimmingCharacters(in: .whitespacesAndNewlines),
            !extracted.isEmpty {
@@ -1386,27 +1402,6 @@ struct AIService {
         }
     }
 
-    private func callGeminiRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
-        let url = try Self.geminiURL(modelId: modelId, method: "generateContent")
-
-        let body: [String: Any] = [
-            "contents": [["parts": [["text": prompt]]]],
-            "generationConfig": ["responseMimeType": "application/json"]
-        ]
-        let data = try await httpPost(
-            url: url,
-            headers: [
-                "Content-Type": "application/json",
-                "x-goog-api-key": apiKey
-            ],
-            body: try JSONSerialization.data(withJSONObject: body)
-        )
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AIServiceError.decodingError
-        }
-        return try Self.geminiText(from: json)
-    }
-
     private static func geminiURL(modelId: String, method: String, query: String? = nil) throws -> URL {
         let base = geminiBaseURLString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         var urlString = "\(base)/models/\(modelId):\(method)"
@@ -1426,58 +1421,6 @@ struct AIService {
         }
         #endif
         return "https://generativelanguage.googleapis.com/v1beta"
-    }
-
-    private func callOpenAIRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
-        guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
-            throw AIServiceError.invalidResponse
-        }
-        let body: [String: Any] = [
-            "model": modelId,
-            "messages": [["role": "user", "content": prompt]],
-            "response_format": ["type": "json_object"]
-        ]
-        let data = try await httpPost(
-            url: url,
-            headers: [
-                "Content-Type": "application/json",
-                "Authorization": "Bearer \(apiKey)"
-            ],
-            body: try JSONSerialization.data(withJSONObject: body)
-        )
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
-              let message = choices.first?["message"] as? [String: Any],
-              let content = message["content"] as? String else {
-            throw AIServiceError.decodingError
-        }
-        return content
-    }
-
-    private func callClaudeRaw(apiKey: String, modelId: String, prompt: String) async throws -> String {
-        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
-            throw AIServiceError.invalidResponse
-        }
-        let body: [String: Any] = [
-            "model": modelId,
-            "max_tokens": 1024,
-            "messages": [["role": "user", "content": prompt]]
-        ]
-        let data = try await httpPost(
-            url: url,
-            headers: [
-                "Content-Type": "application/json",
-                "x-api-key": apiKey,
-                "anthropic-version": "2023-06-01"
-            ],
-            body: try JSONSerialization.data(withJSONObject: body)
-        )
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let contentArray = json["content"] as? [[String: Any]],
-              let text = contentArray.first?["text"] as? String else {
-            throw AIServiceError.decodingError
-        }
-        return text
     }
 
     @available(iOS 26.0, *)

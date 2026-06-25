@@ -3,23 +3,101 @@ import SwiftData
 import UIKit
 import UniformTypeIdentifiers
 
+private enum EditorViewConstants {
+    enum UnBlockChrome {
+        static let expandedButtonWidth: CGFloat = 136
+        static let expandedWordmarkWidth: CGFloat = 76
+        static let collapsedWordmarkWidth: CGFloat = 0
+        static let visibleWordmarkOpacity: Double = 1
+        static let hiddenWordmarkOpacity: Double = 0
+        static let transitionScale: CGFloat = 0.92
+        static let surfaceFallbackOpacity: Double = 0.35
+        static let shadowOpacity: Double = 0.26
+    }
+
+    enum AssistantSheet {
+        static let dragMinimumDistance: CGFloat = 8
+        static let closeThresholdMinimum: CGFloat = 96
+        static let closeThresholdMaximum: CGFloat = 180
+        static let closeThresholdHeightRatio: CGFloat = 0.18
+        static let backSwipeMinimumDistance: CGFloat = 18
+        static let backSwipeStartX: CGFloat = 32
+        static let backSwipeTranslation: CGFloat = 60
+        static let restingOffset: CGFloat = 0
+        static let grabberOpacity: Double = 0.45
+    }
+
+    enum EditorLayout {
+        static let lyricsMinimumHeight: CGFloat = 400
+        static let stackSpacing: CGFloat = 0
+        static let accessoryZIndex: Double = 1.5
+        static let floatingButtonZIndex: Double = 1
+        static let assistantSheetZIndex: Double = 2
+        static let noAccessoryHeight: CGFloat = 0
+        static let noSelectionAvoidanceInset: CGFloat = 0
+    }
+
+    enum Keyboard {
+        static let hiddenHeight: CGFloat = 0
+    }
+
+    enum TopBar {
+        static let saveProgressScale: CGFloat = 0.6
+        static let counterSpacing: CGFloat = 2
+        static let savedStatusOpacity: Double = 0.8
+        static let disabledExportOpacity: Double = 0.4
+        static let enabledExportOpacity: Double = 1.0
+        static let surfaceCornerRadius: CGFloat = 0
+        static let surfaceFallbackOpacity: Double = 0.02
+    }
+
+    enum RewriteReview {
+        static let progressScale: CGFloat = 0.72
+        static let statusMinimumScale: CGFloat = 0.82
+        static let actionButtonMinWidth: CGFloat = 72
+        static let surfaceTintOpacity: Double = 0.08
+        static let surfaceFallbackOpacity: Double = 0.85
+        static let statusLineLimit = 1
+    }
+
+    enum Wordmark {
+        static let verticalSpacing: CGFloat = 1
+        static let underlineWidth: CGFloat = 58
+        static let underlineHeight: CGFloat = 5
+    }
+
+    enum Scribble {
+        static let start = CGPoint(x: 0, y: 0.55)
+        static let firstPeak = CGPoint(x: 0.18, y: 0.25)
+        static let centerDip = CGPoint(x: 0.42, y: 0.78)
+        static let secondPeak = CGPoint(x: 0.68, y: 0.28)
+        static let end = CGPoint(x: 1, y: 0.58)
+        static let strokeOpacity: Double = 0.9
+        static let strokeWidth: CGFloat = 1.6
+
+        static func point(_ unitPoint: CGPoint, in size: CGSize) -> CGPoint {
+            CGPoint(x: size.width * unitPoint.x, y: size.height * unitPoint.y)
+        }
+    }
+}
+
 struct EditorView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var keyboardIsVisible = false
-    @State private var keyboardHeight: CGFloat = 0
-    @State private var assistantSheetDragOffset: CGFloat = 0
+    @State private var keyboardHeight: CGFloat = EditorViewConstants.Keyboard.hiddenHeight
+    @State private var assistantSheetDragOffset: CGFloat = EditorViewConstants.AssistantSheet.restingOffset
     @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
     @State private var fileExporterPresented: Bool = false
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
-    @State private var rewriteAccessoryHeight: CGFloat = 0
+    @State private var rewriteAccessoryHeight: CGFloat = EditorViewConstants.EditorLayout.noAccessoryHeight
     // UnBlock collapses into a pencil circle while the mic is recording.
-    @State private var unblockWordmarkOpacity: Double = 1
-    @State private var unblockButtonWidth: CGFloat = 136
-    @State private var unblockWordmarkWidth: CGFloat = 76
+    @State private var unblockWordmarkOpacity: Double = EditorViewConstants.UnBlockChrome.visibleWordmarkOpacity
+    @State private var unblockButtonWidth: CGFloat = EditorViewConstants.UnBlockChrome.expandedButtonWidth
+    @State private var unblockWordmarkWidth: CGFloat = EditorViewConstants.UnBlockChrome.expandedWordmarkWidth
     @State private var unblockCollapsed: Bool = false
 
     var body: some View {
@@ -120,13 +198,13 @@ struct EditorView: View {
     // MARK: - iPad Layout (split view)
 
     private var iPadLayout: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
             // Editor column
-            VStack(spacing: 0) {
+            VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                 topBar
                 editorScrollView
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            .safeAreaInset(edge: .bottom, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                 rewriteAccessoryBar
                     .padding(.horizontal, RhymeAITokens.Spacing.md)
                     .padding(.bottom, RhymeAITokens.Spacing.sm)
@@ -147,7 +225,7 @@ struct EditorView: View {
         ZStack(alignment: .bottom) {
             Color(UIColor.systemBackground).ignoresSafeArea()
 
-            VStack(spacing: 0) {
+            VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                 topBar
                 editorScrollView
             }
@@ -157,13 +235,13 @@ struct EditorView: View {
             rewriteAccessoryBar
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .padding(.bottom, keyboardIsVisible ? keyboardHeight + RhymeAITokens.Spacing.xs : RhymeAITokens.Spacing.sm)
-                .zIndex(1.5)
+                .zIndex(EditorViewConstants.EditorLayout.accessoryZIndex)
 
             assistantFloatingButton
-                .zIndex(1)
+                .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
 
             assistantSheetOverlay
-                .zIndex(2)
+                .zIndex(EditorViewConstants.EditorLayout.assistantSheetZIndex)
         }
         .rhymeAnimation(RhymeAITokens.Motion.presentation, value: viewModel.showAssistantSheet)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: keyboardIsVisible)
@@ -177,19 +255,19 @@ struct EditorView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardIsVisible = false
-            keyboardHeight = 0
+            keyboardHeight = EditorViewConstants.Keyboard.hiddenHeight
         }
         .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
             if isPresented {
-                assistantSheetDragOffset = 0
+                assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
             }
         }
         // UnBlock collapse / expand coordinated with mic recording.
         .onChange(of: viewModel.voiceMemoService.isRecording) { _, isRecording in
             withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
-                unblockWordmarkOpacity = isRecording ? 0 : 1
-                unblockButtonWidth = isRecording ? RhymeAITokens.Touch.comfortable : 136
-                unblockWordmarkWidth = isRecording ? 0 : 76
+                unblockWordmarkOpacity = isRecording ? EditorViewConstants.UnBlockChrome.hiddenWordmarkOpacity : EditorViewConstants.UnBlockChrome.visibleWordmarkOpacity
+                unblockButtonWidth = isRecording ? RhymeAITokens.Touch.comfortable : EditorViewConstants.UnBlockChrome.expandedButtonWidth
+                unblockWordmarkWidth = isRecording ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : EditorViewConstants.UnBlockChrome.expandedWordmarkWidth
                 unblockCollapsed = isRecording
             }
         }
@@ -228,7 +306,7 @@ struct EditorView: View {
                         Button {
                             presentAssistantSheet()
                         } label: {
-                            HStack(spacing: unblockCollapsed ? 0 : RhymeAITokens.Spacing.xs) {
+                            HStack(spacing: unblockCollapsed ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : RhymeAITokens.Spacing.xs) {
                                 Image(systemName: "pencil")
                                     .font(.body.weight(.semibold))
                                 UnBlockWordmark()
@@ -242,8 +320,8 @@ struct EditorView: View {
                                 width: unblockButtonWidth,
                                 height: RhymeAITokens.Touch.comfortable
                             )
-                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo, interactive: true, fallbackOpacity: 0.35)
-                            .shadow(color: .indigo.opacity(0.26), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo, interactive: true, fallbackOpacity: EditorViewConstants.UnBlockChrome.surfaceFallbackOpacity)
+                            .shadow(color: .indigo.opacity(EditorViewConstants.UnBlockChrome.shadowOpacity), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
                         }
                         .accessibilityIdentifier("unblockButton")
                         .allowsHitTesting(!viewModel.voiceMemoService.isRecording)
@@ -254,7 +332,7 @@ struct EditorView: View {
                          ? keyboardHeight + RhymeAITokens.Spacing.sm
                          : RhymeAITokens.Spacing.md)
             }
-            .transition(.scale(scale: 0.92, anchor: .bottomTrailing).combined(with: .opacity))
+            .transition(.scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: .bottomTrailing).combined(with: .opacity))
         }
     }
 
@@ -262,7 +340,7 @@ struct EditorView: View {
     private var assistantSheetOverlay: some View {
         GeometryReader { proxy in
             if viewModel.showAssistantSheet {
-                VStack(spacing: 0) {
+                VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                     assistantSheetDragHandle(sheetHeight: proxy.size.height)
                         .padding(.top, proxy.safeAreaInsets.top + RhymeAITokens.Spacing.xs)
 
@@ -284,14 +362,14 @@ struct EditorView: View {
             .frame(height: RhymeAITokens.Layout.assistantSheetHandleArea)
             .overlay {
                 Capsule()
-                    .fill(.secondary.opacity(0.45))
+                    .fill(.secondary.opacity(EditorViewConstants.AssistantSheet.grabberOpacity))
                     .frame(width: RhymeAITokens.Layout.assistantSheetHandleWidth, height: RhymeAITokens.Layout.assistantSheetHandleHeight)
             }
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 8, coordinateSpace: .local)
+                DragGesture(minimumDistance: EditorViewConstants.AssistantSheet.dragMinimumDistance, coordinateSpace: .local)
                     .onChanged { value in
-                        assistantSheetDragOffset = min(max(0, value.translation.height), sheetHeight)
+                        assistantSheetDragOffset = min(max(EditorViewConstants.AssistantSheet.restingOffset, value.translation.height), sheetHeight)
                     }
                     .onEnded { value in
                         settleAssistantSheetDrag(
@@ -310,10 +388,10 @@ struct EditorView: View {
         predictedTranslation: CGFloat,
         sheetHeight: CGFloat
     ) {
-        let dragDistance = max(0, translation)
-        let projectedDistance = max(0, predictedTranslation)
+        let dragDistance = max(EditorViewConstants.AssistantSheet.restingOffset, translation)
+        let projectedDistance = max(EditorViewConstants.AssistantSheet.restingOffset, predictedTranslation)
         // Gesture threshold — tuned by feel, not derived from the φ scale.
-        let closeThreshold = min(180, max(96, sheetHeight * 0.18))
+        let closeThreshold = min(EditorViewConstants.AssistantSheet.closeThresholdMaximum, max(EditorViewConstants.AssistantSheet.closeThresholdMinimum, sheetHeight * EditorViewConstants.AssistantSheet.closeThresholdHeightRatio))
 
         if dragDistance >= closeThreshold || projectedDistance >= closeThreshold {
             withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
@@ -321,11 +399,11 @@ struct EditorView: View {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + RhymeAITokens.Motion.feedbackDuration) {
                 viewModel.showAssistantSheet = false
-                assistantSheetDragOffset = 0
+                assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
             }
         } else {
             withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
-                assistantSheetDragOffset = 0
+                assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
             }
         }
     }
@@ -343,7 +421,7 @@ struct EditorView: View {
     }
 
     private func showAssistantSheetWithAnimation() {
-        assistantSheetDragOffset = 0
+        assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
         withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
             viewModel.showAssistantSheet = true
         }
@@ -351,11 +429,11 @@ struct EditorView: View {
 
     private var assistantBackSwipeGesture: some Gesture {
         // Gesture thresholds — tuned for back-swipe feel, intentionally off the φ scale.
-        DragGesture(minimumDistance: 18, coordinateSpace: .local)
+        DragGesture(minimumDistance: EditorViewConstants.AssistantSheet.backSwipeMinimumDistance, coordinateSpace: .local)
             .onEnded { value in
                 guard viewModel.showAssistantSheet else { return }
-                guard value.startLocation.x <= 32 else { return }
-                guard value.translation.width > 60 else { return }
+                guard value.startLocation.x <= EditorViewConstants.AssistantSheet.backSwipeStartX else { return }
+                guard value.translation.width > EditorViewConstants.AssistantSheet.backSwipeTranslation else { return }
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
 
                 dismissAssistantSheetWithAnimation()
@@ -363,7 +441,7 @@ struct EditorView: View {
     }
 
     private func dismissAssistantSheetWithAnimation() {
-        assistantSheetDragOffset = 0
+        assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
         withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
             viewModel.showAssistantSheet = false
         }
@@ -418,12 +496,12 @@ struct EditorView: View {
     }
 
     private var forceRewriteChipBarForUITests: Bool {
-        ProcessInfo.processInfo.arguments.contains("--ui-test-force-rewrite-bar")
+        UITestFlags.isEnabled(UITestFlags.forceRewriteBar)
     }
 
     private var editorScrollView: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                 // Title Field
                 TextField("Song Title...", text: $viewModel.title)
                     .font(.system(.largeTitle, design: .serif, weight: .bold))
@@ -470,7 +548,7 @@ struct EditorView: View {
                         isTransparentText: overlayActive && !viewModel.hasActiveRewrite && !viewModel.lyrics.isEmpty,
                         isEditable: !viewModel.hasActiveRewrite
                     )
-                    .frame(minHeight: 400)
+                    .frame(minHeight: EditorViewConstants.EditorLayout.lyricsMinimumHeight)
                     .padding(.horizontal, RhymeAITokens.Spacing.md)
                     .onChange(of: viewModel.lyrics) {
                         viewModel.triggerAutoSave()
@@ -495,7 +573,7 @@ struct EditorView: View {
         if horizontalSizeClass != .regular && !viewModel.showAssistantSheet && !assistantModalOpen {
             return RhymeAITokens.Touch.comfortable + RhymeAITokens.Spacing.md
         }
-        return 0
+        return EditorViewConstants.EditorLayout.noSelectionAvoidanceInset
     }
 
     private var overlayActive: Bool {
@@ -529,7 +607,7 @@ struct EditorView: View {
             if viewModel.saveStatus == .saving {
                 HStack(spacing: RhymeAITokens.Spacing.xxs) {
                     ProgressView()
-                        .scaleEffect(0.6)
+                        .scaleEffect(EditorViewConstants.TopBar.saveProgressScale)
                     Text("Saving...")
                         .font(.caption)
                 }
@@ -541,13 +619,13 @@ struct EditorView: View {
                     Text("Saved")
                         .font(.caption)
                 }
-                .foregroundStyle(.green.opacity(0.8))
+                .foregroundStyle(.green.opacity(EditorViewConstants.TopBar.savedStatusOpacity))
             }
 
             Spacer()
 
             // Word & Syllable counts
-            VStack(alignment: .trailing, spacing: 2) {
+            VStack(alignment: .trailing, spacing: EditorViewConstants.TopBar.counterSpacing) {
                 Text("\(viewModel.wordCount) words")
                     .font(.caption2)
                 Text("\(viewModel.syllableCount) syllables")
@@ -562,7 +640,7 @@ struct EditorView: View {
             } label: {
                 Image(systemName: "square.and.arrow.up")
                     .font(.body)
-                    .foregroundStyle(Color.secondary.opacity(viewModel.lyrics.isEmpty ? 0.4 : 1.0))
+                    .foregroundStyle(Color.secondary.opacity(viewModel.lyrics.isEmpty ? EditorViewConstants.TopBar.disabledExportOpacity : EditorViewConstants.TopBar.enabledExportOpacity))
                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
             }
             .disabled(viewModel.lyrics.isEmpty)
@@ -580,7 +658,7 @@ struct EditorView: View {
         }
         .padding(.horizontal, RhymeAITokens.Spacing.xs)
         .padding(.vertical, RhymeAITokens.Spacing.xs)
-        .liquidGlassSurface(cornerRadius: 0, fallbackOpacity: 0.02)
+        .liquidGlassSurface(cornerRadius: EditorViewConstants.TopBar.surfaceCornerRadius, fallbackOpacity: EditorViewConstants.TopBar.surfaceFallbackOpacity)
         .overlay(
             Divider(), alignment: .bottom
         )
@@ -588,7 +666,7 @@ struct EditorView: View {
 }
 
 private struct RewriteAccessoryHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static var defaultValue: CGFloat = EditorViewConstants.EditorLayout.noAccessoryHeight
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
@@ -609,7 +687,7 @@ private struct InlineRewriteReviewBar: View {
             HStack(spacing: RhymeAITokens.Spacing.xs) {
                 if loading {
                     ProgressView()
-                        .scaleEffect(0.72)
+                        .scaleEffect(EditorViewConstants.RewriteReview.progressScale)
                 } else {
                     Image(systemName: error == nil ? "sparkles" : "exclamationmark.triangle")
                         .font(.caption.weight(.semibold))
@@ -617,8 +695,8 @@ private struct InlineRewriteReviewBar: View {
 
                 Text(statusText)
                     .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
+                    .lineLimit(EditorViewConstants.RewriteReview.statusLineLimit)
+                    .minimumScaleFactor(EditorViewConstants.RewriteReview.statusMinimumScale)
             }
             .foregroundStyle(error == nil ? .indigo : .red)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -627,13 +705,13 @@ private struct InlineRewriteReviewBar: View {
                 Button("Retry", action: onRetry)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.indigo)
-                    .frame(minWidth: 72, minHeight: RhymeAITokens.Touch.minimum)
+                    .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
                     .buttonStyle(.rhymePress)
             } else if preview != nil {
                 Button("Apply", action: onApply)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.white)
-                    .frame(minWidth: 72, minHeight: RhymeAITokens.Touch.minimum)
+                    .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
                     .background(.indigo, in: Capsule())
                     .buttonStyle(.rhymePress)
                 Button {
@@ -657,7 +735,7 @@ private struct InlineRewriteReviewBar: View {
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
         .padding(.vertical, RhymeAITokens.Spacing.xs)
         .frame(maxWidth: RhymeAITokens.Layout.drawerMaxWidth)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo.opacity(0.08), fallbackOpacity: 0.85)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo.opacity(EditorViewConstants.RewriteReview.surfaceTintOpacity), fallbackOpacity: EditorViewConstants.RewriteReview.surfaceFallbackOpacity)
         .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
         .accessibilityIdentifier("inlineRewriteReviewBar")
     }
@@ -678,12 +756,12 @@ private struct InlineRewriteReviewBar: View {
 
 private struct UnBlockWordmark: View {
     var body: some View {
-        VStack(spacing: 1) {
+        VStack(spacing: EditorViewConstants.Wordmark.verticalSpacing) {
             Text("UnBlock")
                 .font(.body.weight(.semibold))
 
             ScribbleUnderline()
-                .frame(width: 58, height: 5)
+                .frame(width: EditorViewConstants.Wordmark.underlineWidth, height: EditorViewConstants.Wordmark.underlineHeight)
         }
     }
 }
@@ -692,20 +770,21 @@ private struct ScribbleUnderline: View {
     var body: some View {
         Canvas { context, size in
             var path = Path()
-            path.move(to: CGPoint(x: 0, y: size.height * 0.55))
-            path.addLine(to: CGPoint(x: size.width * 0.18, y: size.height * 0.25))
-            path.addLine(to: CGPoint(x: size.width * 0.42, y: size.height * 0.78))
-            path.addLine(to: CGPoint(x: size.width * 0.68, y: size.height * 0.28))
-            path.addLine(to: CGPoint(x: size.width, y: size.height * 0.58))
+            path.move(to: EditorViewConstants.Scribble.point(EditorViewConstants.Scribble.start, in: size))
+            path.addLine(to: EditorViewConstants.Scribble.point(EditorViewConstants.Scribble.firstPeak, in: size))
+            path.addLine(to: EditorViewConstants.Scribble.point(EditorViewConstants.Scribble.centerDip, in: size))
+            path.addLine(to: EditorViewConstants.Scribble.point(EditorViewConstants.Scribble.secondPeak, in: size))
+            path.addLine(to: EditorViewConstants.Scribble.point(EditorViewConstants.Scribble.end, in: size))
 
             context.stroke(
                 path,
-                with: .color(.white.opacity(0.9)),
-                style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)
+                with: .color(.white.opacity(EditorViewConstants.Scribble.strokeOpacity)),
+                style: StrokeStyle(lineWidth: EditorViewConstants.Scribble.strokeWidth, lineCap: .round, lineJoin: .round)
             )
         }
     }
 }
+
 
 #Preview {
     EditorView()

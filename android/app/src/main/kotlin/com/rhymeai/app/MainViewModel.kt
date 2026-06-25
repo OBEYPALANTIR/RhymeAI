@@ -492,7 +492,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun seedRewritePreviewForTesting(action: RewriteAction, range: TextRange, original: String, preview: String) {
-        check(BuildConfig.DEBUG) { "Rewrite preview seeding is only available in debug builds." }
+        seedRewriteStateForTesting(
+            action = action,
+            range = range,
+            original = original,
+            preview = preview,
+            error = null,
+            loading = false,
+            debugMessage = "Rewrite preview seeding is only available in debug builds."
+        )
+    }
+
+    fun seedRewriteErrorForTesting(action: RewriteAction, range: TextRange, original: String, error: String) {
+        seedRewriteStateForTesting(
+            action = action,
+            range = range,
+            original = original,
+            preview = null,
+            error = error,
+            loading = false,
+            debugMessage = "Rewrite error seeding is only available in debug builds."
+        )
+    }
+
+    fun seedRewriteLoadingForTesting(action: RewriteAction, range: TextRange, original: String) {
+        seedRewriteStateForTesting(
+            action = action,
+            range = range,
+            original = original,
+            preview = null,
+            error = null,
+            loading = true,
+            debugMessage = "Rewrite loading seeding is only available in debug builds."
+        )
+    }
+
+    private fun seedRewriteStateForTesting(
+        action: RewriteAction,
+        range: TextRange,
+        original: String,
+        preview: String?,
+        error: String?,
+        loading: Boolean,
+        debugMessage: String
+    ) {
+        check(BuildConfig.DEBUG) { debugMessage }
         rewriteJob?.cancel()
         pendingRewriteRange = null
         rewriteAction = action
@@ -500,34 +544,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rewriteRange = range
         rewriteRejectedCandidates = setOf(original)
         rewritePreview = preview
-        rewriteError = null
-        rewriteLoading = false
-    }
-
-    fun seedRewriteErrorForTesting(action: RewriteAction, range: TextRange, original: String, error: String) {
-        check(BuildConfig.DEBUG) { "Rewrite error seeding is only available in debug builds." }
-        rewriteJob?.cancel()
-        pendingRewriteRange = null
-        rewriteAction = action
-        rewriteOriginal = original
-        rewriteRange = range
-        rewriteRejectedCandidates = setOf(original)
-        rewritePreview = null
         rewriteError = error
-        rewriteLoading = false
-    }
-
-    fun seedRewriteLoadingForTesting(action: RewriteAction, range: TextRange, original: String) {
-        check(BuildConfig.DEBUG) { "Rewrite loading seeding is only available in debug builds." }
-        rewriteJob?.cancel()
-        pendingRewriteRange = null
-        rewriteAction = action
-        rewriteOriginal = original
-        rewriteRange = range
-        rewriteRejectedCandidates = setOf(original)
-        rewritePreview = null
-        rewriteError = null
-        rewriteLoading = true
+        rewriteLoading = loading
     }
 
     fun applyRewrite() {
@@ -829,9 +847,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         showProjectsDialog = false
         showStartMenu = false
         viewModelScope.launch {
-            repo.saveProjects(projects)
-            repo.setCurrentProjectId(project.id)
-            repo.saveEditorState(project.title, project.lyrics, project.theme)
+            persistActiveProjectSnapshot(
+                projectId = project.id,
+                projectList = projects,
+                editorTitle = project.title,
+                editorLyrics = project.lyrics,
+                editorTheme = project.theme
+            )
         }
     }
 
@@ -843,6 +865,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             theme = theme,
             updatedAt = System.currentTimeMillis()
         )
+    }
+
+    private fun createUntitledProjectSnapshot(): SongProject {
+        return createUntitledProjectSnapshot(
+            title = title,
+            lyrics = lyrics,
+            theme = theme
+        )
+    }
+
+    private fun createUntitledProjectSnapshot(
+        title: String,
+        lyrics: String,
+        theme: String,
+        id: String = java.util.UUID.randomUUID().toString(),
+        updatedAt: Long = System.currentTimeMillis()
+    ): SongProject {
+        return SongProject(
+            id = id,
+            title = title.ifEmpty { "Untitled Song" },
+            lyrics = lyrics,
+            theme = theme,
+            updatedAt = updatedAt
+        )
+    }
+
+    private suspend fun persistActiveProjectSnapshot(
+        projectId: String,
+        projectList: List<SongProject>,
+        editorTitle: String,
+        editorLyrics: String,
+        editorTheme: String
+    ) {
+        repo.saveProjects(projectList)
+        repo.setCurrentProjectId(projectId)
+        repo.saveEditorState(editorTitle, editorLyrics, editorTheme)
     }
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String) {
@@ -860,20 +918,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // the melody first). Creates and persists an Untitled project on demand.
     fun ensureProjectForRecording(): String {
         currentProjectId?.let { return it }
-        val newProject = SongProject(
-            id = java.util.UUID.randomUUID().toString(),
-            title = title.ifEmpty { "Untitled Song" },
-            lyrics = lyrics,
-            theme = theme,
-            updatedAt = System.currentTimeMillis()
-        )
+        val newProject = createUntitledProjectSnapshot()
         projects = listOf(newProject) + projects
         currentProjectId = newProject.id
         showStartMenu = false
         viewModelScope.launch {
-            repo.saveProjects(projects)
-            repo.setCurrentProjectId(newProject.id)
-            repo.saveEditorState(title, lyrics, theme)
+            persistActiveProjectSnapshot(
+                projectId = newProject.id,
+                projectList = projects,
+                editorTitle = title,
+                editorLyrics = lyrics,
+                editorTheme = theme
+            )
         }
         return newProject.id
     }
@@ -903,15 +959,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val updatedProjectId: String
                 val updatedProjects = if (projectIdAtTrigger == null) {
-                    val newId = java.util.UUID.randomUUID().toString()
-                    val newProject = SongProject(
-                        id = newId,
-                        title = currentTitle.ifEmpty { "Untitled Song" },
+                    val newProject = createUntitledProjectSnapshot(
+                        title = currentTitle,
                         lyrics = currentLyrics,
-                        theme = currentTheme,
-                        updatedAt = System.currentTimeMillis()
+                        theme = currentTheme
                     )
-                    updatedProjectId = newId
+                    updatedProjectId = newProject.id
                     listOf(newProject) + projects
                 } else {
                     updatedProjectId = projectIdAtTrigger
@@ -928,9 +981,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 projects = updatedProjects
                 currentProjectId = updatedProjectId
 
-                repo.saveProjects(updatedProjects)
-                repo.setCurrentProjectId(updatedProjectId)
-                repo.saveEditorState(currentTitle, currentLyrics, currentTheme)
+                persistActiveProjectSnapshot(
+                    projectId = updatedProjectId,
+                    projectList = updatedProjects,
+                    editorTitle = currentTitle,
+                    editorLyrics = currentLyrics,
+                    editorTheme = currentTheme
+                )
 
                 delay(SAVE_STATUS_VISIBLE_MILLIS)
                 saveStatus = SaveStatus.SAVED

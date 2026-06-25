@@ -20,9 +20,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
 import com.rhymeai.app.ui.theme.syllableColor
+import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.SyllableCounter
 
-private val wordPattern = Regex("[a-zA-Z0-9']+")
+private val wordPattern = LyricTokenizer.alphanumericWordPattern
 
 @Immutable
 data class SyllableUnderlineSpan(
