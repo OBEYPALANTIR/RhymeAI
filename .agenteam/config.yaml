@@ -33,7 +33,7 @@ final_verify:
 
 roles:
   dev:
-    model: gpt-5.3-codex
+    model: gpt-5.5
     can_write: true
     write_scope:
       - "android/**"
@@ -43,7 +43,7 @@ roles:
       - "*.md"
 
   qa:
-    model: gpt-5.3-codex
+    model: gpt-5.5
     can_write: true
     write_scope:
       - "android/app/src/test/**"
