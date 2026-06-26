@@ -48,10 +48,7 @@ object DesignTokens {
     }
 
     object EditorChrome {
-        val saveStatusSavingGap = 6.dp
-        val saveStatusSavedGap = 5.dp
         val saveStatusStrokeWidth = 2.dp
-        val saveStatusIconSize = 16.dp
         val statsEndPadding = 4.dp
         val fabSize = 56.dp
         val micRecordingWidth = 216.dp

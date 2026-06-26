@@ -468,16 +468,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         when (viewModel.saveStatus) {
                             SaveStatus.SAVING -> CircularProgressIndicator(
                                 modifier = Modifier
-                                    .size(14.dp)
+                                    .size(DesignTokens.Indicator.spinnerSm)
                                     .semantics { contentDescription = savingLabel },
-                                strokeWidth = 2.dp,
+                                strokeWidth = DesignTokens.EditorChrome.saveStatusStrokeWidth,
                                 color = colorScheme.onSurfaceVariant
                             )
                             SaveStatus.SAVED -> Icon(
                                 Icons.Default.Check,
                                 contentDescription = stringResource(R.string.editor_saved),
                                 tint = colorScheme.tertiary,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(DesignTokens.Indicator.spinnerSm)
                             )
                             else -> {}
                         }
