@@ -643,24 +643,25 @@ struct EditorView: View {
             }
             .accessibilityLabel("Open songs drawer")
 
-            // Save status
-            if viewModel.saveStatus == .saving {
-                HStack(spacing: RhymeAITokens.Spacing.xxs) {
+            HStack(spacing: RhymeAITokens.Spacing.xs) {
+                Text(viewModel.title.isEmpty ? "Untitled Song" : viewModel.title)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .accessibilityIdentifier("editorTopBarTitle")
+                if viewModel.saveStatus == .saving {
                     ProgressView()
                         .scaleEffect(EditorViewConstants.TopBar.saveProgressScale)
-                    Text("Saving...")
-                        .font(.caption)
-                }
-                .foregroundStyle(.secondary)
-            } else if viewModel.saveStatus == .saved {
-                HStack(spacing: RhymeAITokens.Spacing.xxs) {
+                        .accessibilityLabel("Saving...")
+                } else if viewModel.saveStatus == .saved {
                     Image(systemName: "checkmark")
                         .font(.caption)
-                    Text("Saved")
-                        .font(.caption)
+                        .foregroundStyle(.green.opacity(EditorViewConstants.TopBar.savedStatusOpacity))
+                        .accessibilityLabel("Saved")
                 }
-                .foregroundStyle(.green.opacity(EditorViewConstants.TopBar.savedStatusOpacity))
             }
+            .rhymeAnimation(RhymeAITokens.Motion.feedback, value: viewModel.saveStatus)
 
             Spacer()
 

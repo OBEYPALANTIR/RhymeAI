@@ -192,7 +192,7 @@ private struct ChipButton: View {
                 copyFlash = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { copyFlash = false }
             }
-            .animation(.easeInOut(duration: 0.2), value: copyFlash)
+            .rhymeAnimation(RhymeAITokens.Motion.feedback, value: copyFlash)
     }
 }
 

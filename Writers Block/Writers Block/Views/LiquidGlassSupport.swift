@@ -46,9 +46,10 @@ enum RhymeAITokens {
     }
 
     enum Motion {
-        static let feedbackDuration: TimeInterval = 0.180
+        // Golden-ratio duration ladder: 0.16 ×φ ≈0.26 ×φ ≈0.42 (φ=1.618). Utilitarian tiers ≤0.50s.
+        static let feedbackDuration: TimeInterval = 0.16
         static let stateDuration: TimeInterval = 0.260
-        static let presentationDuration: TimeInterval = 0.340
+        static let presentationDuration: TimeInterval = 0.26
         static let settleDuration: TimeInterval = 0.420
 
         static let feedback: Animation = .easeInOut(duration: feedbackDuration)
@@ -56,7 +57,7 @@ enum RhymeAITokens {
         static let state: Animation = .easeInOut(duration: stateDuration)
         static let dialog: Animation = .easeInOut(duration: stateDuration)
         static let presentation: Animation = .spring(response: presentationDuration, dampingFraction: 0.88)
-        static let settle: Animation = .spring(response: settleDuration, dampingFraction: 0.72)
+        static let settle: Animation = .spring(response: settleDuration, dampingFraction: 0.80)
 
         /// Expressive spring for the mic↔pill choreography and the UnBlock FAB
         /// fall-down — a ~0.4s glide with a subtle settle (no hard snap). Drives the

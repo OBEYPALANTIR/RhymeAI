@@ -44,7 +44,7 @@ private let gemmaDownloadOptions: [GemmaDownloadOption] = [
     )
 ]
 
-private let providerSectionAnimation = Animation.spring(response: 0.34, dampingFraction: 0.88)
+private let providerSectionAnimation = RhymeAITokens.Motion.presentation
 
 private enum CloudBackupAction {
     case backup
