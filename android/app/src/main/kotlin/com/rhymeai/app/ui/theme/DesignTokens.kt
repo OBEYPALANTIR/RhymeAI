@@ -97,13 +97,14 @@ object DesignTokens {
     }
 
     object Motion {
-        const val feedbackMillis = 180
-        const val dismissMillis = 180
+        // Golden-ratio duration ladder: 0.16 ×φ ≈0.26 ×φ ≈0.42 (φ=1.618). Utilitarian tiers ≤0.50s.
+        const val feedbackMillis = 160
+        const val dismissMillis = 160
         const val standardMillis = 260
         const val dialogMillis = 260
-        const val assistantPresentMillis = 340
-        const val sheetPresentMillis = 340
-        const val drawerPresentMillis = 340
+        const val assistantPresentMillis = 260
+        const val sheetPresentMillis = 260
+        const val drawerPresentMillis = 260
         const val dragSettleMillis = 420
         const val rewriteShimmerMillis = 1200
 
@@ -118,7 +119,7 @@ object DesignTokens {
         )
 
         fun <T> settleSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
-            dampingRatio = 0.72f,
+            dampingRatio = 0.80f,
             stiffness = Spring.StiffnessLow,
             visibilityThreshold = visibilityThreshold
         )

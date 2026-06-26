@@ -6,6 +6,7 @@ import android.provider.MediaStore
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -61,6 +62,16 @@ class NewFeatureUiTest {
     fun tearDown() {
         scenario?.close()
         scenario = null
+    }
+
+    @Test
+    fun editorTopBarShowsCurrentSongTitle() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        composeRule.onNodeWithTag("editorTopBarTitle").assertTextEquals("Untitled Song")
+        composeRule.onNodeWithTag("songTitleEditor").performClick()
+        composeRule.onNodeWithTag("songTitleEditor").performTextInput("Golden Hour")
+        composeRule.onNodeWithTag("editorTopBarTitle").assertTextEquals("Golden Hour")
     }
 
     @Test

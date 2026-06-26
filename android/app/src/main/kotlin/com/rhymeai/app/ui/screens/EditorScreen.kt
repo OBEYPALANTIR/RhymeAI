@@ -450,47 +450,37 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     }
                 },
                 title = {
-                    when (viewModel.saveStatus) {
-                        SaveStatus.SAVING -> Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.EditorChrome.saveStatusSavingGap)
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(DesignTokens.Indicator.spinnerSm),
-                                strokeWidth = DesignTokens.EditorChrome.saveStatusStrokeWidth,
-                                color = colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                stringResource(R.string.editor_saving),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                        }
-                        SaveStatus.SAVED -> Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.EditorChrome.saveStatusSavedGap)
-                        ) {
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = null,
-                                modifier = Modifier.size(DesignTokens.EditorChrome.saveStatusIconSize),
-                                tint = colorScheme.tertiary
-                            )
-                            Text(
-                                stringResource(R.string.editor_saved),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = colorScheme.tertiary,
-                                maxLines = 1
-                            )
-                        }
-                        SaveStatus.IDLE -> Text(
-                            "Writers Block",
+                    val savingLabel = stringResource(R.string.editor_saving)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+                    ) {
+                        Text(
+                            text = viewModel.title.ifBlank { "Untitled Song" },
                             style = MaterialTheme.typography.titleSmall,
                             color = colorScheme.onSurfaceVariant,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .testTag("editorTopBarTitle")
                         )
+                        when (viewModel.saveStatus) {
+                            SaveStatus.SAVING -> CircularProgressIndicator(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .semantics { contentDescription = savingLabel },
+                                strokeWidth = 2.dp,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            SaveStatus.SAVED -> Icon(
+                                Icons.Default.Check,
+                                contentDescription = stringResource(R.string.editor_saved),
+                                tint = colorScheme.tertiary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            else -> {}
+                        }
                     }
                 },
                 actions = {
