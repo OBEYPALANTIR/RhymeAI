@@ -7,6 +7,19 @@ enum SaveStatus {
     case idle, saving, saved
 }
 
+@MainActor
+protocol CloudBackupServicing: AnyObject {
+    var isConfigured: Bool { get }
+    var hasStoredPassphrase: Bool { get }
+
+    func updatePassphrase(_ passphrase: String)
+    func backupNow(modelContext: ModelContext) async throws
+    func restoreNow(modelContext: ModelContext) async throws
+    func backupInBackgroundIfPossible(modelContext: ModelContext) async
+}
+
+extension BackupService: CloudBackupServicing {}
+
 final class EditorViewModel: ObservableObject {
 
     // MARK: - Editor State
@@ -127,16 +140,26 @@ final class EditorViewModel: ObservableObject {
     /// snapshots, or test fixtures.
     @Published private(set) var apiKeyPresence: [String: Bool] = [:]
 
+    // MARK: - Cloud Backup
+
+    @Published private(set) var cloudBackupConfigured: Bool = false
+    @Published private(set) var cloudBackupHasStoredPassphrase: Bool = false
+    @Published private(set) var cloudBackupIsWorking: Bool = false
+    @Published private(set) var cloudBackupStatusText: String = "Google Drive backup is unavailable in this build."
+    @Published private(set) var cloudBackupLastResultIsError: Bool = false
+
     // MARK: - Internal
 
     var modelContext: ModelContext? {
         didSet {
             purgeExpiredTrashedProjects()
             seedTrashProjectForUITestsIfNeeded()
+            refreshCloudBackupState()
         }
     }
     private let aiService = AIService()
     private let keychainStore: KeychainStore
+    private let backupService: CloudBackupServicing?
     private var autoSaveTask: Task<Void, Never>?
     private var trashSchedulerTask: Task<Void, Never>?
     private var didSeedTrashProjectForUITests = false
@@ -171,6 +194,10 @@ final class EditorViewModel: ObservableObject {
         #else
         return ""
         #endif
+    }
+
+    var canRunCloudBackup: Bool {
+        cloudBackupConfigured && cloudBackupHasStoredPassphrase && !cloudBackupIsWorking && modelContext != nil
     }
 
     func hasApiKey(for provider: AIProvider) -> Bool {
@@ -218,11 +245,12 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Init
 
-    init(keychainStore: KeychainStore? = nil) {
+    init(keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil) {
         let runningUITestInMemory = UITestFlags.isEnabled(UITestFlags.inMemoryStore)
         let resolvedStore: KeychainStore = keychainStore
             ?? (runningUITestInMemory ? InMemoryKeychainStore() : SystemKeychainStore())
         self.keychainStore = resolvedStore
+        self.backupService = backupService
 
         #if DEBUG
         if runningUITestInMemory,
@@ -293,6 +321,7 @@ final class EditorViewModel: ObservableObject {
             cursorPosition = selectedRange.location + selectedRange.length
             showWelcome = false
         }
+        refreshCloudBackupState()
     }
 
     deinit {
@@ -1182,6 +1211,107 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't save the \(provider.displayName) API key to the Keychain. Try again after unlocking the device."
         }
         apiKeyPresence[provider.rawValue] = stored
+    }
+
+    // MARK: - Cloud Backup
+
+    func refreshCloudBackupState() {
+        cloudBackupConfigured = backupService?.isConfigured ?? false
+        cloudBackupHasStoredPassphrase = backupService?.hasStoredPassphrase ?? false
+
+        if !cloudBackupConfigured {
+            cloudBackupStatusText = "Google Drive backup is not configured yet. Add the iOS OAuth client ID before backing up."
+            cloudBackupLastResultIsError = true
+        } else if !cloudBackupHasStoredPassphrase {
+            cloudBackupStatusText = "Enter a backup passphrase to enable Google Drive backup."
+            cloudBackupLastResultIsError = false
+        } else if cloudBackupStatusText == "Google Drive backup is unavailable in this build."
+            || cloudBackupStatusText.contains("not configured")
+            || cloudBackupStatusText.contains("Enter a backup passphrase") {
+            cloudBackupStatusText = "Ready to back up projects, trash, and recordings."
+            cloudBackupLastResultIsError = false
+        }
+    }
+
+    func updateCloudBackupPassphrase(_ passphrase: String) {
+        let trimmed = passphrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            refreshCloudBackupState()
+            return
+        }
+
+        backupService?.updatePassphrase(trimmed)
+        refreshCloudBackupState()
+    }
+
+    func backUpNow() async {
+        guard let backupService, let context = modelContext, canRunCloudBackup else {
+            refreshCloudBackupState()
+            return
+        }
+
+        cloudBackupIsWorking = true
+        cloudBackupLastResultIsError = false
+        cloudBackupStatusText = "Encrypting backup for Google Drive..."
+        defer {
+            cloudBackupIsWorking = false
+            cloudBackupConfigured = backupService.isConfigured
+            cloudBackupHasStoredPassphrase = backupService.hasStoredPassphrase
+        }
+
+        do {
+            try await backupService.backupNow(modelContext: context)
+            cloudBackupStatusText = "Backup complete. Projects, trash, and recordings are encrypted in Google Drive."
+        } catch {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Backup failed: \(cloudBackupErrorDescription(error))"
+        }
+    }
+
+    func restoreBackupNow() async {
+        guard let backupService, let context = modelContext, canRunCloudBackup else {
+            refreshCloudBackupState()
+            return
+        }
+
+        cloudBackupIsWorking = true
+        cloudBackupLastResultIsError = false
+        cloudBackupStatusText = "Restoring encrypted Google Drive backup..."
+        defer {
+            cloudBackupIsWorking = false
+            cloudBackupConfigured = backupService.isConfigured
+            cloudBackupHasStoredPassphrase = backupService.hasStoredPassphrase
+        }
+
+        do {
+            try await backupService.restoreNow(modelContext: context)
+            cloudBackupStatusText = "Restore complete. Projects, trash, and missing recordings were restored."
+        } catch {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Restore failed: \(cloudBackupErrorDescription(error))"
+        }
+    }
+
+    func runCloudBackupOnBackgroundIfPossible() async {
+        refreshCloudBackupState()
+        guard let backupService,
+              let context = modelContext,
+              cloudBackupConfigured,
+              cloudBackupHasStoredPassphrase else {
+            return
+        }
+
+        await backupService.backupInBackgroundIfPossible(modelContext: context)
+        refreshCloudBackupState()
+    }
+
+    private func cloudBackupErrorDescription(_ error: Error) -> String {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription,
+           !description.isEmpty {
+            return description
+        }
+        return error.localizedDescription
     }
 
     func saveProvider(_ provider: AIProvider) {

@@ -65,10 +65,53 @@ data class RhymeContext(
     val currentSectionRef: SectionRef? = null
 )
 
+internal enum class DriveSyncAction {
+    Sync,
+    Restore
+}
+
+internal fun formatDriveSyncSuccessStatus(
+    action: DriveSyncAction,
+    projectCount: Int,
+    trashedCount: Int,
+    recordingCount: Int
+): String {
+    val verb = when (action) {
+        DriveSyncAction.Sync -> "Sync complete"
+        DriveSyncAction.Restore -> "Restore complete"
+    }
+    return "$verb — ${plural(projectCount, "project")}, $trashedCount trashed, ${plural(recordingCount, "recording")}. API keys stay on this device."
+}
+
+internal fun driveSyncProgressLabel(action: DriveSyncAction?): String =
+    when (action) {
+        DriveSyncAction.Restore -> "Restoring backup..."
+        else -> "Syncing backup..."
+    }
+
+internal fun nextDriveSyncActionAfterAuthorization(pendingAction: DriveSyncAction?): DriveSyncAction =
+    pendingAction ?: DriveSyncAction.Sync
+
+internal fun shouldAttemptBackgroundDriveSync(
+    hasPassphrase: Boolean,
+    authorizedForNonInteractiveSync: Boolean,
+    syncInProgress: Boolean
+): Boolean = hasPassphrase && authorizedForNonInteractiveSync && !syncInProgress
+
+internal fun shouldDeferBackgroundDriveSync(
+    nowMillis: Long,
+    lastAttemptMillis: Long,
+    minIntervalMillis: Long
+): Boolean = lastAttemptMillis > 0L && nowMillis - lastAttemptMillis < minIntervalMillis
+
+private fun plural(count: Int, noun: String): String =
+    if (count == 1) "$count $noun" else "$count ${noun}s"
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         private const val AUTOSAVE_DEBOUNCE_MILLIS = 450L
         private const val SAVE_STATUS_VISIBLE_MILLIS = 700L
+        private const val BACKGROUND_SYNC_MIN_INTERVAL_MILLIS = 15 * 60 * 1000L
     }
 
     private val repo = ProjectRepository(application)
@@ -160,6 +203,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var syncInProgress by mutableStateOf(false)
         private set
 
+    private var syncCurrentAction by mutableStateOf<DriveSyncAction?>(null)
+
+    val syncProgressLabel: String
+        get() = driveSyncProgressLabel(syncCurrentAction)
+
     /**
      * Human-readable result of the last sync attempt.
      * Null = never synced this session.
@@ -180,45 +228,115 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var syncPassphraseStored by mutableStateOf(false)
         private set
 
+    private var driveSyncAuthorizedForNonInteractive by mutableStateOf(false)
+    private var pendingAuthAction: DriveSyncAction? = null
+    private var lastBackgroundSyncAttemptMillis = 0L
+
     fun saveSyncPassphrase(passphrase: String) {
         driveSyncService.setPassphrase(passphrase)
         syncPassphraseStored = passphrase.isNotEmpty()
+        driveSyncAuthorizedForNonInteractive = false
     }
 
     fun triggerSync() {
+        runDriveSync(action = DriveSyncAction.Sync, interactive = true)
+    }
+
+    fun triggerRestore() {
+        runDriveSync(action = DriveSyncAction.Restore, interactive = true)
+    }
+
+    fun retryAfterDriveAuthorization() {
+        val action = nextDriveSyncActionAfterAuthorization(pendingAuthAction)
+        pendingAuthAction = null
+        syncPendingIntent = null
+        runDriveSync(action = action, interactive = true)
+    }
+
+    fun triggerBackgroundDriveSync() {
+        val hasPassphrase = driveSyncService.hasPassphrase()
+        val now = System.currentTimeMillis()
+        syncPassphraseStored = hasPassphrase
+        if (!shouldAttemptBackgroundDriveSync(
+                hasPassphrase = hasPassphrase,
+                authorizedForNonInteractiveSync = driveSyncAuthorizedForNonInteractive,
+                syncInProgress = syncInProgress
+            ) ||
+            shouldDeferBackgroundDriveSync(
+                nowMillis = now,
+                lastAttemptMillis = lastBackgroundSyncAttemptMillis,
+                minIntervalMillis = BACKGROUND_SYNC_MIN_INTERVAL_MILLIS
+            )
+        ) {
+            return
+        }
+        lastBackgroundSyncAttemptMillis = now
+        runDriveSync(action = DriveSyncAction.Sync, interactive = false)
+    }
+
+    private fun runDriveSync(action: DriveSyncAction, interactive: Boolean) {
         if (syncInProgress) return
         syncInProgress = true
+        syncCurrentAction = action
         syncLastResult = null
         viewModelScope.launch {
-            val result = driveSyncService.sync(repo)
+            val result = when (action) {
+                DriveSyncAction.Sync -> driveSyncService.sync(repo)
+                DriveSyncAction.Restore -> driveSyncService.restore(repo)
+            }
             syncInProgress = false
-            when (result) {
-                is SyncResult.Success -> {
-                    syncLastResult = "Sync complete"
-                    // Re-read projects into UI state since the snapshot may have changed.
-                    projects = result.merged.projects
-                    trashedProjects = result.merged.trashed
-                }
-                is SyncResult.AuthorizationRequired -> {
+            syncCurrentAction = null
+            handleSyncResult(result, action, interactive)
+        }
+    }
+
+    private fun handleSyncResult(
+        result: SyncResult,
+        action: DriveSyncAction,
+        interactive: Boolean
+    ) {
+        when (result) {
+            is SyncResult.Success -> {
+                driveSyncAuthorizedForNonInteractive = true
+                pendingAuthAction = null
+                syncLastResult = formatDriveSyncSuccessStatus(
+                    action = action,
+                    projectCount = result.merged.projects.size,
+                    trashedCount = result.merged.trashed.size,
+                    recordingCount = result.merged.recordings.size
+                )
+                // Re-read projects into UI state since the snapshot may have changed.
+                projects = result.merged.projects
+                trashedProjects = result.merged.trashed
+            }
+            is SyncResult.AuthorizationRequired -> {
+                driveSyncAuthorizedForNonInteractive = false
+                syncLastResult = if (interactive) {
+                    pendingAuthAction = action
                     syncPendingIntent = result.pendingIntent
-                    syncLastResult = "Authorization required — tap to approve"
+                    "Authorization required — approve Google Drive access to back up and restore projects, trash, and recordings."
+                } else {
+                    "Background sync skipped — open Settings and run Sync now to approve Google Drive access."
                 }
-                is SyncResult.WrongPassphrase -> {
-                    syncLastResult = "Wrong passphrase — remote file was not changed"
+            }
+            is SyncResult.WrongPassphrase -> {
+                driveSyncAuthorizedForNonInteractive = false
+                syncLastResult = "Wrong passphrase — Drive backup was not changed."
+            }
+            is SyncResult.NotConfigured -> {
+                driveSyncAuthorizedForNonInteractive = false
+                syncPassphraseStored = driveSyncService.hasPassphrase()
+                syncLastResult = if (!syncPassphraseStored) {
+                    "Set a sync passphrase in Settings to enable encrypted Drive backup for projects, trash, and recordings."
+                } else {
+                    "Drive backup is not configured — check Google Cloud Console setup."
                 }
-                is SyncResult.NotConfigured -> {
-                    syncLastResult = if (!driveSyncService.hasPassphrase()) {
-                        "Set a sync passphrase in Settings to enable Drive sync"
-                    } else {
-                        "Drive sync not configured — check Google Cloud Console setup"
-                    }
-                }
-                is SyncResult.NetworkError -> {
-                    syncLastResult = "Sync failed: ${result.message}"
-                }
-                is SyncResult.UnknownError -> {
-                    syncLastResult = "Sync failed: ${result.cause.message ?: "unexpected error"}"
-                }
+            }
+            is SyncResult.NetworkError -> {
+                syncLastResult = "Drive sync failed: ${result.message}"
+            }
+            is SyncResult.UnknownError -> {
+                syncLastResult = "Drive sync failed: ${result.cause.message ?: "unexpected error"}"
             }
         }
     }

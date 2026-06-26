@@ -4,7 +4,8 @@ import os
 
 @main
 struct Writers_BlockApp: App {
-    @StateObject private var viewModel = EditorViewModel()
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var viewModel = EditorViewModel(backupService: BackupService.shared)
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
@@ -55,6 +56,18 @@ struct Writers_BlockApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(viewModel)
+                .onChange(of: scenePhase) { _, phase in
+                    switch phase {
+                    case .active:
+                        viewModel.refreshCloudBackupState()
+                    case .background:
+                        Task {
+                            await viewModel.runCloudBackupOnBackgroundIfPossible()
+                        }
+                    default:
+                        break
+                    }
+                }
         }
         .modelContainer(sharedModelContainer)
     }

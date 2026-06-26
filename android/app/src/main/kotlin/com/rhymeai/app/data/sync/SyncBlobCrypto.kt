@@ -20,9 +20,8 @@ import javax.crypto.spec.SecretKeySpec
  *
  * Envelope layout: magic "RAI1" (4) | salt (16) | IV (12) | ciphertext+tag.
  *
- * Pure JVM (javax.crypto only) so it is unit-testable without a device. The
- * Drive client that will produce/consume these envelopes does not exist yet;
- * iOS needs no counterpart because its sync rides CloudKit's own encryption.
+ * Pure JVM (javax.crypto only) so it is unit-testable without a device. Android
+ * and iOS must keep this RAI1 envelope byte-compatible for Drive backup restore.
  */
 object SyncBlobCrypto {
 
@@ -40,9 +39,20 @@ object SyncBlobCrypto {
     private val random = SecureRandom()
 
     fun seal(plaintext: ByteArray, passphrase: CharArray): ByteArray {
-        require(passphrase.isNotEmpty()) { "Passphrase must not be empty" }
         val salt = ByteArray(SALT_BYTES).also(random::nextBytes)
         val iv = ByteArray(IV_BYTES).also(random::nextBytes)
+        return seal(plaintext, passphrase, salt, iv)
+    }
+
+    internal fun seal(
+        plaintext: ByteArray,
+        passphrase: CharArray,
+        salt: ByteArray,
+        iv: ByteArray
+    ): ByteArray {
+        requirePortablePassphrase(passphrase)
+        require(salt.size == SALT_BYTES) { "Salt must be $SALT_BYTES bytes" }
+        require(iv.size == IV_BYTES) { "IV must be $IV_BYTES bytes" }
         val header = MAGIC + salt + iv
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -52,7 +62,9 @@ object SyncBlobCrypto {
     }
 
     fun open(envelope: ByteArray, passphrase: CharArray): ByteArray {
-        require(passphrase.isNotEmpty()) { "Passphrase must not be empty" }
+        if (!isPortablePassphrase(passphrase)) {
+            throw SyncBlobSealException("Passphrase uses unsupported characters for cross-platform Drive sync")
+        }
         val headerLength = MAGIC.size + SALT_BYTES + IV_BYTES
         if (envelope.size <= headerLength) {
             throw SyncBlobSealException("Envelope is truncated (${envelope.size} bytes)")
@@ -81,6 +93,15 @@ object SyncBlobCrypto {
         spec.clearPassword()
         return SecretKeySpec(key.encoded, "AES")
     }
+
+    private fun requirePortablePassphrase(passphrase: CharArray) {
+        require(isPortablePassphrase(passphrase)) {
+            "Drive sync passphrase must use printable ASCII so Android and iOS derive the same key"
+        }
+    }
+
+    private fun isPortablePassphrase(passphrase: CharArray): Boolean =
+        passphrase.isNotEmpty() && passphrase.all { it.code in 0x20..0x7E }
 }
 
 class SyncBlobSealException(message: String, cause: Throwable? = null) : Exception(message, cause)

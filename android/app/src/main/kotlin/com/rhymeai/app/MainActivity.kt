@@ -13,12 +13,16 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalDensity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
@@ -61,16 +65,29 @@ class MainActivity : ComponentActivity() {
             RhymeAITheme {
                 val density = LocalDensity.current
                 val viewModel: MainViewModel = viewModel()
+                val lifecycleOwner = LocalLifecycleOwner.current
 
-                // Drive authorization consent screen. After the user approves, clear
-                // the pending intent and retry sync — the second call will find an
-                // access token directly via the identity cache.
+                DisposableEffect(lifecycleOwner, viewModel) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_STOP) {
+                            viewModel.triggerBackgroundDriveSync()
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose {
+                        lifecycleOwner.lifecycle.removeObserver(observer)
+                    }
+                }
+
+                // Drive authorization consent screen. After the user approves,
+                // retry the same action that requested consent (sync or restore).
                 val driveAuthLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.StartIntentSenderForResult()
                 ) { result ->
-                    viewModel.syncPendingIntent = null
                     if (result.resultCode == Activity.RESULT_OK) {
-                        viewModel.triggerSync()
+                        viewModel.retryAfterDriveAuthorization()
+                    } else {
+                        viewModel.syncPendingIntent = null
                     }
                 }
 
@@ -197,8 +214,10 @@ class MainActivity : ComponentActivity() {
                             syncPassphraseStored = viewModel.syncPassphraseStored,
                             syncInProgress = viewModel.syncInProgress,
                             syncLastResult = viewModel.syncLastResult,
+                            syncProgressLabel = viewModel.syncProgressLabel,
                             onSaveSyncPassphrase = { viewModel.saveSyncPassphrase(it) },
                             onSyncNow = { viewModel.triggerSync() },
+                            onRestoreNow = { viewModel.triggerRestore() },
                             // Editor toggles — each change is persisted via viewModel.persistEditorToggles().
                             useWholeSongContext = viewModel.useWholeSongContext,
                             onWholeSongContextChange = { viewModel.useWholeSongContext = it; viewModel.persistEditorToggles() },

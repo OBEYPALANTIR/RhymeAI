@@ -114,8 +114,10 @@ fun SettingsDialog(
     syncPassphraseStored: Boolean = false,
     syncInProgress: Boolean = false,
     syncLastResult: String? = null,
+    syncProgressLabel: String = "Syncing backup...",
     onSaveSyncPassphrase: (String) -> Unit = {},
     onSyncNow: () -> Unit = {},
+    onRestoreNow: (() -> Unit)? = null,
     // Editor toggles — moved from AssistantPanel to Settings so the panel stays clean.
     useWholeSongContext: Boolean = false,
     onWholeSongContextChange: (Boolean) -> Unit = {},
@@ -729,7 +731,6 @@ fun SettingsDialog(
                                         AIProvider.GEMINI -> geminiKey = newKey
                                         AIProvider.OPENAI -> openaiKey = newKey
                                         AIProvider.CLAUDE -> claudeKey = newKey
-                                        else -> {}
                                     }
                                     saved = false
                                 },
@@ -843,7 +844,7 @@ fun SettingsDialog(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Encrypted with your passphrase before upload — losing it means starting over.",
+                    "Backs up projects, trash, and recordings to Google Drive. API keys stay on this device. Backup is encrypted with your passphrase.",
                     fontSize = 12.sp,
                     color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     lineHeight = 16.sp
@@ -882,10 +883,9 @@ fun SettingsDialog(
 
                 Spacer(Modifier.height(8.dp))
 
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
                         onClick = {
@@ -896,7 +896,7 @@ fun SettingsDialog(
                             onSyncNow()
                         },
                         enabled = !syncInProgress && (syncPassphraseStored || syncPassphraseField.isNotBlank()),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         if (syncInProgress) {
@@ -906,9 +906,26 @@ fun SettingsDialog(
                                 strokeWidth = 2.dp
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Syncing...", fontSize = 13.sp)
+                            Text(syncProgressLabel, fontSize = 13.sp)
                         } else {
-                            Text("Sync now", fontSize = 13.sp)
+                            Text("Back up / sync now", fontSize = 13.sp)
+                        }
+                    }
+
+                    onRestoreNow?.let { restore ->
+                        OutlinedButton(
+                            onClick = {
+                                if (syncPassphraseField.isNotBlank()) {
+                                    onSaveSyncPassphrase(syncPassphraseField.trim())
+                                    syncPassphraseField = ""
+                                }
+                                restore()
+                            },
+                            enabled = !syncInProgress && (syncPassphraseStored || syncPassphraseField.isNotBlank()),
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Restore from Drive", fontSize = 13.sp)
                         }
                     }
                 }
@@ -918,7 +935,7 @@ fun SettingsDialog(
                     Text(
                         result,
                         fontSize = 11.sp,
-                        color = if (result.startsWith("Sync complete")) colorScheme.tertiary
+                        color = if (result.startsWith("Sync complete") || result.startsWith("Restore complete")) colorScheme.tertiary
                         else colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         lineHeight = 15.sp
                     )

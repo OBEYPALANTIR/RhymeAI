@@ -9,14 +9,23 @@ import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SecureKeyStore
+import com.rhymeai.app.service.VoiceMemoService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.File
+import java.net.URLEncoder
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -61,11 +70,28 @@ sealed class SyncResult {
  * `uploadNewFile`   — multipart create in appDataFolder; returns the new Drive file id.
  * `updateFile`      — multipart update of an existing Drive file id.
  */
+data class DriveFileMetadata(
+    val id: String,
+    val name: String
+)
+
 interface DriveClient {
-    suspend fun findFile(accessToken: String): String?
+    suspend fun findFile(accessToken: String): String? =
+        findFileByName(accessToken, SyncBlob.DRIVE_FILE_NAME)
+
+    suspend fun findFileByName(accessToken: String, name: String): String?
+    suspend fun listFilesByNamePrefix(accessToken: String, namePrefix: String): List<DriveFileMetadata>
     suspend fun downloadFile(accessToken: String, fileId: String): ByteArray
-    suspend fun uploadNewFile(accessToken: String, content: ByteArray): String
-    suspend fun updateFile(accessToken: String, fileId: String, content: ByteArray)
+
+    suspend fun uploadNewFile(accessToken: String, content: ByteArray): String =
+        uploadNewFile(accessToken, SyncBlob.DRIVE_FILE_NAME, SyncBlob.DRIVE_MIME_TYPE, content)
+
+    suspend fun uploadNewFile(accessToken: String, name: String, mimeType: String, content: ByteArray): String
+
+    suspend fun updateFile(accessToken: String, fileId: String, content: ByteArray) =
+        updateFile(accessToken, fileId, SyncBlob.DRIVE_MIME_TYPE, content)
+
+    suspend fun updateFile(accessToken: String, fileId: String, mimeType: String, content: ByteArray)
 }
 
 /**
@@ -85,28 +111,19 @@ class RealDriveClient : DriveClient {
         private const val CONNECT_TIMEOUT_MS = 20_000
         private const val READ_TIMEOUT_MS = 30_000
         private const val MULTIPART_BOUNDARY = "rhymeai_boundary_g91hf"
+        private val driveJson = Json { ignoreUnknownKeys = true }
     }
 
-    override suspend fun findFile(accessToken: String): String? = withContext(Dispatchers.IO) {
-        // List appDataFolder for a file with our exact name; return its id if found.
-        val encodedName = java.net.URLEncoder.encode(SyncBlob.DRIVE_FILE_NAME, "UTF-8")
-        val url = "$DRIVE_V3/files?spaces=appDataFolder&fields=files(id)&q=name%3D%27${encodedName}%27"
-        val conn = openGet(url, accessToken)
-        try {
-            val code = conn.responseCode
-            if (code == 401) throw DriveAuthException("Access token rejected by Drive (401)")
-            if (code !in 200..299) {
-                val body = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
-                throw DriveNetworkException("Drive list failed ($code): $body")
-            }
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            // Parse just the first file id — we never create duplicates so there
-            // can be at most one. Uses simple string extraction to avoid a JSON lib dep.
-            val match = Regex(""""id"\s*:\s*"([^"]+)"""").find(body)
-            match?.groupValues?.get(1)
-        } finally {
-            conn.disconnect()
-        }
+    override suspend fun findFileByName(accessToken: String, name: String): String? = withContext(Dispatchers.IO) {
+        listFiles(accessToken, exactName = name, namePrefix = null).firstOrNull()?.id
+    }
+
+    override suspend fun listFilesByNamePrefix(
+        accessToken: String,
+        namePrefix: String
+    ): List<DriveFileMetadata> = withContext(Dispatchers.IO) {
+        listFiles(accessToken, exactName = null, namePrefix = namePrefix)
+            .filter { it.name.startsWith(namePrefix) }
     }
 
     override suspend fun downloadFile(accessToken: String, fileId: String): ByteArray =
@@ -125,48 +142,80 @@ class RealDriveClient : DriveClient {
             }
         }
 
-    override suspend fun uploadNewFile(accessToken: String, content: ByteArray): String =
-        withContext(Dispatchers.IO) {
-            // Multipart create with appDataFolder parent and our file name.
-            val metadataJson = """{"name":"${SyncBlob.DRIVE_FILE_NAME}","parents":["appDataFolder"],"mimeType":"${SyncBlob.DRIVE_MIME_TYPE}"}"""
-            val body = buildMultipart(metadataJson.toByteArray(Charsets.UTF_8), content)
-            val conn = openMultipart("$UPLOAD_V3/files?uploadType=multipart", "POST", accessToken)
-            conn.doOutput = true
-            conn.outputStream.use { it.write(body) }
-            try {
-                val code = conn.responseCode
-                if (code == 401) throw DriveAuthException("Access token rejected by Drive (401)")
-                if (code !in 200..299) {
-                    val errBody = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
-                    throw DriveNetworkException("Drive upload failed ($code): $errBody")
-                }
-                val respBody = conn.inputStream.bufferedReader().use { it.readText() }
-                Regex(""""id"\s*:\s*"([^"]+)"""").find(respBody)?.groupValues?.get(1)
-                    ?: throw DriveNetworkException("Drive upload response missing file id")
-            } finally {
-                conn.disconnect()
+    override suspend fun uploadNewFile(
+        accessToken: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray
+    ): String = withContext(Dispatchers.IO) {
+        val metadataJson = """{"name":"${jsonEscape(name)}","parents":["appDataFolder"],"mimeType":"${jsonEscape(mimeType)}"}"""
+        val body = buildMultipart(metadataJson.toByteArray(Charsets.UTF_8), mimeType, content)
+        val conn = openMultipart("$UPLOAD_V3/files?uploadType=multipart", "POST", accessToken)
+        conn.doOutput = true
+        conn.outputStream.use { it.write(body) }
+        try {
+            val code = conn.responseCode
+            if (code == 401) throw DriveAuthException("Access token rejected by Drive (401)")
+            if (code !in 200..299) {
+                val errBody = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                throw DriveNetworkException("Drive upload failed ($code): $errBody")
             }
+            val respBody = conn.inputStream.bufferedReader().use { it.readText() }
+            Regex(""""id"\s*:\s*"([^"]+)"""").find(respBody)?.groupValues?.get(1)
+                ?: throw DriveNetworkException("Drive upload response missing file id")
+        } finally {
+            conn.disconnect()
         }
+    }
 
-    override suspend fun updateFile(accessToken: String, fileId: String, content: ByteArray) =
-        withContext(Dispatchers.IO) {
-            // Multipart update — no parent or name change needed, just replace content.
-            val metadataJson = """{"mimeType":"${SyncBlob.DRIVE_MIME_TYPE}"}"""
-            val body = buildMultipart(metadataJson.toByteArray(Charsets.UTF_8), content)
-            val conn = openMultipart("$UPLOAD_V3/files/$fileId?uploadType=multipart", "PATCH", accessToken)
-            conn.doOutput = true
-            conn.outputStream.use { it.write(body) }
-            try {
-                val code = conn.responseCode
-                if (code == 401) throw DriveAuthException("Access token rejected by Drive (401)")
-                if (code !in 200..299) {
-                    val errBody = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
-                    throw DriveNetworkException("Drive update failed ($code): $errBody")
-                }
-            } finally {
-                conn.disconnect()
+    override suspend fun updateFile(
+        accessToken: String,
+        fileId: String,
+        mimeType: String,
+        content: ByteArray
+    ) = withContext(Dispatchers.IO) {
+        val metadataJson = """{"mimeType":"${jsonEscape(mimeType)}"}"""
+        val body = buildMultipart(metadataJson.toByteArray(Charsets.UTF_8), mimeType, content)
+        val conn = openMultipart("$UPLOAD_V3/files/$fileId?uploadType=multipart", "PATCH", accessToken)
+        conn.doOutput = true
+        conn.outputStream.use { it.write(body) }
+        try {
+            val code = conn.responseCode
+            if (code == 401) throw DriveAuthException("Access token rejected by Drive (401)")
+            if (code !in 200..299) {
+                val errBody = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                throw DriveNetworkException("Drive update failed ($code): $errBody")
             }
+        } finally {
+            conn.disconnect()
         }
+    }
+
+    private fun listFiles(
+        accessToken: String,
+        exactName: String?,
+        namePrefix: String?
+    ): List<DriveFileMetadata> {
+        val query = when {
+            exactName != null -> "name = '${driveQueryLiteral(exactName)}' and trashed = false"
+            namePrefix != null -> "name contains '${driveQueryLiteral(namePrefix)}' and trashed = false"
+            else -> "trashed = false"
+        }
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val url = "$DRIVE_V3/files?spaces=appDataFolder&fields=files(id,name)&q=$encodedQuery"
+        val conn = openGet(url, accessToken)
+        try {
+            val code = conn.responseCode
+            if (code == 401) throw DriveAuthException("Access token rejected by Drive (401)")
+            if (code !in 200..299) {
+                val body = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                throw DriveNetworkException("Drive list failed ($code): $body")
+            }
+            return parseDriveFiles(conn.inputStream.bufferedReader().use { it.readText() })
+        } finally {
+            conn.disconnect()
+        }
+    }
 
     private fun openGet(url: String, accessToken: String): HttpURLConnection {
         val conn = URL(url).openConnection() as HttpURLConnection
@@ -187,7 +236,7 @@ class RealDriveClient : DriveClient {
         return conn
     }
 
-    private fun buildMultipart(metadataBytes: ByteArray, contentBytes: ByteArray): ByteArray {
+    private fun buildMultipart(metadataBytes: ByteArray, mimeType: String, contentBytes: ByteArray): ByteArray {
         val nl = "\r\n"
         val sb = StringBuilder()
         sb.append("--$MULTIPART_BOUNDARY$nl")
@@ -195,11 +244,27 @@ class RealDriveClient : DriveClient {
         val prefix = sb.toString().toByteArray(Charsets.UTF_8)
 
         val middle = "$nl--$MULTIPART_BOUNDARY$nl".toByteArray(Charsets.UTF_8)
-        val contentHeader = "Content-Type: ${SyncBlob.DRIVE_MIME_TYPE}$nl$nl".toByteArray(Charsets.UTF_8)
+        val contentHeader = "Content-Type: $mimeType$nl$nl".toByteArray(Charsets.UTF_8)
         val suffix = "$nl--$MULTIPART_BOUNDARY--$nl".toByteArray(Charsets.UTF_8)
 
         return prefix + metadataBytes + middle + contentHeader + contentBytes + suffix
     }
+
+    private fun parseDriveFiles(body: String): List<DriveFileMetadata> {
+        val files = driveJson.parseToJsonElement(body).jsonObject["files"]?.jsonArray ?: return emptyList()
+        return files.mapNotNull { element ->
+            val obj = element.jsonObject
+            val id = obj["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            val name = obj["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            DriveFileMetadata(id = id, name = name)
+        }
+    }
+
+    private fun driveQueryLiteral(value: String): String =
+        value.replace("\\", "\\\\").replace("'", "\\'")
+
+    private fun jsonEscape(value: String): String =
+        value.replace("\\", "\\\\").replace("\"", "\\\"")
 }
 
 /** Thrown when the Drive access token is rejected (401) — triggers re-auth. */
@@ -207,6 +272,92 @@ class DriveAuthException(message: String) : Exception(message)
 
 /** Thrown for any non-auth HTTP or IO failure from Drive. */
 class DriveNetworkException(message: String) : Exception(message)
+
+data class RecordingRestorePlan(
+    val entry: RecordingManifestEntry,
+    val remoteFileId: String
+)
+
+object RecordingSyncPlanner {
+    fun planUploads(
+        local: List<RecordingManifestEntry>,
+        remoteManifest: List<RecordingManifestEntry>,
+        remoteDriveNames: Set<String>
+    ): List<RecordingManifestEntry> {
+        val remoteByIdentity = remoteManifest.associateBy { it.identityKey }
+        return local.filter { localEntry ->
+            val remoteEntry = remoteByIdentity[localEntry.identityKey]
+            remoteEntry == null ||
+                localEntry.modifiedAt > remoteEntry.modifiedAt ||
+                (
+                    localEntry.modifiedAt == remoteEntry.modifiedAt &&
+                        (localEntry.sha256 != remoteEntry.sha256 || localEntry.driveName !in remoteDriveNames)
+                    )
+        }
+    }
+
+    fun planRestores(
+        local: List<RecordingManifestEntry>,
+        remoteManifest: List<RecordingManifestEntry>,
+        remoteFilesByName: Map<String, String>
+    ): List<RecordingRestorePlan> {
+        val localByIdentity = local.associateBy { it.identityKey }
+        return remoteManifest.mapNotNull { remoteEntry ->
+            val remoteFileId = remoteFilesByName[remoteEntry.driveName] ?: return@mapNotNull null
+            val localEntry = localByIdentity[remoteEntry.identityKey]
+            val shouldRestore = localEntry == null ||
+                remoteEntry.modifiedAt > localEntry.modifiedAt ||
+                (remoteEntry.modifiedAt == localEntry.modifiedAt && remoteEntry.sha256 != localEntry.sha256)
+            if (shouldRestore) RecordingRestorePlan(remoteEntry, remoteFileId) else null
+        }
+    }
+}
+
+object RecordingFileStore {
+    fun targetFile(filesDir: File, projectId: String, fileName: String): File =
+        File(VoiceMemoService.memoDirectory(filesDir, projectId), fileName)
+
+    fun writeAtomically(filesDir: File, entry: RecordingManifestEntry, bytes: ByteArray) {
+        val target = targetFile(filesDir, entry.projectId, entry.fileName)
+        val dir = target.parentFile
+            ?: throw DriveNetworkException("Recording ${entry.driveName} has no parent directory")
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw DriveNetworkException("Could not create memo directory for ${entry.projectId}")
+        }
+
+        val temp = File(dir, ".${entry.fileName}.${System.nanoTime()}.tmp")
+        try {
+            temp.writeBytes(bytes)
+            if (temp.length() != entry.sizeBytes || sha256Hex(temp) != entry.sha256) {
+                throw DriveNetworkException("Recording ${entry.driveName} failed integrity verification")
+            }
+            Files.move(
+                temp.toPath(),
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE
+            )
+            target.setLastModified(entry.modifiedAt)
+        } finally {
+            if (temp.exists()) temp.delete()
+        }
+    }
+
+    fun sha256Hex(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString(separator = "") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
+    }
+}
 
 /**
  * Sync decision inputs. Pure data class so the unit tests can exercise all
@@ -228,10 +379,14 @@ data class SyncDecisionInput(
  */
 sealed class SyncDecision {
     /** No remote; upload the local blob. */
-    data class UploadOnly(val sealedBytes: ByteArray) : SyncDecision()
+    data class UploadOnly(val sealedBytes: ByteArray, val local: SyncBlob) : SyncDecision()
 
     /** Remote exists; merge, then upload merged. */
-    data class MergeAndUpload(val merged: SyncBlob, val sealedBytes: ByteArray) : SyncDecision()
+    data class MergeAndUpload(
+        val merged: SyncBlob,
+        val sealedBytes: ByteArray,
+        val remote: SyncBlob
+    ) : SyncDecision()
 
     /** Wrong passphrase; do not touch the remote. */
     data object BadPassphrase : SyncDecision()
@@ -259,7 +414,7 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     }
 
     if (input.remoteBytes == null) {
-        return SyncDecision.UploadOnly(sealLocal(localWithId))
+        return SyncDecision.UploadOnly(sealLocal(localWithId), localWithId)
     }
 
     val remotePlaintext = try {
@@ -276,7 +431,7 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     }
 
     val merged = SyncMerger.merge(localWithId, remoteBlob)
-    return SyncDecision.MergeAndUpload(merged, sealLocal(merged))
+    return SyncDecision.MergeAndUpload(merged, sealLocal(merged), remoteBlob)
 }
 
 /**
@@ -352,18 +507,15 @@ class DriveSyncService(
      */
     suspend fun sync(repository: ProjectRepository): SyncResult = withContext(Dispatchers.IO) {
         try {
-            // 1. Check passphrase is stored.
             val passphrase = secureKeyStore.getKey(PASSPHRASE_KEY).toCharArray()
             if (passphrase.isEmpty()) {
                 return@withContext SyncResult.NotConfigured
             }
 
-            // 2. Authorize — get an access token for the appData scope.
             val authResult = authorize()
                 ?: return@withContext SyncResult.NotConfigured
 
             if (authResult.hasResolution()) {
-                // User needs to approve; surface the intent and stop here.
                 return@withContext SyncResult.AuthorizationRequired(
                     authResult.pendingIntent
                         ?: return@withContext SyncResult.NetworkError("Authorization pending intent missing")
@@ -375,17 +527,18 @@ class DriveSyncService(
 
             Log.d(TAG, "Authorized; token length=${accessToken.length}")
 
-            // 3. Snapshot local state from the repository.
-            val localBlob = repository.snapshotForSync()
+            val localRecordingFiles = snapshotLocalRecordingFiles()
+            val localBlob = repository.snapshotForSync().copy(
+                recordings = localRecordingFiles.map { it.entry }
+            )
 
-            // 4. Find and optionally download the remote blob.
-            val remoteFileId: String? = try {
+            val remoteFileId = try {
                 driveClient.findFile(accessToken)
             } catch (e: DriveNetworkException) {
                 return@withContext SyncResult.NetworkError("Could not list Drive files: ${e.message}")
             }
 
-            val remoteBytes: ByteArray? = if (remoteFileId != null) {
+            val remoteBytes = if (remoteFileId != null) {
                 try {
                     driveClient.downloadFile(accessToken, remoteFileId)
                 } catch (e: DriveNetworkException) {
@@ -395,7 +548,6 @@ class DriveSyncService(
                 null
             }
 
-            // 5. Pure decision: merge or upload-only, or refuse if passphrase is wrong.
             val clientId = android.provider.Settings.Secure.getString(
                 context.contentResolver,
                 android.provider.Settings.Secure.ANDROID_ID
@@ -417,30 +569,68 @@ class DriveSyncService(
                 }
 
                 is SyncDecision.UploadOnly -> {
-                    // No remote; just push local.
                     try {
+                        uploadRecordingFiles(
+                            accessToken = accessToken,
+                            passphrase = passphrase,
+                            uploads = decision.local.recordings,
+                            localFiles = localRecordingFiles,
+                            remoteFilesByName = emptyMap()
+                        )
                         driveClient.uploadNewFile(accessToken, decision.sealedBytes)
                         Log.d(TAG, "Upload-only sync complete (first sync)")
                     } catch (e: DriveNetworkException) {
                         return@withContext SyncResult.NetworkError("Upload failed: ${e.message}")
                     }
-                    return@withContext SyncResult.Success(localBlob)
+                    return@withContext SyncResult.Success(decision.local)
                 }
 
                 is SyncDecision.MergeAndUpload -> {
-                    // Push merged blob; only apply to repo after successful upload.
+                    val remoteFilesByName = try {
+                        driveClient.listFilesByNamePrefix(
+                            accessToken,
+                            RecordingManifestEntry.DRIVE_PREFIX
+                        ).associate { it.name to it.id }
+                    } catch (e: DriveNetworkException) {
+                        return@withContext SyncResult.NetworkError("Could not list recording files: ${e.message}")
+                    }
+
+                    val uploadedFilesByName = try {
+                        uploadRecordingFiles(
+                            accessToken = accessToken,
+                            passphrase = passphrase,
+                            uploads = RecordingSyncPlanner.planUploads(
+                                local = localBlob.recordings,
+                                remoteManifest = decision.remote.recordings,
+                                remoteDriveNames = remoteFilesByName.keys
+                            ),
+                            localFiles = localRecordingFiles,
+                            remoteFilesByName = remoteFilesByName
+                        )
+                    } catch (e: DriveNetworkException) {
+                        return@withContext SyncResult.NetworkError("Recording upload failed: ${e.message}")
+                    }
+
+                    val currentRemoteFilesByName = remoteFilesByName + uploadedFilesByName
+
                     try {
                         if (remoteFileId != null) {
                             driveClient.updateFile(accessToken, remoteFileId, decision.sealedBytes)
                         } else {
                             driveClient.uploadNewFile(accessToken, decision.sealedBytes)
                         }
+                        restoreRemoteRecordings(
+                            accessToken = accessToken,
+                            passphrase = passphrase,
+                            remoteManifest = decision.merged.recordings,
+                            remoteFilesByName = currentRemoteFilesByName,
+                            localManifest = localBlob.recordings
+                        )
                         Log.d(TAG, "Merge-and-upload sync complete")
                     } catch (e: DriveNetworkException) {
-                        return@withContext SyncResult.NetworkError("Upload failed after merge: ${e.message}")
+                        return@withContext SyncResult.NetworkError("Sync failed after merge: ${e.message}")
                     }
 
-                    // 6. Apply merged snapshot to the repository (after the upload succeeds).
                     repository.applySnapshot(decision.merged)
                     return@withContext SyncResult.Success(decision.merged)
                 }
@@ -452,6 +642,179 @@ class DriveSyncService(
             SyncResult.UnknownError(e)
         }
     }
+
+    suspend fun restore(repository: ProjectRepository): SyncResult = withContext(Dispatchers.IO) {
+        try {
+            val passphrase = secureKeyStore.getKey(PASSPHRASE_KEY).toCharArray()
+            if (passphrase.isEmpty()) {
+                return@withContext SyncResult.NotConfigured
+            }
+
+            val authResult = authorize()
+                ?: return@withContext SyncResult.NotConfigured
+
+            if (authResult.hasResolution()) {
+                return@withContext SyncResult.AuthorizationRequired(
+                    authResult.pendingIntent
+                        ?: return@withContext SyncResult.NetworkError("Authorization pending intent missing")
+                )
+            }
+
+            val accessToken = authResult.accessToken
+                ?: return@withContext SyncResult.NetworkError("No access token received from authorization")
+
+            val remoteFileId = try {
+                driveClient.findFile(accessToken)
+            } catch (e: DriveNetworkException) {
+                return@withContext SyncResult.NetworkError("Could not list Drive files: ${e.message}")
+            } ?: return@withContext SyncResult.NetworkError("No Drive backup found")
+
+            val remoteBytes = try {
+                driveClient.downloadFile(accessToken, remoteFileId)
+            } catch (e: DriveNetworkException) {
+                return@withContext SyncResult.NetworkError("Could not download sync file: ${e.message}")
+            }
+
+            val remotePlaintext = try {
+                SyncBlobCrypto.open(remoteBytes, passphrase)
+            } catch (e: SyncBlobSealException) {
+                return@withContext SyncResult.WrongPassphrase
+            }
+
+            val json = Json { ignoreUnknownKeys = true }
+            val remoteBlob = try {
+                json.decodeFromString<SyncBlob>(remotePlaintext.toString(Charsets.UTF_8))
+            } catch (e: Exception) {
+                return@withContext SyncResult.NetworkError("Downloaded backup manifest is unreadable")
+            }
+
+            val localRecordingFiles = snapshotLocalRecordingFiles()
+            val localBlob = repository.snapshotForSync().copy(
+                recordings = localRecordingFiles.map { it.entry }
+            )
+            val mergedBlob = SyncMerger.merge(localBlob, remoteBlob)
+
+            val remoteFilesByName = try {
+                driveClient.listFilesByNamePrefix(
+                    accessToken,
+                    RecordingManifestEntry.DRIVE_PREFIX
+                ).associate { it.name to it.id }
+            } catch (e: DriveNetworkException) {
+                return@withContext SyncResult.NetworkError("Could not list recording files: ${e.message}")
+            }
+
+            try {
+                restoreRemoteRecordings(
+                    accessToken = accessToken,
+                    passphrase = passphrase,
+                    remoteManifest = mergedBlob.recordings,
+                    remoteFilesByName = remoteFilesByName,
+                    localManifest = localBlob.recordings
+                )
+            } catch (e: DriveNetworkException) {
+                return@withContext SyncResult.NetworkError("Recording restore failed: ${e.message}")
+            }
+
+            repository.applySnapshot(mergedBlob)
+            SyncResult.Success(mergedBlob)
+        } catch (e: DriveAuthException) {
+            SyncResult.NetworkError("Drive auth failed: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected restore error", e)
+            SyncResult.UnknownError(e)
+        }
+    }
+
+    private data class LocalRecordingFile(
+        val entry: RecordingManifestEntry,
+        val file: File
+    )
+
+    private fun snapshotLocalRecordingFiles(): List<LocalRecordingFile> {
+        val root = VoiceMemoService.memosRoot(context.filesDir)
+        if (!root.exists()) return emptyList()
+        return root.listFiles()
+            ?.asSequence()
+            ?.filter { it.isDirectory }
+            ?.flatMap { projectDir ->
+                projectDir.listFiles()
+                    ?.asSequence()
+                    ?.filter { it.isFile && it.name.endsWith(VoiceMemoService.MEMO_EXTENSION) }
+                    ?.map { file ->
+                        val entry = RecordingManifestEntry(
+                            projectId = projectDir.name,
+                            fileName = file.name,
+                            driveName = RecordingManifestEntry.driveNameFor(projectDir.name, file.name),
+                            sizeBytes = file.length(),
+                            modifiedAt = file.lastModified(),
+                            sha256 = RecordingFileStore.sha256Hex(file)
+                        )
+                        LocalRecordingFile(entry, file)
+                    }
+                    ?: emptySequence()
+            }
+            ?.sortedWith(compareBy<LocalRecordingFile> { it.entry.projectId }.thenBy { it.entry.fileName })
+            ?.toList()
+            ?: emptyList()
+    }
+
+    private suspend fun uploadRecordingFiles(
+        accessToken: String,
+        passphrase: CharArray,
+        uploads: List<RecordingManifestEntry>,
+        localFiles: List<LocalRecordingFile>,
+        remoteFilesByName: Map<String, String>
+    ): Map<String, String> {
+        val localByIdentity = localFiles.associateBy { it.entry.identityKey }
+        val uploaded = mutableMapOf<String, String>()
+        for (entry in uploads) {
+            val file = localByIdentity[entry.identityKey]?.file ?: continue
+            val encrypted = SyncBlobCrypto.seal(file.readBytes(), passphrase)
+            val existingId = remoteFilesByName[entry.driveName]
+            if (existingId != null) {
+                driveClient.updateFile(
+                    accessToken,
+                    existingId,
+                    RecordingManifestEntry.MIME_TYPE,
+                    encrypted
+                )
+                uploaded[entry.driveName] = existingId
+            } else {
+                uploaded[entry.driveName] = driveClient.uploadNewFile(
+                    accessToken,
+                    entry.driveName,
+                    RecordingManifestEntry.MIME_TYPE,
+                    encrypted
+                )
+            }
+        }
+        return uploaded
+    }
+
+    private suspend fun restoreRemoteRecordings(
+        accessToken: String,
+        passphrase: CharArray,
+        remoteManifest: List<RecordingManifestEntry>,
+        remoteFilesByName: Map<String, String>,
+        localManifest: List<RecordingManifestEntry>
+    ) {
+        val plan = RecordingSyncPlanner.planRestores(
+            local = localManifest,
+            remoteManifest = remoteManifest,
+            remoteFilesByName = remoteFilesByName
+        )
+        for (restore in plan) {
+            val encrypted = driveClient.downloadFile(accessToken, restore.remoteFileId)
+            val plaintext = try {
+                SyncBlobCrypto.open(encrypted, passphrase)
+            } catch (e: SyncBlobSealException) {
+                throw DriveNetworkException("Recording ${restore.entry.driveName} could not be decrypted")
+            }
+            RecordingFileStore.writeAtomically(context.filesDir, restore.entry, plaintext)
+        }
+    }
+
+
 
     /**
      * Request authorization from Google Identity Services. Returns null only

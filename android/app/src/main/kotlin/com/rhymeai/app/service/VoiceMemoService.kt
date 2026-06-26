@@ -337,7 +337,7 @@ class VoiceMemoService(private val context: Context) {
     // ---------------------------------------------------------------------------
 
     private fun memoDir(projectId: String): File =
-        File(context.filesDir, "voice-memos/$projectId")
+        memoDirectory(context.filesDir, projectId)
 
     private fun memoFromFile(file: File): VoiceMemo {
         val durationMs = probeAudioDurationMs(file)
@@ -370,6 +370,15 @@ class VoiceMemoService(private val context: Context) {
 
     companion object {
         private val LABEL_FORMAT = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
+        const val MEMOS_ROOT_DIR = "voice-memos"
+        const val MEMO_EXTENSION = ".m4a"
+
+        fun memosRoot(filesDir: File): File =
+            File(filesDir, MEMOS_ROOT_DIR)
+
+        fun memoDirectory(filesDir: File, projectId: String): File =
+            File(memosRoot(filesDir), projectId)
+
 
         fun formatMemoLabel(timestampMs: Long): String =
             LABEL_FORMAT.format(Date(timestampMs))

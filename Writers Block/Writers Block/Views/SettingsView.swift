@@ -46,6 +46,11 @@ private let gemmaDownloadOptions: [GemmaDownloadOption] = [
 
 private let providerSectionAnimation = Animation.spring(response: 0.34, dampingFraction: 0.88)
 
+private enum CloudBackupAction {
+    case backup
+    case restore
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
@@ -61,6 +66,7 @@ struct SettingsView: View {
     @State private var downloadTask: Task<Void, Never>?
     @State private var ggufEngineChoice: GGUFEngineChoice = GGUFEngineChoice.current
     @State private var activeHelp: FeatureHelp?
+    @State private var cloudBackupPassphraseEntry: String = ""
 
     var body: some View {
         NavigationStack {
@@ -86,6 +92,7 @@ struct SettingsView: View {
             }
             .onDisappear {
                 downloadTask?.cancel()
+                cloudBackupPassphraseEntry = ""
             }
             .sheet(item: $activeHelp) { help in
                 FeatureHelpSheet(help: help)
@@ -140,6 +147,8 @@ struct SettingsView: View {
             modelSection
 
             editorSection
+
+            cloudBackupSection
 
             saveSection
         }
@@ -330,6 +339,102 @@ struct SettingsView: View {
         .liquidGlassSurface(cornerRadius: 22, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
     }
 
+    private var cloudBackupSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SettingsSectionTitle("Cloud Backup", systemImage: "externaldrive.badge.icloud")
+
+            Text("Backs up projects, trash, and voice recordings to your Google Drive app data. API keys stay on this device and are never included.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            SecureField(
+                viewModel.cloudBackupHasStoredPassphrase ? "Stored passphrase ready" : "Backup passphrase",
+                text: $cloudBackupPassphraseEntry
+            )
+            .textContentType(.password)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .font(.system(.body, design: .rounded))
+            .padding(14)
+            .liquidGlassSurface(cornerRadius: 16, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .accessibilityIdentifier("cloudBackupPassphrase")
+
+            HStack(spacing: 10) {
+                Button {
+                    runCloudBackupAction(.backup)
+                } label: {
+                    Label("Back Up Now", systemImage: "arrow.up.doc.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.rhymePress)
+
+                Button {
+                    runCloudBackupAction(.restore)
+                } label: {
+                    Label("Restore", systemImage: "arrow.down.doc.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.rhymePress)
+            }
+            .font(.subheadline.weight(.semibold))
+            .disabled(!cloudBackupControlsEnabled)
+
+            Label(viewModel.cloudBackupStatusText, systemImage: cloudBackupStatusIcon)
+                .font(.caption)
+                .foregroundStyle(cloudBackupStatusColor)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("cloudBackupStatus")
+
+            Text("Background backup runs only after you set up Google Drive and save a passphrase here. It will never open Google sign-in from the background.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .liquidGlassSurface(cornerRadius: 22, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
+    }
+
+    private var cloudBackupControlsEnabled: Bool {
+        viewModel.cloudBackupConfigured
+            && !viewModel.cloudBackupIsWorking
+            && (viewModel.cloudBackupHasStoredPassphrase || !cloudBackupPassphraseEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    private var cloudBackupStatusIcon: String {
+        if viewModel.cloudBackupIsWorking {
+            return "arrow.triangle.2.circlepath"
+        }
+        return viewModel.cloudBackupLastResultIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+    }
+
+    private var cloudBackupStatusColor: Color {
+        if viewModel.cloudBackupIsWorking {
+            return .secondary
+        }
+        return viewModel.cloudBackupLastResultIsError ? .orange : .green
+    }
+
+    private func runCloudBackupAction(_ action: CloudBackupAction) {
+        let passphrase = cloudBackupPassphraseEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !passphrase.isEmpty {
+            viewModel.updateCloudBackupPassphrase(passphrase)
+        }
+
+        Task { @MainActor in
+            switch action {
+            case .backup:
+                await viewModel.backUpNow()
+            case .restore:
+                await viewModel.restoreBackupNow()
+            }
+            if !passphrase.isEmpty {
+                cloudBackupPassphraseEntry = ""
+            }
+        }
+    }
+
+
     private var saveSection: some View {
         Button {
             saveAll()
@@ -506,6 +611,8 @@ struct SettingsView: View {
             editingKeys[provider.rawValue] = viewModel.apiKey(for: provider)
         }
         ggufEngineChoice = GGUFEngineChoice.current
+        cloudBackupPassphraseEntry = ""
+        viewModel.refreshCloudBackupState()
         refreshInstalledModels()
     }
 

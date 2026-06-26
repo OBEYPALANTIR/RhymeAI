@@ -18,6 +18,7 @@ data class SyncBlob(
     val version: Int = CURRENT_VERSION,
     val projects: List<SongProject> = emptyList(),
     val trashed: List<TrashedSongProject> = emptyList(),
+    val recordings: List<RecordingManifestEntry> = emptyList(),
     val savedAt: Long = System.currentTimeMillis(),
     val savedByClientId: String = ""
 ) {
@@ -25,6 +26,30 @@ data class SyncBlob(
         const val CURRENT_VERSION = 1
         const val DRIVE_FILE_NAME = "rhymeai-projects.json"
         const val DRIVE_MIME_TYPE = "application/json"
+    }
+}
+
+@Serializable
+data class RecordingManifestEntry(
+    val projectId: String,
+    val fileName: String,
+    val driveName: String = driveNameFor(projectId, fileName),
+    val sizeBytes: Long,
+    val modifiedAt: Long,
+    val sha256: String
+) {
+    val identityKey: String
+        get() = "$projectId/$fileName"
+
+    companion object {
+        const val DRIVE_PREFIX = "rec_"
+        const val DRIVE_SUFFIX = ".m4a.enc"
+        const val MIME_TYPE = "application/octet-stream"
+
+        fun driveNameFor(projectId: String, fileName: String): String {
+            val stem = fileName.removeSuffix(".m4a")
+            return "$DRIVE_PREFIX${projectId}_${stem}$DRIVE_SUFFIX"
+        }
     }
 }
 
@@ -42,6 +67,7 @@ object SyncMerger {
     fun merge(local: SyncBlob, remote: SyncBlob): SyncBlob {
         val mergedProjects = mergeProjects(local.projects, remote.projects)
         val mergedTrashed = mergeTrash(local.trashed, remote.trashed)
+        val mergedRecordings = mergeRecordings(local.recordings, remote.recordings)
 
         val (cleanProjects, cleanTrashed) = resolveActiveTrashConflicts(mergedProjects, mergedTrashed)
 
@@ -49,6 +75,7 @@ object SyncMerger {
             version = maxOf(local.version, remote.version),
             projects = cleanProjects.sortedByDescending { it.updatedAt },
             trashed = cleanTrashed.sortedByDescending { it.deletedAt },
+            recordings = mergedRecordings.sortedWith(compareBy<RecordingManifestEntry> { it.projectId }.thenBy { it.fileName }),
             savedAt = System.currentTimeMillis(),
             savedByClientId = local.savedByClientId
         )
@@ -86,6 +113,23 @@ object SyncMerger {
             }
         }
         return byId.values.toList()
+    }
+
+    private fun mergeRecordings(
+        local: List<RecordingManifestEntry>,
+        remote: List<RecordingManifestEntry>
+    ): List<RecordingManifestEntry> {
+        val byIdentity = HashMap<String, RecordingManifestEntry>(local.size + remote.size)
+        for (entry in local) {
+            byIdentity[entry.identityKey] = entry
+        }
+        for (entry in remote) {
+            val existing = byIdentity[entry.identityKey]
+            if (existing == null || entry.modifiedAt > existing.modifiedAt) {
+                byIdentity[entry.identityKey] = entry
+            }
+        }
+        return byIdentity.values.toList()
     }
 
     private fun resolveActiveTrashConflicts(
