@@ -89,6 +89,8 @@ struct EditorView: View {
     @State private var keyboardIsVisible = false
     @State private var keyboardHeight: CGFloat = EditorViewConstants.Keyboard.hiddenHeight
     @State private var assistantSheetDragOffset: CGFloat = EditorViewConstants.AssistantSheet.restingOffset
+    @State private var assistantSheetIsDismissing = false
+    @State private var assistantSheetLifecycleTask: Task<Void, Never>?
     @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
     @State private var fileExporterPresented: Bool = false
     @State private var projectDrawerOpen: Bool = false
@@ -115,6 +117,9 @@ struct EditorView: View {
         }
         .onAppear {
             viewModel.modelContext = modelContext
+            if viewModel.showAssistantSheet {
+                assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
+            }
         }
         .sheet(
             isPresented: $viewModel.showExportSheet,
@@ -229,8 +234,8 @@ struct EditorView: View {
                 topBar
                 editorScrollView
             }
-            .allowsHitTesting(!viewModel.showAssistantSheet)
-            .accessibilityHidden(viewModel.showAssistantSheet)
+            .allowsHitTesting(!assistantSheetIsActive)
+            .accessibilityHidden(assistantSheetIsActive)
 
             rewriteAccessoryBar
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
@@ -243,7 +248,7 @@ struct EditorView: View {
             assistantSheetOverlay
                 .zIndex(EditorViewConstants.EditorLayout.assistantSheetZIndex)
         }
-        .rhymeAnimation(RhymeAITokens.Motion.presentation, value: viewModel.showAssistantSheet)
+        .rhymeAnimation(assistantSheetTransitionAnimation, value: viewModel.showAssistantSheet)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: keyboardIsVisible)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: lyricsEditorIsFocused)
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -259,7 +264,11 @@ struct EditorView: View {
         }
         .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
             if isPresented {
+                assistantSheetLifecycleTask?.cancel()
+                assistantSheetIsDismissing = false
                 assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
+            } else if !assistantSheetIsDismissing {
+                holdAssistantDismissalGate()
             }
         }
         // UnBlock collapse / expand coordinated with mic recording.
@@ -271,11 +280,19 @@ struct EditorView: View {
                 unblockCollapsed = isRecording
             }
         }
-        .simultaneousGesture(assistantBackSwipeGesture, including: viewModel.showAssistantSheet ? .all : .subviews)
+        .simultaneousGesture(assistantBackSwipeGesture, including: assistantSheetIsActive ? .all : .subviews)
     }
 
     private var assistantModalOpen: Bool {
         viewModel.showSettingsSheet || viewModel.showExportSheet || projectDrawerOpen
+    }
+
+    private var assistantSheetIsActive: Bool {
+        viewModel.showAssistantSheet || assistantSheetIsDismissing
+    }
+
+    private var assistantSheetTransitionAnimation: Animation {
+        viewModel.showAssistantSheet ? RhymeAITokens.Motion.presentation : RhymeAITokens.Motion.dismiss
     }
 
     @ViewBuilder
@@ -287,7 +304,7 @@ struct EditorView: View {
         // during selection because its bottom-end FAB and centered chip bar do
         // not overlap.) Keyboard does NOT hide the button — it rides above it.
         // The mic button shares this exact condition so both appear/disappear together.
-        if !viewModel.showAssistantSheet && !assistantModalOpen && !viewModel.hasActiveRewrite && !shouldShowRewriteChipBar {
+        if !assistantSheetIsActive && !assistantModalOpen && !viewModel.hasActiveRewrite && !shouldShowRewriteChipBar {
             VStack {
                 Spacer()
                 HStack(alignment: .bottom, spacing: RhymeAITokens.Spacing.sm) {
@@ -394,13 +411,7 @@ struct EditorView: View {
         let closeThreshold = min(EditorViewConstants.AssistantSheet.closeThresholdMaximum, max(EditorViewConstants.AssistantSheet.closeThresholdMinimum, sheetHeight * EditorViewConstants.AssistantSheet.closeThresholdHeightRatio))
 
         if dragDistance >= closeThreshold || projectedDistance >= closeThreshold {
-            withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
-                assistantSheetDragOffset = sheetHeight
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + RhymeAITokens.Motion.feedbackDuration) {
-                viewModel.showAssistantSheet = false
-                assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
-            }
+            dismissAssistantSheetWithAnimation()
         } else {
             withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                 assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
@@ -408,30 +419,11 @@ struct EditorView: View {
         }
     }
 
-    private func presentAssistantSheet() {
-        dismissKeyboard()
-
-        if keyboardIsVisible {
-            DispatchQueue.main.asyncAfter(deadline: .now() + RhymeAITokens.Motion.stateDuration) {
-                showAssistantSheetWithAnimation()
-            }
-        } else {
-            showAssistantSheetWithAnimation()
-        }
-    }
-
-    private func showAssistantSheetWithAnimation() {
-        assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
-        withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
-            viewModel.showAssistantSheet = true
-        }
-    }
-
     private var assistantBackSwipeGesture: some Gesture {
         // Gesture thresholds — tuned for back-swipe feel, intentionally off the φ scale.
         DragGesture(minimumDistance: EditorViewConstants.AssistantSheet.backSwipeMinimumDistance, coordinateSpace: .local)
             .onEnded { value in
-                guard viewModel.showAssistantSheet else { return }
+                guard assistantSheetIsActive else { return }
                 guard value.startLocation.x <= EditorViewConstants.AssistantSheet.backSwipeStartX else { return }
                 guard value.translation.width > EditorViewConstants.AssistantSheet.backSwipeTranslation else { return }
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
@@ -440,10 +432,58 @@ struct EditorView: View {
             }
     }
 
-    private func dismissAssistantSheetWithAnimation() {
+    private func presentAssistantSheet() {
+        dismissKeyboard()
+        assistantSheetLifecycleTask?.cancel()
+
+        if keyboardIsVisible {
+            assistantSheetLifecycleTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(RhymeAITokens.Motion.stateDuration * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                showAssistantSheetWithAnimation()
+            }
+        } else {
+            showAssistantSheetWithAnimation()
+        }
+    }
+
+    private func showAssistantSheetWithAnimation() {
+        assistantSheetLifecycleTask?.cancel()
+        assistantSheetIsDismissing = false
         assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
+        withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
+            viewModel.showAssistantSheet = true
+        }
+    }
+
+    private func dismissAssistantSheetWithAnimation() {
+        guard viewModel.showAssistantSheet || assistantSheetIsDismissing else { return }
+        assistantSheetLifecycleTask?.cancel()
+        assistantSheetIsDismissing = true
         withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
             viewModel.showAssistantSheet = false
+        }
+        scheduleAssistantDismissalGateRelease()
+    }
+
+    private func holdAssistantDismissalGate() {
+        assistantSheetLifecycleTask?.cancel()
+        assistantSheetIsDismissing = true
+        scheduleAssistantDismissalGateRelease()
+    }
+
+    private func scheduleAssistantDismissalGateRelease() {
+        if reduceMotion {
+            assistantSheetIsDismissing = false
+            assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
+            return
+        }
+
+        assistantSheetLifecycleTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(RhymeAITokens.Motion.feedbackDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            assistantSheetIsDismissing = false
+            assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
         }
     }
 
@@ -452,7 +492,7 @@ struct EditorView: View {
     @ViewBuilder
     private var rewriteAccessoryBar: some View {
         Group {
-            if !viewModel.showAssistantSheet {
+            if !assistantSheetIsActive {
                 if let action = viewModel.rewriteAction {
                     InlineRewriteReviewBar(
                         action: action,
@@ -492,7 +532,7 @@ struct EditorView: View {
         (viewModel.selectedRange.length > 0 || forceRewriteChipBarForUITests)
             && viewModel.rewriteAction == nil
             && !viewModel.showInspector
-            && !viewModel.showAssistantSheet
+            && !assistantSheetIsActive
     }
 
     private var forceRewriteChipBarForUITests: Bool {
@@ -570,7 +610,7 @@ struct EditorView: View {
             return rewriteAccessoryHeight + RhymeAITokens.Spacing.md
         }
         // Otherwise reserve the iPhone-only mic + UnBlock FAB so the caret does not scroll behind it.
-        if horizontalSizeClass != .regular && !viewModel.showAssistantSheet && !assistantModalOpen {
+        if horizontalSizeClass != .regular && !assistantSheetIsActive && !assistantModalOpen {
             return RhymeAITokens.Touch.comfortable + RhymeAITokens.Spacing.md
         }
         return EditorViewConstants.EditorLayout.noSelectionAvoidanceInset

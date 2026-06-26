@@ -4,12 +4,16 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -78,6 +82,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -149,11 +154,30 @@ fun ProjectsDrawer(
     var isClosing by remember { mutableStateOf(false) }
     var projectPendingDelete by remember { mutableStateOf<SongProject?>(null) }
     var showTrashBin by remember { mutableStateOf(false) }
+    var trashBinVisible by remember { mutableStateOf(false) }
+    var isTrashBinClosing by remember { mutableStateOf(false) }
     // 0 = Songs, 1 = Recordings
     var selectedTab by remember { mutableStateOf(0) }
 
+    fun openTrashBin() {
+        isTrashBinClosing = false
+        showTrashBin = true
+        trashBinVisible = true
+    }
+
+    fun closeTrashBin() {
+        if (!showTrashBin || isTrashBinClosing) return
+        isTrashBinClosing = true
+        trashBinVisible = false
+        scope.launch {
+            delay(DrawerAnimationMillis.toLong())
+            showTrashBin = false
+            isTrashBinClosing = false
+        }
+    }
+
     BackHandler(enabled = showTrashBin) {
-        showTrashBin = false
+        closeTrashBin()
     }
 
     fun closeDrawer(afterClose: () -> Unit = {}) {
@@ -212,7 +236,7 @@ fun ProjectsDrawer(
 
     Dialog(
         onDismissRequest = {
-            if (showTrashBin) showTrashBin = false else closeDrawer()
+            if (showTrashBin) closeTrashBin() else closeDrawer()
         },
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
@@ -464,7 +488,7 @@ fun ProjectsDrawer(
                                 OutlinedIconButton(
                                     onClick = {
                                         onPurgeExpiredTrash()
-                                        showTrashBin = true
+                                        openTrashBin()
                                     },
                                     modifier = Modifier
                                         .fillMaxHeight()
@@ -486,23 +510,25 @@ fun ProjectsDrawer(
                 }
             }
 
-            AnimatedVisibility(
-                visible = showTrashBin,
-                enter = slideInHorizontally(
-                    animationSpec = tween(DrawerAnimationMillis),
-                    initialOffsetX = { it }
-                ) + fadeIn(animationSpec = tween(DrawerAnimationMillis)),
-                exit = slideOutHorizontally(
-                    animationSpec = tween(DrawerAnimationMillis),
-                    targetOffsetX = { it }
-                ) + fadeOut(animationSpec = tween(DrawerAnimationMillis))
-            ) {
-                TrashBinPage(
-                    trashedProjects = trashedProjects,
-                    onRestoreProject = onRestoreProject,
-                    onPermanentlyDeleteProject = onPermanentlyDeleteProject,
-                    onDismiss = { showTrashBin = false }
-                )
+            if (showTrashBin) {
+                AnimatedVisibility(
+                    visible = trashBinVisible,
+                    enter = slideInHorizontally(
+                        animationSpec = tween(DrawerAnimationMillis),
+                        initialOffsetX = { it }
+                    ) + fadeIn(animationSpec = tween(DrawerAnimationMillis)),
+                    exit = slideOutHorizontally(
+                        animationSpec = tween(DrawerAnimationMillis),
+                        targetOffsetX = { it }
+                    ) + fadeOut(animationSpec = tween(DrawerAnimationMillis))
+                ) {
+                    TrashBinPage(
+                        trashedProjects = trashedProjects,
+                        onRestoreProject = onRestoreProject,
+                        onPermanentlyDeleteProject = onPermanentlyDeleteProject,
+                        onDismiss = ::closeTrashBin
+                    )
+                }
             }
         }
     }
@@ -744,33 +770,54 @@ private fun RecordingsTab(
             contentPadding = PaddingValues(vertical = DesignTokens.Spacing.sm)
         ) {
             visibleFolders.forEach { folder ->
+                val folderExpanded = expanded[folder.projectId] == true || query.isNotEmpty()
                 item(key = "folder-${folder.projectId}") {
-                    FolderHeaderRow(
-                        folder = folder,
-                        isExpanded = expanded[folder.projectId] == true || query.isNotEmpty(),
-                        onToggle = {
-                            expanded[folder.projectId] = !(expanded[folder.projectId] ?: false)
-                        }
-                    )
-                }
-                if (expanded[folder.projectId] == true || query.isNotEmpty()) {
-                    items(folder.memos, key = { it.file.absolutePath }) { memo ->
-                        val memoPath = memo.file.absolutePath
-                        Box(modifier = Modifier.padding(start = DesignTokens.Spacing.md)) {
-                            RecordingMemoRow(
-                                memo = memo,
-                                service = service,
-                                isSelecting = isSelecting,
-                                isSelected = memoPath in selectedMemoPaths,
-                                onSelectionChanged = { selected ->
-                                    selectedMemoPaths = if (selected) {
-                                        selectedMemoPaths + memoPath
-                                    } else {
-                                        selectedMemoPaths - memoPath
+                    Column {
+                        FolderHeaderRow(
+                            folder = folder,
+                            isExpanded = folderExpanded,
+                            onToggle = {
+                                expanded[folder.projectId] = !(expanded[folder.projectId] ?: false)
+                            }
+                        )
+
+                        AnimatedVisibility(
+                            visible = folderExpanded,
+                            enter = expandVertically(
+                                animationSpec = DesignTokens.Motion.expressiveSpring(),
+                                expandFrom = Alignment.Top
+                            ) + fadeIn(animationSpec = tween(DesignTokens.Motion.feedbackMillis)),
+                            exit = shrinkVertically(
+                                animationSpec = DesignTokens.Motion.expressiveSpring(),
+                                shrinkTowards = Alignment.Top
+                            ) + fadeOut(animationSpec = tween(DesignTokens.Motion.feedbackMillis))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(top = DesignTokens.Spacing.md),
+                                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+                            ) {
+                                folder.memos.forEach { memo ->
+                                    key(memo.file.absolutePath) {
+                                        val memoPath = memo.file.absolutePath
+                                        Box(modifier = Modifier.padding(start = DesignTokens.Spacing.md)) {
+                                            RecordingMemoRow(
+                                                memo = memo,
+                                                service = service,
+                                                isSelecting = isSelecting,
+                                                isSelected = memoPath in selectedMemoPaths,
+                                                onSelectionChanged = { selected ->
+                                                    selectedMemoPaths = if (selected) {
+                                                        selectedMemoPaths + memoPath
+                                                    } else {
+                                                        selectedMemoPaths - memoPath
+                                                    }
+                                                },
+                                                onMemoListChanged = { memoListVersion++ }
+                                            )
+                                        }
                                     }
-                                },
-                                onMemoListChanged = { memoListVersion++ }
-                            )
+                                }
+                            }
                         }
                     }
                 }
@@ -786,6 +833,10 @@ private fun FolderHeaderRow(
     onToggle: () -> Unit,
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 180f else 0f,
+        animationSpec = DesignTokens.Motion.expressiveSpring()
+    )
     OutlinedCard(
         onClick = onToggle,
         modifier = Modifier
@@ -826,7 +877,7 @@ private fun FolderHeaderRow(
                 Icons.Default.KeyboardArrowDown,
                 contentDescription = if (isExpanded) "Collapse" else "Expand",
                 tint = colorScheme.onSurfaceVariant,
-                modifier = Modifier.rotate(if (isExpanded) 180f else 0f)
+                modifier = Modifier.rotate(arrowRotation)
             )
         }
     }
@@ -870,7 +921,7 @@ private fun SwipeToRevealDelete(
             ) {
                 IconButton(
                     onClick = {
-                        scope.launch { offsetX.animateTo(0f, tween(DesignTokens.Motion.standardMillis)) }
+                        scope.launch { offsetX.animateTo(0f, DesignTokens.Motion.settleSpring()) }
                         onDelete()
                     },
                     modifier = Modifier.width(revealWidth)
@@ -899,13 +950,13 @@ private fun SwipeToRevealDelete(
                         onDragEnd = {
                             val target = if (offsetX.value < -revealPx / 2f) -revealPx else 0f
                             scope.launch {
-                                offsetX.animateTo(target, tween(DesignTokens.Motion.standardMillis))
+                                offsetX.animateTo(target, DesignTokens.Motion.settleSpring())
                             }
                         },
                         onDragCancel = {
                             val target = if (offsetX.value < -revealPx / 2f) -revealPx else 0f
                             scope.launch {
-                                offsetX.animateTo(target, tween(DesignTokens.Motion.standardMillis))
+                                offsetX.animateTo(target, DesignTokens.Motion.settleSpring())
                             }
                         }
                     )
@@ -1397,6 +1448,14 @@ private fun TrashProjectSelectableRow(
 @Composable
 private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
     val colorScheme = MaterialTheme.colorScheme
+    val fillColor by animateColorAsState(
+        targetValue = if (selected) colorScheme.primary else colorScheme.surfaceContainerLow,
+        animationSpec = tween(DesignTokens.Motion.feedbackMillis)
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) colorScheme.primary else colorScheme.outline,
+        animationSpec = tween(DesignTokens.Motion.feedbackMillis)
+    )
     Box(
         modifier = Modifier
             .size(DesignTokens.Touch.minTarget)
@@ -1407,17 +1466,21 @@ private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
             modifier = Modifier
                 .size(26.dp)
                 .background(
-                    color = if (selected) colorScheme.primary else colorScheme.surfaceContainerLow,
+                    color = fillColor,
                     shape = CircleShape
                 )
                 .border(
                     width = 2.dp,
-                    color = if (selected) colorScheme.primary else colorScheme.outline,
+                    color = borderColor,
                     shape = CircleShape
                 ),
             contentAlignment = Alignment.Center
         ) {
-            if (selected) {
+            AnimatedVisibility(
+                visible = selected,
+                enter = fadeIn(animationSpec = tween(DesignTokens.Motion.feedbackMillis)),
+                exit = fadeOut(animationSpec = tween(DesignTokens.Motion.feedbackMillis))
+            ) {
                 Icon(
                     Icons.Default.Check,
                     contentDescription = null,

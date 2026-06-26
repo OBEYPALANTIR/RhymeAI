@@ -237,13 +237,28 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
     }
 
+    suspend fun animateAssistantSheetClose() {
+        val animation = Animatable(assistantSheetDragOffsetPx)
+        animation.animateTo(
+            targetValue = fullSheetHeightPx,
+            animationSpec = tween(
+                durationMillis = DesignTokens.Motion.dismissMillis,
+                easing = DesignTokens.Motion.exitEasing
+            )
+        ) {
+            assistantSheetDragOffsetPx = value
+        }
+        showBottomSheet = false
+        assistantSheetDragOffsetPx = 0f
+    }
+
     fun settleAssistantSheetDrag() {
         scope.launch {
             val startOffset = assistantSheetDragOffsetPx
-            val targetOffset = if (startOffset >= assistantSheetCloseThresholdPx) fullSheetHeightPx else 0f
-            val animation = Animatable(startOffset)
+            val shouldClose = startOffset >= assistantSheetCloseThresholdPx
 
-            if (targetOffset == 0f) {
+            if (!shouldClose) {
+                val animation = Animatable(startOffset)
                 animation.animateTo(
                     targetValue = 0f,
                     animationSpec = DesignTokens.Motion.settleSpring()
@@ -251,17 +266,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     assistantSheetDragOffsetPx = value
                 }
             } else {
-                animation.animateTo(
-                    targetValue = targetOffset,
-                    animationSpec = tween(
-                        durationMillis = DesignTokens.Motion.dismissMillis,
-                        easing = DesignTokens.Motion.exitEasing
-                    )
-                ) {
-                    assistantSheetDragOffsetPx = value
-                }
-                showBottomSheet = false
-                assistantSheetDragOffsetPx = 0f
+                animateAssistantSheetClose()
             }
         }
     }
@@ -274,18 +279,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
 
         scope.launch {
-            val animation = Animatable(assistantSheetDragOffsetPx)
-            animation.animateTo(
-                targetValue = fullSheetHeightPx,
-                animationSpec = tween(
-                    durationMillis = DesignTokens.Motion.dismissMillis,
-                    easing = DesignTokens.Motion.exitEasing
-                )
-            ) {
-                assistantSheetDragOffsetPx = value
-            }
-            showBottomSheet = false
-            assistantSheetDragOffsetPx = 0f
+            animateAssistantSheetClose()
         }
     }
 
@@ -442,6 +436,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             .background(colorScheme.background)
     ) {
         val fabRowVisible = !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite
+        val fabRowBottomOriginOffsetPx = with(density) { DesignTokens.Spacing.xxl.roundToPx() }
         Column(modifier = Modifier.fillMaxSize()) {
             // Top bar — always visible
             TopAppBar(
@@ -878,7 +873,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     durationMillis = DesignTokens.Motion.assistantPresentMillis,
                     easing = DesignTokens.Motion.emphasizedEasing
                 ),
-                initialOffsetY = { it }
+                initialOffsetY = { fullHeight -> fullHeight + fabRowBottomOriginOffsetPx }
             ),
             exit = fadeOut(
                 animationSpec = tween(
@@ -890,7 +885,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     durationMillis = DesignTokens.Motion.dismissMillis,
                     easing = DesignTokens.Motion.exitEasing
                 ),
-                targetOffsetY = { it }
+                targetOffsetY = { fullHeight -> fullHeight + fabRowBottomOriginOffsetPx }
             ),
             modifier = Modifier.align(Alignment.BottomEnd)
         ) {
@@ -1288,7 +1283,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 AssistantPanel(
                     viewModel = viewModel,
                     rhymeContext = rhymeContext,
-                    onSuggestionInserted = { showBottomSheet = false },
+                    onSuggestionInserted = { dismissAssistantSheet() },
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)

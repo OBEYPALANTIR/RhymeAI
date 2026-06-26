@@ -7,13 +7,14 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.launch
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -166,14 +167,6 @@ fun SettingsDialog(
     // Sync passphrase field — write-only like API key fields; empty = do not change stored value.
     var syncPassphraseField by remember { mutableStateOf("") }
     var showSyncPassphrase by remember { mutableStateOf(false) }
-
-    val currentKeyForProvider = when (selectedProvider) {
-        AIProvider.GEMINI -> geminiKey
-        AIProvider.OPENAI -> openaiKey
-        AIProvider.CLAUDE -> claudeKey
-        AIProvider.LOCAL -> ""
-    }
-    val currentProviderHasSavedKey = apiKeyPresence[selectedProvider.name] == true
 
     // File picker for local models
     var copyingFile by remember { mutableStateOf(false) }
@@ -465,17 +458,35 @@ fun SettingsDialog(
 
                 Spacer(Modifier.height(20.dp))
 
-                Crossfade(
-                    targetState = selectedProvider == AIProvider.LOCAL,
-                    animationSpec = tween(durationMillis = DesignTokens.Motion.standardMillis),
+                AnimatedContent(
+                    targetState = selectedProvider,
+                    contentAlignment = Alignment.TopStart,
+                    transitionSpec = {
+                        ContentTransform(
+                            targetContentEnter = fadeIn(
+                                animationSpec = tween(
+                                    durationMillis = DesignTokens.Motion.standardMillis,
+                                    easing = DesignTokens.Motion.standardEasing
+                                )
+                            ),
+                            initialContentExit = fadeOut(
+                                animationSpec = tween(
+                                    durationMillis = DesignTokens.Motion.standardMillis,
+                                    easing = DesignTokens.Motion.standardEasing
+                                )
+                            ),
+                            sizeTransform = SizeTransform(clip = false) { _, _ ->
+                                tween(
+                                    durationMillis = DesignTokens.Motion.standardMillis,
+                                    easing = DesignTokens.Motion.standardEasing
+                                )
+                            }
+                        )
+                    },
                     label = "settingsProviderContent"
-                ) { isLocalProvider ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .animateContentSize(animationSpec = tween(durationMillis = DesignTokens.Motion.standardMillis))
-                    ) {
-                        if (isLocalProvider) {
+                ) { providerForContent ->
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        if (providerForContent == AIProvider.LOCAL) {
                             // Local model section
                             Text("On-Device Model", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(4.dp))
@@ -682,16 +693,24 @@ fun SettingsDialog(
                                 }
                             }
                         } else {
+                            val keyForContent = when (providerForContent) {
+                                AIProvider.GEMINI -> geminiKey
+                                AIProvider.OPENAI -> openaiKey
+                                AIProvider.CLAUDE -> claudeKey
+                                AIProvider.LOCAL -> ""
+                            }
+                            val providerHasSavedKey = apiKeyPresence[providerForContent.name] == true
+
                             // Cloud API key section
                             Text(
-                                "${selectedProvider.displayName} API Key",
+                                "${providerForContent.displayName} API Key",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = colorScheme.onSurfaceVariant
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                when (selectedProvider) {
+                                when (providerForContent) {
                                     AIProvider.GEMINI -> "Get a key at aistudio.google.com"
                                     AIProvider.OPENAI -> "Get a key at platform.openai.com"
                                     AIProvider.CLAUDE -> "Get a key at console.anthropic.com"
@@ -704,9 +723,9 @@ fun SettingsDialog(
                             Spacer(Modifier.height(8.dp))
 
                             OutlinedTextField(
-                                value = currentKeyForProvider,
+                                value = keyForContent,
                                 onValueChange = { newKey ->
-                                    when (selectedProvider) {
+                                    when (providerForContent) {
                                         AIProvider.GEMINI -> geminiKey = newKey
                                         AIProvider.OPENAI -> openaiKey = newKey
                                         AIProvider.CLAUDE -> claudeKey = newKey
@@ -716,7 +735,7 @@ fun SettingsDialog(
                                 },
                                 placeholder = {
                                     Text(
-                                        if (currentProviderHasSavedKey) "Key saved — type to replace" else "Paste your API key here...",
+                                        if (providerHasSavedKey) "Key saved — type to replace" else "Paste your API key here...",
                                         fontSize = 14.sp
                                     )
                                 },
@@ -741,9 +760,9 @@ fun SettingsDialog(
                                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp)
                             )
 
-                            if (currentProviderHasSavedKey && currentKeyForProvider.isEmpty()) {
+                            if (providerHasSavedKey && keyForContent.isEmpty()) {
                                 TextButton(onClick = {
-                                    onSaveApiKey(selectedProvider, "")
+                                    onSaveApiKey(providerForContent, "")
                                     saved = false
                                 }) {
                                     Text("Remove saved key", fontSize = 12.sp)
@@ -756,14 +775,19 @@ fun SettingsDialog(
                             Text("Model", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
 
-                            val availableModels = AIModel.modelsForProvider(selectedProvider)
+                            val availableModels = AIModel.modelsForProvider(providerForContent)
+                            val displayedModel = if (selectedModel.provider == providerForContent) {
+                                selectedModel
+                            } else {
+                                availableModels.firstOrNull() ?: selectedModel
+                            }
 
                             ExposedDropdownMenuBox(
                                 expanded = modelExpanded,
                                 onExpandedChange = { modelExpanded = !modelExpanded }
                             ) {
                                 OutlinedTextField(
-                                    value = selectedModel.displayName,
+                                    value = displayedModel.displayName,
                                     onValueChange = {},
                                     readOnly = true,
                                     modifier = Modifier

@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
-private let projectDrawerAnimationDuration: TimeInterval = RhymeAITokens.Motion.presentationDuration
+private let projectDrawerDismissDuration: TimeInterval = RhymeAITokens.Motion.feedbackDuration
 
 struct ProjectsDrawerView: View {
     @Binding var isPresented: Bool
@@ -97,7 +97,6 @@ struct ProjectsDrawerView: View {
                         .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
                         .offset(x: drawerVisible ? 0 : -drawerWidth)
                 }
-                .rhymeAnimation(RhymeAITokens.Motion.presentation, value: drawerVisible)
             }
             .ignoresSafeArea()
 
@@ -113,7 +112,9 @@ struct ProjectsDrawerView: View {
         }
         .onAppear {
             DispatchQueue.main.async {
-                drawerVisible = true
+                withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
+                    drawerVisible = true
+                }
             }
         }
         .fileImporter(
@@ -252,7 +253,9 @@ struct ProjectsDrawerView: View {
 
                 Button {
                     viewModel.purgeExpiredTrashedProjects()
-                    trashBinPresented = true
+                    withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
+                        trashBinPresented = true
+                    }
                 } label: {
                     trashBinButtonLabel
                 }
@@ -681,7 +684,8 @@ struct ProjectsDrawerView: View {
         withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
             drawerVisible = false
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + projectDrawerAnimationDuration) {
+        let removalDelay = reduceMotion ? 0 : projectDrawerDismissDuration
+        DispatchQueue.main.asyncAfter(deadline: .now() + removalDelay) {
             isPresented = false
         }
     }

@@ -8,6 +8,7 @@ struct TrashBinView: View {
     @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
     @State private var selectedIds: Set<String> = []
     @State private var confirmPermanentDelete = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var onDismiss: (() -> Void)? = nil
 
@@ -54,7 +55,7 @@ struct TrashBinView: View {
             Button("Delete Forever", role: .destructive) {
                 let projects = selectedProjects
                 projects.forEach(viewModel.permanentlyDeleteTrashedProject)
-                selectedIds.removeAll()
+                clearSelectionWithFeedback()
             }
         } message: {
             Text("\(selectedIds.count) selected song\(selectedIds.count == 1 ? "" : "s") will be permanently deleted. This cannot be undone.")
@@ -109,7 +110,9 @@ struct TrashBinView: View {
 
     private var selectionHeader: some View {
         Button {
-            selectedIds = allSelected ? [] : Set(trashIds)
+            withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
+                selectedIds = allSelected ? [] : Set(trashIds)
+            }
         } label: {
             HStack {
                 Text("All items")
@@ -186,7 +189,7 @@ struct TrashBinView: View {
             Button {
                 let projects = selectedProjects
                 projects.forEach(viewModel.restoreTrashedProject)
-                selectedIds.removeAll()
+                clearSelectionWithFeedback()
             } label: {
                 Label("Restore", systemImage: "arrow.uturn.backward")
                     .font(.subheadline.weight(.semibold))
@@ -221,16 +224,20 @@ struct TrashBinView: View {
                 .strokeBorder(selected ? Color.indigo : Color.secondary.opacity(0.9), lineWidth: 2)
                 .background(
                     Circle()
-                        .fill(selected ? Color.indigo : Color.clear)
+                        .fill(Color.indigo)
+                        .scaleEffect(selected ? 1 : 0.72)
+                        .opacity(selected ? 1 : 0)
                 )
 
             if selected {
                 Image(systemName: "checkmark")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.white)
+                    .transition(.scale(scale: 0.72).combined(with: .opacity))
             }
         }
         .frame(width: 26, height: 26)
+        .rhymeAnimation(RhymeAITokens.Motion.feedback, value: selected)
     }
 
     private func dismissView() {
@@ -242,10 +249,18 @@ struct TrashBinView: View {
     }
 
     private func toggleSelection(_ id: String) {
-        if selectedIds.contains(id) {
-            selectedIds.remove(id)
-        } else {
-            selectedIds.insert(id)
+        withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
+            if selectedIds.contains(id) {
+                selectedIds.remove(id)
+            } else {
+                selectedIds.insert(id)
+            }
+        }
+    }
+
+    private func clearSelectionWithFeedback() {
+        withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
+            selectedIds.removeAll()
         }
     }
 
