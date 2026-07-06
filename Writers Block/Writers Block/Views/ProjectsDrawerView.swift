@@ -352,7 +352,7 @@ struct ProjectsDrawerView: View {
                 }
             }
         }
-        .alert("Delete Failed", isPresented: Binding(
+        .alert("Recording Error", isPresented: Binding(
             get: { viewModel.voiceMemoService.lastError != nil },
             set: { if !$0 { viewModel.voiceMemoService.lastError = nil } }
         )) {
@@ -369,8 +369,12 @@ struct ProjectsDrawerView: View {
                 .autocorrectionDisabled()
             Button("Rename") {
                 if let item = renamingItem {
-                    _ = try? viewModel.voiceMemoService.renameMemo(at: item.url, to: renameText)
-                    reloadRecordings()
+                    do {
+                        try viewModel.voiceMemoService.renameMemo(at: item.url, to: renameText)
+                        reloadRecordings()
+                    } catch {
+                        viewModel.voiceMemoService.lastError = "Couldn't rename recording: \(error.localizedDescription)"
+                    }
                 }
                 renamingItem = nil
             }

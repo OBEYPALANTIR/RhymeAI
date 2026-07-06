@@ -78,6 +78,8 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -106,6 +108,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.rhymeai.app.R
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.service.VoiceMemo
@@ -158,6 +161,7 @@ fun ProjectsDrawer(
     var isTrashBinClosing by remember { mutableStateOf(false) }
     // 0 = Songs, 1 = Recordings
     var selectedTab by remember { mutableStateOf(0) }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     fun openTrashBin() {
         isTrashBinClosing = false
@@ -440,6 +444,7 @@ fun ProjectsDrawer(
                                     service = service,
                                     projects = projects,
                                     searchQuery = searchQuery,
+                                    snackbarHostState = snackbarHostState,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .weight(1f)
@@ -530,6 +535,13 @@ fun ProjectsDrawer(
                     )
                 }
             }
+
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(DesignTokens.Spacing.lg)
+            )
         }
     }
 
@@ -606,6 +618,7 @@ private fun RecordingsTab(
     service: VoiceMemoService?,
     projects: List<SongProject>,
     searchQuery: String,
+    snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier
 ) {
     if (service == null) {
@@ -690,14 +703,18 @@ private fun RecordingsTab(
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        folders.orEmpty()
+                        val deleteResults = folders.orEmpty()
                             .flatMap { it.memos }
                             .filter { it.file.absolutePath in selectedMemoPaths }
-                            .forEach { service.deleteMemo(it) }
+                            .map { service.deleteMemo(it) }
+                        val deleteFailed = deleteResults.any { !it }
                         pendingBulkDelete = false
                         isSelecting = false
                         selectedMemoPaths = emptySet()
                         memoListVersion++
+                        if (deleteFailed) {
+                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
+                        }
                     }
                 }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
@@ -805,6 +822,7 @@ private fun RecordingsTab(
                                                 service = service,
                                                 isSelecting = isSelecting,
                                                 isSelected = memoPath in selectedMemoPaths,
+                                                snackbarHostState = snackbarHostState,
                                                 onSelectionChanged = { selected ->
                                                     selectedMemoPaths = if (selected) {
                                                         selectedMemoPaths + memoPath
@@ -973,10 +991,12 @@ private fun RecordingMemoRow(
     service: VoiceMemoService,
     isSelecting: Boolean,
     isSelected: Boolean,
+    snackbarHostState: SnackbarHostState,
     onSelectionChanged: (Boolean) -> Unit,
     onMemoListChanged: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val isPlaying = service.playingFile == memo.file
     var pendingDelete by remember { mutableStateOf(false) }
@@ -993,9 +1013,12 @@ private fun RecordingMemoRow(
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        service.deleteMemo(memo)
+                        val deleted = service.deleteMemo(memo)
                         pendingDelete = false
                         onMemoListChanged()
+                        if (!deleted) {
+                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
+                        }
                     }
                 }) { Text("Delete", color = colorScheme.error) }
             },
@@ -1023,7 +1046,11 @@ private fun RecordingMemoRow(
                     scope.launch {
                         val renamed = service.renameMemo(memo, renameText)
                         pendingRename = false
-                        if (renamed != null) onMemoListChanged()
+                        if (renamed != null) {
+                            onMemoListChanged()
+                        } else {
+                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_rename_failed))
+                        }
                     }
                 }) { Text("OK") }
             },

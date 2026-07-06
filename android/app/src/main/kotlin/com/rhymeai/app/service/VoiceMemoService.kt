@@ -100,10 +100,11 @@ class VoiceMemoService(private val context: Context) {
     suspend fun startRecording(projectId: String): File = withContext(Dispatchers.IO) {
         check(!isRecording) { "Already recording — call stopRecording() first" }
 
-        // Ensure the directory exists.
+        // Ensure the directory exists; surface storage failures to the caller.
         val dir = memoDir(projectId)
-        dir.mkdirs()
-
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw IllegalStateException("Could not create voice memo directory: ${dir.absolutePath}")
+        }
         val timestamp = System.currentTimeMillis()
         val file = File(dir, "$timestamp.m4a")
 
@@ -268,10 +269,10 @@ class VoiceMemoService(private val context: Context) {
     }
 
     /** Delete a single memo. Stops playback of that file if it is currently playing. */
-    suspend fun deleteMemo(memo: VoiceMemo) {
+    suspend fun deleteMemo(memo: VoiceMemo): Boolean {
         if (playingFile == memo.file) stopPlayback()
-        withContext(Dispatchers.IO) {
-            memo.file.delete()
+        return withContext(Dispatchers.IO) {
+            deleteMemoFile(memo.file)
         }
     }
 
@@ -405,6 +406,10 @@ class VoiceMemoService(private val context: Context) {
                 base
             }
         }
+
+        /** Delete [file] and return File.delete()'s success signal for UI surfacing. */
+        internal fun deleteMemoFile(file: File): Boolean =
+            file.delete()
 
         /**
          * Strip characters that are illegal in file paths on Android (FAT32 + ext4),

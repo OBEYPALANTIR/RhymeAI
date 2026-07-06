@@ -79,6 +79,9 @@
     <string name="voice_memo_pause">Pause</string>
     <string name="voice_memo_delete">Delete memo</string>
     <string name="voice_memo_permission_denied">Microphone permission is required to record voice memos.</string>
+    <string name="voice_memo_record_failed">Couldn\'t start recording. Check the microphone and try again.</string>
+    <string name="voice_memo_delete_failed">Couldn\'t delete recording. Try again.</string>
+    <string name="voice_memo_rename_failed">Couldn\'t rename recording. Try again.</string>
 
     <!-- Misc -->
     <string name="dialog_got_it">Got it</string>

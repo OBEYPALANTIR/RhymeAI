@@ -198,6 +198,24 @@ class VoiceMemoServiceTest {
         assertFalse(after.any { it.name == "1000.m4a" })
     }
 
+    @Test
+    fun deleteMemoFileReturnsFalseWhenFileDeleteFails() {
+        val dir = File(tempFolder.root, "voice-memos/proj-delete-failure")
+        dir.mkdirs()
+        File(dir, "child.m4a").createNewFile()
+
+        assertFalse(VoiceMemoService.deleteMemoFile(dir))
+        assertTrue(dir.exists())
+    }
+
+    @Test
+    fun deleteMemoFileReturnsTrueWhenFileDeleteSucceeds() {
+        val file = File(tempFolder.root, "delete-me.m4a").also { it.createNewFile() }
+
+        assertTrue(VoiceMemoService.deleteMemoFile(file))
+        assertFalse(file.exists())
+    }
+
     // ---------------------------------------------------------------------------
     // Task 3 — rename: sanitizeBasename
     // ---------------------------------------------------------------------------

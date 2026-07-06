@@ -213,6 +213,19 @@ struct VoiceMemoServiceTests {
         #expect(FileManager.default.fileExists(atPath: source.path))
     }
 
+    @Test func renameMemoThrowsWhenSourceIsMissing() {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-\(UUID().uuidString).m4a")
+
+        let service = VoiceMemoService()
+        do {
+            _ = try service.renameMemo(at: missing, to: "Verse 1")
+            Issue.record("Expected renameMemo to throw for a missing source file")
+        } catch {
+            #expect(!error.localizedDescription.isEmpty)
+        }
+    }
+
     // MARK: - deleteMemo
 
     @Test func deleteMemoRemovesFileAndLeavesNoError() throws {

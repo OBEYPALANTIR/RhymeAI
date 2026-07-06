@@ -24,8 +24,8 @@ final class VoiceMemoService {
     // Not private(set) — the .alert(isPresented:) binding needs write access
     // to reset the flag when the user dismisses the alert.
     var permissionDenied: Bool = false
-    // Set when a destructive file op fails so the UI can surface it instead of
-    // swallowing the error. Writable so the alert binding can clear it.
+    // Set when a recording or file operation fails so the UI can surface it
+    // instead of swallowing the error. Writable so the alert binding can clear it.
     var lastError: String?
 
     // MARK: - Private (not tracked by @Observable)
@@ -124,6 +124,7 @@ final class VoiceMemoService {
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
             try session.setActive(true)
         } catch {
+            failToStartRecording(session: session)
             return
         }
 
@@ -136,8 +137,11 @@ final class VoiceMemoService {
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
 
-        guard let recorder = try? AVAudioRecorder(url: url, settings: settings) else {
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        let recorder: AVAudioRecorder
+        do {
+            recorder = try AVAudioRecorder(url: url, settings: settings)
+        } catch {
+            failToStartRecording(session: session)
             return
         }
 
@@ -147,7 +151,11 @@ final class VoiceMemoService {
         // Metering must be enabled before record() so AVAudioRecorder captures
         // level data from the first packet; it cannot be toggled mid-session.
         recorder.isMeteringEnabled = true
-        recorder.record()
+        guard recorder.record() else {
+            recorder.stop()
+            failToStartRecording(session: session)
+            return
+        }
 
         audioRecorder = recorder
         recordingStartTime = Date()
@@ -197,6 +205,22 @@ final class VoiceMemoService {
 
         // Deactivate so other apps (Music, Podcast) can resume their sessions.
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private func failToStartRecording(session: AVAudioSession) {
+        audioRecorder?.stop()
+        audioRecorder = nil
+        elapsedTimer?.invalidate()
+        elapsedTimer = nil
+        meteringTimer?.invalidate()
+        meteringTimer = nil
+        recordingStartTime = nil
+        delegateForwarder = nil
+        isRecording = false
+        recordingElapsed = 0
+        averagePowerNormalized = 0
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        lastError = "Couldn't start recording. Check the microphone and try again."
     }
 
     // MARK: - Playback
