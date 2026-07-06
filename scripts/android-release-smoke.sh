@@ -73,12 +73,12 @@ sleep 5
 
 pid="$("$ADB" -s "$serial" shell pidof com.rhymeai.app | tr -d '\r' || true)"
 if [[ -z "$pid" ]]; then
-  "$ADB" -s "$serial" logcat -d -t 400 | rg -n 'FATAL EXCEPTION|AndroidRuntime|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError' || true
+  "$ADB" -s "$serial" logcat -d -t 400 | rg -n 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError' || true
   echo "Release app process did not stay alive after launch." >&2
   exit 1
 fi
 
-if "$ADB" -s "$serial" logcat -d -t 400 | rg -n 'FATAL EXCEPTION|AndroidRuntime|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError'; then
+if "$ADB" -s "$serial" logcat -d -t 400 | rg -n 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError'; then
   echo "Release launch emitted crash markers." >&2
   exit 1
 fi

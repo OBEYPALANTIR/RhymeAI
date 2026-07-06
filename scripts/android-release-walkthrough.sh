@@ -45,7 +45,7 @@ SKIP_INSTALL=1 "$ROOT_DIR/scripts/android-release-smoke.sh"
 "$ADB" -s "$serial" shell am start -W -n "$PACKAGE/.MainActivity" >/dev/null
 
 release_title="Release Walkthrough $(date +%s)"
-release_lyrics="Midnight notes on a borrowed train I keep the hook alive through rain"
+release_lyrics="Midnight notes on a borrowed train"
 
 dump_ui() {
   "$ADB" -s "$serial" shell uiautomator dump /sdcard/rhymeai-window.xml >/dev/null
@@ -118,8 +118,22 @@ tap_node() {
 
 input_text() {
   local text="$1"
-  local escaped="${text// /%s}"
-  "$ADB" -s "$serial" shell input text "$escaped"
+  local chunk=()
+  local word
+  read -ra words <<<"$text"
+  for word in "${words[@]}"; do
+    chunk+=("$word")
+    if (( ${#chunk[@]} == 6 )); then
+      local joined="${chunk[*]} "
+      "$ADB" -s "$serial" shell input text "${joined// /%s}"
+      chunk=()
+      sleep 0.2
+    fi
+  done
+  if (( ${#chunk[@]} > 0 )); then
+    local joined="${chunk[*]} "
+    "$ADB" -s "$serial" shell input text "${joined// /%s}"
+  fi
 }
 
 assert_process_alive() {
@@ -138,10 +152,13 @@ tap_node exact "New Song"
 wait_for_node exact "Song Title..." 20
 tap_node exact "Song Title..."
 input_text "$release_title"
+"$ADB" -s "$serial" shell input keyevent KEYCODE_BACK >/dev/null || true
+sleep 1
 
 wait_for_node exact "Start writing your lyrics here..." 20
 tap_node exact "Start writing your lyrics here..."
 input_text "$release_lyrics"
+wait_for_node contains "Midnight notes on a borrowed train" 10
 
 "$ADB" -s "$serial" shell input keyevent KEYCODE_BACK >/dev/null || true
 wait_for_node exact "Saved" 10

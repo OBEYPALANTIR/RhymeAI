@@ -27,8 +27,34 @@ val keystoreProperties = Properties().apply {
         keystorePropertiesFile.inputStream().use(::load)
     }
 }
-val hasReleaseSigningConfig = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
-    .all { keystoreProperties.getProperty(it).isNullOrBlank().not() }
+
+fun Properties.nonBlankProperty(name: String): String? =
+    getProperty(name)?.takeIf { it.isNotBlank() }
+
+fun env(name: String): String? =
+    System.getenv(name)?.takeIf { it.isNotBlank() }
+
+fun Map<String, String?>.completeSigningProperties(): Map<String, String>? =
+    takeIf { values.all { value -> value.isNullOrBlank().not() } }?.mapValues { it.value.orEmpty() }
+
+val releaseSigningProperties = mapOf(
+    "storeFile" to (keystoreProperties.nonBlankProperty("storeFile") ?: env("RHYMEAI_KEYSTORE_FILE")),
+    "storePassword" to (keystoreProperties.nonBlankProperty("storePassword") ?: env("RHYMEAI_STORE_PASSWORD")),
+    "keyAlias" to (keystoreProperties.nonBlankProperty("keyAlias") ?: env("RHYMEAI_KEY_ALIAS")),
+    "keyPassword" to (keystoreProperties.nonBlankProperty("keyPassword") ?: env("RHYMEAI_KEY_PASSWORD")),
+).completeSigningProperties()
+val releaseStoreFile = releaseSigningProperties?.get("storeFile")?.let { rootProject.file(it) }
+val hasReleaseSigningConfig = releaseSigningProperties != null && releaseStoreFile?.isFile == true
+
+tasks.configureEach {
+    if (name == "assembleRelease" || name == "bundleRelease") {
+        doFirst {
+            if (!hasReleaseSigningConfig) {
+                throw GradleException("Release signing material missing: create android/keystore.properties")
+            }
+        }
+    }
+}
 
 android {
     namespace = "com.rhymeai.app"
@@ -38,8 +64,8 @@ android {
         applicationId = "com.rhymeai.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 3
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -50,12 +76,14 @@ android {
     }
 
     if (hasReleaseSigningConfig) {
+        val signingValues = requireNotNull(releaseSigningProperties)
+        val signingStoreFile = requireNotNull(releaseStoreFile)
         signingConfigs {
             create("release") {
-                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
-                storePassword = keystoreProperties.getProperty("storePassword")
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = signingStoreFile
+                storePassword = signingValues.getValue("storePassword")
+                keyAlias = signingValues.getValue("keyAlias")
+                keyPassword = signingValues.getValue("keyPassword")
             }
         }
     }
