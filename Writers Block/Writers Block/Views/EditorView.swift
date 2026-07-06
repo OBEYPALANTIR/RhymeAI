@@ -343,7 +343,6 @@ struct EditorView: View {
                             .shadow(color: .indigo.opacity(EditorViewConstants.UnBlockChrome.shadowOpacity), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
                         }
                         .accessibilityIdentifier("unblockButton")
-                        .allowsHitTesting(!viewModel.voiceMemoService.isRecording)
                     }
                 }
                 .padding(.trailing, RhymeAITokens.Spacing.md)

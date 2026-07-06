@@ -1116,17 +1116,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 RoundedCornerShape(DesignTokens.Radius.pill)
                             )
                             .clickable(
-                                enabled = !memoService.isRecording,
                                 interactionSource = unBlockInteractionSource,
                                 indication = ripple()
                             ) {
                                 openAssistantSheet()
                             }
                             .semantics {
-                                contentDescription = if (memoService.isRecording)
-                                    "AI suggestions unavailable while recording"
-                                else
-                                    "Open AI suggestions"
+                                contentDescription = "Open AI suggestions"
                             },
                         contentAlignment = Alignment.Center
                     ) {
