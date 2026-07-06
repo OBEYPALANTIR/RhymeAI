@@ -10,14 +10,48 @@ enum BackupError: Error, Equatable {
     case missingPassphrase
     case noRemoteBackup
     case network(String)
+    case quotaExceeded
+    case serverError(String)
+    case invalidRequest
     case invalidResponse
-    case wrongPassphraseOrCorruptData
+    case corruptRemoteOrWrongPassphrase
     case recordingIntegrityMismatch(String)
 }
 
-struct DriveAppDataFile: Equatable, Sendable {
+extension BackupError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .notConfigured:
+            return "Google Drive backup is not configured on this device."
+        case .authorizationRequired:
+            return "Sign in to Google Drive again to continue backup."
+        case .missingPassphrase:
+            return "Enter your backup passphrase before using Google Drive backup."
+        case .noRemoteBackup:
+            return "No Google Drive backup was found."
+        case .network(let message):
+            return message.isEmpty ? "Network connection failed. Check your connection and try again." : message
+        case .quotaExceeded:
+            return "Google Drive backup is temporarily rate-limited or out of quota. Try again later."
+        case .serverError(let message):
+            return message.isEmpty ? "Google Drive is temporarily unavailable. Try again later." : message
+        case .invalidRequest:
+            return "Google Drive backup could not build a valid request."
+        case .invalidResponse:
+            return "Google Drive returned an invalid response."
+        case .corruptRemoteOrWrongPassphrase:
+            return "Your Drive backup could not be decrypted or read. Check your passphrase; it was not overwritten."
+        case .recordingIntegrityMismatch(let name):
+            return "The recording \(name) did not match its backup manifest."
+        }
+    }
+}
+
+struct DriveAppDataFile: Equatable, Sendable, Decodable {
     var id: String
     var name: String
+    var modifiedTime: String?
+    var version: String?
 }
 
 protocol DriveAppDataClient: AnyObject {
@@ -36,8 +70,6 @@ protocol OAuthAccessTokenProvider: AnyObject {
 
 final class RealDriveAppDataClient: DriveAppDataClient {
     private let session: URLSession
-    private let driveBase = URL(string: "https://www.googleapis.com/drive/v3")!
-    private let uploadBase = URL(string: "https://www.googleapis.com/upload/drive/v3")!
     private let boundary = "rhymeai_boundary_ios_42"
 
     init(session: URLSession = .shared) {
@@ -54,9 +86,14 @@ final class RealDriveAppDataClient: DriveAppDataClient {
     }
 
     func downloadFile(id: String, accessToken: String) async throws -> Data {
-        var components = URLComponents(url: driveBase.appendingPathComponent("files/\(id)"), resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(
+            url: try Self.driveBaseURL().appendingPathComponent("files/\(id)"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw BackupError.invalidRequest
+        }
         components.queryItems = [URLQueryItem(name: "alt", value: "media")]
-        var request = URLRequest(url: components.url!)
+        var request = try request(from: components)
         request.httpMethod = "GET"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         return try await data(for: request)
@@ -65,24 +102,44 @@ final class RealDriveAppDataClient: DriveAppDataClient {
     func uploadNewFile(named name: String, mimeType: String, content: Data, accessToken: String) async throws -> DriveAppDataFile {
         let metadata = DriveUploadMetadata(name: name, parents: ["appDataFolder"], mimeType: mimeType)
         let body = try multipartBody(metadata: metadata, mimeType: mimeType, content: content)
-        var components = URLComponents(url: uploadBase.appendingPathComponent("files"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "uploadType", value: "multipart"), URLQueryItem(name: "fields", value: "id,name")]
-        var request = URLRequest(url: components.url!)
+        guard var components = URLComponents(
+            url: try Self.uploadBaseURL().appendingPathComponent("files"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw BackupError.invalidRequest
+        }
+        components.queryItems = [
+            URLQueryItem(name: "uploadType", value: "multipart"),
+            URLQueryItem(name: "fields", value: "id,name,modifiedTime,version")
+        ]
+        var request = try request(from: components)
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
         let responseData = try await data(for: request)
-        return try JSONDecoder().decode(DriveFileResponse.self, from: responseData).file
+        do {
+            return try JSONDecoder().decode(DriveFileResponse.self, from: responseData).file
+        } catch {
+            throw BackupError.invalidResponse
+        }
     }
 
     func updateFile(id: String, mimeType: String, content: Data, accessToken: String) async throws {
         let metadata = DrivePatchMetadata(mimeType: mimeType)
         let body = try multipartBody(metadata: metadata, mimeType: mimeType, content: content)
-        var components = URLComponents(url: uploadBase.appendingPathComponent("files/\(id)"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "uploadType", value: "multipart")]
-        var request = URLRequest(url: components.url!)
+        guard var components = URLComponents(
+            url: try Self.uploadBaseURL().appendingPathComponent("files/\(id)"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw BackupError.invalidRequest
+        }
+        components.queryItems = [
+            URLQueryItem(name: "uploadType", value: "multipart"),
+            URLQueryItem(name: "fields", value: "id,name,modifiedTime,version")
+        ]
+        var request = try request(from: components)
         request.httpMethod = "PATCH"
         request.httpBody = body
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -92,40 +149,100 @@ final class RealDriveAppDataClient: DriveAppDataClient {
     }
 
     private func listFiles(query: String, accessToken: String) async throws -> [DriveAppDataFile] {
-        var components = URLComponents(url: driveBase.appendingPathComponent("files"), resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(
+            url: try Self.driveBaseURL().appendingPathComponent("files"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw BackupError.invalidRequest
+        }
         components.queryItems = [
             URLQueryItem(name: "spaces", value: "appDataFolder"),
-            URLQueryItem(name: "fields", value: "files(id,name)"),
+            URLQueryItem(name: "fields", value: "files(id,name,modifiedTime,version)"),
             URLQueryItem(name: "q", value: query)
         ]
-        var request = URLRequest(url: components.url!)
+        var request = try request(from: components)
         request.httpMethod = "GET"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         let responseData = try await data(for: request)
-        return try JSONDecoder().decode(DriveFilesResponse.self, from: responseData).files
+        do {
+            return try JSONDecoder().decode(DriveFilesResponse.self, from: responseData).files
+        } catch {
+            throw BackupError.invalidResponse
+        }
+    }
+
+    private func request(from components: URLComponents) throws -> URLRequest {
+        guard let url = components.url else { throw BackupError.invalidRequest }
+        return URLRequest(url: url)
     }
 
     private func data(for request: URLRequest) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw BackupError.invalidResponse }
-        guard (200...299).contains(http.statusCode) else {
-            if http.statusCode == 401 { throw BackupError.authorizationRequired }
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw BackupError.network("Drive request failed (\(http.statusCode)): \(body)")
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw BackupError.invalidResponse }
+            guard (200...299).contains(http.statusCode) else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                throw Self.httpError(statusCode: http.statusCode, body: body)
+            }
+            return data
+        } catch let error as BackupError {
+            throw error
+        } catch let error as URLError {
+            throw Self.urlError(error)
         }
-        return data
     }
 
     private func multipartBody<T: Encodable>(metadata: T, mimeType: String, content: Data) throws -> Data {
         var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/json; charset=UTF-8\r\n\r\n".data(using: .utf8)!)
+        try appendUTF8("--\(boundary)\r\n", to: &body)
+        try appendUTF8("Content-Type: application/json; charset=UTF-8\r\n\r\n", to: &body)
         body.append(try JSONEncoder().encode(metadata))
-        body.append("\r\n--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+        try appendUTF8("\r\n--\(boundary)\r\n", to: &body)
+        try appendUTF8("Content-Type: \(mimeType)\r\n\r\n", to: &body)
         body.append(content)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        try appendUTF8("\r\n--\(boundary)--\r\n", to: &body)
         return body
+    }
+
+    private func appendUTF8(_ string: String, to body: inout Data) throws {
+        guard let data = string.data(using: .utf8) else { throw BackupError.invalidRequest }
+        body.append(data)
+    }
+
+    private static func driveBaseURL() throws -> URL {
+        guard let url = URL(string: "https://www.googleapis.com/drive/v3") else {
+            throw BackupError.invalidRequest
+        }
+        return url
+    }
+
+    private static func uploadBaseURL() throws -> URL {
+        guard let url = URL(string: "https://www.googleapis.com/upload/drive/v3") else {
+            throw BackupError.invalidRequest
+        }
+        return url
+    }
+
+    private static func urlError(_ error: URLError) -> BackupError {
+        switch error.code {
+        case .timedOut, .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost:
+            return .network("Network connection failed. Check your connection and try again.")
+        default:
+            return .network(error.localizedDescription)
+        }
+    }
+
+    private static func httpError(statusCode: Int, body: String) -> BackupError {
+        switch statusCode {
+        case 401:
+            return .authorizationRequired
+        case 403, 429:
+            return .quotaExceeded
+        case 500...599:
+            return .serverError("Google Drive is temporarily unavailable. Try again later.")
+        default:
+            return .network("Drive request failed (\(statusCode)): \(body)")
+        }
     }
 
     private static func escapeQueryString(_ value: String) -> String {
@@ -137,11 +254,12 @@ private struct DriveFilesResponse: Decodable { var files: [DriveAppDataFile] }
 private struct DriveFileResponse: Decodable {
     var id: String
     var name: String
-    var file: DriveAppDataFile { DriveAppDataFile(id: id, name: name) }
-}
+    var modifiedTime: String?
+    var version: String?
 
-extension DriveAppDataFile: Decodable {
-    enum CodingKeys: String, CodingKey { case id, name }
+    var file: DriveAppDataFile {
+        DriveAppDataFile(id: id, name: name, modifiedTime: modifiedTime, version: version)
+    }
 }
 
 private struct DriveUploadMetadata: Encodable {
@@ -272,7 +390,9 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
         let verifier = Self.randomURLSafeString(byteCount: 32)
         let challenge = Self.codeChallenge(for: verifier)
         let redirectURI = "\(redirectScheme):/oauth2redirect/google"
-        var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
+        guard var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth") else {
+            throw BackupError.invalidRequest
+        }
         components.queryItems = [
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
@@ -283,7 +403,10 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256")
         ]
-        let callback = try await runWebAuthentication(url: components.url!, callbackScheme: redirectScheme)
+        guard let authorizationURL = components.url else {
+            throw BackupError.invalidRequest
+        }
+        let callback = try await runWebAuthentication(url: authorizationURL, callbackScheme: redirectScheme)
         guard let returned = URLComponents(url: callback, resolvingAgainstBaseURL: false),
               let code = returned.queryItems?.first(where: { $0.name == "code" })?.value else {
             throw BackupError.invalidResponse
@@ -328,24 +451,58 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
     }
 
     private func requestToken(body: [String: String], preservingRefreshToken: String?) async throws -> OAuthToken {
-        var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
-        request.httpMethod = "POST"
-        request.httpBody = body.formURLEncoded.data(using: .utf8)
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw BackupError.invalidResponse }
-        guard (200...299).contains(http.statusCode) else {
-            let text = String(data: data, encoding: .utf8) ?? ""
-            throw BackupError.network("OAuth token request failed (\(http.statusCode)): \(text)")
+        guard let url = URL(string: "https://oauth2.googleapis.com/token"),
+              let encodedBody = body.formURLEncoded.data(using: .utf8) else {
+            throw BackupError.invalidRequest
         }
-        let responseBody = try JSONDecoder().decode(OAuthTokenResponse.self, from: data)
-        let token = OAuthToken(
-            accessToken: responseBody.accessToken,
-            refreshToken: responseBody.refreshToken ?? preservingRefreshToken,
-            expiresAt: Date().addingTimeInterval(TimeInterval(responseBody.expiresIn))
-        )
-        tokenStore.saveToken(token)
-        return token
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = encodedBody
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw BackupError.invalidResponse }
+            guard (200...299).contains(http.statusCode) else {
+                let text = String(data: data, encoding: .utf8) ?? ""
+                throw Self.httpError(statusCode: http.statusCode, body: text)
+            }
+            let responseBody = try JSONDecoder().decode(OAuthTokenResponse.self, from: data)
+            let token = OAuthToken(
+                accessToken: responseBody.accessToken,
+                refreshToken: responseBody.refreshToken ?? preservingRefreshToken,
+                expiresAt: Date().addingTimeInterval(TimeInterval(responseBody.expiresIn))
+            )
+            tokenStore.saveToken(token)
+            return token
+        } catch let error as BackupError {
+            throw error
+        } catch let error as URLError {
+            throw Self.urlError(error)
+        } catch {
+            throw BackupError.invalidResponse
+        }
+    }
+
+    private static func urlError(_ error: URLError) -> BackupError {
+        switch error.code {
+        case .timedOut, .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost:
+            return .network("Network connection failed. Check your connection and try again.")
+        default:
+            return .network(error.localizedDescription)
+        }
+    }
+
+    private static func httpError(statusCode: Int, body: String) -> BackupError {
+        switch statusCode {
+        case 401:
+            return .authorizationRequired
+        case 403, 429:
+            return .quotaExceeded
+        case 500...599:
+            return .serverError("Google Drive is temporarily unavailable. Try again later.")
+        default:
+            return .network("OAuth token request failed (\(statusCode)): \(body)")
+        }
     }
 
     private static func randomURLSafeString(byteCount: Int) -> String {
@@ -419,11 +576,13 @@ final class BackupService {
     private static let passphraseKey = "drive-sync-passphrase"
     private static let clientIdKey = "drive-sync-client-id"
 
+    private static let backgroundFailureKey = "drive-sync-last-background-failure"
     private let driveClient: DriveAppDataClient
     private let oauthProvider: OAuthAccessTokenProvider
     private let secretStore: BackupSecretStore
     private let defaults: UserDefaults
     private let memosRoot: URL
+    private typealias LocalRecording = (entry: SyncRecordingManifestEntry, localURL: URL)
 
     convenience init() {
         self.init(
@@ -451,6 +610,9 @@ final class BackupService {
 
     var isConfigured: Bool { oauthProvider.isConfigured }
     var hasStoredPassphrase: Bool { storedPassphrase != nil }
+    var backgroundBackupFailureDescription: String? {
+        defaults.string(forKey: Self.backgroundFailureKey)?.nilIfBlank
+    }
 
     func updatePassphrase(_ passphrase: String) {
         let trimmed = passphrase.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -478,8 +640,9 @@ final class BackupService {
         do {
             let accessToken = try await oauthProvider.accessToken(interactive: false)
             try await backup(modelContext: modelContext, accessToken: accessToken, passphrase: passphrase)
+            clearBackgroundBackupFailure()
         } catch {
-            return
+            recordBackgroundBackupFailure(error)
         }
     }
 
@@ -493,43 +656,205 @@ final class BackupService {
     }
 
     private func backup(modelContext: ModelContext, accessToken: String, passphrase: String) async throws {
-        let snapshot = try makeSnapshot(modelContext: modelContext)
-        for recording in try RecordingBackupManifest.scan(projectIds: snapshot.allProjectIds, memosRoot: memosRoot) {
-            let encrypted = try SyncBlobCrypto.seal(Data(contentsOf: recording.localURL), passphrase: passphrase)
-            try await upsertDriveFile(name: recording.entry.driveName, mimeType: "application/octet-stream", content: encrypted, accessToken: accessToken)
+        var localSnapshot = try makeSnapshot(modelContext: modelContext)
+        let sourceRemoteFile = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken)
+        var sourceRemoteBlob: SyncBlob?
+        var merged = finalizedBlob(localSnapshot.blob)
+
+        if let sourceRemoteFile {
+            let remoteBlob = try await downloadRemoteBlob(sourceRemoteFile, accessToken: accessToken, passphrase: passphrase)
+            sourceRemoteBlob = remoteBlob
+            merged = finalizedBlob(SyncMerger.merge(local: localSnapshot.blob, remote: remoteBlob))
+            try apply(merged, to: modelContext)
+            try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
+            localSnapshot = try makeSnapshot(modelContext: modelContext)
         }
 
-        var blob = snapshot.blob
-        blob.recordings = try RecordingBackupManifest.scan(projectIds: snapshot.allProjectIds, memosRoot: memosRoot).map(\.entry)
-        let plaintext = try SyncJSON.encoder.encode(blob)
-        let encrypted = try SyncBlobCrypto.seal(plaintext, passphrase: passphrase)
-        try await upsertDriveFile(name: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: encrypted, accessToken: accessToken)
+        var localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
+        try await uploadLocalRecordings(
+            for: merged.recordings,
+            localRecordings: localRecordings,
+            remoteBlob: sourceRemoteBlob,
+            accessToken: accessToken,
+            passphrase: passphrase
+        )
+
+        let latestRemoteFile = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken)
+        if remoteMetadataChanged(original: sourceRemoteFile, latest: latestRemoteFile) {
+            localSnapshot = try makeSnapshot(modelContext: modelContext)
+            if let latestRemoteFile {
+                let latestRemoteBlob = try await downloadRemoteBlob(latestRemoteFile, accessToken: accessToken, passphrase: passphrase)
+                merged = finalizedBlob(SyncMerger.merge(local: localSnapshot.blob, remote: latestRemoteBlob))
+                try apply(merged, to: modelContext)
+                try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
+                localSnapshot = try makeSnapshot(modelContext: modelContext)
+                localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
+                try await uploadLocalRecordings(
+                    for: merged.recordings,
+                    localRecordings: localRecordings,
+                    remoteBlob: latestRemoteBlob,
+                    accessToken: accessToken,
+                    passphrase: passphrase
+                )
+            } else {
+                merged = finalizedBlob(localSnapshot.blob)
+                localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
+                try await uploadLocalRecordings(
+                    for: merged.recordings,
+                    localRecordings: localRecordings,
+                    remoteBlob: nil,
+                    accessToken: accessToken,
+                    passphrase: passphrase
+                )
+            }
+        }
+
+        try await uploadManifest(merged, accessToken: accessToken, passphrase: passphrase)
+        clearBackgroundBackupFailure()
     }
 
     private func restore(modelContext: ModelContext, accessToken: String, passphrase: String) async throws {
         guard let remoteFile = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken) else {
             throw BackupError.noRemoteBackup
         }
-        let encrypted = try await driveClient.downloadFile(id: remoteFile.id, accessToken: accessToken)
+        let remoteBlob = try await downloadRemoteBlob(remoteFile, accessToken: accessToken, passphrase: passphrase)
+        let localSnapshot = try makeSnapshot(modelContext: modelContext)
+        let merged = finalizedBlob(SyncMerger.merge(local: localSnapshot.blob, remote: remoteBlob))
+        let localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
+        try apply(merged, to: modelContext)
+        try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
+        try await uploadLocalRecordings(
+            for: merged.recordings,
+            localRecordings: localRecordings,
+            remoteBlob: remoteBlob,
+            accessToken: accessToken,
+            passphrase: passphrase
+        )
+        try await uploadManifest(merged, accessToken: accessToken, passphrase: passphrase)
+        clearBackgroundBackupFailure()
+    }
+
+    private func upsertDriveFile(name: String, mimeType: String, content: Data, accessToken: String) async throws -> DriveAppDataFile {
+        if let existing = try await driveClient.findFile(named: name, accessToken: accessToken) {
+            try await driveClient.updateFile(id: existing.id, mimeType: mimeType, content: content, accessToken: accessToken)
+            return try await driveClient.findFile(named: name, accessToken: accessToken) ?? existing
+        }
+        return try await driveClient.uploadNewFile(named: name, mimeType: mimeType, content: content, accessToken: accessToken)
+    }
+
+    private func downloadRemoteBlob(_ file: DriveAppDataFile, accessToken: String, passphrase: String) async throws -> SyncBlob {
+        let encrypted = try await driveClient.downloadFile(id: file.id, accessToken: accessToken)
         let plaintext: Data
         do {
             plaintext = try SyncBlobCrypto.open(encrypted, passphrase: passphrase)
         } catch {
-            throw BackupError.wrongPassphraseOrCorruptData
+            throw BackupError.corruptRemoteOrWrongPassphrase
         }
-        let remoteBlob = try SyncJSON.decoder.decode(SyncBlob.self, from: plaintext)
-        let localBlob = try makeSnapshot(modelContext: modelContext).blob
-        let merged = SyncMerger.merge(local: localBlob, remote: remoteBlob)
-        try apply(merged, to: modelContext)
-        try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
+        do {
+            return try SyncJSON.decoder.decode(SyncBlob.self, from: plaintext)
+        } catch {
+            throw BackupError.corruptRemoteOrWrongPassphrase
+        }
     }
 
-    private func upsertDriveFile(name: String, mimeType: String, content: Data, accessToken: String) async throws {
-        if let existing = try await driveClient.findFile(named: name, accessToken: accessToken) {
-            try await driveClient.updateFile(id: existing.id, mimeType: mimeType, content: content, accessToken: accessToken)
-        } else {
-            _ = try await driveClient.uploadNewFile(named: name, mimeType: mimeType, content: content, accessToken: accessToken)
+    private func uploadManifest(_ blob: SyncBlob, accessToken: String, passphrase: String) async throws {
+        let plaintext = try SyncJSON.encoder.encode(blob)
+        let encrypted = try SyncBlobCrypto.seal(plaintext, passphrase: passphrase)
+        _ = try await upsertDriveFile(name: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: encrypted, accessToken: accessToken)
+    }
+
+    private func finalizedBlob(_ blob: SyncBlob) -> SyncBlob {
+        var finalized = blob
+        finalized.savedAt = Date()
+        finalized.savedByClientId = clientId
+        return finalized
+    }
+
+    private func remoteMetadataChanged(original: DriveAppDataFile?, latest: DriveAppDataFile?) -> Bool {
+        switch (original, latest) {
+        case (.none, .none):
+            return false
+        case (.none, .some), (.some, .none):
+            return true
+        case let (.some(original), .some(latest)):
+            return original.id != latest.id
+                || original.version != latest.version
+                || original.modifiedTime != latest.modifiedTime
         }
+    }
+
+    private func localRecordingMap(projectIds: [String]) throws -> [String: LocalRecording] {
+        var recordings: [String: LocalRecording] = [:]
+        for recording in try RecordingBackupManifest.scan(projectIds: projectIds, memosRoot: memosRoot) {
+            let key = recordingKey(recording.entry)
+            if let existing = recordings[key],
+               Self.epochMilliseconds(existing.entry.modifiedAt) > Self.epochMilliseconds(recording.entry.modifiedAt) {
+                continue
+            }
+            recordings[key] = recording
+        }
+        return recordings
+    }
+
+    private func uploadLocalRecordings(
+        for mergedRecordings: [SyncRecordingManifestEntry],
+        localRecordings: [String: LocalRecording],
+        remoteBlob: SyncBlob?,
+        accessToken: String,
+        passphrase: String
+    ) async throws {
+        for entry in mergedRecordings {
+            let key = recordingKey(entry)
+            guard let local = localRecordings[key],
+                  recordingManifest(local.entry, matches: entry),
+                  try await shouldUploadLocalRecording(local.entry, remoteBlob: remoteBlob, accessToken: accessToken) else {
+                continue
+            }
+            let encrypted = try SyncBlobCrypto.seal(Data(contentsOf: local.localURL), passphrase: passphrase)
+            _ = try await upsertDriveFile(name: local.entry.driveName, mimeType: "application/octet-stream", content: encrypted, accessToken: accessToken)
+        }
+    }
+
+    private func shouldUploadLocalRecording(_ local: SyncRecordingManifestEntry, remoteBlob: SyncBlob?, accessToken: String) async throws -> Bool {
+        let remoteEntry = remoteBlob?.recordings.first(where: { recordingKey($0) == recordingKey(local) })
+        guard let remoteEntry else { return true }
+        let localMillis = Self.epochMilliseconds(local.modifiedAt)
+        let remoteMillis = Self.epochMilliseconds(remoteEntry.modifiedAt)
+        if localMillis < remoteMillis { return false }
+        if localMillis > remoteMillis { return true }
+        guard local.sha256 == remoteEntry.sha256,
+              local.sizeBytes == remoteEntry.sizeBytes,
+              local.driveName == remoteEntry.driveName else {
+            return true
+        }
+        return try await driveClient.findFile(named: local.driveName, accessToken: accessToken) == nil
+    }
+
+    private func recordingManifest(_ lhs: SyncRecordingManifestEntry, matches rhs: SyncRecordingManifestEntry) -> Bool {
+        lhs.projectId == rhs.projectId
+            && lhs.fileName == rhs.fileName
+            && lhs.driveName == rhs.driveName
+            && lhs.sizeBytes == rhs.sizeBytes
+            && Self.epochMilliseconds(lhs.modifiedAt) == Self.epochMilliseconds(rhs.modifiedAt)
+            && lhs.sha256 == rhs.sha256
+    }
+
+    private func recordingKey(_ entry: SyncRecordingManifestEntry) -> String {
+        "\(entry.projectId)/\(entry.fileName)"
+    }
+
+    private func recordBackgroundBackupFailure(_ error: Error) {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription,
+           !description.isEmpty {
+            defaults.set(description, forKey: Self.backgroundFailureKey)
+        } else {
+            defaults.set(error.localizedDescription, forKey: Self.backgroundFailureKey)
+        }
+    }
+
+    private func clearBackgroundBackupFailure() {
+        defaults.removeObject(forKey: Self.backgroundFailureKey)
     }
 
     private func makeSnapshot(modelContext: ModelContext) throws -> BackupSnapshot {
@@ -600,7 +925,12 @@ final class BackupService {
             guard shouldRestore else { continue }
             guard let remote = try await driveClient.findFile(named: entry.driveName, accessToken: accessToken) else { continue }
             let encrypted = try await driveClient.downloadFile(id: remote.id, accessToken: accessToken)
-            let plaintext = try SyncBlobCrypto.open(encrypted, passphrase: passphrase)
+            let plaintext: Data
+            do {
+                plaintext = try SyncBlobCrypto.open(encrypted, passphrase: passphrase)
+            } catch {
+                throw BackupError.corruptRemoteOrWrongPassphrase
+            }
             let digest = SHA256.hash(data: plaintext).map { String(format: "%02x", $0) }.joined()
             guard digest == entry.sha256, plaintext.count == entry.sizeBytes else {
                 throw BackupError.recordingIntegrityMismatch(entry.driveName)
@@ -653,6 +983,7 @@ private extension String {
         return trimmed.isEmpty ? nil : trimmed
     }
 }
+
 
 private extension Dictionary where Key == String, Value == String {
     var formURLEncoded: String {

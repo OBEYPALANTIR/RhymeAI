@@ -8,7 +8,6 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -17,10 +16,11 @@ import kotlin.test.assertTrue
  * (DriveClient, ProjectRepository) are tested via their pure-function
  * equivalents only.
  *
- * Test structure mirrors the three decision paths:
+ * Test structure mirrors the four decision paths:
  *   - Upload-only (first sync, no remote file)
  *   - Merge-and-upload (remote exists, correct passphrase)
  *   - BadPassphrase (remote exists, wrong passphrase → do nothing)
+ *   - CorruptRemote (remote decrypts but cannot be decoded → do nothing)
  */
 class DriveSyncServiceTest {
 
@@ -173,6 +173,26 @@ class DriveSyncServiceTest {
     }
 
     @Test
+    fun corruptRemoteWhenEnvelopeDecryptsButJsonDecodeFails() {
+        val local = SyncBlob(projects = listOf(project("a", "A")))
+        val decryptableButInvalidJson = SyncBlobCrypto.seal(
+            "not a sync blob".toByteArray(Charsets.UTF_8),
+            passphrase
+        )
+        val input = SyncDecisionInput(local, decryptableButInvalidJson, passphrase, clientId)
+
+        val decision = decideSyncAction(input)
+
+        assertIs<SyncDecision.CorruptRemote>(decision)
+        when (decision) {
+            is SyncDecision.CorruptRemote -> { /* expected */ }
+            is SyncDecision.BadPassphrase -> error("unexpected")
+            is SyncDecision.UploadOnly -> error("unexpected")
+            is SyncDecision.MergeAndUpload -> error("unexpected")
+        }
+    }
+
+    @Test
     fun badPassphraseNeverModifiesRemote() {
         // This is a property of the sealed type system: BadPassphrase has no
         // sealedBytes field, so there is nothing for a caller to upload.
@@ -186,6 +206,7 @@ class DriveSyncServiceTest {
         // Verify by exhaustive when: the compiler ensures no other variant carries bytes.
         when (decision) {
             is SyncDecision.BadPassphrase -> { /* expected */ }
+            is SyncDecision.CorruptRemote -> error("unexpected")
             is SyncDecision.UploadOnly -> error("unexpected")
             is SyncDecision.MergeAndUpload -> error("unexpected")
         }
@@ -236,6 +257,17 @@ class DriveSyncServiceTest {
     fun inMemoryKeyStoreEmptyByDefault() {
         val store = FakeSecureKeyStore()
         assertEquals("", store.getKey(DriveSyncService.PASSPHRASE_KEY))
+    }
+
+    @Test
+    fun driveSyncPassphraseRequiresAtLeastEightPrintableAsciiCharacters() {
+        assertEquals(null, normalizedDriveSyncPassphraseOrNull("short7"))
+        assertEquals(null, normalizedDriveSyncPassphraseOrNull("validlen\n"))
+    }
+
+    @Test
+    fun driveSyncPassphraseTrimsAndAcceptsPrintableAscii() {
+        assertEquals("correct horse", normalizedDriveSyncPassphraseOrNull("  correct horse  "))
     }
 }
 

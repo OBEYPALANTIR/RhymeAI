@@ -929,6 +929,13 @@ fun SettingsDialog(
                         }
                     }
                 }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Your songs and recordings are included in Android's automatic backup. Only the optional Google Drive backup is encrypted with your passphrase. API keys never leave this device.",
+                    fontSize = 12.sp,
+                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    lineHeight = 16.sp
+                )
 
                 syncLastResult?.let { result ->
                     Spacer(Modifier.height(6.dp))

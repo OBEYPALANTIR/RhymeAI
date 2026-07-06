@@ -11,11 +11,16 @@ enum SaveStatus {
 protocol CloudBackupServicing: AnyObject {
     var isConfigured: Bool { get }
     var hasStoredPassphrase: Bool { get }
+    var backgroundBackupFailureDescription: String? { get }
 
     func updatePassphrase(_ passphrase: String)
     func backupNow(modelContext: ModelContext) async throws
     func restoreNow(modelContext: ModelContext) async throws
     func backupInBackgroundIfPossible(modelContext: ModelContext) async
+}
+
+extension CloudBackupServicing {
+    var backgroundBackupFailureDescription: String? { nil }
 }
 
 extension BackupService: CloudBackupServicing {}
@@ -1225,9 +1230,13 @@ final class EditorViewModel: ObservableObject {
         } else if !cloudBackupHasStoredPassphrase {
             cloudBackupStatusText = "Enter a backup passphrase to enable Google Drive backup."
             cloudBackupLastResultIsError = false
+        } else if let backgroundFailure = backupService?.backgroundBackupFailureDescription, !backgroundFailure.isEmpty {
+            cloudBackupStatusText = "Background backup failed: \(backgroundFailure)"
+            cloudBackupLastResultIsError = true
         } else if cloudBackupStatusText == "Google Drive backup is unavailable in this build."
             || cloudBackupStatusText.contains("not configured")
-            || cloudBackupStatusText.contains("Enter a backup passphrase") {
+            || cloudBackupStatusText.contains("Enter a backup passphrase")
+            || cloudBackupStatusText.hasPrefix("Background backup failed:") {
             cloudBackupStatusText = "Ready to back up projects, trash, and recordings."
             cloudBackupLastResultIsError = false
         }
@@ -1235,13 +1244,23 @@ final class EditorViewModel: ObservableObject {
 
     func updateCloudBackupPassphrase(_ passphrase: String) {
         let trimmed = passphrase.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            refreshCloudBackupState()
+        guard Self.isPortableBackupPassphrase(trimmed) else {
+            cloudBackupConfigured = backupService?.isConfigured ?? false
+            cloudBackupHasStoredPassphrase = backupService?.hasStoredPassphrase ?? false
+            cloudBackupStatusText = "Use at least 8 characters (printable ASCII) so your backup restores on any device."
+            cloudBackupLastResultIsError = true
             return
         }
 
         backupService?.updatePassphrase(trimmed)
         refreshCloudBackupState()
+    }
+
+    private static func isPortableBackupPassphrase(_ passphrase: String) -> Bool {
+        guard passphrase.count >= 8 else { return false }
+        return passphrase.unicodeScalars.allSatisfy { scalar in
+            (0x20...0x7e).contains(Int(scalar.value))
+        }
     }
 
     func backUpNow() async {

@@ -19,6 +19,7 @@ import com.rhymeai.app.data.model.TrashedSongProject
 import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.sync.DriveSyncService
+import com.rhymeai.app.data.sync.DRIVE_SYNC_PASSPHRASE_REQUIREMENT_MESSAGE
 import com.rhymeai.app.data.sync.SyncResult
 import com.rhymeai.app.data.repository.EncryptedPrefsKeyStore
 import com.rhymeai.app.service.AIModel
@@ -233,9 +234,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var lastBackgroundSyncAttemptMillis = 0L
 
     fun saveSyncPassphrase(passphrase: String) {
-        driveSyncService.setPassphrase(passphrase)
-        syncPassphraseStored = passphrase.isNotEmpty()
+        if (!driveSyncService.setPassphrase(passphrase)) {
+            syncLastResult = DRIVE_SYNC_PASSPHRASE_REQUIREMENT_MESSAGE
+            syncPassphraseStored = driveSyncService.hasPassphrase()
+            driveSyncAuthorizedForNonInteractive = false
+            return
+        }
+        syncPassphraseStored = true
         driveSyncAuthorizedForNonInteractive = false
+        syncLastResult = null
     }
 
     fun triggerSync() {
@@ -322,6 +329,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is SyncResult.WrongPassphrase -> {
                 driveSyncAuthorizedForNonInteractive = false
                 syncLastResult = "Wrong passphrase — Drive backup was not changed."
+            }
+            is SyncResult.CorruptRemote -> {
+                driveSyncAuthorizedForNonInteractive = false
+                syncLastResult = "Your Drive backup is unreadable and was not overwritten. Try Restore, or contact support."
             }
             is SyncResult.NotConfigured -> {
                 driveSyncAuthorizedForNonInteractive = false
