@@ -1,6 +1,61 @@
 # Final Sign-Off Status
 
-Last updated: 2026-06-27.
+Last updated: 2026-07-05.
+
+## 2026-07-05 Production Audit
+
+A multi-agent audit (Kotlin, Swift, security, UI-token conformance, and
+cross-platform parity reviewers, with adversarial verification of every
+finding) ran against the full tree after the pending Drive-backup, voice-memo,
+and syllable-coloring work landed.
+
+Fixed and committed on main, gated by the Android compile/lint/unit suite and
+the iOS simulator build-for-testing gate:
+
+- Passphrase trimming now uses the identical ASCII space/tab/CR/LF set on both
+  platforms (previously iOS trimmed all Unicode whitespace while Android
+  trimmed only spaces — a cross-device restore lockout risk).
+- The shared RAI1 crypto golden vector is now pinned by unit tests on both
+  platforms, protecting the cross-platform backup format against drift.
+- iOS Keychain writes for the OAuth token and backup passphrase now check
+  `SecItemAdd` status and surface failures instead of silently losing secrets.
+- Raw Drive/OAuth HTTP response bodies no longer reach user-facing error text
+  or `UserDefaults`.
+- Voice memo deletion treats an already-missing file as success on Android,
+  the delete-failure snackbar can no longer be dropped by recomposition, and
+  iOS invalidates the elapsed-time timer when a recording finishes on its own.
+- iOS rhyme-family colors are stable across launches (FNV-1a instead of the
+  per-process-seeded `hashValue`).
+- Drive query escaping handles backslashes on iOS, matching Android.
+- Zero-visual-change token conformance: hardcoded values that duplicated
+  design tokens now reference them (`Touch.prominent`, `Touch.comfortable`,
+  `assistantReadableWidth`, `Radius.lg`), off-scale 5dp paddings moved to the
+  4dp token, and the de-facto 13px caption size is codified as
+  `DesignTokens.Typography.caption` and documented in DESIGN.md.
+
+Security review verdict: no CRITICAL or HIGH findings. KDF, salt/nonce
+handling, AES-GCM envelope, Keychain/EncryptedSharedPreferences usage, release
+key stripping, UI-test-flag gating, and certificate pin sets were all verified
+sound. Drive/OAuth hosts are intentionally unpinned (system trust) on both
+platforms.
+
+Deferred with rationale (documented, not fixed this session):
+
+- iOS lyric 16pt/28pt line-height contract is half-implemented: no line height
+  is applied to `LyricsTextView`, `RhymeHighlightedText`, or
+  `SyllableColoredText`. Fixing requires changing the UITextView paragraph
+  style and both overlays in lockstep and verifying overlay registration in a
+  running simulator, which is blocked locally (see below).
+- Off-scale type sizes (10/11/15/17/18/26 sp/pt) and hand-tuned iOS
+  SettingsView paddings/radii: visible-pixel changes reserved for a dedicated
+  typography/design pass.
+- Drive sync concurrent-writer window: the merge-on-refresh guard mitigates
+  most clobber risk; an `If-Match` precondition on `updateFile` would close
+  the remaining window.
+- Minor UX polish items: enum-driven backup status text on iOS, one-tap
+  re-auth on Android 401, sticky background wrong-passphrase banner, lone
+  apostrophes tinted by syllable coloring, brief weight-shift during the
+  syllable-color crossfade.
 
 ## Current Local Evidence
 

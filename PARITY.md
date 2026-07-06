@@ -52,6 +52,30 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 - Android and iOS unit-verified that section headers do not consume rhyme-scheme positions, latest previous lyric lines with the same scheme letter become the rhyme target, current section detection reaches prompt shaping, and empty lyrics use the first active scheme letter. Android pure seam additionally verifies cursor clamping and empty-scheme fallback to `A`.
 
+## Cloud backup parity checks
+
+- Encrypted blob compatibility: statically audit-verified 2026-07-05 that both
+  platforms use PBKDF2-HMAC-SHA256 at 210,000 iterations with a 256-bit key,
+  AES-256-GCM with a 128-bit tag, and the byte-identical
+  `RAI1 | salt(16) | iv(12) | ciphertext | tag(16)` envelope with the header
+  bound as AAD. The shared RAI1 golden vector is now pinned by unit tests on
+  both platforms (`BackupCoreTests` on iOS, `SyncBlobCryptoTest` on Android).
+- Backup passphrase rules: both platforms trim the ASCII set space/tab/CR/LF
+  and require at least 8 printable ASCII (0x20–0x7E) characters, unit-verified
+  on both sides including tab/newline-padded and interior-tab cases.
+- Drive HTTP error mapping: 401 re-auth, 403/429 retry-later, 5xx server-error,
+  and generic fallback buckets are aligned; neither platform echoes raw
+  response bodies into user-facing text.
+- Trash retention: 30 days on both platforms
+  (`TrashedSongProject.kt` / `TrashedSongProject.swift`).
+- Prompt templates: section labels, rhyme-constraint blocks, rewrite action
+  instructions, and the Gemma chat template are byte-identical across
+  platforms (iOS softens punch-up wording only on the Apple Intelligence
+  local path due to on-device guardrails).
+- Syllable coloring: identical two-toggle semantics — syllables on with rhyme
+  highlight off tints whole words semibold; with rhyme highlight on, syllable
+  color moves to the underline.
+
 ## Open parity checks
 
 - Local model live/inference path: Android has current emulator evidence for GGUF load and nonblank generation through `scripts/android-local-model-smoke.sh`; iOS local provider has a simulator/device smoke gate that passes when Apple Foundation Models either return text or surface an on-device availability reason.
