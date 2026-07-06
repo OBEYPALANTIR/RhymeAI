@@ -558,7 +558,7 @@ Android enables Material You dynamic color by default in `Theme.kt`, so the auth
 
 iOS should bias toward black, indigo, purple, and translucent blue-gray glass. Glass surfaces should be visible through border, tint, blur, and shadow rather than through solid fill. Avoid opaque cards on iOS unless the content is modal and needs firm legibility.
 
-Rhyme and syllable colors are functional tokens, not decoration. Syllable underlines use four stable colors by syllable count. Rhyme colors cycle through a broader palette so matching colors imply matching rhyme families.
+Rhyme and syllable colors are functional tokens, not decoration. Syllable underlines use four stable colors by syllable count. Rhyme colors cycle through a broader palette so matching colors imply matching rhyme families. When Rhyme Highlight is on, syllable cues render as underlines beneath each word; when Rhyme Highlight is off, Syllable Coloring instead tints each whole word (semibold) by its syllable count, mirroring rhyme highlight's word coloring so the foreground color is never double-claimed.
 
 ## Typography
 

@@ -1,54 +1,85 @@
 # Final Sign-Off Status
 
-Last updated: 2026-06-02 04:57 America/New_York.
+Last updated: 2026-06-27.
 
 ## Current Local Evidence
 
-Command run from `/Users/tylermanring/Documents/RhymeAI`:
-
-```sh
-RUN_VERIFY=1 RUN_CLOUDKIT_READINESS=1 ./scripts/final-signoff-status.sh
-```
+Commands were run from `/Users/tylermanring/Developer/RhymeAI` unless a subdirectory is noted.
 
 Passed:
 
-- Required release docs exist: `BUGS.md`, `KNOWN_ISSUES.md`, `PARITY.md`,
-  `README.md`, and `RELEASE_NOTES.md`.
-- Tracked files contain no Gemini key prefix.
-- Gitignored Android `geminiTestKey` is present in `android/local.properties`.
-- `./scripts/verify.sh` passed Android `assembleDebug`, `testDebugUnitTest`,
-  `lintDebug`, then iOS build and `Writers BlockTests` on the default
-  `iPhone 17 Pro, OS 26.5` simulator.
-- `./scripts/ios-cloudkit-readiness.sh` passed static CloudKit readiness:
-  private container wiring, entitlements, remote-notification background mode,
-  build output, and `TrashLifecycleTests`.
-- Android local GGUF inference passed on `emulator-5554` with:
+- Android debug compile/lint/unit gate from `android/`:
+  `./gradlew :app:compileDebugKotlin :app:lintDebug :app:testDebugUnitTest`.
+- Android targeted sync gate from `android/`:
+  `./gradlew :app:testDebugUnitTest --tests 'com.rhymeai.app.data.sync.*'`.
+- Android release build/signing gate from `android/`:
+  `./gradlew :app:assembleRelease`, producing a signed
+  `android/app/build/outputs/apk/release/app-release.apk`.
+- Android release identity check:
+  `aapt dump badging android/app/build/outputs/apk/release/app-release.apk`
+  reported `versionName='1.0'`, `versionCode='3'`, and application label
+  `Writers Block`.
+- Android release APK signature check:
+  `apksigner verify --print-certs android/app/build/outputs/apk/release/app-release.apk`
+  reported signer certificate `CN=RhymeAI Local Release Smoke`.
+- Android release smoke:
+  `./scripts/android-release-smoke.sh`.
+- Android release walkthrough:
+  `./scripts/android-release-walkthrough.sh` passed on `emulator-5554`
+  through create, save, no-key suggestion, export surface, force-stop, reopen,
+  and persisted lyrics.
+- iOS release simulator build/key scan with live launch/archive skipped:
+  `IOS_DESTINATION='generic/platform=iOS Simulator' SKIP_SIM_LAUNCH=1 SKIP_ARCHIVE=1 ./scripts/ios-release-smoke.sh`.
+- iOS simulator compile gate:
+  `xcodebuild build -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'generic/platform=iOS Simulator'`
+  returned `** BUILD SUCCEEDED **`.
+- iOS test build gate:
+  `xcodebuild build-for-testing -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'generic/platform=iOS Simulator' -parallel-testing-enabled NO`
+  returned `** TEST BUILD SUCCEEDED **`.
 
-```sh
-LOCAL_GGUF_PATH="$PWD/artifacts/local-model-smoke/tinyllama-1.1b-chat-v0.6.q2_k.gguf" ANDROID_SERIAL=emulator-5554 ./scripts/android-local-model-smoke.sh
-```
+Blocked locally:
 
-  The ignored smoke fixture was 482143168 bytes with a valid GGUF header, and
-  `LocalModelInstrumentedTest` passed after loading the model and producing
-  nonblank generation output.
-- `./scripts/remaining-live-gates-preflight.sh` currently exits `2`: this shell
-  has no `OPENAI_TEST_KEY`, `CLAUDE_TEST_KEY`, or `ANTHROPIC_TEST_KEY`.
-- Two iOS 26.5 simulators booted successfully for CloudKit preflight
-  (`E4C0D568-C431-462E-84B3-B019135F2F29` and
-  `48C15EB1-26B1-4AC8-BE0E-C5B1B65C184F`), but neither has a
-  `MobileMeAccounts` account record and both return `BRCloudDocsErrorDomain`
-  code `153` from `simctl icloud_sync`.
-- `./scripts/final-signoff-status.sh` now reports two pending items by default:
-  OpenAI/Claude live provider smoke and CloudKit live sync.
+- Concrete iOS simulator tests and launch-dependent iOS smoke scripts remain
+  owner-blocked by the local Xcode/CoreSimulator component mismatch after the
+  approved first-launch remediation attempt. Fresh 2026-06-27 evidence:
+  `/Library/Developer/PrivateFrameworks/CoreSimulator.framework` still reports
+  `CFBundleShortVersionString=1051.54` / `CFBundleVersion=1051.54`;
+  `xcodebuild -checkFirstLaunchStatus` prints `xcodebuild: ok` but exits `69`;
+  `xcrun simctl list devices` still emits
+  `Install Failed: Authorization is required to install the packages.`
+- The owner-authorized installer remains required. Agent attempts cannot satisfy
+  the auth prompt: `osascript ... with administrator privileges` returned
+  `The administrator user name or password was incorrect. (-60007)`, and
+  `sudo -n xcodebuild -runFirstLaunch` returned `sudo: a password is required`.
+  Owner must run `sudo xcodebuild -runFirstLaunch` interactively, or accept
+  Xcode's GUI "install additional components" prompt, before simulator tests can
+  be re-run.
+- Full iOS archive/release-smoke archive path is also blocked locally by
+  signing access: `CodeSign failed with a nonzero exit code` /
+  `errSecInternalComponent`; unlock/update the login keychain partition list
+  before running the archive branch.
 
-## Remaining External Gates
+## Remaining Owner-Run Gates
 
-Final sign-off still needs current live evidence for:
+Final production sign-off still needs current live/console evidence for:
 
-- OpenAI/Claude provider happy paths: run `./scripts/provider-live-smoke.sh`
-  with `OPENAI_TEST_KEY` and `CLAUDE_TEST_KEY` or `ANTHROPIC_TEST_KEY`.
-- CloudKit live sync: complete `docs/CLOUDKIT_SYNC_CHECKLIST.md` on two
-  iCloud-signed-in simulators/devices.
+- G1 — Google Drive OAuth clients: create Android and iOS OAuth clients, enable
+  Drive API with `drive.appdata`, populate `Writers Block/Secrets.xcconfig`,
+  then run the manual backup/restore and cross-platform round trip in
+  `docs/CLOUD_BACKUP_SETUP.md`.
+- G2 — BYO-key provider smoke:
+  `export OPENAI_TEST_KEY=... CLAUDE_TEST_KEY=...; ./scripts/provider-live-smoke.sh`.
+- G3 — iCloud two-device sync matrix:
+  complete `docs/CLOUDKIT_SYNC_CHECKLIST.md` on two iCloud-signed-in devices or
+  simulators after fixing the local CoreSimulator mismatch.
+- G4 — Apple Developer/App Store Connect:
+  confirm App ID `ShaydeTree.Writers-Block` has iCloud/CloudKit container
+  `iCloud.ShaydeTree.Writers-Block` on a distribution profile, then create the
+  listing, screenshots, and privacy policy.
+- G5 — Rotate the live debug Gemini key if any `artifacts/*debug*.apk` was
+  shared externally.
+- G6 — Submit signed artifacts:
+  Android release AAB and iOS Archive to the stores.
 
-Do not mark production sign-off complete until both live gates above have
-current passing evidence.
+Do not mark production sign-off complete until the blocked simulator gates and
+all owner-run live/console gates above have current passing evidence.
