@@ -58,9 +58,6 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -381,26 +378,13 @@ fun SettingsDialog(
 
                 Spacer(Modifier.height(16.dp))
 
-                // General | Editor tab switcher — lightweight, reuses the segmented control already present in the dialog.
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    listOf("General", "Editor").forEachIndexed { index, label ->
-                        SegmentedButton(
-                            selected = settingsTab == index,
-                            onClick = { settingsTab = index },
-                            shape = SegmentedButtonDefaults.itemShape(index, 2),
-                            colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = colorScheme.primary,
-                                activeContentColor = colorScheme.onPrimary,
-                                inactiveContainerColor = colorScheme.surfaceContainerLow,
-                                inactiveContentColor = colorScheme.onSurfaceVariant,
-                                activeBorderColor = colorScheme.primary,
-                                inactiveBorderColor = colorScheme.outlineVariant
-                            )
-                        ) {
-                            Text(label, fontSize = DesignTokens.Typography.caption)
-                        }
-                    }
-                }
+                // General | Editor tab switcher
+                SlidingSegmentedControl(
+                    labels = listOf("General", "Editor"),
+                    selectedIndex = settingsTab,
+                    onSelect = { settingsTab = it },
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 Spacer(Modifier.height(20.dp))
 
@@ -431,32 +415,21 @@ fun SettingsDialog(
                 Text("AI Provider", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
 
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    AIProvider.entries.forEachIndexed { index, provider ->
-                        SegmentedButton(
-                            selected = selectedProvider == provider,
-                            onClick = {
-                                selectedProvider = provider
-                                saved = false
-                                val models = AIModel.modelsForProvider(provider)
-                                if (selectedModel.provider != provider && models.isNotEmpty()) {
-                                    selectedModel = models.first()
-                                }
-                            },
-                            shape = SegmentedButtonDefaults.itemShape(index, AIProvider.entries.size),
-                            colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = colorScheme.primary,
-                                activeContentColor = colorScheme.onPrimary,
-                                inactiveContainerColor = colorScheme.surfaceContainerLow,
-                                inactiveContentColor = colorScheme.onSurfaceVariant,
-                                activeBorderColor = colorScheme.primary,
-                                inactiveBorderColor = colorScheme.outlineVariant
-                            )
-                        ) {
-                            Text(provider.displayName, fontSize = 11.sp)
+                SlidingSegmentedControl(
+                    labels = AIProvider.entries.map { it.displayName },
+                    selectedIndex = AIProvider.entries.indexOf(selectedProvider),
+                    onSelect = { index ->
+                        val provider = AIProvider.entries[index]
+                        selectedProvider = provider
+                        saved = false
+                        val models = AIModel.modelsForProvider(provider)
+                        if (selectedModel.provider != provider && models.isNotEmpty()) {
+                            selectedModel = models.first()
                         }
-                    }
-                }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    fontSize = 11.sp
+                )
 
                 Spacer(Modifier.height(20.dp))
 

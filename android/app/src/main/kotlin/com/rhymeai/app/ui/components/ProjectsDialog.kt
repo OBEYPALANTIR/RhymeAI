@@ -72,9 +72,6 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -379,29 +376,14 @@ fun ProjectsDrawer(
 
                             // Songs | Recordings tab switcher
                             Spacer(Modifier.height(DesignTokens.Spacing.md))
-                            SingleChoiceSegmentedButtonRow(
+                            SlidingSegmentedControl(
+                                labels = listOf("Songs", "Recordings"),
+                                selectedIndex = selectedTab,
+                                onSelect = { selectedTab = it },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(bottom = DesignTokens.Spacing.sm)
-                            ) {
-                                listOf("Songs", "Recordings").forEachIndexed { index, label ->
-                                    SegmentedButton(
-                                        selected = selectedTab == index,
-                                        onClick = { selectedTab = index },
-                                        shape = SegmentedButtonDefaults.itemShape(index, 2),
-                                        colors = SegmentedButtonDefaults.colors(
-                                            activeContainerColor = colorScheme.primary,
-                                            activeContentColor = colorScheme.onPrimary,
-                                            inactiveContainerColor = colorScheme.surfaceContainerLow,
-                                            inactiveContentColor = colorScheme.onSurfaceVariant,
-                                            activeBorderColor = colorScheme.primary,
-                                            inactiveBorderColor = colorScheme.outlineVariant
-                                        )
-                                    ) {
-                                        Text(label, fontSize = DesignTokens.Typography.caption)
-                                    }
-                                }
-                            }
+                            )
 
                             if (selectedTab == 0) {
                                 // ── Songs tab ──

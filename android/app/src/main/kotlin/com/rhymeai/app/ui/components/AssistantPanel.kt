@@ -35,9 +35,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -297,25 +294,13 @@ fun AssistantPanel(
                     color = colorScheme.onSurfaceVariant
                 )
 
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    RhymeType.entries.forEachIndexed { index, type ->
-                        SegmentedButton(
-                            selected = viewModel.rhymeType == type,
-                            onClick = { viewModel.rhymeType = type },
-                            shape = SegmentedButtonDefaults.itemShape(index, RhymeType.entries.size),
-                            colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = colorScheme.primary,
-                                activeContentColor = colorScheme.onPrimary,
-                                inactiveContainerColor = colorScheme.surfaceContainerLow,
-                                inactiveContentColor = colorScheme.onSurfaceVariant,
-                                activeBorderColor = colorScheme.primary,
-                                inactiveBorderColor = colorScheme.outlineVariant
-                            )
-                        ) {
-                            Text(type.shortLabel(), fontSize = 12.sp)
-                        }
-                    }
-                }
+                SlidingSegmentedControl(
+                    labels = RhymeType.entries.map { it.shortLabel() },
+                    selectedIndex = RhymeType.entries.indexOf(viewModel.rhymeType),
+                    onSelect = { viewModel.rhymeType = RhymeType.entries[it] },
+                    modifier = Modifier.fillMaxWidth(),
+                    fontSize = 12.sp
+                )
             }
 
             // Rhyme Complexity Slider
