@@ -16,6 +16,7 @@ enum BackupError: Error, Equatable {
     case invalidResponse
     case corruptRemoteOrWrongPassphrase
     case recordingIntegrityMismatch(String)
+    case keychainWriteFailed(OSStatus)
 }
 
 extension BackupError: LocalizedError {
@@ -43,6 +44,8 @@ extension BackupError: LocalizedError {
             return "Your Drive backup could not be decrypted or read. Check your passphrase; it was not overwritten."
         case .recordingIntegrityMismatch(let name):
             return "The recording \(name) did not match its backup manifest."
+        case .keychainWriteFailed:
+            return "Could not securely store your backup credentials on this device. Try again."
         }
     }
 }
@@ -241,12 +244,15 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         case 500...599:
             return .serverError("Google Drive is temporarily unavailable. Try again later.")
         default:
-            return .network("Drive request failed (\(statusCode)): \(body)")
+            return .network("Drive request failed (\(statusCode)).")
         }
     }
 
     private static func escapeQueryString(_ value: String) -> String {
-        value.replacingOccurrences(of: "'", with: "\\'")
+        // Escape backslash first, then single-quote, matching Android's driveQueryLiteral.
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
     }
 }
 
@@ -298,7 +304,7 @@ struct OAuthToken: Codable, Equatable, Sendable {
 
 protocol OAuthTokenStore: AnyObject {
     func loadToken() -> OAuthToken?
-    func saveToken(_ token: OAuthToken)
+    func saveToken(_ token: OAuthToken) throws
     func deleteToken()
 }
 
@@ -324,13 +330,18 @@ final class KeychainOAuthTokenStore: OAuthTokenStore {
         return try? JSONDecoder().decode(OAuthToken.self, from: data)
     }
 
-    func saveToken(_ token: OAuthToken) {
-        guard let data = try? JSONEncoder().encode(token) else { return }
+    func saveToken(_ token: OAuthToken) throws {
+        guard let data = try? JSONEncoder().encode(token) else {
+            throw BackupError.keychainWriteFailed(errSecParam)
+        }
         SecItemDelete(baseQuery() as CFDictionary)
         var query = baseQuery()
         query[kSecValueData as String] = data
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw BackupError.keychainWriteFailed(status)
+        }
     }
 
     func deleteToken() {
@@ -472,7 +483,7 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
                 refreshToken: responseBody.refreshToken ?? preservingRefreshToken,
                 expiresAt: Date().addingTimeInterval(TimeInterval(responseBody.expiresIn))
             )
-            tokenStore.saveToken(token)
+            try tokenStore.saveToken(token)
             return token
         } catch let error as BackupError {
             throw error
@@ -501,7 +512,7 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
         case 500...599:
             return .serverError("Google Drive is temporarily unavailable. Try again later.")
         default:
-            return .network("OAuth token request failed (\(statusCode)): \(body)")
+            return .network("OAuth token request failed (\(statusCode)).")
         }
     }
 
@@ -531,7 +542,7 @@ private struct OAuthTokenResponse: Decodable {
 
 protocol BackupSecretStore: AnyObject {
     func string(for key: String) -> String?
-    func setString(_ value: String, for key: String)
+    func setString(_ value: String, for key: String) throws
     func deleteString(for key: String)
 }
 
@@ -548,12 +559,15 @@ final class KeychainBackupSecretStore: BackupSecretStore {
         return String(data: data, encoding: .utf8)
     }
 
-    func setString(_ value: String, for key: String) {
+    func setString(_ value: String, for key: String) throws {
         SecItemDelete(baseQuery(key) as CFDictionary)
         var query = baseQuery(key)
         query[kSecValueData as String] = Data(value.utf8)
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw BackupError.keychainWriteFailed(status)
+        }
     }
 
     func deleteString(for key: String) {
@@ -614,12 +628,12 @@ final class BackupService {
         defaults.string(forKey: Self.backgroundFailureKey)?.nilIfBlank
     }
 
-    func updatePassphrase(_ passphrase: String) {
+    func updatePassphrase(_ passphrase: String) throws {
         let trimmed = passphrase.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             secretStore.deleteString(for: Self.passphraseKey)
         } else {
-            secretStore.setString(trimmed, for: Self.passphraseKey)
+            try secretStore.setString(trimmed, for: Self.passphraseKey)
         }
     }
 
