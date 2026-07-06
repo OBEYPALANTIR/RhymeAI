@@ -167,8 +167,16 @@ struct RhymeHighlightedText: View, Equatable {
 
     private func colorFor(key: String) -> Color {
         let p = palette
-        let h = abs(key.hashValue)
-        return p[h % p.count]
+        // Stable across launches: Swift's `hashValue` is per-process seeded, so a
+        // rhyme family would recolor every launch. FNV-1a over the key's UTF-8
+        // bytes is deterministic. `&*`/`&+` wrap on overflow instead of trapping.
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in key.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        let index = Int(hash % UInt64(p.count))
+        return p[index]
     }
 
     private func syllableColor(for count: Int) -> Color {
