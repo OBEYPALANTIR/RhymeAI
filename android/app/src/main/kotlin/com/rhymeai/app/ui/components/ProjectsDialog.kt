@@ -398,7 +398,7 @@ fun ProjectsDrawer(
                                             inactiveBorderColor = colorScheme.outlineVariant
                                         )
                                     ) {
-                                        Text(label, fontSize = 13.sp)
+                                        Text(label, fontSize = DesignTokens.Typography.caption)
                                     }
                                 }
                             }
@@ -887,7 +887,7 @@ private fun FolderHeaderRow(
                 )
                 Text(
                     text = "${folder.memos.size} ${if (folder.memos.size == 1) "recording" else "recordings"}",
-                    fontSize = 13.sp,
+                    fontSize = DesignTokens.Typography.caption,
                     color = colorScheme.onSurfaceVariant
                 )
             }
@@ -1015,9 +1015,14 @@ private fun RecordingMemoRow(
                     scope.launch {
                         val deleted = service.deleteMemo(memo)
                         pendingDelete = false
-                        onMemoListChanged()
-                        if (!deleted) {
+                        if (deleted) {
+                            onMemoListChanged()
+                        } else {
+                            // Show the failure snackbar first: onMemoListChanged()'s
+                            // recomposition can cancel this row's scope before the
+                            // snackbar is enqueued, swallowing the error.
                             snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
+                            onMemoListChanged()
                         }
                     }
                 }) { Text("Delete", color = colorScheme.error) }
@@ -1097,7 +1102,7 @@ private fun RecordingMemoRow(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = VoiceMemoService.displayName(memo.file),
-                        fontSize = 13.sp,
+                        fontSize = DesignTokens.Typography.caption,
                         fontWeight = FontWeight.Medium,
                         color = colorScheme.onSurface
                     )
@@ -1203,7 +1208,7 @@ private fun ProjectDrawerRow(
                 )
                 Text(
                     "$dateStr \u2022 $wordCount words",
-                    fontSize = 13.sp,
+                    fontSize = DesignTokens.Typography.caption,
                     color = if (isActive) {
                         colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
                     } else {
@@ -1462,7 +1467,7 @@ private fun TrashProjectSelectableRow(
             )
             Text(
                 "$wordCount words • ${trashRemainingLabel(trashedProject.deleteAfter)}",
-                fontSize = 13.sp,
+                fontSize = DesignTokens.Typography.caption,
                 color = colorScheme.onSurfaceVariant,
                 maxLines = 1
             )

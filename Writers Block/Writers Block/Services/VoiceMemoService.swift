@@ -340,6 +340,8 @@ final class VoiceMemoService {
         isRecording = false
         recordingElapsed = 0
         averagePowerNormalized = 0
+        elapsedTimer?.invalidate()
+        elapsedTimer = nil
         meteringTimer?.invalidate()
         meteringTimer = nil
         delegateForwarder = nil

@@ -407,9 +407,13 @@ class VoiceMemoService(private val context: Context) {
             }
         }
 
-        /** Delete [file] and return File.delete()'s success signal for UI surfacing. */
+        /**
+         * Delete [file], reporting success for UI surfacing. An already-absent file
+         * counts as success — there is nothing left to fail to remove, so callers
+         * should not show a delete-failed error for it.
+         */
         internal fun deleteMemoFile(file: File): Boolean =
-            file.delete()
+            !file.exists() || file.delete()
 
         /**
          * Strip characters that are illegal in file paths on Android (FAT32 + ext4),

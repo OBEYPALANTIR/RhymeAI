@@ -216,6 +216,15 @@ class VoiceMemoServiceTest {
         assertFalse(file.exists())
     }
 
+    @Test
+    fun deleteMemoFileReturnsTrueWhenFileAlreadyGone() {
+        // An already-absent file is not a delete failure — nothing to remove.
+        val file = File(tempFolder.root, "never-existed.m4a")
+        assertFalse(file.exists())
+
+        assertTrue(VoiceMemoService.deleteMemoFile(file))
+    }
+
     // ---------------------------------------------------------------------------
     // Task 3 — rename: sanitizeBasename
     // ---------------------------------------------------------------------------
