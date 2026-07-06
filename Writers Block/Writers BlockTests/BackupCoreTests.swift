@@ -135,11 +135,34 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test func tabAndNewlinePaddedPassphraseIsAcceptedAfterTrim() {
+        let backupService = FakeCloudBackupService()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: backupService)
+
+        viewModel.updateCloudBackupPassphrase("\t validpass1 \n")
+
+        #expect(backupService.updatedPassphrase == "validpass1")
+        #expect(!viewModel.cloudBackupLastResultIsError)
+    }
+
+    @MainActor
+    @Test func interiorTabPassphraseIsRejected() {
+        let backupService = FakeCloudBackupService()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: backupService)
+
+        viewModel.updateCloudBackupPassphrase("valid\tpass1")
+
+        #expect(backupService.updatedPassphrase == nil)
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText == "Use at least 8 characters (printable ASCII) so your backup restores on any device.")
+    }
+
+    @MainActor
     @Test func backgroundBackupFailureIsPersistedForRefresh() async throws {
         let oauthProvider = FakeOAuthProvider()
         oauthProvider.accessTokenError = BackupError.network("offline")
         let harness = try makeHarness(oauthProvider: oauthProvider)
-        harness.service.updatePassphrase(passphrase)
+        try harness.service.updatePassphrase(passphrase)
 
         await harness.service.backupInBackgroundIfPossible(modelContext: harness.context)
 
@@ -178,7 +201,7 @@ struct BackupCoreTests {
         try memoData.write(to: memoURL)
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_700_000_011)], ofItemAtPath: memoURL.path)
 
-        harness.service.updatePassphrase(passphrase)
+        try harness.service.updatePassphrase(passphrase)
 
         try await harness.service.backupNow(modelContext: harness.context)
 
@@ -224,7 +247,7 @@ struct BackupCoreTests {
             name: SyncBlob.driveFileName,
             content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(remoteBlob), passphrase: passphrase)
         )
-        harness.service.updatePassphrase(passphrase)
+        try harness.service.updatePassphrase(passphrase)
 
         try await harness.service.backupNow(modelContext: harness.context)
 
@@ -249,7 +272,7 @@ struct BackupCoreTests {
 
         let corruptEnvelope = try SyncBlobCrypto.seal(Data("{".utf8), passphrase: passphrase)
         harness.drive.seed(name: SyncBlob.driveFileName, content: corruptEnvelope)
-        harness.service.updatePassphrase(passphrase)
+        try harness.service.updatePassphrase(passphrase)
 
         await #expect(throws: BackupError.corruptRemoteOrWrongPassphrase) {
             try await harness.service.backupNow(modelContext: harness.context)
@@ -277,7 +300,7 @@ struct BackupCoreTests {
         )
         let originalEnvelope = try SyncBlobCrypto.seal(SyncJSON.encoder.encode(remoteBlob), passphrase: passphrase)
         harness.drive.seed(name: SyncBlob.driveFileName, content: originalEnvelope)
-        harness.service.updatePassphrase("wrong horse battery staple")
+        try harness.service.updatePassphrase("wrong horse battery staple")
 
         await #expect(throws: BackupError.corruptRemoteOrWrongPassphrase) {
             try await harness.service.backupNow(modelContext: harness.context)
@@ -333,7 +356,7 @@ struct BackupCoreTests {
             onFind: 2,
             content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(lateRemoteBlob), passphrase: passphrase)
         )
-        harness.service.updatePassphrase(passphrase)
+        try harness.service.updatePassphrase(passphrase)
 
         try await harness.service.backupNow(modelContext: harness.context)
 
@@ -363,7 +386,7 @@ struct BackupCoreTests {
         )
         harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(blob), passphrase: passphrase))
         harness.drive.seed(name: recording.driveName, content: try SyncBlobCrypto.seal(remoteMemo, passphrase: passphrase))
-        harness.service.updatePassphrase(passphrase)
+        try harness.service.updatePassphrase(passphrase)
 
         try await harness.service.restoreNow(modelContext: harness.context)
 
@@ -403,7 +426,7 @@ struct BackupCoreTests {
             name: SyncBlob.driveFileName,
             content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(remoteBlob), passphrase: passphrase)
         )
-        harness.service.updatePassphrase(passphrase)
+        try harness.service.updatePassphrase(passphrase)
 
         try await harness.service.restoreNow(modelContext: harness.context)
 
@@ -446,7 +469,7 @@ struct BackupCoreTests {
         )
         harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(blob), passphrase: passphrase))
         harness.drive.seed(name: recording.driveName, content: try SyncBlobCrypto.seal(remoteMemo, passphrase: passphrase))
-        harness.service.updatePassphrase(passphrase)
+        try harness.service.updatePassphrase(passphrase)
 
         try await harness.service.restoreNow(modelContext: harness.context)
 

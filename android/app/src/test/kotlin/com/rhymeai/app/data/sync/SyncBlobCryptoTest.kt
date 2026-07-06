@@ -1,6 +1,7 @@
 package com.rhymeai.app.data.sync
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import java.util.Base64
@@ -23,6 +24,24 @@ class SyncBlobCryptoTest {
     fun opensSharedRAI1GoldenFixture() {
         val envelope = Base64.getDecoder().decode(goldenEnvelopeBase64)
         assertArrayEquals(goldenPlaintext, SyncBlobCrypto.open(envelope, passphrase))
+    }
+
+    /**
+     * Cross-platform pin: this exact base64 envelope and passphrase are the RAI1
+     * golden vector held by the iOS BackupCoreTests (opensAndroidCompatibleRAI1Fixture /
+     * deterministicSealMatchesRAI1GoldenVector). Opening it here to the expected JSON
+     * proves Android's PBKDF2/AES-GCM/envelope-layout stays byte-compatible with iOS —
+     * any KDF, GCM, or layout drift on either side breaks this test.
+     */
+    @Test
+    fun opensIosGoldenVectorToExpectedJson() {
+        val envelope = Base64.getDecoder().decode(goldenEnvelopeBase64)
+        val expectedJson =
+            """{"version":1,"projects":[],"trashed":[],"recordings":[],"savedAt":1700000000000,"savedByClientId":"android-fixture"}"""
+
+        val opened = SyncBlobCrypto.open(envelope, passphrase)
+
+        assertEquals(expectedJson, String(opened, Charsets.UTF_8))
     }
 
     @Test

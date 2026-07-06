@@ -262,12 +262,25 @@ class DriveSyncServiceTest {
     @Test
     fun driveSyncPassphraseRequiresAtLeastEightPrintableAsciiCharacters() {
         assertEquals(null, normalizedDriveSyncPassphraseOrNull("short7"))
-        assertEquals(null, normalizedDriveSyncPassphraseOrNull("validlen\n"))
+        // Only 7 printable chars remain after trimming the trailing newline → rejected.
+        assertEquals(null, normalizedDriveSyncPassphraseOrNull("short7\n"))
     }
 
     @Test
     fun driveSyncPassphraseTrimsAndAcceptsPrintableAscii() {
         assertEquals("correct horse", normalizedDriveSyncPassphraseOrNull("  correct horse  "))
+    }
+
+    @Test
+    fun driveSyncPassphraseTrimsTabAndNewlinePadding() {
+        // Matches iOS: strip the ASCII whitespace set " \t\r\n" from both ends.
+        assertEquals("correct horse", normalizedDriveSyncPassphraseOrNull("\t correct horse \r\n"))
+    }
+
+    @Test
+    fun driveSyncPassphraseRejectsInteriorTab() {
+        // Interior whitespace is not trimmed; a tab is outside 0x20..0x7E → rejected.
+        assertEquals(null, normalizedDriveSyncPassphraseOrNull("correct\thorse"))
     }
 }
 

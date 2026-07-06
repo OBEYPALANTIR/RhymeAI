@@ -398,7 +398,9 @@ const val DRIVE_SYNC_PASSPHRASE_REQUIREMENT_MESSAGE =
     "Use at least 8 characters (printable ASCII) so your backup restores on any device."
 
 internal fun normalizedDriveSyncPassphraseOrNull(passphrase: String): String? {
-    val trimmed = passphrase.trim { it == ' ' }
+    // Trim the same ASCII whitespace set iOS strips (space, tab, CR, LF) so a
+    // passphrase padded on either platform derives the identical key.
+    val trimmed = passphrase.trim { it == ' ' || it == '\t' || it == '\r' || it == '\n' }
     return if (trimmed.length >= 8 && trimmed.all { it.code in 0x20..0x7E }) {
         trimmed
     } else {

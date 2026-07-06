@@ -13,7 +13,7 @@ protocol CloudBackupServicing: AnyObject {
     var hasStoredPassphrase: Bool { get }
     var backgroundBackupFailureDescription: String? { get }
 
-    func updatePassphrase(_ passphrase: String)
+    func updatePassphrase(_ passphrase: String) throws
     func backupNow(modelContext: ModelContext) async throws
     func restoreNow(modelContext: ModelContext) async throws
     func backupInBackgroundIfPossible(modelContext: ModelContext) async
@@ -1243,7 +1243,9 @@ final class EditorViewModel: ObservableObject {
     }
 
     func updateCloudBackupPassphrase(_ passphrase: String) {
-        let trimmed = passphrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Trim exactly the ASCII space/tab/CR/LF set (not Unicode whitespace) so the
+        // accepted passphrase matches Android's byte-for-byte trimming.
+        let trimmed = passphrase.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n"))
         guard Self.isPortableBackupPassphrase(trimmed) else {
             cloudBackupConfigured = backupService?.isConfigured ?? false
             cloudBackupHasStoredPassphrase = backupService?.hasStoredPassphrase ?? false
@@ -1252,7 +1254,16 @@ final class EditorViewModel: ObservableObject {
             return
         }
 
-        backupService?.updatePassphrase(trimmed)
+        do {
+            try backupService?.updatePassphrase(trimmed)
+        } catch {
+            cloudBackupConfigured = backupService?.isConfigured ?? false
+            cloudBackupHasStoredPassphrase = backupService?.hasStoredPassphrase ?? false
+            cloudBackupStatusText = (error as? LocalizedError)?.errorDescription
+                ?? "Could not securely store your backup passphrase. Try again."
+            cloudBackupLastResultIsError = true
+            return
+        }
         refreshCloudBackupState()
     }
 
