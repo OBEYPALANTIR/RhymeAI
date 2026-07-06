@@ -129,14 +129,14 @@ fun AssistantPanel(
                 value = viewModel.theme,
                 onValueChange = { viewModel.onThemeChanged(it) },
                 enabled = !viewModel.useWholeSongContext,
-                placeholder = { Text("What is this song about?", fontSize = 13.sp) },
+                placeholder = { Text("What is this song about?", fontSize = DesignTokens.Typography.caption) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp)
                     .heightIn(min = 100.dp),
                 colors = textFieldColors,
                 shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = DesignTokens.Typography.caption)
             )
         }
 
@@ -210,7 +210,7 @@ fun AssistantPanel(
                             "New rhyme sound (or place cursor on a line)",
                             fontStyle = FontStyle.Italic,
                             color = colorScheme.onSurfaceVariant,
-                            fontSize = 13.sp
+                            fontSize = DesignTokens.Typography.caption
                         )
                     }
                 }
@@ -242,7 +242,7 @@ fun AssistantPanel(
                             modifier = Modifier
                                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                                 .widthIn(min = 130.dp),
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = colorScheme.onSurface),
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = DesignTokens.Typography.caption, color = colorScheme.onSurface),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                             colors = textFieldColors,
                             shape = RoundedCornerShape(DesignTokens.Radius.sm),
@@ -255,7 +255,7 @@ fun AssistantPanel(
                         ) {
                             RhymeScheme.entries.forEach { scheme ->
                                 DropdownMenuItem(
-                                    text = { Text(scheme.label, color = colorScheme.onSurface, fontSize = 13.sp) },
+                                    text = { Text(scheme.label, color = colorScheme.onSurface, fontSize = DesignTokens.Typography.caption) },
                                     onClick = {
                                         viewModel.rhymeScheme = scheme
                                         expanded = false
@@ -270,12 +270,12 @@ fun AssistantPanel(
                     OutlinedTextField(
                         value = viewModel.customRhymeScheme,
                         onValueChange = { viewModel.customRhymeScheme = it.uppercase().filter { c -> c.isLetter() } },
-                        placeholder = { Text("e.g. AABBCC", fontSize = 13.sp) },
+                        placeholder = { Text("e.g. AABBCC", fontSize = DesignTokens.Typography.caption) },
                         modifier = Modifier.fillMaxWidth().height(DesignTokens.Touch.minTarget),
                         colors = textFieldColors,
                         shape = RoundedCornerShape(DesignTokens.Radius.sm),
                         singleLine = true,
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = DesignTokens.Typography.caption)
                     )
                 }
 
@@ -333,7 +333,7 @@ fun AssistantPanel(
                     )
                     Text(
                         viewModel.rhymeComplexity.label,
-                        fontSize = 13.sp,
+                        fontSize = DesignTokens.Typography.caption,
                         fontWeight = FontWeight.Medium,
                         color = colorScheme.primary
                     )
@@ -410,7 +410,7 @@ fun AssistantPanel(
             // Suggestions
             if (viewModel.suggestions.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                    Text(stringResource(R.string.assistant_suggestions_header), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     Text(
                         stringResource(R.string.assistant_suggestions_caveat),
                         fontSize = 11.sp,
@@ -446,7 +446,7 @@ fun AssistantPanel(
                 ) {
                     Text(
                         "BPM",
-                        fontSize = 13.sp,
+                        fontSize = DesignTokens.Typography.caption,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
                         color = colorScheme.onSurfaceVariant
                     )

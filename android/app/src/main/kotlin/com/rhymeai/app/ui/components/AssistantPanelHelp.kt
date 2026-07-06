@@ -177,7 +177,7 @@ internal fun FeatureHelpDialog(
 private fun SyllableLegend() {
     val isDark = isSystemInDarkTheme()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Underline colors", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+        Text("Underline colors", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
         LegendRow(color = syllableColor(1, isDark), label = "1 syllable")
         LegendRow(color = syllableColor(2, isDark), label = "2 syllables")
         LegendRow(color = syllableColor(3, isDark), label = "3 syllables")
@@ -189,7 +189,7 @@ private fun SyllableLegend() {
 private fun RhymeLegend() {
     val palette = rhymePalette(isSystemInDarkTheme())
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Rhyme colors", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+        Text("Rhyme colors", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Matching colors belong to the same rhyme family. New rhyme families get the next available color.",
             fontSize = 12.sp,

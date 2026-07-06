@@ -203,7 +203,7 @@ fun WordInspectorSheet(
                                 Text(
                                     "/$ipa/",
                                     fontFamily = FontFamily.Monospace,
-                                    fontSize = 13.sp,
+                                    fontSize = DesignTokens.Typography.caption,
                                     color = colorScheme.onSurfaceVariant
                                 )
                             }
@@ -274,7 +274,7 @@ fun WordInspectorSheet(
                             ) {
                                 Text(
                                     "Synonyms",
-                                    fontSize = 13.sp,
+                                    fontSize = DesignTokens.Typography.caption,
                                     fontWeight = FontWeight.SemiBold,
                                     color = colorScheme.onSurface
                                 )
@@ -374,7 +374,7 @@ private fun ResultsSection(
     val colorScheme = MaterialTheme.colorScheme
     Text(
         title,
-        fontSize = 13.sp,
+        fontSize = DesignTokens.Typography.caption,
         fontWeight = FontWeight.SemiBold,
         color = colorScheme.onSurface
     )
@@ -420,7 +420,7 @@ private fun ResultChip(
     ) {
         Text(
             label,
-            fontSize = 13.sp,
+            fontSize = DesignTokens.Typography.caption,
             color = colorScheme.onSurface
         )
     }

@@ -26,6 +26,12 @@ object DesignTokens {
         val golden = 52.dp
     }
 
+    object Typography {
+        // De-facto caption size used across dialogs, sheets, and the editor for
+        // secondary/support text — the 13px rung of the φ-rounded 12/13px caption tier.
+        val caption = 13.sp
+    }
+
     object Touch {
         val minTarget = 48.dp
     }

@@ -397,7 +397,7 @@ fun SettingsDialog(
                                 inactiveBorderColor = colorScheme.outlineVariant
                             )
                         ) {
-                            Text(label, fontSize = 13.sp)
+                            Text(label, fontSize = DesignTokens.Typography.caption)
                         }
                     }
                 }
@@ -506,15 +506,15 @@ fun SettingsDialog(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .background(colorScheme.tertiaryContainer, RoundedCornerShape(12.dp))
-                                        .border(1.dp, colorScheme.tertiary, RoundedCornerShape(12.dp))
+                                        .background(colorScheme.tertiaryContainer, RoundedCornerShape(DesignTokens.Radius.lg))
+                                        .border(1.dp, colorScheme.tertiary, RoundedCornerShape(DesignTokens.Radius.lg))
                                         .padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Icon(Icons.Default.CheckCircle, null, tint = colorScheme.onTertiaryContainer, modifier = Modifier.size(18.dp))
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text("Model loaded", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onTertiaryContainer)
+                                        Text("Model loaded", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onTertiaryContainer)
                                         Text(
                                             localModelPath.substringAfterLast("/"),
                                             fontSize = 11.sp,
@@ -530,13 +530,13 @@ fun SettingsDialog(
                                 OutlinedButton(
                                     onClick = onUnloadLocalModel,
                                     modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(DesignTokens.Radius.lg)
                                 ) {
                                     Text("Unload Model")
                                 }
                             } else {
                                 // Recommended model downloads
-                                Text("Recommended Downloads", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                                Text("Recommended Downloads", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                                 Spacer(Modifier.height(8.dp))
 
                                 GEMMA_DOWNLOADS.forEach { model ->
@@ -565,7 +565,7 @@ fun SettingsDialog(
                                         },
                                         enabled = !localModelLoading && !copyingFile && downloadingModel == null,
                                         modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(12.dp)
+                                        shape = RoundedCornerShape(DesignTokens.Radius.lg)
                                     ) {
                                         if (isDownloadingThis) {
                                             CircularProgressIndicator(
@@ -605,7 +605,7 @@ fun SettingsDialog(
                                                                     colorScheme.tertiaryContainer,
                                                                     RoundedCornerShape(4.dp)
                                                                 )
-                                                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                                .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
                                                         )
                                                     }
                                                 }
@@ -632,7 +632,7 @@ fun SettingsDialog(
                                     onClick = { filePicker.launch(arrayOf("*/*")) },
                                     enabled = !localModelLoading && !copyingFile && downloadingModel == null,
                                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = colorScheme.primary,
                                         contentColor = colorScheme.onPrimary
@@ -756,7 +756,7 @@ fun SettingsDialog(
                                 visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = textFieldColors,
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                 singleLine = true,
                                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp)
                             )
@@ -797,7 +797,7 @@ fun SettingsDialog(
                                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = colorScheme.onSurface),
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded) },
                                     colors = textFieldColors,
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                     singleLine = true
                                 )
                                 ExposedDropdownMenu(
@@ -876,7 +876,7 @@ fun SettingsDialog(
                     visualTransformation = if (showSyncPassphrase) VisualTransformation.None else PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                     colors = textFieldColors,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(DesignTokens.Radius.lg),
                     singleLine = true,
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp)
                 )
@@ -897,7 +897,7 @@ fun SettingsDialog(
                         },
                         enabled = !syncInProgress && (syncPassphraseStored || syncPassphraseField.isNotBlank()),
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(DesignTokens.Radius.lg)
                     ) {
                         if (syncInProgress) {
                             CircularProgressIndicator(
@@ -906,9 +906,9 @@ fun SettingsDialog(
                                 strokeWidth = 2.dp
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(syncProgressLabel, fontSize = 13.sp)
+                            Text(syncProgressLabel, fontSize = DesignTokens.Typography.caption)
                         } else {
-                            Text("Back up / sync now", fontSize = 13.sp)
+                            Text("Back up / sync now", fontSize = DesignTokens.Typography.caption)
                         }
                     }
 
@@ -923,9 +923,9 @@ fun SettingsDialog(
                             },
                             enabled = !syncInProgress && (syncPassphraseStored || syncPassphraseField.isNotBlank()),
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
+                            shape = RoundedCornerShape(DesignTokens.Radius.lg)
                         ) {
-                            Text("Restore from Drive", fontSize = 13.sp)
+                            Text("Restore from Drive", fontSize = DesignTokens.Typography.caption)
                         }
                     }
                 }
@@ -963,7 +963,7 @@ fun SettingsDialog(
                         saved = true
                     },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(DesignTokens.Radius.lg),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colorScheme.primary,
                         contentColor = colorScheme.onPrimary

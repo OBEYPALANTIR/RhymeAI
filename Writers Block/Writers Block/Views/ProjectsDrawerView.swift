@@ -439,7 +439,7 @@ struct ProjectsDrawerView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
-        .frame(minHeight: 56)
+        .frame(minHeight: RhymeAITokens.Touch.comfortable)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .contentShape(Rectangle())
         .onTapGesture {

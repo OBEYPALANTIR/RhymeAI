@@ -111,7 +111,7 @@ fun TemplatesDialog(
                                 )
                                 Text(
                                     template.theme,
-                                    fontSize = 13.sp,
+                                    fontSize = DesignTokens.Typography.caption,
                                     color = colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(top = DesignTokens.Spacing.xs)
                                 )

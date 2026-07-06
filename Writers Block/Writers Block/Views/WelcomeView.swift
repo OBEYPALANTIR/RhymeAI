@@ -25,7 +25,7 @@ struct WelcomeView: View {
                 Image("BrandIcon")
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 82, height: 82)
+                    .frame(width: RhymeAITokens.Touch.prominent, height: RhymeAITokens.Touch.prominent)
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 22, style: .continuous)

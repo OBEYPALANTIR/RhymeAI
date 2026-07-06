@@ -1482,7 +1482,7 @@ private fun InlineRewriteReviewBar(
         Text(
             text = inlineRewriteStatusText(action, loading, preview, error),
             color = if (error == null) colorScheme.onSurface else colorScheme.error,
-            fontSize = 13.sp,
+            fontSize = DesignTokens.Typography.caption,
             fontWeight = FontWeight.Medium,
             maxLines = if (error == null) 1 else 2,
             overflow = TextOverflow.Ellipsis,
@@ -1564,7 +1564,7 @@ private fun UnBlockWordmark() {
         Canvas(
             modifier = Modifier
                 .width(68.dp)
-                .height(5.dp)
+                .height(DesignTokens.Spacing.xs)
         ) {
             val strokeWidth = 1.6.dp.toPx()
             drawLine(

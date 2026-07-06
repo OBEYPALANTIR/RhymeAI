@@ -566,6 +566,8 @@ The typographic voice pairs expressive serif display text with plain system sans
 
 Lyric text needs more breathing room than standard body copy. Use a 16px size with a 28px line height for writing and highlighted lyric overlays. This keeps colored rhyme and syllable cues readable without making the editor feel crowded.
 
+Secondary and support text — dialog captions, sheet metadata, and inline labels — sits at a 13px caption size. This is the upper half of the 12/13px caption tier in the φ-rounded rhythm above, kept one step below the 14px control text so supporting copy reads as quieter without dropping to the 12px fine-print rung.
+
 Letter spacing stays neutral. Do not tighten display text; the heavy serif forms already carry enough character.
 
 ## Layout

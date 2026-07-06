@@ -151,7 +151,7 @@ fun SuggestionCard(
                             colorScheme.tertiaryContainer,
                             RoundedCornerShape(4.dp)
                         )
-                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                        .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
                 )
             }
             Icon(

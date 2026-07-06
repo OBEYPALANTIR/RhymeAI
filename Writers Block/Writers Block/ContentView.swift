@@ -35,7 +35,7 @@ struct ContentView: View {
         .sheet(isPresented: $viewModel.showSettingsSheet) {
             SettingsView()
                 .frame(
-                    minWidth: horizontalSizeClass == .regular ? 420 : nil,
+                    minWidth: horizontalSizeClass == .regular ? RhymeAITokens.Layout.assistantReadableWidth : nil,
                     idealWidth: horizontalSizeClass == .regular ? 520 : nil,
                     minHeight: horizontalSizeClass == .regular ? 560 : nil
                 )
