@@ -23,6 +23,7 @@ android/.gradle/
 # IDE
 .idea/
 **/*.xcodeproj/xcuserdata/
+Writers Block/Secrets.xcconfig
 **/*.xcworkspace/xcuserdata/
 DerivedData/
 

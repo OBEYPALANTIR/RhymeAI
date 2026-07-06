@@ -10,7 +10,13 @@ enum UITestFlags {
     static let seedTrashSong = "--ui-test-seed-trash-song"
     static let forceRewriteBar = "--ui-test-force-rewrite-bar"
 
+    #if DEBUG
     static func isEnabled(_ flag: String, in arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
         arguments.contains(flag)
     }
+    #else
+    static func isEnabled(_ flag: String, in arguments: [String] = []) -> Bool {
+        false
+    }
+    #endif
 }

@@ -27,6 +27,7 @@
 		78A34A542F837D250033E904 /* Writers Block.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Writers Block.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		78A34A632F837D260033E904 /* Writers BlockTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Writers BlockTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		78A34A6D2F837D260033E904 /* Writers BlockUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Writers BlockUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		78A34A802F837D260033E904 /* Secrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.example.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -78,6 +79,7 @@
 				78A34A562F837D250033E904 /* Writers Block */,
 				78A34A662F837D260033E904 /* Writers BlockTests */,
 				78A34A702F837D260033E904 /* Writers BlockUITests */,
+				78A34A802F837D260033E904 /* Secrets.example.xcconfig */,
 				78A34A552F837D250033E904 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -397,13 +399,14 @@
 		};
 		78A34A782F837D260033E904 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 78A34A802F837D260033E904 /* Secrets.example.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Writers Block/Writers Block.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 202605112031;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -411,7 +414,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Writers-Block-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "Writers Blok";
+				INFOPLIST_KEY_CFBundleDisplayName = "Writers Block";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -423,7 +426,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-Block";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -441,13 +444,14 @@
 		};
 		78A34A792F837D260033E904 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 78A34A802F837D260033E904 /* Secrets.example.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Writers Block/Writers Block.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 202605112031;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -455,7 +459,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Writers-Block-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "Writers Blok";
+				INFOPLIST_KEY_CFBundleDisplayName = "Writers Block";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -467,7 +471,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-Block";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
