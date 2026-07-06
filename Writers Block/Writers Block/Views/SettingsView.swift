@@ -53,6 +53,7 @@ private enum CloudBackupAction {
 
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
+    @EnvironmentObject private var persistenceState: AppPersistenceState
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -192,38 +193,46 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             localStatusRow
 
-            // Engine picker: only shown when at least one GGUF is installed.
-            if !installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty {
-                enginePickerRow
-            }
+            if GGUFModelService.isEngineAvailable {
+                // Engine picker: only shown when at least one GGUF is installed.
+                if !installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty {
+                    enginePickerRow
+                }
 
-            SettingsSectionTitle("Recommended Gemma Downloads", systemImage: "arrow.down.circle")
+                SettingsSectionTitle("Recommended Gemma Downloads", systemImage: "arrow.down.circle")
 
-            ForEach(gemmaDownloadOptions) { option in
-                gemmaDownloadRow(option)
-            }
+                ForEach(gemmaDownloadOptions) { option in
+                    gemmaDownloadRow(option)
+                }
 
-            if let downloadMessage {
-                Label(downloadMessage, systemImage: "checkmark.circle.fill")
+                if let downloadMessage {
+                    Label(downloadMessage, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                        .accessibilityIdentifier("gemmaDownloadMessage")
+                }
+
+                if let downloadError {
+                    Label(downloadError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("gemmaDownloadError")
+                }
+
+                Text(installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty
+                     ? "Download a Gemma model to enable on-device inference without Apple Intelligence. Files are stored in the app sandbox."
+                     : "Gemma uses the downloaded GGUF model directly via llama.cpp. Apple Intelligence is the fallback when no GGUF is present."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Gemma downloads and the GGUF engine are unavailable in this build. Apple Intelligence remains the on-device local option.")
                     .font(.caption)
-                    .foregroundStyle(.green)
-                    .accessibilityIdentifier("gemmaDownloadMessage")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("gemmaUnavailableMessage")
             }
-
-            if let downloadError {
-                Label(downloadError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .accessibilityIdentifier("gemmaDownloadError")
-            }
-
-            Text(installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty
-                 ? "Download a Gemma model to enable on-device inference without Apple Intelligence. Files are stored in the app sandbox."
-                 : "Gemma uses the downloaded GGUF model directly via llama.cpp. Apple Intelligence is the fallback when no GGUF is present."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -339,9 +348,41 @@ struct SettingsView: View {
         .liquidGlassSurface(cornerRadius: 22, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
     }
 
+    private var cloudSyncStatusRow: some View {
+        Label(cloudSyncStatusText, systemImage: cloudSyncStatusIcon)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("iCloudSyncStatus")
+    }
+
+    private var cloudSyncStatusText: String {
+        switch persistenceState.cloudSyncStatus {
+        case .syncing:
+            return "iCloud sync: Checking…"
+        case .available:
+            return "iCloud sync: On"
+        case .localOnly, .accountUnavailable:
+            return "iCloud sync: Off — sign in to iCloud in system Settings to sync across devices."
+        }
+    }
+
+    private var cloudSyncStatusIcon: String {
+        switch persistenceState.cloudSyncStatus {
+        case .syncing:
+            return "arrow.triangle.2.circlepath"
+        case .available:
+            return "checkmark.icloud.fill"
+        case .localOnly, .accountUnavailable:
+            return "icloud.slash"
+        }
+    }
+
     private var cloudBackupSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             SettingsSectionTitle("Cloud Backup", systemImage: "externaldrive.badge.icloud")
+
+            cloudSyncStatusRow
 
             Text("Backs up projects, trash, and voice recordings to your Google Drive app data. API keys stay on this device and are never included.")
                 .font(.caption)
@@ -388,6 +429,11 @@ struct SettingsView: View {
 
             Text("Background backup runs only after you set up Google Drive and save a passphrase here. It will never open Google sign-in from the background.")
                 .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Your songs and recordings are also included in your device's iCloud backup and synced across your iCloud devices. Only the optional Google Drive backup is encrypted with your passphrase. API keys never leave this device.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -761,4 +807,5 @@ private struct SettingsSectionTitle: View {
 #Preview {
     SettingsView()
         .environmentObject(EditorViewModel())
+        .environmentObject(AppPersistenceState(persistenceDegraded: false, cloudSyncStatus: .available, usesCloudBackedStore: true))
 }

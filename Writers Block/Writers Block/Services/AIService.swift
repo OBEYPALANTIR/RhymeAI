@@ -929,9 +929,10 @@ struct AIService {
     // MARK: - GGUF / Gemma routing helpers
 
     /// Returns true when calls should be routed through the Gemma GGUF runner.
-    /// Conditions: engine choice is .gemma AND at least one GGUF file exists in
-    /// the models directory.
+    /// Conditions: llama.cpp engine is compiled in, engine choice is .gemma,
+    /// and at least one GGUF file exists in the models directory.
     static func shouldUseGemma() -> Bool {
+        guard GGUFModelService.isEngineAvailable else { return false }
         guard GGUFEngineChoice.current == .gemma else { return false }
         guard let dir = try? FileManager.default.url(
             for: .applicationSupportDirectory,

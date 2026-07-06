@@ -72,6 +72,15 @@ final class GGUFModelStub: LocalGGUFRunner {
 /// unit tests can exercise prompt template and marker-stripping logic without
 /// requiring the llama.cpp SPM package to be resolved.
 enum GGUFModelService {
+    /// True only when the llama.cpp engine is linked into this target.
+    static var isEngineAvailable: Bool {
+#if canImport(llama)
+        true
+#else
+        false
+#endif
+    }
+
     /// Wraps a user prompt in the Gemma instruction chat template.
     /// Mirrors Android's AIService.gemmaInstructionPrompt().
     static func gemmaPrompt(_ userPrompt: String) -> String {
