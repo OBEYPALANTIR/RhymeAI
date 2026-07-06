@@ -1,6 +1,33 @@
 # Final Sign-Off Status
 
-Last updated: 2026-07-05.
+Last updated: 2026-07-06.
+
+## 2026-07-06 iOS Simulator Test Gate — CLEARED
+
+The owner fixed the CoreSimulator component mismatch, so the full iOS test
+suite now runs locally. Full-suite result on iPhone 17 Pro (iOS 26.5):
+227 tests, 212 passed, 12 skipped, 3 failed — and all 3 failures are
+accounted for:
+
+- 2 × Gemini live gates (`geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey`,
+  `geminiStreamingCanBeCancelledAfterFirstSuggestionWithDebugKey`) fail by
+  design without `GEMINI_TEST_KEY` — that is the G2 owner gate.
+- 1 × `autoSaveCreatesProjectAndPersistsEditorFields` is a load-induced flake
+  (300 ms margin on a 1 s debounce); it passes 3/3 in isolation.
+
+Fixes landed while clearing this gate (commits `b857d9e`, `53e87c2`):
+
+- `LyricsTextView` no longer propagates selection changes from a non-focused
+  text view, so programmatic text assignment can't clobber seeded or restored
+  cursor state.
+- `EditorViewModel.refreshLyricsDerivedState()` now fires `objectWillChange`
+  when the debounced word/syllable/rhyme-context batch lands — previously the
+  counters and the assistant's target line stayed stale until the next
+  unrelated render.
+- UI tests match the saved-status checkmark via `images["Saved"]` (the chrome
+  restyle replaced the "Saved" text with a checkmark image).
+- Local-model smoke tests `XCTSkip` on simulator when FoundationModels
+  generation fails environmentally; real-device runs stay strict.
 
 ## 2026-07-05 Production Audit
 
@@ -92,24 +119,15 @@ Passed:
   `xcodebuild build-for-testing -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'generic/platform=iOS Simulator' -parallel-testing-enabled NO`
   returned `** TEST BUILD SUCCEEDED **`.
 
+Passed 2026-07-06 (previously blocked):
+
+- Full iOS simulator test suite:
+  `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination 'platform=iOS Simulator,name=iPhone 17 Pro'`
+  — see the 2026-07-06 section above for the accounted-for failures.
+
 Blocked locally:
 
-- Concrete iOS simulator tests and launch-dependent iOS smoke scripts remain
-  owner-blocked by the local Xcode/CoreSimulator component mismatch after the
-  approved first-launch remediation attempt. Fresh 2026-06-27 evidence:
-  `/Library/Developer/PrivateFrameworks/CoreSimulator.framework` still reports
-  `CFBundleShortVersionString=1051.54` / `CFBundleVersion=1051.54`;
-  `xcodebuild -checkFirstLaunchStatus` prints `xcodebuild: ok` but exits `69`;
-  `xcrun simctl list devices` still emits
-  `Install Failed: Authorization is required to install the packages.`
-- The owner-authorized installer remains required. Agent attempts cannot satisfy
-  the auth prompt: `osascript ... with administrator privileges` returned
-  `The administrator user name or password was incorrect. (-60007)`, and
-  `sudo -n xcodebuild -runFirstLaunch` returned `sudo: a password is required`.
-  Owner must run `sudo xcodebuild -runFirstLaunch` interactively, or accept
-  Xcode's GUI "install additional components" prompt, before simulator tests can
-  be re-run.
-- Full iOS archive/release-smoke archive path is also blocked locally by
+- Full iOS archive/release-smoke archive path is still blocked locally by
   signing access: `CodeSign failed with a nonzero exit code` /
   `errSecInternalComponent`; unlock/update the login keychain partition list
   before running the archive branch.
@@ -126,7 +144,7 @@ Final production sign-off still needs current live/console evidence for:
   `export OPENAI_TEST_KEY=... CLAUDE_TEST_KEY=...; ./scripts/provider-live-smoke.sh`.
 - G3 — iCloud two-device sync matrix:
   complete `docs/CLOUDKIT_SYNC_CHECKLIST.md` on two iCloud-signed-in devices or
-  simulators after fixing the local CoreSimulator mismatch.
+  simulators (CoreSimulator mismatch is fixed as of 2026-07-06).
 - G4 — Apple Developer/App Store Connect:
   confirm App ID `ShaydeTree.Writers-Block` has iCloud/CloudKit container
   `iCloud.ShaydeTree.Writers-Block` on a distribution profile, then create the
@@ -136,5 +154,5 @@ Final production sign-off still needs current live/console evidence for:
 - G6 — Submit signed artifacts:
   Android release AAB and iOS Archive to the stores.
 
-Do not mark production sign-off complete until the blocked simulator gates and
+Do not mark production sign-off complete until the blocked archive gate and
 all owner-run live/console gates above have current passing evidence.
