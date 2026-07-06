@@ -117,12 +117,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.rhymeai.app.R
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -738,10 +740,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         !viewModel.hasActiveRewrite &&
                         lyricAnalysisReady
                     val wordColorOverlayActive = rhymeOverlayActive || syllableWordColorActive
+                    // Center glyphs in the 28sp line box and drop legacy font padding so the
+                    // cursor, placeholder, and color overlays all share one vertical metric.
                     val lyricsTextStyle = TextStyle(
                         fontSize = DesignTokens.Editor.lyricFontSize,
                         lineHeight = DesignTokens.Editor.lyricLineHeight,
-                        fontFamily = FontFamily.Default
+                        fontFamily = FontFamily.Default,
+                        lineHeightStyle = LineHeightStyle(
+                            alignment = LineHeightStyle.Alignment.Center,
+                            trim = LineHeightStyle.Trim.None
+                        ),
+                        platformStyle = PlatformTextStyle(includeFontPadding = false)
                     )
                     val syllableUnderlineGap = with(density) { DesignTokens.Editor.syllableUnderlineGap.toPx() }
                     val syllableUnderlineWidth = with(density) { DesignTokens.Editor.syllableUnderlineWidth.toPx() }
@@ -872,8 +881,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     if (viewModel.lyrics.isEmpty()) {
                                         Text(
                                             "Start writing your lyrics here...",
-                                            fontSize = DesignTokens.Editor.lyricFontSize,
-                                            lineHeight = DesignTokens.Editor.lyricLineHeight,
+                                            style = lyricsTextStyle,
                                             color = colorScheme.onBackground.copy(alpha = 0.2f)
                                         )
                                     }
