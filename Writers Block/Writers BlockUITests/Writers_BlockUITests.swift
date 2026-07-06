@@ -524,7 +524,7 @@ final class Writers_BlockUITests: XCTestCase {
         lyricsEditor.tap()
         lyricsEditor.typeText(lyrics)
 
-        XCTAssertTrue(app.staticTexts["Saved"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.images["Saved"].waitForExistence(timeout: 5))
 
         app.buttons["Share"].tap()
         XCTAssertTrue(app.staticTexts["Export Song"].waitForExistence(timeout: 5))
@@ -603,7 +603,7 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
         lyricsEditor.tap()
         lyricsEditor.typeText("[Verse]\nMidnight notes on a borrowed train\nI keep the hook alive through rain")
-        XCTAssertTrue(app.staticTexts["Saved"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.images["Saved"].waitForExistence(timeout: 5))
         attachScreenshot(app, name: "release-populated-editor")
 
         app.buttons["Share"].tap()
