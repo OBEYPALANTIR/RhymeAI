@@ -96,6 +96,8 @@ struct EditorView: View {
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
     @State private var rewriteAccessoryHeight: CGFloat = EditorViewConstants.EditorLayout.noAccessoryHeight
+    @State private var lyricColorRevealOpacity: Double = 1
+    @State private var pendingColorReveal = false
     // UnBlock collapses into a pencil circle while the mic is recording.
     @State private var unblockWordmarkOpacity: Double = EditorViewConstants.UnBlockChrome.visibleWordmarkOpacity
     @State private var unblockButtonWidth: CGFloat = EditorViewConstants.UnBlockChrome.expandedButtonWidth
@@ -564,6 +566,7 @@ struct EditorView: View {
                         )
                         .equatable()
                         .padding(.horizontal, RhymeAITokens.Spacing.md)
+                        .opacity(lyricColorRevealOpacity)
                     }
 
                     // Actual text view
@@ -602,6 +605,23 @@ struct EditorView: View {
         }
         .scrollDismissesKeyboard(.immediately)
         .background(Color(UIColor.systemBackground))
+        .onChange(of: viewModel.isRhymeHighlightEnabled) {
+            pendingColorReveal = true
+        }
+        .onChange(of: viewModel.isSyllableColoringEnabled) {
+            pendingColorReveal = true
+        }
+        .onChange(of: viewModel.showSettingsSheet) {
+            guard !viewModel.showSettingsSheet, pendingColorReveal else { return }
+            pendingColorReveal = false
+            guard overlayActive, !viewModel.lyrics.isEmpty else { return }
+            lyricColorRevealOpacity = 0
+            DispatchQueue.main.async {
+                withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
+                    lyricColorRevealOpacity = 1
+                }
+            }
+        }
     }
 
     private var selectionAvoidanceInset: CGFloat {

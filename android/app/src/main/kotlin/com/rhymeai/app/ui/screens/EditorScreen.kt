@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -16,6 +17,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.fadeIn
@@ -136,6 +138,7 @@ import com.rhymeai.app.ui.components.ExportSheet
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.RhymeHighlightedText
+import com.rhymeai.app.ui.components.SyllableWordColoredText
 import com.rhymeai.app.ui.components.WordInspectorSheet
 import com.rhymeai.app.ui.components.buildSyllableUnderlineSpans
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
@@ -342,8 +345,15 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 micBusy = true
                 scope.launch {
                     try {
-                        val projectId = viewModel.ensureProjectForRecording()
-                        runCatching { viewModel.voiceMemoService.startRecording(projectId) }
+                        runCatching {
+                            val projectId = viewModel.ensureProjectForRecording()
+                            viewModel.voiceMemoService.startRecording(projectId)
+                        }
+                            .onFailure {
+                                snackbarHostState.showSnackbar(
+                                    context.getString(R.string.voice_memo_record_failed)
+                                )
+                            }
                     } finally {
                         micBusy = false
                     }
@@ -365,8 +375,15 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             micBusy = true
             scope.launch {
                 try {
-                    val projectId = viewModel.ensureProjectForRecording()
-                    runCatching { viewModel.voiceMemoService.startRecording(projectId) }
+                    runCatching {
+                        val projectId = viewModel.ensureProjectForRecording()
+                        viewModel.voiceMemoService.startRecording(projectId)
+                    }
+                        .onFailure {
+                            snackbarHostState.showSnackbar(
+                                context.getString(R.string.voice_memo_record_failed)
+                            )
+                        }
                 } finally {
                     micBusy = false
                 }
@@ -709,10 +726,18 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         viewModel.lyrics.isNotEmpty() &&
                         !viewModel.hasActiveRewrite &&
                         lyricAnalysisReady
-                    val syllableUnderlineActive = viewModel.isSyllableColoringEnabled &&
+                    val syllableWordColorActive = viewModel.isSyllableColoringEnabled &&
+                        !viewModel.isRhymeHighlightEnabled &&
                         viewModel.lyrics.isNotEmpty() &&
                         !viewModel.hasActiveRewrite &&
                         lyricAnalysisReady
+                    // Underlines only when rhyme coloring owns the foreground; otherwise syllables tint the word itself.
+                    val syllableUnderlineActive = viewModel.isSyllableColoringEnabled &&
+                        viewModel.isRhymeHighlightEnabled &&
+                        viewModel.lyrics.isNotEmpty() &&
+                        !viewModel.hasActiveRewrite &&
+                        lyricAnalysisReady
+                    val wordColorOverlayActive = rhymeOverlayActive || syllableWordColorActive
                     val lyricsTextStyle = TextStyle(
                         fontSize = DesignTokens.Editor.lyricFontSize,
                         lineHeight = DesignTokens.Editor.lyricLineHeight,
@@ -771,14 +796,32 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     } else {
                         { 0f }
                     }
+                    val colorOverlayAlpha by animateFloatAsState(
+                        targetValue = if (wordColorOverlayActive) 1f else 0f,
+                        animationSpec = if (animationsEnabled) {
+                            tween(DesignTokens.Motion.standardMillis)
+                        } else {
+                            snap()
+                        },
+                        label = "lyricColorOverlayAlpha"
+                    )
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        // Colored overlay behind the transparent field only when rhyme coloring is active.
-                        if (rhymeOverlayActive) {
-                            RhymeHighlightedText(
-                                text = analyzedLyrics,
-                                enabled = true,
-                                style = lyricsTextStyle
-                            )
+                        // Colored overlay behind the transparent field: rhyme families, or syllable-count word color when rhyme is off.
+                        if (colorOverlayAlpha > 0f) {
+                            if (viewModel.isRhymeHighlightEnabled) {
+                                RhymeHighlightedText(
+                                    text = analyzedLyrics,
+                                    enabled = true,
+                                    modifier = Modifier.graphicsLayer { alpha = colorOverlayAlpha },
+                                    style = lyricsTextStyle
+                                )
+                            } else {
+                                SyllableWordColoredText(
+                                    text = analyzedLyrics,
+                                    modifier = Modifier.graphicsLayer { alpha = colorOverlayAlpha },
+                                    style = lyricsTextStyle
+                                )
+                            }
                         }
 
                         // Actual text field. Keep it visible for syllable underlines so editing does not redraw through
@@ -793,10 +836,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             onTextLayout = { lyricsTextLayout = it },
                             readOnly = viewModel.hasActiveRewrite,
                             textStyle = lyricsTextStyle.copy(
-                                color = if (rhymeOverlayActive)
-                                    Color.Transparent
-                                else
-                                    colorScheme.onBackground
+                                color = colorScheme.onBackground.copy(alpha = 1f - colorOverlayAlpha)
                             ),
                             cursorBrush = SolidColor(colorScheme.primary),
                             modifier = Modifier

@@ -129,19 +129,28 @@ struct RhymeHighlightedText: View, Equatable {
                 pre.foregroundColor = .primary
                 result += pre
             }
+            let count = analyses[i].syllableCount
             var seg = AttributedString(tok.value)
             if enabled, let familyKey = familyKeyPerToken[i] {
                 seg.foregroundColor = colorFor(key: familyKey)
                 seg.font = .system(size: 16, weight: .semibold)
+                if syllablesEnabled {
+                    seg.underlineStyle = Text.LineStyle(
+                        pattern: .solid,
+                        color: syllableColor(for: count)
+                    )
+                }
+            } else if !enabled && syllablesEnabled {
+                seg.foregroundColor = syllableColor(for: count)
+                seg.font = .system(size: 16, weight: .semibold)
             } else {
                 seg.foregroundColor = .primary
-            }
-            if syllablesEnabled {
-                let count = analyses[i].syllableCount
-                seg.underlineStyle = Text.LineStyle(
-                    pattern: .solid,
-                    color: syllableColor(for: count)
-                )
+                if syllablesEnabled {
+                    seg.underlineStyle = Text.LineStyle(
+                        pattern: .solid,
+                        color: syllableColor(for: count)
+                    )
+                }
             }
             result += seg
             cursor = tok.range.upperBound

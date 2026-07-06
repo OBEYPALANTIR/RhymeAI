@@ -15,8 +15,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
 import com.rhymeai.app.ui.theme.syllableColor
@@ -24,6 +29,56 @@ import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.SyllableCounter
 
 private val wordPattern = LyricTokenizer.alphanumericWordPattern
+
+fun buildSyllableWordColorAnnotatedString(
+    text: String,
+    baseTextColor: Color,
+    isDark: Boolean
+): AnnotatedString = buildAnnotatedString {
+    var cursor = 0
+    for (match in wordPattern.findAll(text)) {
+        val start = match.range.first
+        val end = match.range.last + 1
+        if (start > cursor) {
+            withStyle(SpanStyle(color = baseTextColor)) {
+                append(text.substring(cursor, start))
+            }
+        }
+        withStyle(
+            SpanStyle(
+                color = syllableColor(SyllableCounter.count(match.value), isDark),
+                fontWeight = FontWeight.SemiBold
+            )
+        ) {
+            append(match.value)
+        }
+        cursor = end
+    }
+    if (cursor < text.length) {
+        withStyle(SpanStyle(color = baseTextColor)) {
+            append(text.substring(cursor))
+        }
+    }
+}
+
+@Composable
+fun SyllableWordColoredText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = TextStyle.Default
+) {
+    val baseTextColor = MaterialTheme.colorScheme.onBackground
+    val isDark = isSystemInDarkTheme()
+    val annotated = remember(text, baseTextColor, isDark) {
+        buildSyllableWordColorAnnotatedString(text, baseTextColor, isDark)
+    }
+
+    Text(
+        text = annotated,
+        modifier = modifier,
+        style = style
+    )
+}
 
 @Immutable
 data class SyllableUnderlineSpan(
