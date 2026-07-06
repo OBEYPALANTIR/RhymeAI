@@ -145,6 +145,11 @@ struct LyricsTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            // UIKit also fires this for programmatic resets (e.g. assigning
+            // .text clamps the selection to {0,0} before first focus). Only
+            // user-driven changes may move the app-level cursor — otherwise a
+            // background reset clobbers seeded or restored cursor state.
+            guard textView.isFirstResponder else { return }
             parent.onCursorChange(textView.selectedRange.location)
             parent.onSelectionChange?(textView.selectedRange)
             scheduleKeepCursorVisible()

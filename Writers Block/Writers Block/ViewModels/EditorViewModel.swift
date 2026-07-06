@@ -355,6 +355,11 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func refreshLyricsDerivedState() {
+        // wordCount/syllableCount/rhymeContext are deliberately not @Published
+        // (they recompute on a debounce, not per keystroke), so views must be
+        // told explicitly when the batch lands — otherwise counters and the
+        // assistant's target line stay stale until the next unrelated render.
+        objectWillChange.send()
         wordCount = SyllableCounter.wordCount(lyrics)
         syllableCount = SyllableCounter.countText(lyrics)
         refreshRhymeContext()
