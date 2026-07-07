@@ -102,7 +102,9 @@ def main():
     # Sanity: the app's turn markers must be real tokens in this tokenizer,
     # otherwise the deployed prompt format and the training format diverge.
     for marker in ("<start_of_turn>", "<end_of_turn>"):
-        ids = tokenizer(marker, add_special_tokens=False)["input_ids"]
+        # FastModel returns a multimodal Processor for gemma-4; positional text
+        # lands in its `images` arg. Use the inner tokenizer directly.
+        ids = getattr(tokenizer, "tokenizer", tokenizer)(marker, add_special_tokens=False)["input_ids"]
         if len(ids) != 1:
             raise SystemExit(
                 "FATAL: %r tokenizes to %d tokens (%r) in %s — the app's raw "
