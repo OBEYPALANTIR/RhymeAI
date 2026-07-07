@@ -94,7 +94,10 @@ def main():
     model, tokenizer = FastModel.from_pretrained(
         model_name=args.base,
         max_seq_length=args.max_seq_length,
-        dtype=None,                    # auto (bf16 on Ampere+)
+        # On bf16-less cards (T4) unsloth trains gemma-4 in fp32; the 4-bit
+        # quantizer must dequantize to the SAME dtype or F.linear throws
+        # 'float != c10::Half'. bf16 cards can pass None.
+        dtype=None if torch.cuda.is_bf16_supported() else torch.float32,                    # auto (bf16 on Ampere+)
         load_in_4bit=args.load_in_4bit,
         full_finetuning=False,
     )
