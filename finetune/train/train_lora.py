@@ -193,7 +193,10 @@ def main():
     stats = trainer.train()
     print("train metrics:", stats.metrics)
 
-    eval_metrics = trainer.evaluate()
+    # Skip a final explicit evaluate(): per-epoch evals already ran, and in
+    # notebook environments transformers' progress callback crashes with
+    # 'on_train_begin must be called before on_evaluate' after train().
+    eval_metrics = dict(stats.metrics or {})
     print("final eval metrics:", eval_metrics)
     with open(os.path.join(args.out, "metrics.json"), "w", encoding="utf-8") as handle:
         json.dump({"train": stats.metrics, "eval": eval_metrics,
