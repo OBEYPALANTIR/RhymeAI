@@ -41,3 +41,6 @@ scripts/.venv/
 
 # Generated fine-tune training data (do not commit)
 finetune/data/out/
+
+# Fine-tune training artifacts: prepared SFT data, adapters, GGUFs (do not commit)
+finetune/train/out/
