@@ -2,6 +2,21 @@ import AVFoundation
 import Foundation
 import Observation
 
+// A recording sitting in the Trash Bin. The trash filename encodes the deletion
+// timestamp as "<deletedAtMs>__<originalName>" so trash state survives restarts
+// without a separate metadata store — mirrors the Android TrashedVoiceMemo.
+struct TrashedVoiceMemo: Identifiable, Sendable {
+    let url: URL
+    let projectId: String
+    /// Original filename (with extension) the memo had before it was trashed.
+    let originalName: String
+    let deletedAt: Date
+    // nonisolated: the project builds with -default-isolation=MainActor, and these
+    // are read from nonisolated static purge/expiry helpers.
+    nonisolated var deleteAfter: Date { deletedAt.addingTimeInterval(trashRetentionInterval) }
+    nonisolated var id: String { url.absoluteString }
+}
+
 // VoiceMemoService owns the full record/play/delete lifecycle for per-song
 // voice memos. One instance per EditorViewModel — its lifetime matches the
 // view model so AVAudioSession is torn down cleanly when the VM is released.
@@ -73,11 +88,139 @@ final class VoiceMemoService {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
-    /// Remove a project's entire memo folder — called on permanent delete and
-    /// on trash-purge expiry so orphaned audio doesn't accumulate on disk.
+    /// Remove a project's entire memo folder — live and trashed. Called on
+    /// permanent delete and on trash-purge expiry so orphaned audio doesn't
+    /// accumulate on disk.
     nonisolated static func deleteMemosFolder(for projectId: String) {
-        let folder = memoFolder(for: projectId)
-        try? FileManager.default.removeItem(at: folder)
+        try? FileManager.default.removeItem(at: memoFolder(for: projectId))
+        try? FileManager.default.removeItem(at: trashFolder(for: projectId))
+    }
+
+    // MARK: - Recordings Trash
+
+    /// Separates the deletion timestamp from the original name in trash filenames.
+    nonisolated static let trashNameSeparator = "__"
+
+    nonisolated static func memosTrashRoot() -> URL {
+        let appSupport = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return appSupport.appendingPathComponent("voice-memos-trash", isDirectory: true)
+    }
+
+    nonisolated static func trashFolder(for projectId: String) -> URL {
+        memosTrashRoot().appendingPathComponent(projectId, isDirectory: true)
+    }
+
+    /// All trashed recordings across every project, newest deletion first.
+    nonisolated static func trashedMemos() -> [TrashedVoiceMemo] {
+        guard let folders = try? FileManager.default.contentsOfDirectory(
+            at: memosTrashRoot(),
+            includingPropertiesForKeys: nil,
+            options: .skipsHiddenFiles
+        ) else { return [] }
+
+        return folders
+            .flatMap { folder -> [TrashedVoiceMemo] in
+                let projectId = folder.lastPathComponent
+                guard let files = try? FileManager.default.contentsOfDirectory(
+                    at: folder,
+                    includingPropertiesForKeys: nil,
+                    options: .skipsHiddenFiles
+                ) else { return [] }
+                return files
+                    .filter { $0.pathExtension == "m4a" }
+                    .compactMap { trashedMemo(at: $0, projectId: projectId) }
+            }
+            .sorted { $0.deletedAt > $1.deletedAt }
+    }
+
+    nonisolated private static func trashedMemo(at url: URL, projectId: String) -> TrashedVoiceMemo? {
+        let name = url.lastPathComponent
+        guard let separatorRange = name.range(of: trashNameSeparator),
+              separatorRange.lowerBound != name.startIndex,
+              let deletedAtMs = Double(name[..<separatorRange.lowerBound]) else { return nil }
+        let originalName = String(name[separatorRange.upperBound...])
+        guard !originalName.isEmpty else { return nil }
+        return TrashedVoiceMemo(
+            url: url,
+            projectId: projectId,
+            originalName: originalName,
+            deletedAt: Date(timeIntervalSince1970: deletedAtMs / 1000)
+        )
+    }
+
+    /// Move the memo at `url` to the Trash Bin instead of deleting it. The file
+    /// is kept for `trashRetentionInterval` before purge.
+    func trashMemo(at url: URL, projectId: String) {
+        if activePlayURL == url { stopPlayback() }
+        let folder = Self.trashFolder(for: projectId)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            // Bump the timestamp on collision so a same-named file trashed twice
+            // in one millisecond never overwrites an existing trashed recording.
+            var deletedAtMs = Int(Date().timeIntervalSince1970 * 1000)
+            var target = folder.appendingPathComponent("\(deletedAtMs)\(Self.trashNameSeparator)\(url.lastPathComponent)")
+            while FileManager.default.fileExists(atPath: target.path) {
+                deletedAtMs += 1
+                target = folder.appendingPathComponent("\(deletedAtMs)\(Self.trashNameSeparator)\(url.lastPathComponent)")
+            }
+            try FileManager.default.moveItem(at: url, to: target)
+        } catch {
+            lastError = "Couldn't move recording to trash: \(error.localizedDescription)"
+        }
+    }
+
+    /// Move a trashed recording back into its project's live memo folder under
+    /// its original name (suffixed if that name is now taken).
+    func restoreTrashedMemo(_ trashed: TrashedVoiceMemo) {
+        let folder = Self.memoFolder(for: trashed.projectId)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var target = folder.appendingPathComponent(trashed.originalName)
+            if FileManager.default.fileExists(atPath: target.path) {
+                let stem = (trashed.originalName as NSString).deletingPathExtension
+                var suffix = 2
+                repeat {
+                    target = folder.appendingPathComponent("\(stem) \(suffix).m4a")
+                    suffix += 1
+                } while FileManager.default.fileExists(atPath: target.path) && suffix < 1000
+            }
+            try FileManager.default.moveItem(at: trashed.url, to: target)
+            Self.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+        } catch {
+            lastError = "Couldn't restore recording: \(error.localizedDescription)"
+        }
+    }
+
+    /// Permanently delete a trashed recording.
+    func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) {
+        if activePlayURL == trashed.url { stopPlayback() }
+        try? FileManager.default.removeItem(at: trashed.url)
+        Self.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+    }
+
+    /// Delete every trashed recording whose retention window has passed.
+    nonisolated static func purgeExpiredTrashedMemos(now: Date = Date()) {
+        for trashed in trashedMemos() where trashed.deleteAfter <= now {
+            try? FileManager.default.removeItem(at: trashed.url)
+            cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+        }
+    }
+
+    /// Earliest deleteAfter among trashed recordings, or nil when trash is empty.
+    nonisolated static func nextTrashedMemoExpiry() -> Date? {
+        trashedMemos().map(\.deleteAfter).min()
+    }
+
+    /// Remove a project's trash folder once its last recording leaves it.
+    nonisolated private static func cleanUpEmptyTrashFolder(_ folder: URL) {
+        if let contents = try? FileManager.default.contentsOfDirectory(
+            at: folder,
+            includingPropertiesForKeys: nil,
+            options: .skipsHiddenFiles
+        ), contents.isEmpty {
+            try? FileManager.default.removeItem(at: folder)
+        }
     }
 
     // MARK: - Permission

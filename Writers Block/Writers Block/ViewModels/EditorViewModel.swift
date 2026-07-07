@@ -940,6 +940,8 @@ final class EditorViewModel: ObservableObject {
     func purgeExpiredTrashedProjects() {
         guard let context = modelContext else { return }
         let now = Date()
+        // Trashed recordings expire on their own clock, independent of projects.
+        VoiceMemoService.purgeExpiredTrashedMemos(now: now)
         let descriptor = FetchDescriptor<TrashedSongProject>(
             predicate: #Predicate<TrashedSongProject> { $0.deleteAfter <= now }
         )
@@ -966,9 +968,12 @@ final class EditorViewModel: ObservableObject {
             sortBy: [SortDescriptor(\.deleteAfter, order: .forward)]
         )
         descriptor.fetchLimit = 1
-        guard let nextProject = try? context.fetch(descriptor).first else { return }
+        let nextProjectExpiry = (try? context.fetch(descriptor).first)?.deleteAfter
+        // Already-expired recordings were purged above; only future expiries count.
+        let nextMemoExpiry = VoiceMemoService.nextTrashedMemoExpiry().flatMap { $0 > now ? $0 : nil }
+        guard let nextExpiry = [nextProjectExpiry, nextMemoExpiry].compactMap({ $0 }).min() else { return }
 
-        let delay = max(nextProject.deleteAfter.timeIntervalSinceNow, 0)
+        let delay = max(nextExpiry.timeIntervalSinceNow, 0)
         trashSchedulerTask = Task { @MainActor [weak self] in
             // Duration-based sleep — manual Double→UInt64 nanosecond math overflows
             // for far-future dates and would fire the purge immediately.

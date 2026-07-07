@@ -15,6 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -27,6 +28,22 @@ data class VoiceMemo(
     val label: String,
     val durationMs: Long
 )
+
+/**
+ * A recording sitting in the Trash Bin. The trash filename encodes the deletion
+ * timestamp as "<deletedAt>__<originalName>" so trash state survives restarts
+ * without a separate metadata store.
+ */
+data class TrashedVoiceMemo(
+    val file: File,
+    val projectId: String,
+    /** Original filename (with extension) the memo had before it was trashed. */
+    val originalName: String,
+    val deletedAt: Long,
+    val durationMs: Long
+) {
+    val deleteAfter: Long get() = deletedAt + TRASH_RETENTION_MILLIS
+}
 
 /**
  * Handles recording, playback, and deletion of per-song voice memos.
@@ -276,6 +293,82 @@ class VoiceMemoService(private val context: Context) {
         }
     }
 
+    // ---------------------------------------------------------------------------
+    // Recordings trash
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Move [memo] to the Trash Bin instead of deleting it. The file is relocated
+     * to voice-memos-trash/<projectId>/<deletedAt>__<name>.m4a and kept for
+     * [TRASH_RETENTION_MILLIS] before purge. Returns false on I/O failure.
+     */
+    suspend fun trashMemo(memo: VoiceMemo): Boolean {
+        if (playingFile == memo.file) stopPlayback()
+        return withContext(Dispatchers.IO) {
+            val projectId = memo.file.parentFile?.name ?: return@withContext false
+            if (!memo.file.exists()) return@withContext true
+            val dir = trashDir(projectId)
+            if (!dir.exists() && !dir.mkdirs()) return@withContext false
+            // Bump the timestamp on collision so renameTo never overwrites an
+            // existing trashed file (same name trashed twice in one millisecond).
+            var deletedAt = System.currentTimeMillis()
+            var target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
+            while (target.exists()) {
+                deletedAt++
+                target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
+            }
+            memo.file.renameTo(target)
+        }
+    }
+
+    /** All trashed recordings across every project, newest deletion first. */
+    suspend fun trashedMemos(): List<TrashedVoiceMemo> = withContext(Dispatchers.IO) {
+        val root = trashRoot(context.filesDir)
+        if (!root.exists()) return@withContext emptyList()
+        root.listFiles()
+            ?.filter { it.isDirectory }
+            ?.flatMap { dir ->
+                dir.listFiles()
+                    ?.filter { it.isFile && it.name.endsWith(MEMO_EXTENSION) }
+                    ?.mapNotNull { file -> trashedMemoFromFile(file, dir.name) }
+                    ?: emptyList()
+            }
+            ?.sortedByDescending { it.deletedAt }
+            ?: emptyList()
+    }
+
+    /**
+     * Move a trashed recording back into its project's live memo folder under
+     * its original name (suffixed if that name is now taken).
+     */
+    suspend fun restoreTrashedMemo(trashed: TrashedVoiceMemo): Boolean = withContext(Dispatchers.IO) {
+        if (!trashed.file.exists()) return@withContext false
+        val dir = memoDir(trashed.projectId)
+        if (!dir.exists() && !dir.mkdirs()) return@withContext false
+        val base = trashed.originalName.removeSuffix(MEMO_EXTENSION)
+        val target = resolveCollision(dir, base)
+        trashed.file.renameTo(target).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
+    }
+
+    /** Permanently delete a trashed recording. */
+    suspend fun permanentlyDeleteTrashedMemo(trashed: TrashedVoiceMemo): Boolean {
+        if (playingFile == trashed.file) stopPlayback()
+        return withContext(Dispatchers.IO) {
+            deleteMemoFile(trashed.file).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
+        }
+    }
+
+    /** Delete every trashed recording whose retention window has passed. */
+    suspend fun purgeExpiredTrashedMemos(now: Long = System.currentTimeMillis()) {
+        trashedMemos()
+            .filter { it.deleteAfter <= now }
+            .forEach { permanentlyDeleteTrashedMemo(it) }
+    }
+
+    /** Earliest deleteAfter among trashed recordings, or null when trash is empty. */
+    suspend fun nextTrashedMemoExpiry(): Long? =
+        trashedMemos().minOfOrNull { it.deleteAfter }
+
     /**
      * Rename [memo] to [newBasename] (without extension). The basename is sanitized:
      * leading/trailing whitespace is stripped, characters illegal on FAT32/ext4 paths
@@ -307,16 +400,20 @@ class VoiceMemoService(private val context: Context) {
     }
 
     /**
-     * Delete the entire memo directory for [projectId]. Called when a project is
-     * permanently deleted so orphaned audio files do not accumulate.
+     * Delete the entire memo directory for [projectId] — live and trashed. Called
+     * when a project is permanently deleted so orphaned audio files do not accumulate.
      */
     suspend fun deleteMemoDirectory(projectId: String) {
         val dir = memoDir(projectId)
+        val trash = trashDir(projectId)
         val playing = playingFile
-        if (playing != null && playing.path.startsWith(dir.path)) stopPlayback()
+        if (playing != null && (playing.path.startsWith(dir.path) || playing.path.startsWith(trash.path))) {
+            stopPlayback()
+        }
 
         withContext(Dispatchers.IO) {
             dir.deleteRecursively()
+            trash.deleteRecursively()
         }
     }
 
@@ -339,6 +436,31 @@ class VoiceMemoService(private val context: Context) {
 
     private fun memoDir(projectId: String): File =
         memoDirectory(context.filesDir, projectId)
+
+    private fun trashDir(projectId: String): File =
+        File(trashRoot(context.filesDir), projectId)
+
+    private fun trashedMemoFromFile(file: File, projectId: String): TrashedVoiceMemo? {
+        val separatorIndex = file.name.indexOf(TRASH_NAME_SEPARATOR)
+        if (separatorIndex <= 0) return null
+        val deletedAt = file.name.substring(0, separatorIndex).toLongOrNull() ?: return null
+        val originalName = file.name.substring(separatorIndex + TRASH_NAME_SEPARATOR.length)
+        if (originalName.isEmpty()) return null
+        return TrashedVoiceMemo(
+            file = file,
+            projectId = projectId,
+            originalName = originalName,
+            deletedAt = deletedAt,
+            durationMs = probeAudioDurationMs(file)
+        )
+    }
+
+    /** Remove a project's trash folder once its last recording leaves it. */
+    private fun cleanUpEmptyTrashDir(dir: File?) {
+        if (dir != null && dir.isDirectory && dir.listFiles()?.isEmpty() == true) {
+            dir.delete()
+        }
+    }
 
     private fun memoFromFile(file: File): VoiceMemo {
         val durationMs = probeAudioDurationMs(file)
@@ -372,10 +494,17 @@ class VoiceMemoService(private val context: Context) {
     companion object {
         private val LABEL_FORMAT = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
         const val MEMOS_ROOT_DIR = "voice-memos"
+        const val MEMOS_TRASH_ROOT_DIR = "voice-memos-trash"
         const val MEMO_EXTENSION = ".m4a"
+
+        /** Separates the deletion timestamp from the original name in trash filenames. */
+        const val TRASH_NAME_SEPARATOR = "__"
 
         fun memosRoot(filesDir: File): File =
             File(filesDir, MEMOS_ROOT_DIR)
+
+        fun trashRoot(filesDir: File): File =
+            File(filesDir, MEMOS_TRASH_ROOT_DIR)
 
         fun memoDirectory(filesDir: File, projectId: String): File =
             File(memosRoot(filesDir), projectId)

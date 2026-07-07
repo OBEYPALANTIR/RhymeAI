@@ -1,7 +1,9 @@
 import Foundation
 import SwiftData
 
-let trashRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
+// nonisolated: read from nonisolated recordings-trash purge helpers as well as
+// main-actor UI code (the project builds with -default-isolation=MainActor).
+nonisolated let trashRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
 
 @Model
 final class TrashedSongProject {

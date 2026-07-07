@@ -930,17 +930,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 purgedIds.forEach { voiceMemoService.deleteMemoDirectory(it) }
             }
         }
+        viewModelScope.launch {
+            voiceMemoService.purgeExpiredTrashedMemos(now)
+        }
         scheduleTrashPurge()
     }
 
     private fun scheduleTrashPurge() {
         trashSchedulerJob?.cancel()
-        val now = System.currentTimeMillis()
-        val nextDeleteAfter = trashedProjects
-            .filter { it.deleteAfter > now }
-            .minOfOrNull { it.deleteAfter }
-            ?: return
         trashSchedulerJob = viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val nextProjectExpiry = trashedProjects
+                .filter { it.deleteAfter > now }
+                .minOfOrNull { it.deleteAfter }
+            // Trashed recordings expire on their own clock; wake for whichever
+            // comes first. Already-expired recordings are being purged by the
+            // launch in purgeExpiredTrashedProjects, so only future expiries count.
+            val nextMemoExpiry = voiceMemoService.nextTrashedMemoExpiry()?.takeIf { it > now }
+            val nextDeleteAfter = listOfNotNull(nextProjectExpiry, nextMemoExpiry).minOrNull()
+                ?: return@launch
             delay((nextDeleteAfter - now).coerceAtLeast(0L))
             trashSchedulerJob = null
             purgeExpiredTrashedProjects()

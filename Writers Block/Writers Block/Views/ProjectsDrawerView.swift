@@ -95,7 +95,10 @@ struct ProjectsDrawerView: View {
                         .background(.ultraThinMaterial)
                         .background(Color(UIColor.systemBackground).opacity(0.88))
                         .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
-                        .offset(x: drawerVisible ? 0 : -drawerWidth)
+                        // Push-style reveal: while the trash screen slides in from
+                        // the right, the drawer slides toward the left like a
+                        // navigation push instead of sitting still under an overlay.
+                        .offset(x: drawerVisible ? (trashBinPresented ? -proxy.size.width * 0.3 : 0) : -drawerWidth)
                 }
             }
             .ignoresSafeArea()
@@ -388,22 +391,22 @@ struct ProjectsDrawerView: View {
             get: { pendingDeleteRecording != nil },
             set: { if !$0 { pendingDeleteRecording = nil } }
         ), titleVisibility: .visible, presenting: pendingDeleteRecording) { item in
-            Button("Delete", role: .destructive) {
-                viewModel.voiceMemoService.deleteMemo(at: item.url)
+            Button("Move to Trash", role: .destructive) {
+                viewModel.voiceMemoService.trashMemo(at: item.url, projectId: item.projectId)
                 reloadRecordings()
                 pendingDeleteRecording = nil
             }
             Button("Cancel", role: .cancel) { pendingDeleteRecording = nil }
         } message: { _ in
-            Text("This recording will be permanently deleted.")
+            Text("This recording will move to Trash Bin and be fully deleted after 30 days.")
         }
         .confirmationDialog("Delete Recordings?", isPresented: $pendingBulkDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
+            Button("Move to Trash", role: .destructive) {
                 let selectedIDs = selectedRecordingIDs
                 recordingFolders
                     .flatMap(\.items)
                     .filter { selectedIDs.contains($0.id) }
-                    .forEach { viewModel.voiceMemoService.deleteMemo(at: $0.url) }
+                    .forEach { viewModel.voiceMemoService.trashMemo(at: $0.url, projectId: $0.projectId) }
                 pendingBulkDelete = false
                 isSelectingRecordings = false
                 selectedRecordingIDs = []
@@ -411,7 +414,7 @@ struct ProjectsDrawerView: View {
             }
             Button("Cancel", role: .cancel) { pendingBulkDelete = false }
         } message: {
-            Text("\(selectedRecordingIDs.count) recordings will be permanently deleted.")
+            Text("\(selectedRecordingIDs.count) recordings will move to Trash Bin and be fully deleted after 30 days.")
         }
     }
 

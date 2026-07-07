@@ -6,11 +6,20 @@ struct TrashBinView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
+    @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @State private var selectedIds: Set<String> = []
     @State private var confirmPermanentDelete = false
+    @State private var activeTab: TrashTab = .projects
+    @State private var trashedMemos: [TrashedVoiceMemo] = []
+    @State private var selectedMemoIds: Set<String> = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var onDismiss: (() -> Void)? = nil
+
+    private enum TrashTab: String, CaseIterable {
+        case projects = "Projects"
+        case recordings = "Recordings"
+    }
 
     private var trashIds: [String] {
         trashedProjects.map(\.id)
@@ -20,8 +29,32 @@ struct TrashBinView: View {
         trashedProjects.filter { selectedIds.contains($0.id) }
     }
 
+    private var selectedMemos: [TrashedVoiceMemo] {
+        trashedMemos.filter { selectedMemoIds.contains($0.id) }
+    }
+
     private var allSelected: Bool {
-        !trashedProjects.isEmpty && selectedIds.count == trashedProjects.count
+        if activeTab == .projects {
+            return !trashedProjects.isEmpty && selectedIds.count == trashedProjects.count
+        }
+        return !trashedMemos.isEmpty && selectedMemoIds.count == trashedMemos.count
+    }
+
+    private var activeSelectionCount: Int {
+        activeTab == .projects ? selectedIds.count : selectedMemoIds.count
+    }
+
+    // Song titles for recording subtitles: live projects and trashed projects
+    // both count; anything else was permanently deleted.
+    private var projectTitleById: [String: String] {
+        var titles: [String: String] = [:]
+        for trashed in trashedProjects {
+            titles[trashed.id] = trashed.title.isEmpty ? "Untitled Song" : trashed.title
+        }
+        for project in projects {
+            titles[project.id] = project.title.isEmpty ? "Untitled Song" : project.title
+        }
+        return titles
     }
 
     var body: some View {
@@ -32,10 +65,27 @@ struct TrashBinView: View {
             VStack(spacing: 0) {
                 topBar
 
-                if trashedProjects.isEmpty {
-                    emptyState
+                Picker("Trash Tab", selection: $activeTab) {
+                    ForEach(TrashTab.allCases, id: \.self) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, RhymeAITokens.Spacing.md)
+                .padding(.top, RhymeAITokens.Spacing.sm)
+
+                if activeTab == .projects {
+                    if trashedProjects.isEmpty {
+                        emptyState
+                    } else {
+                        trashList
+                    }
                 } else {
-                    trashList
+                    if trashedMemos.isEmpty {
+                        recordingsEmptyState
+                    } else {
+                        recordingsTrashList
+                    }
                 }
             }
         }
@@ -45,6 +95,7 @@ struct TrashBinView: View {
         }
         .onAppear {
             viewModel.purgeExpiredTrashedProjects()
+            reloadTrashedMemos()
             pruneSelection()
         }
         .onChange(of: trashIds) { _, _ in
@@ -53,12 +104,11 @@ struct TrashBinView: View {
         .alert("Delete forever?", isPresented: $confirmPermanentDelete) {
             Button("Cancel", role: .cancel) { }
             Button("Delete Forever", role: .destructive) {
-                let projects = selectedProjects
-                projects.forEach(viewModel.permanentlyDeleteTrashedProject)
-                clearSelectionWithFeedback()
+                deleteSelectedForever()
             }
         } message: {
-            Text("\(selectedIds.count) selected song\(selectedIds.count == 1 ? "" : "s") will be permanently deleted. This cannot be undone.")
+            let noun = activeTab == .projects ? "song" : "recording"
+            Text("\(activeSelectionCount) selected \(noun)\(activeSelectionCount == 1 ? "" : "s") will be permanently deleted. This cannot be undone.")
         }
     }
 
@@ -111,7 +161,11 @@ struct TrashBinView: View {
     private var selectionHeader: some View {
         Button {
             withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
-                selectedIds = allSelected ? [] : Set(trashIds)
+                if activeTab == .projects {
+                    selectedIds = allSelected ? [] : Set(trashIds)
+                } else {
+                    selectedMemoIds = allSelected ? [] : Set(trashedMemos.map(\.id))
+                }
             }
         } label: {
             HStack {
@@ -175,7 +229,7 @@ struct TrashBinView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("Trash Bin is Empty", systemImage: "trash")
+            Label("No Songs in Trash", systemImage: "trash")
         } description: {
             Text("Deleted songs stay here for 30 days.")
         }
@@ -184,12 +238,104 @@ struct TrashBinView: View {
         .padding(RhymeAITokens.Spacing.xl)
     }
 
+    // MARK: - Recordings Tab
+
+    private var recordingsEmptyState: some View {
+        ContentUnavailableView {
+            Label("No Recordings in Trash", systemImage: "mic.slash")
+        } description: {
+            Text("Deleted recordings stay here for 30 days.")
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(RhymeAITokens.Spacing.xl)
+    }
+
+    private var recordingsTrashList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                selectionHeader
+
+                ForEach(trashedMemos) { memo in
+                    trashRecordingRow(memo)
+                }
+            }
+            .padding(.top, RhymeAITokens.Spacing.sm)
+            .padding(.bottom, RhymeAITokens.Spacing.xxl)
+        }
+        .scrollContentBackground(.hidden)
+    }
+
+    private func trashRecordingRow(_ memo: TrashedVoiceMemo) -> some View {
+        let selected = selectedMemoIds.contains(memo.id)
+        let projectTitle = projectTitleById[memo.projectId] ?? "Deleted song"
+
+        return Button {
+            toggleMemoSelection(memo.id)
+        } label: {
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
+                        .fill(Color(UIColor.secondarySystemBackground))
+
+                    Image(systemName: "mic")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(width: RhymeAITokens.Touch.comfortable, height: RhymeAITokens.Touch.comfortable)
+
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                    Text(recordingDisplayName(memo.originalName))
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text("\(projectTitle) · \(trashRemainingText(deleteAfter: memo.deleteAfter))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: RhymeAITokens.Spacing.sm)
+
+                selectionCircle(selected: selected)
+            }
+            .frame(minHeight: 76)
+            .padding(.horizontal, RhymeAITokens.Spacing.md)
+            .padding(.vertical, RhymeAITokens.Spacing.xs)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.rhymePress)
+        .accessibilityLabel(recordingDisplayName(memo.originalName))
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+    }
+
+    private static let recordingDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    /// Human-readable name for a trashed recording: renamed files keep their
+    /// name, raw millisecond-timestamp names render as a date (drawer parity).
+    private func recordingDisplayName(_ originalName: String) -> String {
+        let stem = (originalName as NSString).deletingPathExtension
+        if stem.count == 13, stem.allSatisfy(\.isNumber), let ms = Double(stem) {
+            return Self.recordingDateFormatter.string(from: Date(timeIntervalSince1970: ms / 1000))
+        }
+        return stem
+    }
+
+    private func reloadTrashedMemos() {
+        trashedMemos = VoiceMemoService.trashedMemos()
+        selectedMemoIds.formIntersection(Set(trashedMemos.map(\.id)))
+    }
+
     private var bottomActionBar: some View {
         HStack(spacing: RhymeAITokens.Spacing.sm) {
             Button {
-                let projects = selectedProjects
-                projects.forEach(viewModel.restoreTrashedProject)
-                clearSelectionWithFeedback()
+                restoreSelected()
             } label: {
                 Label("Restore", systemImage: "arrow.uturn.backward")
                     .font(.subheadline.weight(.semibold))
@@ -198,7 +344,7 @@ struct TrashBinView: View {
             }
             .buttonStyle(.bordered)
             .buttonBorderShape(.capsule)
-            .disabled(selectedIds.isEmpty)
+            .disabled(activeSelectionCount == 0)
 
             Button(role: .destructive) {
                 confirmPermanentDelete = true
@@ -210,12 +356,34 @@ struct TrashBinView: View {
             }
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
-            .disabled(selectedIds.isEmpty)
+            .disabled(activeSelectionCount == 0)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
         .background(.ultraThinMaterial)
+    }
+
+    private func restoreSelected() {
+        if activeTab == .projects {
+            let projects = selectedProjects
+            projects.forEach(viewModel.restoreTrashedProject)
+        } else {
+            selectedMemos.forEach(viewModel.voiceMemoService.restoreTrashedMemo)
+            reloadTrashedMemos()
+        }
+        clearSelectionWithFeedback()
+    }
+
+    private func deleteSelectedForever() {
+        if activeTab == .projects {
+            let projects = selectedProjects
+            projects.forEach(viewModel.permanentlyDeleteTrashedProject)
+        } else {
+            selectedMemos.forEach(viewModel.voiceMemoService.permanentlyDeleteTrashedMemo)
+            reloadTrashedMemos()
+        }
+        clearSelectionWithFeedback()
     }
 
     private func selectionCircle(selected: Bool) -> some View {
@@ -258,9 +426,20 @@ struct TrashBinView: View {
         }
     }
 
+    private func toggleMemoSelection(_ id: String) {
+        withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
+            if selectedMemoIds.contains(id) {
+                selectedMemoIds.remove(id)
+            } else {
+                selectedMemoIds.insert(id)
+            }
+        }
+    }
+
     private func clearSelectionWithFeedback() {
         withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
             selectedIds.removeAll()
+            selectedMemoIds.removeAll()
         }
     }
 

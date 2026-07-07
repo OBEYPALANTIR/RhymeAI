@@ -13,6 +13,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -93,6 +94,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
@@ -111,7 +113,9 @@ import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.service.VoiceMemo
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.SyllableCounter
+import com.rhymeai.app.service.TrashedVoiceMemo
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -235,6 +239,22 @@ fun ProjectsDrawer(
         focusedLeadingIconColor = colorScheme.primary
     )
 
+    // Push-style reveal: while the trash screen slides in from the right, the
+    // drawer slides toward the left like a navigation push, so the trash reads
+    // as the next screen rather than an overlay.
+    val animationsEnabled = LocalAnimationsEnabled.current
+    val density = LocalDensity.current
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val trashRevealProgress by animateFloatAsState(
+        targetValue = if (trashBinVisible) 1f else 0f,
+        animationSpec = if (animationsEnabled) {
+            tween(DrawerAnimationMillis, easing = DesignTokens.Motion.standardEasing)
+        } else {
+            snap()
+        },
+        label = "trashRevealProgress"
+    )
+
     Dialog(
         onDismissRequest = {
             if (showTrashBin) closeTrashBin() else closeDrawer()
@@ -275,6 +295,7 @@ fun ProjectsDrawer(
             ) {
                 Surface(
                     modifier = Modifier
+                        .graphicsLayer { translationX = -screenWidthPx * 0.3f * trashRevealProgress }
                         .fillMaxHeight()
                         .width(drawerWidth)
                         .widthIn(max = DesignTokens.Drawer.width)
@@ -513,7 +534,9 @@ fun ProjectsDrawer(
                         trashedProjects = trashedProjects,
                         onRestoreProject = onRestoreProject,
                         onPermanentlyDeleteProject = onPermanentlyDeleteProject,
-                        onDismiss = ::closeTrashBin
+                        onDismiss = ::closeTrashBin,
+                        service = service,
+                        projects = projects
                     )
                 }
             }
@@ -681,24 +704,24 @@ private fun RecordingsTab(
         AlertDialog(
             onDismissRequest = { pendingBulkDelete = false },
             title = { Text("Delete recordings?") },
-            text = { Text("${selectedMemoPaths.size} recordings will be permanently deleted.") },
+            text = { Text("${selectedMemoPaths.size} recordings will move to Trash Bin and be fully deleted after 30 days.") },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        val deleteResults = folders.orEmpty()
+                        val trashResults = folders.orEmpty()
                             .flatMap { it.memos }
                             .filter { it.file.absolutePath in selectedMemoPaths }
-                            .map { service.deleteMemo(it) }
-                        val deleteFailed = deleteResults.any { !it }
+                            .map { service.trashMemo(it) }
+                        val trashFailed = trashResults.any { !it }
                         pendingBulkDelete = false
                         isSelecting = false
                         selectedMemoPaths = emptySet()
                         memoListVersion++
-                        if (deleteFailed) {
+                        if (trashFailed) {
                             snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
                         }
                     }
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                }) { Text("Move to Trash", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingBulkDelete = false }) { Text("Cancel") }
@@ -991,13 +1014,13 @@ private fun RecordingMemoRow(
         AlertDialog(
             onDismissRequest = { pendingDelete = false },
             title = { Text("Delete recording?") },
-            text = { Text("This recording will be permanently deleted.") },
+            text = { Text("This recording will move to Trash Bin and be fully deleted after 30 days.") },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        val deleted = service.deleteMemo(memo)
+                        val trashed = service.trashMemo(memo)
                         pendingDelete = false
-                        if (deleted) {
+                        if (trashed) {
                             onMemoListChanged()
                         } else {
                             // Show the failure snackbar first: onMemoListChanged()'s
@@ -1007,7 +1030,7 @@ private fun RecordingMemoRow(
                             onMemoListChanged()
                         }
                     }
-                }) { Text("Delete", color = colorScheme.error) }
+                }) { Text("Move to Trash", color = colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = false }) { Text("Cancel") }
@@ -1218,9 +1241,16 @@ private fun TrashBinPage(
     trashedProjects: List<TrashedSongProject>,
     onRestoreProject: (String) -> Unit,
     onPermanentlyDeleteProject: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    service: VoiceMemoService?,
+    projects: List<SongProject>
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    // 0 = Projects, 1 = Recordings
+    var selectedTrashTab by remember { mutableStateOf(0) }
+    val isProjectsTab = selectedTrashTab == 0
+
     val sortedTrashedProjects = remember(trashedProjects) {
         trashedProjects.sortedByDescending { it.deletedAt }
     }
@@ -1230,9 +1260,39 @@ private fun TrashBinPage(
     val trashIdSet = remember(trashIds) { trashIds.toSet() }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var confirmPermanentDelete by remember { mutableStateOf(false) }
-    val selectedCount = selectedIds.size
+
+    // Trashed recordings are scanned from disk; bump the version to re-scan
+    // after any restore/delete mutation.
+    var trashedMemoVersion by remember { mutableIntStateOf(0) }
+    val trashedMemos: List<TrashedVoiceMemo>? by produceState<List<TrashedVoiceMemo>?>(
+        initialValue = null,
+        service,
+        trashedMemoVersion
+    ) {
+        service?.purgeExpiredTrashedMemos()
+        value = service?.trashedMemos() ?: emptyList()
+    }
+    val memoPaths = remember(trashedMemos) {
+        trashedMemos.orEmpty().map { it.file.absolutePath }
+    }
+    val memoPathSet = remember(memoPaths) { memoPaths.toSet() }
+    var selectedMemoPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // Song titles for recording subtitles: live projects and trashed projects both
+    // count; anything else was permanently deleted.
+    val projectTitleById = remember(projects, trashedProjects) {
+        buildMap {
+            trashedProjects.forEach { put(it.project.id, it.project.title.ifEmpty { "Untitled Song" }) }
+            projects.forEach { put(it.id, it.title.ifEmpty { "Untitled Song" }) }
+        }
+    }
+
+    val selectedCount = if (isProjectsTab) selectedIds.size else selectedMemoPaths.size
     val hasSelection = selectedCount > 0
-    val allSelected = sortedTrashedProjects.isNotEmpty() && selectedIds.containsAll(trashIds)
+    val allSelected = if (isProjectsTab) {
+        sortedTrashedProjects.isNotEmpty() && selectedIds.containsAll(trashIds)
+    } else {
+        memoPaths.isNotEmpty() && selectedMemoPaths.containsAll(memoPaths)
+    }
     val bottomActionClearance = maxOf(
         navigationBarBottomPadding(),
         DialogBottomActionMinClearance
@@ -1243,15 +1303,46 @@ private fun TrashBinPage(
     LaunchedEffect(trashIdSet) {
         selectedIds = selectedIds.intersect(trashIdSet)
     }
+    LaunchedEffect(memoPathSet) {
+        selectedMemoPaths = selectedMemoPaths.intersect(memoPathSet)
+    }
 
     fun toggleSelection(id: String) {
         selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
     }
 
+    fun toggleMemoSelection(path: String) {
+        selectedMemoPaths = if (path in selectedMemoPaths) selectedMemoPaths - path else selectedMemoPaths + path
+    }
+
     fun restoreSelected() {
-        val idsToRestore = selectedIds.toList()
-        idsToRestore.forEach(onRestoreProject)
-        selectedIds = emptySet()
+        if (isProjectsTab) {
+            val idsToRestore = selectedIds.toList()
+            idsToRestore.forEach(onRestoreProject)
+            selectedIds = emptySet()
+        } else {
+            val memosToRestore = trashedMemos.orEmpty().filter { it.file.absolutePath in selectedMemoPaths }
+            scope.launch {
+                memosToRestore.forEach { service?.restoreTrashedMemo(it) }
+                selectedMemoPaths = emptySet()
+                trashedMemoVersion++
+            }
+        }
+    }
+
+    fun deleteSelectedForever() {
+        if (isProjectsTab) {
+            val idsToDelete = selectedIds.toList()
+            idsToDelete.forEach(onPermanentlyDeleteProject)
+            selectedIds = emptySet()
+        } else {
+            val memosToDelete = trashedMemos.orEmpty().filter { it.file.absolutePath in selectedMemoPaths }
+            scope.launch {
+                memosToDelete.forEach { service?.permanentlyDeleteTrashedMemo(it) }
+                selectedMemoPaths = emptySet()
+                trashedMemoVersion++
+            }
+        }
     }
 
     Surface(
@@ -1263,51 +1354,129 @@ private fun TrashBinPage(
             Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
                 TrashTopBar(onDismiss = onDismiss)
 
-                if (sortedTrashedProjects.isEmpty()) {
-                    EmptyDrawerState(
-                        icon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                        text = "Trash Bin is empty."
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentPadding = PaddingValues(
+                SlidingSegmentedControl(
+                    labels = listOf("Projects", "Recordings"),
+                    selectedIndex = selectedTrashTab,
+                    onSelect = { selectedTrashTab = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
                             start = DesignTokens.Spacing.lg,
-                            top = DesignTokens.Spacing.md,
                             end = DesignTokens.Spacing.lg,
-                            bottom = contentBottomPadding
+                            bottom = DesignTokens.Spacing.sm
                         )
-                    ) {
-                        item {
-                            TrashSelectionHeaderRow(
-                                selected = allSelected,
-                                onToggle = {
-                                    selectedIds = if (allSelected) emptySet() else trashIds.toSet()
-                                }
-                            )
-                        }
+                )
 
-                        item {
-                            Text(
-                                "30 days left",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = colorScheme.onSurface,
-                                modifier = Modifier.padding(
-                                    top = DesignTokens.Spacing.xl,
-                                    bottom = DesignTokens.Spacing.sm
+                if (isProjectsTab) {
+                    if (sortedTrashedProjects.isEmpty()) {
+                        EmptyDrawerState(
+                            icon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                            text = "No songs in the Trash Bin."
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            contentPadding = PaddingValues(
+                                start = DesignTokens.Spacing.lg,
+                                top = DesignTokens.Spacing.md,
+                                end = DesignTokens.Spacing.lg,
+                                bottom = contentBottomPadding
+                            )
+                        ) {
+                            item {
+                                TrashSelectionHeaderRow(
+                                    selected = allSelected,
+                                    onToggle = {
+                                        selectedIds = if (allSelected) emptySet() else trashIds.toSet()
+                                    }
                                 )
+                            }
+
+                            item {
+                                Text(
+                                    "30 days left",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = colorScheme.onSurface,
+                                    modifier = Modifier.padding(
+                                        top = DesignTokens.Spacing.xl,
+                                        bottom = DesignTokens.Spacing.sm
+                                    )
+                                )
+                            }
+
+                            items(sortedTrashedProjects, key = { it.project.id }) { trashedProject ->
+                                TrashProjectSelectableRow(
+                                    trashedProject = trashedProject,
+                                    selected = trashedProject.project.id in selectedIds,
+                                    onToggle = { toggleSelection(trashedProject.project.id) }
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    when {
+                        trashedMemos == null -> {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                        trashedMemos.orEmpty().isEmpty() -> {
+                            EmptyDrawerState(
+                                icon = { Icon(Icons.Default.Mic, contentDescription = null) },
+                                text = "No recordings in the Trash Bin."
                             )
                         }
+                        else -> {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f),
+                                contentPadding = PaddingValues(
+                                    start = DesignTokens.Spacing.lg,
+                                    top = DesignTokens.Spacing.md,
+                                    end = DesignTokens.Spacing.lg,
+                                    bottom = contentBottomPadding
+                                )
+                            ) {
+                                item {
+                                    TrashSelectionHeaderRow(
+                                        selected = allSelected,
+                                        onToggle = {
+                                            selectedMemoPaths = if (allSelected) emptySet() else memoPathSet
+                                        }
+                                    )
+                                }
 
-                        items(sortedTrashedProjects, key = { it.project.id }) { trashedProject ->
-                            TrashProjectSelectableRow(
-                                trashedProject = trashedProject,
-                                selected = trashedProject.project.id in selectedIds,
-                                onToggle = { toggleSelection(trashedProject.project.id) }
-                            )
+                                item {
+                                    Text(
+                                        "30 days left",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = colorScheme.onSurface,
+                                        modifier = Modifier.padding(
+                                            top = DesignTokens.Spacing.xl,
+                                            bottom = DesignTokens.Spacing.sm
+                                        )
+                                    )
+                                }
+
+                                items(trashedMemos.orEmpty(), key = { it.file.absolutePath }) { trashedMemo ->
+                                    TrashRecordingSelectableRow(
+                                        trashedMemo = trashedMemo,
+                                        projectTitle = projectTitleById[trashedMemo.projectId] ?: "Deleted song",
+                                        selected = trashedMemo.file.absolutePath in selectedMemoPaths,
+                                        onToggle = { toggleMemoSelection(trashedMemo.file.absolutePath) }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1329,19 +1498,18 @@ private fun TrashBinPage(
     }
 
     if (confirmPermanentDelete) {
+        val itemNoun = if (isProjectsTab) "song" else "recording"
         AlertDialog(
             onDismissRequest = { confirmPermanentDelete = false },
             title = { Text("Delete forever?") },
             text = {
-                Text("$selectedCount selected song${if (selectedCount == 1) "" else "s"} will be permanently deleted. This cannot be undone.")
+                Text("$selectedCount selected $itemNoun${if (selectedCount == 1) "" else "s"} will be permanently deleted. This cannot be undone.")
             },
             confirmButton = {
                 TextButton(
                     enabled = hasSelection,
                     onClick = {
-                        val idsToDelete = selectedIds.toList()
-                        idsToDelete.forEach(onPermanentlyDeleteProject)
-                        selectedIds = emptySet()
+                        deleteSelectedForever()
                         confirmPermanentDelete = false
                     }
                 ) {
@@ -1355,6 +1523,64 @@ private fun TrashBinPage(
             },
             containerColor = colorScheme.surfaceContainerHigh
         )
+    }
+}
+
+@Composable
+private fun TrashRecordingSelectableRow(
+    trashedMemo: TrashedVoiceMemo,
+    projectTitle: String,
+    selected: Boolean,
+    onToggle: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val displayName = remember(trashedMemo.originalName) {
+        VoiceMemoService.displayName(File(trashedMemo.originalName))
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 76.dp)
+            .clickable(onClick = onToggle)
+            .padding(vertical = DesignTokens.Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.lg)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Mic,
+                contentDescription = null,
+                tint = colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+        ) {
+            Text(
+                displayName,
+                fontWeight = FontWeight.Medium,
+                fontSize = 17.sp,
+                color = colorScheme.onSurface,
+                maxLines = 1
+            )
+            Text(
+                "$projectTitle • ${VoiceMemoService.formatDuration(trashedMemo.durationMs)} • ${trashRemainingLabel(trashedMemo.deleteAfter)}",
+                fontSize = DesignTokens.Typography.caption,
+                color = colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+
+        SelectionCircle(selected = selected, onToggle = onToggle)
     }
 }
 
