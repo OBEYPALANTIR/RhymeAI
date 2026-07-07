@@ -222,9 +222,6 @@ fun ProjectsDrawer(
     val sortedProjects = remember(projects) { projects.sortedByDescending { it.updatedAt } }
     val filteredProjects = remember(sortedProjects, searchQuery) { searchProjects(sortedProjects, searchQuery) }
     val isSearching = searchQuery.isNotBlank()
-    val drawerWidth = (configuration.screenWidthDp.dp - DesignTokens.Spacing.xxl)
-        .coerceAtLeast(DesignTokens.Drawer.compactWidth)
-        .coerceAtMost(DesignTokens.Drawer.width)
     val textFieldColors = OutlinedTextFieldDefaults.colors(
         unfocusedBorderColor = colorScheme.outlineVariant,
         focusedBorderColor = colorScheme.primary,
@@ -296,9 +293,7 @@ fun ProjectsDrawer(
                 Surface(
                     modifier = Modifier
                         .graphicsLayer { translationX = -screenWidthPx * 0.3f * trashRevealProgress }
-                        .fillMaxHeight()
-                        .width(drawerWidth)
-                        .widthIn(max = DesignTokens.Drawer.width)
+                        .fillMaxSize()
                         .imePadding()
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
@@ -318,7 +313,9 @@ fun ProjectsDrawer(
                         modifier = Modifier
                             .fillMaxSize()
                             .statusBarsPadding()
-                            .padding(horizontal = DesignTokens.Spacing.lg)
+                            // Full-page drawer: editor-tier side padding (20dp) so the
+                            // full-bleed lists keep comfortable margins.
+                            .padding(horizontal = DesignTokens.Spacing.xl)
                             .padding(top = DesignTokens.Spacing.lg)
                     ) {
                         Column(
@@ -330,56 +327,46 @@ fun ProjectsDrawer(
                                         DesignTokens.Spacing.lg
                                 )
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                OutlinedTextField(
-                                    value = searchQuery,
-                                    onValueChange = { searchQuery = it },
-                                    singleLine = true,
-                                    leadingIcon = {
+                            // Full-bleed search: one trailing X inside the field — clears the
+                            // query while typing, closes the drawer when the field is empty.
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                singleLine = true,
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                trailingIcon = {
+                                    val isClearing = searchQuery.isNotEmpty()
+                                    IconButton(onClick = {
+                                        if (isClearing) searchQuery = "" else closeDrawer()
+                                    }) {
                                         Icon(
-                                            Icons.Default.Search,
-                                            contentDescription = null,
+                                            Icons.Default.Close,
+                                            contentDescription = if (isClearing) "Clear search" else "Close drawer",
+                                            tint = colorScheme.onSurfaceVariant,
                                             modifier = Modifier.size(18.dp)
                                         )
-                                    },
-                                    trailingIcon = {
-                                        if (searchQuery.isNotEmpty()) {
-                                            IconButton(onClick = { searchQuery = "" }) {
-                                                Icon(
-                                                    Icons.Default.Close,
-                                                    contentDescription = "Clear search",
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            }
-                                        }
-                                    },
-                                    placeholder = {
-                                        Text(
-                                            text = if (selectedTab == 0) {
-                                                "Search songs"
-                                            } else {
-                                                "Search recordings"
-                                            },
-                                            fontSize = 14.sp
-                                        )
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    colors = textFieldColors,
-                                    shape = RoundedCornerShape(DesignTokens.Radius.xl)
-                                )
-
-                                IconButton(onClick = { closeDrawer() }) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Close drawer",
-                                        tint = colorScheme.onSurfaceVariant
+                                    }
+                                },
+                                placeholder = {
+                                    Text(
+                                        text = if (selectedTab == 0) {
+                                            "Search songs"
+                                        } else {
+                                            "Search recordings"
+                                        },
+                                        fontSize = 14.sp
                                     )
-                                }
-                            }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = textFieldColors,
+                                shape = RoundedCornerShape(DesignTokens.Radius.xl)
+                            )
 
                             OutlinedButton(
                                 onClick = { closeDrawer(afterClose = onNewProject) },

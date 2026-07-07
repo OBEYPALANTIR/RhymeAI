@@ -82,7 +82,8 @@ struct ProjectsDrawerView: View {
     var body: some View {
         ZStack {
             GeometryReader { proxy in
-                let drawerWidth = min(max(proxy.size.width - RhymeAITokens.Layout.drawerHorizontalMargin, RhymeAITokens.Layout.drawerMinWidth), RhymeAITokens.Layout.drawerMaxWidth)
+                // Full-page drawer: cover the entire width instead of the 3/4 panel.
+                let drawerWidth = proxy.size.width
 
                 ZStack(alignment: .leading) {
                     Color.black.opacity(drawerVisible ? 0.42 : 0)
@@ -151,23 +152,10 @@ struct ProjectsDrawerView: View {
         let resolvedTopInset = topInset > 0 ? topInset : 45
 
         return VStack(alignment: .leading, spacing: 0) {
-            // Top bar: search/close + tab picker
-            HStack(spacing: RhymeAITokens.Spacing.xs) {
-                searchField
-
-                Button {
-                    closeDrawer()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.rhymePress)
-                .accessibilityLabel("Close drawer")
-            }
-            .padding(.top, RhymeAITokens.Spacing.lg)
+            // Full-width search; the trailing X inside the field clears the query
+            // while typing and closes the drawer when the field is empty.
+            searchField
+                .padding(.top, RhymeAITokens.Spacing.lg)
 
             // Tab picker — spans Songs and Recordings
             Picker("Tab", selection: $activeTab) {
@@ -603,16 +591,18 @@ struct ProjectsDrawerView: View {
                 .textInputAutocapitalization(.never)
                 .foregroundStyle(.primary)
 
-            if !searchText.isEmpty {
-                Button {
+            Button {
+                if searchText.isEmpty {
+                    closeDrawer()
+                } else {
                     searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.rhymePress)
-                .accessibilityLabel("Clear search")
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
             }
+            .buttonStyle(.rhymePress)
+            .accessibilityLabel(searchText.isEmpty ? "Close drawer" : "Clear search")
         }
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
         .frame(height: RhymeAITokens.Touch.minimum)
