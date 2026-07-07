@@ -170,7 +170,17 @@ def accepted(task: str, score: dict) -> bool:
     return True
 
 
-def dedup_key(task: str, completion: str) -> str:
+def dedup_key(task: str, completion: str, case_params: dict | None = None) -> str:
+    # Single-word rewrites legitimately repeat answers across different source
+    # words and songs ("crooked"→"askew" in five songs is five valid examples),
+    # so scope their dedup to the specific word+action+song instead of globally.
+    if task == "rewrite_word" and case_params:
+        scope = "|".join([
+            str(case_params.get("song_id", "")),
+            str(case_params.get("selection", "")),
+            str(case_params.get("action", "")),
+        ])
+        return task + "|" + scope + "|" + scoring.normalize_suggestion_key(completion)
     return task + "|" + scoring.normalize_suggestion_key(completion)
 
 
@@ -191,7 +201,7 @@ def load_existing(out_path: str, run_seed: int):
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            dedup.add(dedup_key(record.get("task", ""), record.get("completion", "")))
+            dedup.add(dedup_key(record.get("task", ""), record.get("completion", ""), record.get("case_params")))
             if record.get("run_seed") == run_seed and "sample_index" in record:
                 done_indexes.add(record["sample_index"])
     return done_indexes, dedup
@@ -264,7 +274,13 @@ def main():
                         help="Model name for chat API payloads (optional)")
     parser.add_argument("--api-key", default="",
                         help="Bearer token for chat API endpoints (optional)")
+    parser.add_argument("--tasks", default="",
+                        help="Comma-separated task filter (e.g. rewrite_word) "
+                             "for targeted top-up runs; empty = all tasks")
     args = parser.parse_args()
+    allowed_tasks = {t.strip() for t in args.tasks.split(",") if t.strip()}
+    if allowed_tasks - set(TASKS):
+        sys.exit("unknown tasks: %s" % ", ".join(sorted(allowed_tasks - set(TASKS))))
 
     client = teacher.TeacherClient(
         endpoint=args.endpoint,
@@ -298,6 +314,15 @@ def main():
                 case_seed = "%d-%d-%d" % (args.seed, index, attempt)
                 rng = random.Random(case_seed)
                 case = sample_cases.sample_case(rng)
+                # Task filter: redraw from the same per-attempt rng stream so
+                # filtered runs stay deterministic for a given seed.
+                redraws = 0
+                while case is not None and allowed_tasks and case["task"] not in allowed_tasks:
+                    redraws += 1
+                    if redraws > 200:
+                        case = None
+                        break
+                    case = sample_cases.sample_case(rng)
                 if case is None:
                     unbuildable_draws += 1
                     continue
@@ -314,7 +339,7 @@ def main():
                     print("[%4d/%d] %-16s attempt %d %s" % (
                         index + 1, args.count, task, attempt, reason))
                     continue
-                key = dedup_key(task, record["completion"])
+                key = dedup_key(task, record["completion"], record.get("case_params"))
                 if key in dedup:
                     stats[task]["duplicates"] += 1
                     print("[%4d/%d] %-16s attempt %d duplicate_completion" % (
