@@ -38,3 +38,6 @@ DerivedData/
 # Python venvs (build-time tooling)
 scripts/.venv/
 .venv/
+
+# Generated fine-tune training data (do not commit)
+finetune/data/out/
