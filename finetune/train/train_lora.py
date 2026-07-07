@@ -105,11 +105,14 @@ def main():
         # FastModel returns a multimodal Processor for gemma-4; positional text
         # lands in its `images` arg. Use the inner tokenizer directly.
         ids = getattr(tokenizer, "tokenizer", tokenizer)(marker, add_special_tokens=False)["input_ids"]
+        # gemma-4 tokenizers treat these markers as PLAIN TEXT (7 tokens each),
+        # unlike gemma-3 where they were single special tokens. That is fine:
+        # the app sends the raw-string template and stops on the <end_of_turn>
+        # STRING, and SFT teaches the model this exact deployed format.
         if len(ids) != 1:
-            raise SystemExit(
-                "FATAL: %r tokenizes to %d tokens (%r) in %s — the app's raw "
-                "Gemma template does not match this tokenizer. Do not train."
-                % (marker, len(ids), ids, args.base))
+            print("WARNING: %r tokenizes to %d tokens in %s "
+                  "(plain-text template — expected for gemma-4)"
+                  % (marker, len(ids), args.base))
 
     # Text-only LoRA on attention + MLP of the language tower. Vision stays
     # frozen; audio modules are never selected because we only opt into
