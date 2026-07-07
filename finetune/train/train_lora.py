@@ -153,7 +153,7 @@ def main():
         save_strategy="epoch",
         seed=args.seed,
         bf16=bf16,
-        fp16=not bf16,
+        fp16=False,  # never fp16: gemma-4 upcasts to fp32 in unsloth; fp16 autocast causes dtype mismatch
         # No packing: examples are short, and packing would interleave
         # documents under the prompt-masking pass below (the Unsloth Gemma 4
         # guide's SFT example also trains unpacked).
