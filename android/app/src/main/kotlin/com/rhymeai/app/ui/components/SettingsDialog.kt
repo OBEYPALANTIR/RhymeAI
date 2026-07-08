@@ -15,8 +15,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +46,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -73,6 +79,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -174,6 +181,9 @@ internal fun SettingsDialog(
     var modelExpanded by remember { mutableStateOf(false) }
 
     // Sync passphrase field — write-only like API key fields; empty = do not change stored value.
+    // Progressive disclosure: Drive sync collapses to a single header row
+    // until the user opens it — General stays scannable.
+    var syncSectionExpanded by remember { mutableStateOf(false) }
     var syncPassphraseField by remember { mutableStateOf("") }
     var showSyncPassphrase by remember { mutableStateOf(false) }
 
@@ -758,13 +768,57 @@ internal fun SettingsDialog(
                 )
                 Spacer(Modifier.height(DesignTokens.Spacing.lg))
 
-                Text(
-                    "Cloud Sync (Google Drive)",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { syncSectionExpanded = !syncSectionExpanded }
+                        .heightIn(min = 44.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Cloud Sync (Google Drive)",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            when {
+                                syncInProgress -> syncProgressLabel
+                                syncPassphraseStored -> "On — encrypted with your passphrase"
+                                else -> "Not set up"
+                            },
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                    val chevronRotation by animateFloatAsState(
+                        targetValue = if (syncSectionExpanded) 180f else 0f,
+                        animationSpec = if (animationsEnabled) {
+                            tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing)
+                        } else {
+                            androidx.compose.animation.core.snap()
+                        },
+                        label = "syncChevron"
+                    )
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (syncSectionExpanded) "Collapse cloud sync" else "Expand cloud sync",
+                        tint = colorScheme.onSurfaceVariant,
+                        modifier = Modifier.rotate(chevronRotation)
+                    )
+                }
+
+                AnimatedVisibility(
+                    visible = syncSectionExpanded,
+                    enter = expandVertically(animationSpec = DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top),
+                    exit = shrinkVertically(animationSpec = tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                ) {
+                Column {
+                Spacer(Modifier.height(DesignTokens.Spacing.sm))
                 Text(
                     "Backs up projects, trash, and recordings to Google Drive. API keys stay on this device. Backup is encrypted with your passphrase.",
                     fontSize = 12.sp,
@@ -869,6 +923,8 @@ internal fun SettingsDialog(
                         lineHeight = 15.sp
                     )
                 }
+                } // end sync collapsible column
+                } // end sync AnimatedVisibility
 
                 } // end else (General tab)
 
