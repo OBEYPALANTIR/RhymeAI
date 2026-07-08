@@ -14,6 +14,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -49,6 +58,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -90,6 +100,8 @@ fun AssistantPanel(
         focusedPlaceholderColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
     )
     var activeHelp by remember { mutableStateOf<FeatureHelp?>(null) }
+    var rhymeOptionsExpanded by remember { mutableStateOf(false) }
+    val animationsEnabled = com.rhymeai.app.ui.theme.LocalAnimationsEnabled.current
 
     activeHelp?.let { help ->
         FeatureHelpDialog(
@@ -217,147 +229,193 @@ fun AssistantPanel(
                 }
             }
 
-            // Rhyme Scheme
+            // Rhyme options — scheme, density, and complexity live behind one
+            // disclosure so the panel leads with the writing flow; the header
+            // summary keeps the current tuning visible while collapsed.
             Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { rhymeOptionsExpanded = !rhymeOptionsExpanded }
+                        .heightIn(min = DesignTokens.Touch.minTarget),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FeatureHelpLabel(
-                        text = "Rhyme Scheme",
-                        help = FeatureHelp.RHYME_SCHEME,
-                        onHelp = { activeHelp = it },
-                        color = colorScheme.onSurfaceVariant
+                    Text(
+                        "Rhyme Options",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
                     )
+                    Text(
+                        "${viewModel.rhymeScheme.label} \u00b7 ${viewModel.rhymeType.shortLabel()} \u00b7 ${viewModel.rhymeComplexity.label}",
+                        fontSize = 12.sp,
+                        color = colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
+                    val chevronRotation by animateFloatAsState(
+                        targetValue = if (rhymeOptionsExpanded) 180f else 0f,
+                        animationSpec = if (animationsEnabled) {
+                            tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing)
+                        } else {
+                            snap()
+                        },
+                        label = "rhymeOptionsChevron"
+                    )
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (rhymeOptionsExpanded) "Collapse rhyme options" else "Expand rhyme options",
+                        tint = colorScheme.onSurfaceVariant,
+                        modifier = Modifier.rotate(chevronRotation)
+                    )
+                }
 
-                    var expanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = !expanded }
-                    ) {
-                        OutlinedTextField(
-                            value = viewModel.rhymeScheme.label,
-                            onValueChange = {},
-                            readOnly = true,
-                            modifier = Modifier
-                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                                .widthIn(min = 130.dp),
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = DesignTokens.Typography.caption, color = colorScheme.onSurface),
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                            colors = textFieldColors,
-                            shape = RoundedCornerShape(DesignTokens.Radius.sm),
-                            singleLine = true
-                        )
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false },
-                            containerColor = colorScheme.surfaceContainerHigh
+                AnimatedVisibility(
+                    visible = rhymeOptionsExpanded,
+                    enter = expandVertically(animationSpec = DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top),
+                    exit = shrinkVertically(animationSpec = tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.lg)) {
+                    // Rhyme Scheme
+                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            RhymeScheme.entries.forEach { scheme ->
-                                DropdownMenuItem(
-                                    text = { Text(scheme.label, color = colorScheme.onSurface, fontSize = DesignTokens.Typography.caption) },
-                                    onClick = {
-                                        viewModel.rhymeScheme = scheme
-                                        expanded = false
-                                    }
+                            FeatureHelpLabel(
+                                text = "Rhyme Scheme",
+                                help = FeatureHelp.RHYME_SCHEME,
+                                onHelp = { activeHelp = it },
+                                color = colorScheme.onSurfaceVariant
+                            )
+
+                            var expanded by remember { mutableStateOf(false) }
+                            ExposedDropdownMenuBox(
+                                expanded = expanded,
+                                onExpandedChange = { expanded = !expanded }
+                            ) {
+                                OutlinedTextField(
+                                    value = viewModel.rhymeScheme.label,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    modifier = Modifier
+                                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                        .widthIn(min = 130.dp),
+                                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = DesignTokens.Typography.caption, color = colorScheme.onSurface),
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                                    colors = textFieldColors,
+                                    shape = RoundedCornerShape(DesignTokens.Radius.sm),
+                                    singleLine = true
                                 )
+                                ExposedDropdownMenu(
+                                    expanded = expanded,
+                                    onDismissRequest = { expanded = false },
+                                    containerColor = colorScheme.surfaceContainerHigh
+                                ) {
+                                    RhymeScheme.entries.forEach { scheme ->
+                                        DropdownMenuItem(
+                                            text = { Text(scheme.label, color = colorScheme.onSurface, fontSize = DesignTokens.Typography.caption) },
+                                            onClick = {
+                                                viewModel.rhymeScheme = scheme
+                                                expanded = false
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
+
+                        if (viewModel.rhymeScheme == RhymeScheme.CUSTOM) {
+                            OutlinedTextField(
+                                value = viewModel.customRhymeScheme,
+                                onValueChange = { viewModel.customRhymeScheme = it.uppercase().filter { c -> c.isLetter() } },
+                                placeholder = { Text("e.g. AABBCC", fontSize = DesignTokens.Typography.caption) },
+                                modifier = Modifier.fillMaxWidth().height(DesignTokens.Touch.minTarget),
+                                colors = textFieldColors,
+                                shape = RoundedCornerShape(DesignTokens.Radius.sm),
+                                singleLine = true,
+                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = DesignTokens.Typography.caption)
+                            )
+                        }
+                    }
+
+                    // Rhyme Type
+                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                        FeatureHelpLabel(
+                            text = "Rhyme Density",
+                            help = FeatureHelp.RHYME_DENSITY,
+                            onHelp = { activeHelp = it },
+                            color = colorScheme.onSurfaceVariant
+                        )
+
+                        SlidingSegmentedControl(
+                            labels = RhymeType.entries.map { it.shortLabel() },
+                            selectedIndex = RhymeType.entries.indexOf(viewModel.rhymeType),
+                            onSelect = { viewModel.rhymeType = RhymeType.entries[it] },
+                            modifier = Modifier.fillMaxWidth(),
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    // Rhyme Complexity Slider
+                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FeatureHelpLabel(
+                                text = "Complexity",
+                                help = FeatureHelp.COMPLEXITY,
+                                onHelp = { activeHelp = it },
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                viewModel.rhymeComplexity.label,
+                                fontSize = DesignTokens.Typography.caption,
+                                fontWeight = FontWeight.Medium,
+                                color = colorScheme.primary
+                            )
+                        }
+
+                        Slider(
+                            value = viewModel.rhymeComplexity.level.toFloat(),
+                            onValueChange = { value ->
+                                viewModel.rhymeComplexity = RhymeComplexity.entries.first { it.level == value.toInt() }
+                            },
+                            valueRange = 0f..2f,
+                            steps = 1,
+                            colors = SliderDefaults.colors(
+                                thumbColor = colorScheme.primary,
+                                activeTrackColor = colorScheme.primary,
+                                inactiveTrackColor = colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Text(
+                            viewModel.rhymeComplexity.description,
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(top = DesignTokens.Spacing.xs)
+                        )
+                    }
+
                     }
                 }
 
-                if (viewModel.rhymeScheme == RhymeScheme.CUSTOM) {
-                    OutlinedTextField(
-                        value = viewModel.customRhymeScheme,
-                        onValueChange = { viewModel.customRhymeScheme = it.uppercase().filter { c -> c.isLetter() } },
-                        placeholder = { Text("e.g. AABBCC", fontSize = DesignTokens.Typography.caption) },
-                        modifier = Modifier.fillMaxWidth().height(DesignTokens.Touch.minTarget),
-                        colors = textFieldColors,
-                        shape = RoundedCornerShape(DesignTokens.Radius.sm),
-                        singleLine = true,
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = DesignTokens.Typography.caption)
-                    )
-                }
-
-                // Visual stanza display
+                // Visual stanza display stays visible: it is feedback on the
+                // lyrics, not a tuning control.
                 if (viewModel.lyrics.isNotEmpty()) {
                     RhymeSchemeDisplay(
                         rhymeContext = rhymeContext,
                         activeScheme = viewModel.activeRhymeScheme
                     )
                 }
-            }
-
-            // Rhyme Type
-            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                FeatureHelpLabel(
-                    text = "Rhyme Density",
-                    help = FeatureHelp.RHYME_DENSITY,
-                    onHelp = { activeHelp = it },
-                    color = colorScheme.onSurfaceVariant
-                )
-
-                SlidingSegmentedControl(
-                    labels = RhymeType.entries.map { it.shortLabel() },
-                    selectedIndex = RhymeType.entries.indexOf(viewModel.rhymeType),
-                    onSelect = { viewModel.rhymeType = RhymeType.entries[it] },
-                    modifier = Modifier.fillMaxWidth(),
-                    fontSize = 12.sp
-                )
-            }
-
-            // Rhyme Complexity Slider
-            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    FeatureHelpLabel(
-                        text = "Complexity",
-                        help = FeatureHelp.COMPLEXITY,
-                        onHelp = { activeHelp = it },
-                        color = colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        viewModel.rhymeComplexity.label,
-                        fontSize = DesignTokens.Typography.caption,
-                        fontWeight = FontWeight.Medium,
-                        color = colorScheme.primary
-                    )
-                }
-
-                Slider(
-                    value = viewModel.rhymeComplexity.level.toFloat(),
-                    onValueChange = { value ->
-                        viewModel.rhymeComplexity = RhymeComplexity.entries.first { it.level == value.toInt() }
-                    },
-                    valueRange = 0f..2f,
-                    steps = 1,
-                    colors = SliderDefaults.colors(
-                        thumbColor = colorScheme.primary,
-                        activeTrackColor = colorScheme.primary,
-                        inactiveTrackColor = colorScheme.outlineVariant
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Simple", fontSize = 12.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                    Text("Moderate", fontSize = 12.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                    Text("Complex", fontSize = 12.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                }
-
-                Text(
-                    viewModel.rhymeComplexity.description,
-                    fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.padding(top = DesignTokens.Spacing.xs)
-                )
             }
 
             // Suggest button — moved directly after Complexity; turns into Stop while streaming.

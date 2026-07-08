@@ -3,6 +3,8 @@ import SwiftUI
 struct AssistantPanelView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @State private var activeHelp: FeatureHelp?
+    @State private var rhymeOptionsExpanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var isInline: Bool = false
     var onDismiss: (() -> Void)?
 
@@ -138,82 +140,118 @@ struct AssistantPanelView: View {
                 .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm, tint: .white.opacity(0.03), fallbackOpacity: 0.05)
             }
 
-            // MARK: - Rhyme Scheme
-            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                HStack {
-                    featureHelpLabel("Rhyme Scheme", help: .rhymeScheme)
+            // MARK: - Rhyme Options
+            // Scheme, density, and complexity live behind one disclosure so the
+            // panel leads with the writing flow; the header summary keeps the
+            // current tuning visible while collapsed.
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+                Button {
+                    withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
+                        rhymeOptionsExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: RhymeAITokens.Spacing.sm) {
+                        Text("Rhyme Options")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(viewModel.rhymeScheme.label) \u{00b7} \(viewModel.rhymeType.shortName) \u{00b7} \(viewModel.rhymeComplexity.label)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.indigo)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(rhymeOptionsExpanded ? 180 : 0))
+                    }
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(rhymeOptionsExpanded ? "Collapse rhyme options" : "Expand rhyme options")
 
-                    Spacer()
+                if rhymeOptionsExpanded {
+                // MARK: - Rhyme Scheme
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    HStack {
+                        featureHelpLabel("Rhyme Scheme", help: .rhymeScheme)
 
-                    Picker("Scheme", selection: $viewModel.rhymeScheme) {
-                        ForEach(RhymeScheme.allCases, id: \.self) { scheme in
-                            Text(scheme.label).tag(scheme)
+                        Spacer()
+
+                        Picker("Scheme", selection: $viewModel.rhymeScheme) {
+                            ForEach(RhymeScheme.allCases, id: \.self) { scheme in
+                                Text(scheme.label).tag(scheme)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .tint(.indigo)
+                    }
+
+                    if viewModel.rhymeScheme == .custom {
+                        TextField("e.g. AABBCC", text: $viewModel.customRhymeScheme)
+                            .textFieldStyle(.plain)
+                            .textInputAutocapitalization(.characters)
+                            .padding(RhymeAITokens.Spacing.sm)
+                            .frame(minHeight: RhymeAITokens.Touch.minimum)
+                            .liquidGlassSurface(
+                                cornerRadius: RhymeAITokens.Radius.md,
+                                tint: .white.opacity(0.04),
+                                interactive: true,
+                                fallbackOpacity: 0.06
+                            )
+                            .onChange(of: viewModel.customRhymeScheme) { _, newValue in
+                                viewModel.customRhymeScheme = newValue.uppercased().filter { $0.isLetter }
+                            }
+                    }
+
+                }
+
+                // MARK: - Rhyme Density
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    featureHelpLabel("Rhyme Density", help: .rhymeDensity)
+
+                    Picker("Type", selection: $viewModel.rhymeType) {
+                        ForEach(RhymeType.allCases, id: \.self) { type in
+                            Text(type.shortName).tag(type)
                         }
                     }
-                    .pickerStyle(.menu)
+                    .pickerStyle(.segmented)
+                }
+
+                // MARK: - Complexity
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    HStack {
+                        featureHelpLabel("Complexity", help: .complexity)
+                        Spacer()
+                        Text(viewModel.rhymeComplexity.label)
+                            .font(.caption)
+                            .foregroundStyle(.indigo)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { Double(viewModel.rhymeComplexity.rawValue) },
+                            set: { viewModel.rhymeComplexity = RhymeComplexity(rawValue: Int($0)) ?? .moderate }
+                        ),
+                        in: 0...2,
+                        step: 1
+                    )
                     .tint(.indigo)
+
+                    Text(viewModel.rhymeComplexity.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                if viewModel.rhymeScheme == .custom {
-                    TextField("e.g. AABBCC", text: $viewModel.customRhymeScheme)
-                        .textFieldStyle(.plain)
-                        .textInputAutocapitalization(.characters)
-                        .padding(RhymeAITokens.Spacing.sm)
-                        .frame(minHeight: RhymeAITokens.Touch.minimum)
-                        .liquidGlassSurface(
-                            cornerRadius: RhymeAITokens.Radius.md,
-                            tint: .white.opacity(0.04),
-                            interactive: true,
-                            fallbackOpacity: 0.06
-                        )
-                        .onChange(of: viewModel.customRhymeScheme) { _, newValue in
-                            viewModel.customRhymeScheme = newValue.uppercased().filter { $0.isLetter }
-                        }
                 }
 
+                // Visual stanza display stays visible: it is feedback on the
+                // lyrics, not a tuning control.
                 if !viewModel.lyrics.isEmpty {
                     RhymeSchemeDisplayView(
                         rhymeContext: rhymeContext,
                         activeScheme: viewModel.activeRhymeScheme
                     )
                 }
-            }
-
-            // MARK: - Rhyme Density
-            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                featureHelpLabel("Rhyme Density", help: .rhymeDensity)
-
-                Picker("Type", selection: $viewModel.rhymeType) {
-                    ForEach(RhymeType.allCases, id: \.self) { type in
-                        Text(type.shortName).tag(type)
-                    }
-                }
-                .pickerStyle(.segmented)
-            }
-
-            // MARK: - Complexity
-            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                HStack {
-                    featureHelpLabel("Complexity", help: .complexity)
-                    Spacer()
-                    Text(viewModel.rhymeComplexity.label)
-                        .font(.caption)
-                        .foregroundStyle(.indigo)
-                }
-
-                Slider(
-                    value: Binding(
-                        get: { Double(viewModel.rhymeComplexity.rawValue) },
-                        set: { viewModel.rhymeComplexity = RhymeComplexity(rawValue: Int($0)) ?? .moderate }
-                    ),
-                    in: 0...2,
-                    step: 1
-                )
-                .tint(.indigo)
-
-                Text(viewModel.rhymeComplexity.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             // Beat Grid tempo controls remain in the panel (not Settings) so the
