@@ -44,7 +44,7 @@ struct ProjectsView: View {
                                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                                 .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.rhymePress)
                         .accessibilityLabel("Clear search")
                     }
                 }

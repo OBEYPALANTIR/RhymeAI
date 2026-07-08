@@ -37,7 +37,7 @@ struct ExportSheet: View {
                         .padding(.vertical, RhymeAITokens.Spacing.sm)
                         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.rhymePress)
                 }
 
                 Spacer()

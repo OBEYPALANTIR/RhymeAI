@@ -308,7 +308,7 @@ struct SettingsView: View {
                         .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.rhymePress)
                 .accessibilityLabel(showKey ? "Hide API key" : "Show API key")
             }
             .padding(14)
@@ -500,7 +500,7 @@ struct SettingsView: View {
             .padding(.horizontal, 16)
             .liquidGlassSurface(cornerRadius: 18, tint: .green.opacity(0.12), interactive: true, fallbackOpacity: 0.08)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.rhymePress)
         .disabled(savedConfirmation)
     }
 
@@ -541,7 +541,7 @@ struct SettingsView: View {
             .padding(14)
             .liquidGlassSurface(cornerRadius: 18, tint: .teal.opacity(0.08), interactive: !isDownloaded, fallbackOpacity: 0.05)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.rhymePress)
         .disabled(activeDownloadID != nil || isDownloaded)
         .accessibilityIdentifier("gemmaDownload.\(option.id)")
     }

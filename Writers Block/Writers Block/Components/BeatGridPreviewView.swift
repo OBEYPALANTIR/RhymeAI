@@ -30,7 +30,7 @@ struct BeatGridTempoControl: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.indigo)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.rhymePress)
                 .accessibilityLabel("Tap tempo")
 
                 // Stepper

@@ -21,7 +21,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -236,10 +235,7 @@ fun AssistantPanel(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { rhymeOptionsExpanded = !rhymeOptionsExpanded }
+                        .clickable { rhymeOptionsExpanded = !rhymeOptionsExpanded }
                         .heightIn(min = DesignTokens.Touch.minTarget),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

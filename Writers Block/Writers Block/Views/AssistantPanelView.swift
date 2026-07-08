@@ -166,7 +166,7 @@ struct AssistantPanelView: View {
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.rhymePress)
                 .accessibilityLabel(rhymeOptionsExpanded ? "Collapse rhyme options" : "Expand rhyme options")
 
                 if rhymeOptionsExpanded {

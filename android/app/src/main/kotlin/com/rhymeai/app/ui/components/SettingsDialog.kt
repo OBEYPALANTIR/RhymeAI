@@ -21,7 +21,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -771,10 +770,7 @@ internal fun SettingsDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { syncSectionExpanded = !syncSectionExpanded }
+                        .clickable { syncSectionExpanded = !syncSectionExpanded }
                         .heightIn(min = 44.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
