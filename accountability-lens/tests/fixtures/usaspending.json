@@ -1,0 +1,45 @@
+{
+  "results": [
+    {
+      "Award ID": "W91ABC25C0001",
+      "Recipient Name": "EXAMPLE CORP",
+      "Award Amount": 480000000.0,
+      "Awarding Agency": "Department of Defense",
+      "Awarding Sub Agency": "Department of the Army",
+      "Description": "DATA ANALYTICS PLATFORM LICENSES AND SUPPORT SERVICES",
+      "Start Date": "2024-10-01",
+      "End Date": "2027-09-30"
+    },
+    {
+      "Award ID": "HSHQDC24F0042",
+      "Recipient Name": "EXAMPLE CORP",
+      "Award Amount": 96500000.0,
+      "Awarding Agency": "Department of Homeland Security",
+      "Awarding Sub Agency": "Immigration and Customs Enforcement",
+      "Description": "CASE MANAGEMENT SOFTWARE AND INTEGRATION",
+      "Start Date": "2023-06-15",
+      "End Date": "2026-06-14"
+    },
+    {
+      "Award ID": "GS35F0119X",
+      "Recipient Name": "EXAMPLE CORP SERVICES LLC",
+      "Award Amount": 12250000.0,
+      "Awarding Agency": "General Services Administration",
+      "Awarding Sub Agency": "Federal Acquisition Service",
+      "Description": "IT PROFESSIONAL SERVICES",
+      "Start Date": "2022-01-01",
+      "End Date": "2025-12-31"
+    },
+    {
+      "Award ID": "75N98024D0007",
+      "Recipient Name": "EXAMPLE CORP",
+      "Award Amount": null,
+      "Awarding Agency": "Department of Health and Human Services",
+      "Awarding Sub Agency": "National Institutes of Health",
+      "Description": "RESEARCH DATA HOSTING",
+      "Start Date": "2024-03-01",
+      "End Date": "2025-02-28"
+    }
+  ],
+  "page_metadata": { "page": 1, "hasNext": false }
+}

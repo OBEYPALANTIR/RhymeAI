@@ -1,0 +1,26 @@
+{
+  "results": [
+    {
+      "contributor_name": "DOE, JANE",
+      "contributor_employer": "EXAMPLE CORP",
+      "contribution_receipt_amount": 6600.0,
+      "contribution_receipt_date": "2024-09-12T00:00:00",
+      "committee": { "name": "SENATE LEADERSHIP FUND", "party_full": "REPUBLICAN PARTY" }
+    },
+    {
+      "contributor_name": "SMITH, JOHN",
+      "contributor_employer": "EXAMPLE CORP",
+      "contribution_receipt_amount": 5000.0,
+      "contribution_receipt_date": "2024-08-02T00:00:00",
+      "committee": { "name": "AMERICAN PROGRESS PAC", "party_full": "DEMOCRATIC PARTY" }
+    },
+    {
+      "contributor_name": "DOE, JANE",
+      "contributor_employer": "EXAMPLE CORP",
+      "contribution_receipt_amount": 3300.0,
+      "contribution_receipt_date": "2024-05-20T00:00:00",
+      "committee": { "name": "SENATE LEADERSHIP FUND", "party_full": "REPUBLICAN PARTY" }
+    }
+  ],
+  "pagination": { "count": 3, "pages": 1 }
+}

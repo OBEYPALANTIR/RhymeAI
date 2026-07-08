@@ -1,0 +1,37 @@
+{
+  "Results": {
+    "QueryRows": "3",
+    "Facilities": [
+      {
+        "FacName": "EXAMPLE CORP MANUFACTURING PLANT",
+        "FacCity": "GARY",
+        "FacState": "IN",
+        "CurrVioFlag": "Y",
+        "FacQtrsWithNC": "7",
+        "FacFormalActionCount": "2",
+        "FacTotalPenalties": "184500",
+        "FacInspectionCount": "11"
+      },
+      {
+        "FacName": "EXAMPLE CORP DATA CENTER",
+        "FacCity": "COUNCIL BLUFFS",
+        "FacState": "IA",
+        "CurrVioFlag": "N",
+        "FacQtrsWithNC": "0",
+        "FacFormalActionCount": "0",
+        "FacTotalPenalties": "",
+        "FacInspectionCount": "3"
+      },
+      {
+        "FacName": "EXAMPLE CORP CHEMICAL STORAGE",
+        "FacCity": "BATON ROUGE",
+        "FacState": "LA",
+        "CurrVioFlag": "N",
+        "FacQtrsWithNC": "4",
+        "FacFormalActionCount": "1",
+        "FacTotalPenalties": "62000",
+        "FacInspectionCount": "6"
+      }
+    ]
+  }
+}
