@@ -33,20 +33,22 @@ internal data class GemmaDownload(
     val expectedBytes: Long
 )
 
+// RhymeAI's own fine-tunes of Gemma 4 (LoRA-trained on the app's exact prompt
+// format; see finetune/SCORECARD.md). Hosted on the project's HF repo.
 internal val GEMMA_DOWNLOADS = listOf(
     GemmaDownload(
-        label = "Gemma 4 E2B",
-        description = "Best default for phones, 3.18 GB.",
-        fileName = "gemma-4-E2B-it-UD-Q4_K_XL.gguf",
-        url = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf?download=true",
-        expectedBytes = 3_184_494_720L
+        label = "RhymeAI Gemma E2B",
+        description = "Tuned for RhymeAI — best default for phones, 3.43 GB.",
+        fileName = "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
+        url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/main/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true",
+        expectedBytes = 3_427_878_784L
     ),
     GemmaDownload(
-        label = "Gemma 4 E4B",
-        description = "Higher quality, slower, 5.13 GB.",
-        fileName = "gemma-4-E4B-it-UD-Q4_K_XL.gguf",
-        url = "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf?download=true",
-        expectedBytes = 5_126_304_928L
+        label = "RhymeAI Gemma E4B",
+        description = "Tuned for RhymeAI — higher quality, slower, 5.34 GB.",
+        fileName = "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
+        url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/main/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true",
+        expectedBytes = 5_335_290_784L
     )
 )
 
