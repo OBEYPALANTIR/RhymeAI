@@ -551,6 +551,9 @@ fun ProjectsDrawer(
                 hostState = snackbarHostState,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    // Clear the gesture bar: without the inset the snackbar (and
+                    // its Undo action) renders half off-screen behind it.
+                    .padding(bottom = navigationBarBottomPadding())
                     .padding(DesignTokens.Spacing.lg)
             )
         }
