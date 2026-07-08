@@ -94,7 +94,7 @@ import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsDialog(
+internal fun SettingsDialog(
     apiKeyPresence: Map<String, Boolean>,
     currentProvider: AIProvider,
     currentModel: AIModel,
@@ -107,6 +107,15 @@ fun SettingsDialog(
     onSaveModel: (AIModel) -> Unit,
     onLoadLocalModel: (String) -> Unit,
     onUnloadLocalModel: () -> Unit,
+    // Gemma download state lives in MainViewModel so it survives leaving this
+    // screen; the dialog only renders it and forwards intents.
+    gemmaDownloadingModel: GemmaDownload? = null,
+    gemmaDownloadProgress: Float? = null,
+    gemmaDownloadError: String? = null,
+    gemmaLastDownloadAttempt: GemmaDownload? = null,
+    gemmaDownloadRevision: Int = 0,
+    onStartGemmaDownload: (GemmaDownload) -> Unit = {},
+    onUseDownloadedGemma: (GemmaDownload) -> Boolean = { false },
     // Drive sync
     syncPassphraseStored: Boolean = false,
     syncInProgress: Boolean = false,
@@ -170,83 +179,13 @@ fun SettingsDialog(
     // File picker for local models
     var copyingFile by remember { mutableStateOf(false) }
     var copyError by remember { mutableStateOf<String?>(null) }
-    var downloadingModel by remember { mutableStateOf<GemmaDownload?>(null) }
-    var downloadProgress by remember { mutableStateOf<Float?>(null) }
-    var downloadError by remember { mutableStateOf<String?>(null) }
-    var lastDownloadAttempt by remember { mutableStateOf<GemmaDownload?>(null) }
-    var downloadRevision by remember { mutableStateOf(0) }
     val coroutineScope = rememberCoroutineScope()
 
     fun useDownloadedModel(model: GemmaDownload) {
-        val destFile = File(context.filesDir, model.fileName)
-        val validationError = validateDownloadedGemma(model, destFile)
-        if (validationError != null) {
-            downloadError = validationError
-            return
-        }
-
-        selectedProvider = AIProvider.LOCAL
-        selectedModel = AIModel.LOCAL_MODEL
-        onSaveProvider(AIProvider.LOCAL)
-        onSaveModel(AIModel.LOCAL_MODEL)
-        onLoadLocalModel(destFile.absolutePath)
-        saved = true
-    }
-
-    fun startGemmaDownload(model: GemmaDownload) {
-        downloadingModel = model
-        downloadProgress = 0f
-        downloadError = null
-        copyError = null
-        lastDownloadAttempt = model
-
-        coroutineScope.launch(Dispatchers.IO) {
-            val destFile = File(context.filesDir, model.fileName)
-            val tempFile = File(context.cacheDir, "${model.fileName}.download")
-
-            try {
-                if (validateDownloadedGemma(model, destFile) == null) {
-                    withContext(Dispatchers.Main) {
-                        downloadingModel = null
-                        downloadProgress = null
-                        useDownloadedModel(model)
-                    }
-                    return@launch
-                }
-
-                ensureEnoughSpaceForGemma(model, destFile, tempFile)
-                if (destFile.exists()) destFile.delete()
-
-                if (validateDownloadedGemma(model, tempFile) != null) {
-                    downloadGemmaToTemp(model, tempFile) { progress ->
-                        withContext(Dispatchers.Main) {
-                            downloadProgress = progress
-                        }
-                    }
-                }
-
-                validateDownloadedGemma(model, tempFile)?.let { throw IllegalStateException(it) }
-
-                if (!tempFile.renameTo(destFile)) {
-                    tempFile.copyTo(destFile, overwrite = true, bufferSize = DOWNLOAD_BUFFER_BYTES)
-                    tempFile.delete()
-                }
-
-                withContext(Dispatchers.Main) {
-                    downloadingModel = null
-                    downloadProgress = null
-                    downloadRevision++
-                    useDownloadedModel(model)
-                }
-            } catch (e: Exception) {
-                Log.w("RhymeAI", "Gemma download failed", e)
-                tempFile.delete()
-                withContext(Dispatchers.Main) {
-                    downloadingModel = null
-                    downloadProgress = null
-                    downloadError = "Failed to download ${model.label}: ${e.message}"
-                }
-            }
+        if (onUseDownloadedGemma(model)) {
+            selectedProvider = AIProvider.LOCAL
+            selectedModel = AIModel.LOCAL_MODEL
+            saved = true
         }
     }
 
@@ -353,10 +292,8 @@ fun SettingsDialog(
                         modifier = Modifier
                             .fillMaxSize()
                             .statusBarsPadding()
-                            .padding(horizontal = 20.dp)
+                            .padding(horizontal = DesignTokens.Spacing.lg)
                             .padding(top = DesignTokens.Spacing.lg)
-                            .bottomSafeActionPadding(extra = DesignTokens.Spacing.lg)
-                            .verticalScroll(rememberScrollState())
                     ) {
                 // Header
                 Row(
@@ -376,7 +313,7 @@ fun SettingsDialog(
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(DesignTokens.Spacing.lg))
 
                 // General | Editor tab switcher
                 SlidingSegmentedControl(
@@ -386,7 +323,16 @@ fun SettingsDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(DesignTokens.Spacing.lg))
+
+                // Only the tab content scrolls; header, tabs, and Save stay pinned.
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(bottom = DesignTokens.Spacing.xxl)
+                ) {
 
                 if (settingsTab == 1) {
                     // ── Editor tab ────────────────────────────────────────────
@@ -431,7 +377,7 @@ fun SettingsDialog(
                     fontSize = 11.sp
                 )
 
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(DesignTokens.Spacing.lg))
 
                 AnimatedContent(
                     targetState = selectedProvider,
@@ -514,7 +460,7 @@ fun SettingsDialog(
 
                                 GEMMA_DOWNLOADS.forEach { model ->
                                     val installedFile = File(context.filesDir, model.fileName)
-                                    val installedError = remember(downloadRevision, model.fileName) {
+                                    val installedError = remember(gemmaDownloadRevision, model.fileName) {
                                         validateDownloadedGemma(model, installedFile)
                                     }
                                     val isInstalled = installedError == null
@@ -523,7 +469,7 @@ fun SettingsDialog(
                                     } else {
                                         model.description
                                     }
-                                    val isDownloadingThis = downloadingModel?.fileName == model.fileName
+                                    val isDownloadingThis = gemmaDownloadingModel?.fileName == model.fileName
                                     val isRecommended = model.fileName == recommendedModel.fileName
                                     // Warn on the non-recommended model so users know it may thrash;
                                     // downloading is still allowed — just not the best fit for this device.
@@ -533,10 +479,10 @@ fun SettingsDialog(
                                             if (isInstalled) {
                                                 useDownloadedModel(model)
                                             } else {
-                                                startGemmaDownload(model)
+                                                onStartGemmaDownload(model)
                                             }
                                         },
-                                        enabled = !localModelLoading && !copyingFile && downloadingModel == null,
+                                        enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null,
                                         modifier = Modifier.fillMaxWidth(),
                                         shape = RoundedCornerShape(DesignTokens.Radius.lg)
                                     ) {
@@ -547,7 +493,7 @@ fun SettingsDialog(
                                                 strokeWidth = 2.dp
                                             )
                                             Text(
-                                                "  ${model.label} ${formatDownloadProgress(downloadProgress)}",
+                                                "  ${model.label} ${formatDownloadProgress(gemmaDownloadProgress)}",
                                                 fontWeight = FontWeight.Medium
                                             )
                                         } else {
@@ -603,7 +549,7 @@ fun SettingsDialog(
                                 // Load model button
                                 Button(
                                     onClick = { filePicker.launch(arrayOf("*/*")) },
-                                    enabled = !localModelLoading && !copyingFile && downloadingModel == null,
+                                    enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null,
                                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                     shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                     colors = ButtonDefaults.buttonColors(
@@ -635,7 +581,7 @@ fun SettingsDialog(
                                 }
                             }
 
-                            val displayError = copyError ?: downloadError ?: localModelError
+                            val displayError = copyError ?: gemmaDownloadError ?: localModelError
                             displayError?.let { errorText ->
                                 Spacer(Modifier.height(8.dp))
                                 Row(
@@ -649,10 +595,10 @@ fun SettingsDialog(
                                         lineHeight = 16.sp,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    val retryTarget = lastDownloadAttempt
+                                    val retryTarget = gemmaLastDownloadAttempt
                                     when {
-                                        downloadError != null && retryTarget != null -> {
-                                            TextButton(onClick = { startGemmaDownload(retryTarget) }) {
+                                        gemmaDownloadError != null && retryTarget != null -> {
+                                            TextButton(onClick = { onStartGemmaDownload(retryTarget) }) {
                                                 Text("Retry")
                                             }
                                         }
@@ -743,7 +689,7 @@ fun SettingsDialog(
                                 }
                             }
 
-                            Spacer(Modifier.height(20.dp))
+                            Spacer(Modifier.height(DesignTokens.Spacing.lg))
 
                             // Model selection
                             Text("Model", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
@@ -802,12 +748,12 @@ fun SettingsDialog(
                 // ---------------------------------------------------------------
                 // Drive Sync section
                 // ---------------------------------------------------------------
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(DesignTokens.Spacing.xxl))
                 androidx.compose.material3.HorizontalDivider(
                     color = colorScheme.outlineVariant.copy(alpha = 0.4f),
                     thickness = 0.5.dp
                 )
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(DesignTokens.Spacing.lg))
 
                 Text(
                     "Cloud Sync (Google Drive)",
@@ -921,43 +867,42 @@ fun SettingsDialog(
                     )
                 }
 
-                Spacer(Modifier.height(20.dp))
-
-                Button(
-                    onClick = {
-                        // Empty fields mean "keep the stored key" — only save typed values.
-                        if (geminiKey.isNotBlank()) onSaveApiKey(AIProvider.GEMINI, geminiKey.trim())
-                        if (openaiKey.isNotBlank()) onSaveApiKey(AIProvider.OPENAI, openaiKey.trim())
-                        if (claudeKey.isNotBlank()) onSaveApiKey(AIProvider.CLAUDE, claudeKey.trim())
-                        onSaveProvider(selectedProvider)
-                        if (selectedProvider != AIProvider.LOCAL) {
-                            onSaveModel(selectedModel)
-                        }
-                        saved = true
-                    },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = colorScheme.primary,
-                        contentColor = colorScheme.onPrimary
-                    )
-                ) {
-                    Text(
-                        if (saved) "Saved!" else "Save Settings",
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                if (saved) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Settings saved successfully.",
-                        fontSize = 12.sp,
-                        color = colorScheme.tertiary
-                    )
-                }
-
                 } // end else (General tab)
+
+                } // end scrollable content
+
+                // Pinned save bar — always reachable regardless of content height.
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = DesignTokens.Spacing.sm)
+                        .bottomSafeActionPadding(extra = DesignTokens.Spacing.sm)
+                ) {
+                    Button(
+                        onClick = {
+                            // Empty fields mean "keep the stored key" — only save typed values.
+                            if (geminiKey.isNotBlank()) onSaveApiKey(AIProvider.GEMINI, geminiKey.trim())
+                            if (openaiKey.isNotBlank()) onSaveApiKey(AIProvider.OPENAI, openaiKey.trim())
+                            if (claudeKey.isNotBlank()) onSaveApiKey(AIProvider.CLAUDE, claudeKey.trim())
+                            onSaveProvider(selectedProvider)
+                            if (selectedProvider != AIProvider.LOCAL) {
+                                onSaveModel(selectedModel)
+                            }
+                            saved = true
+                        },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        )
+                    ) {
+                        Text(
+                            if (saved) "Saved!" else "Save Settings",
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
                 }
             }

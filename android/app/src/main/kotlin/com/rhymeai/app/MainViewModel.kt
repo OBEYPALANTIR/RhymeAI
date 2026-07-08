@@ -1241,6 +1241,94 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Gemma download — lives here (not in Settings' composable scope) so a
+    // multi-gigabyte download survives leaving the screen. Resume support in
+    // downloadGemmaToTemp means an app restart continues where it stopped. ──
+    internal var gemmaDownloadingModel by mutableStateOf<com.rhymeai.app.ui.components.GemmaDownload?>(null)
+        private set
+    var gemmaDownloadProgress by mutableStateOf<Float?>(null)
+        private set
+    var gemmaDownloadError by mutableStateOf<String?>(null)
+    internal var gemmaLastDownloadAttempt by mutableStateOf<com.rhymeai.app.ui.components.GemmaDownload?>(null)
+        private set
+    var gemmaDownloadRevision by mutableStateOf(0)
+        private set
+
+    internal fun useDownloadedGemma(model: com.rhymeai.app.ui.components.GemmaDownload): Boolean {
+        val destFile = java.io.File(getApplication<android.app.Application>().filesDir, model.fileName)
+        val validationError = com.rhymeai.app.ui.components.validateDownloadedGemma(model, destFile)
+        if (validationError != null) {
+            gemmaDownloadError = validationError
+            return false
+        }
+        saveProvider(AIProvider.LOCAL)
+        saveModel(AIModel.LOCAL_MODEL)
+        loadLocalModel(destFile.absolutePath)
+        return true
+    }
+
+    internal fun startGemmaDownload(model: com.rhymeai.app.ui.components.GemmaDownload) {
+        if (gemmaDownloadingModel != null) return
+        gemmaDownloadingModel = model
+        gemmaDownloadProgress = 0f
+        gemmaDownloadError = null
+        gemmaLastDownloadAttempt = model
+        val app = getApplication<android.app.Application>()
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val destFile = java.io.File(app.filesDir, model.fileName)
+            val tempFile = java.io.File(app.cacheDir, "${model.fileName}.download")
+            try {
+                if (com.rhymeai.app.ui.components.validateDownloadedGemma(model, destFile) == null) {
+                    withContext(Dispatchers.Main) {
+                        gemmaDownloadingModel = null
+                        gemmaDownloadProgress = null
+                        useDownloadedGemma(model)
+                    }
+                    return@launch
+                }
+
+                com.rhymeai.app.ui.components.ensureEnoughSpaceForGemma(model, destFile, tempFile)
+                if (destFile.exists()) destFile.delete()
+
+                if (com.rhymeai.app.ui.components.validateDownloadedGemma(model, tempFile) != null) {
+                    com.rhymeai.app.ui.components.downloadGemmaToTemp(model, tempFile) { progress ->
+                        withContext(Dispatchers.Main) {
+                            gemmaDownloadProgress = progress
+                        }
+                    }
+                }
+
+                com.rhymeai.app.ui.components.validateDownloadedGemma(model, tempFile)?.let {
+                    throw IllegalStateException(it)
+                }
+
+                if (!tempFile.renameTo(destFile)) {
+                    tempFile.copyTo(destFile, overwrite = true, bufferSize = com.rhymeai.app.ui.components.DOWNLOAD_BUFFER_BYTES)
+                    tempFile.delete()
+                }
+
+                withContext(Dispatchers.Main) {
+                    gemmaDownloadingModel = null
+                    gemmaDownloadProgress = null
+                    gemmaDownloadRevision++
+                    useDownloadedGemma(model)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("RhymeAI", "Gemma download failed", e)
+                // Keep a PARTIAL temp file so the next attempt resumes with a
+                // Range request; delete it if it reached full size but failed
+                // validation (corrupt download would otherwise stick forever).
+                if (tempFile.length() >= model.expectedBytes) tempFile.delete()
+                withContext(Dispatchers.Main) {
+                    gemmaDownloadingModel = null
+                    gemmaDownloadProgress = null
+                    gemmaDownloadError = "Failed to download ${model.label}: ${e.message}"
+                }
+            }
+        }
+    }
+
     fun loadLocalModel(path: String) {
         localModelPath = path
         localModelLoading = true

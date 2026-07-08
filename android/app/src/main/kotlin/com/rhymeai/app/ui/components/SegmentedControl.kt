@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,10 +66,16 @@ fun SlidingSegmentedControl(
     } else {
         0.dp
     }
+    // Animate only for user-driven selection changes. On (re)mount — e.g. a tab
+    // switch recomposing the page — the highlight must appear already in place
+    // instead of flying in from the first segment.
+    var hasSettled by remember { mutableStateOf(false) }
+    val initialIndex = remember { selectedIndex }
+    if (!hasSettled && (selectedIndex != initialIndex)) hasSettled = true
     val targetOffset = segmentWidth * selectedIndex
     val pillOffset by animateDpAsState(
         targetValue = targetOffset,
-        animationSpec = if (animationsEnabled) DesignTokens.Motion.standardSpring() else snap(),
+        animationSpec = if (animationsEnabled && hasSettled) DesignTokens.Motion.standardSpring() else snap(),
         label = "segmentedPillOffset"
     )
 
