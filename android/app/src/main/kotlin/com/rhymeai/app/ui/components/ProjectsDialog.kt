@@ -76,8 +76,10 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -157,7 +159,6 @@ fun ProjectsDrawer(
     var searchQuery by remember { mutableStateOf("") }
     var drawerVisible by remember { mutableStateOf(false) }
     var isClosing by remember { mutableStateOf(false) }
-    var projectPendingDelete by remember { mutableStateOf<SongProject?>(null) }
     var showTrashBin by remember { mutableStateOf(false) }
     var trashBinVisible by remember { mutableStateOf(false) }
     var isTrashBinClosing by remember { mutableStateOf(false) }
@@ -429,7 +430,19 @@ fun ProjectsDrawer(
                                                 onLoadProject = { selected ->
                                                     closeDrawer { onLoadProject(selected) }
                                                 },
-                                                onDeleteProject = { projectPendingDelete = it }
+                                                onDeleteProject = { project ->
+                                                    onDeleteProject(project.id)
+                                                    scope.launch {
+                                                        val result = snackbarHostState.showSnackbar(
+                                                            message = "\"${project.title.ifEmpty { "Untitled Song" }}\" moved to Trash",
+                                                            actionLabel = "Undo",
+                                                            duration = SnackbarDuration.Short
+                                                        )
+                                                        if (result == SnackbarResult.ActionPerformed) {
+                                                            onRestoreProject(project.id)
+                                                        }
+                                                    }
+                                                }
                                             )
                                         }
                                     }
@@ -541,31 +554,6 @@ fun ProjectsDrawer(
                     .padding(DesignTokens.Spacing.lg)
             )
         }
-    }
-
-    projectPendingDelete?.let { project ->
-        AlertDialog(
-            onDismissRequest = { projectPendingDelete = null },
-            title = { Text("Delete this song?") },
-            text = {
-                Text("\"${project.title.ifEmpty { "Untitled Song" }}\" will move to Trash Bin and be fully deleted after 30 days.")
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onDeleteProject(project.id)
-                        projectPendingDelete = null
-                    }
-                ) {
-                    Text("Move to Trash", color = colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { projectPendingDelete = null }) {
-                    Text("Cancel")
-                }
-            }
-        )
     }
 
 }
@@ -705,7 +693,7 @@ private fun RecordingsTab(
                             .flatMap { it.memos }
                             .filter { it.file.absolutePath in selectedMemoPaths }
                             .map { service.trashMemo(it) }
-                        val trashFailed = trashResults.any { !it }
+                        val trashFailed = trashResults.any { it == null }
                         pendingBulkDelete = false
                         isSelecting = false
                         selectedMemoPaths = emptySet()
@@ -826,6 +814,25 @@ private fun RecordingsTab(
                                                         selectedMemoPaths + memoPath
                                                     } else {
                                                         selectedMemoPaths - memoPath
+                                                    }
+                                                },
+                                                onTrashRequest = { m ->
+                                                    scope.launch {
+                                                        val trashed = service.trashMemo(m)
+                                                        memoListVersion++
+                                                        if (trashed != null) {
+                                                            val result = snackbarHostState.showSnackbar(
+                                                                message = "Recording moved to Trash",
+                                                                actionLabel = "Undo",
+                                                                duration = SnackbarDuration.Short
+                                                            )
+                                                            if (result == SnackbarResult.ActionPerformed) {
+                                                                service.restoreTrashedMemo(trashed)
+                                                                memoListVersion++
+                                                            }
+                                                        } else {
+                                                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
+                                                        }
                                                     }
                                                 },
                                                 onMemoListChanged = { memoListVersion++ }
@@ -991,44 +998,16 @@ private fun RecordingMemoRow(
     isSelected: Boolean,
     snackbarHostState: SnackbarHostState,
     onSelectionChanged: (Boolean) -> Unit,
+    onTrashRequest: (VoiceMemo) -> Unit,
     onMemoListChanged: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val isPlaying = service.playingFile == memo.file
-    var pendingDelete by remember { mutableStateOf(false) }
     var pendingRename by remember { mutableStateOf(false) }
     var renameText by remember(memo.file.absolutePath) {
         mutableStateOf(VoiceMemoService.displayName(memo.file))
-    }
-
-    if (pendingDelete) {
-        AlertDialog(
-            onDismissRequest = { pendingDelete = false },
-            title = { Text("Delete recording?") },
-            text = { Text("This recording will move to Trash Bin and be fully deleted after 30 days.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        val trashed = service.trashMemo(memo)
-                        pendingDelete = false
-                        if (trashed) {
-                            onMemoListChanged()
-                        } else {
-                            // Show the failure snackbar first: onMemoListChanged()'s
-                            // recomposition can cancel this row's scope before the
-                            // snackbar is enqueued, swallowing the error.
-                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
-                            onMemoListChanged()
-                        }
-                    }
-                }) { Text("Move to Trash", color = colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = false }) { Text("Cancel") }
-            }
-        )
     }
 
     if (pendingRename) {
@@ -1063,7 +1042,7 @@ private fun RecordingMemoRow(
         )
     }
 
-    SwipeToRevealDelete(onDelete = { pendingDelete = true }) {
+    SwipeToRevealDelete(onDelete = { onTrashRequest(memo) }) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()

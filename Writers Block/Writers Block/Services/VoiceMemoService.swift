@@ -151,7 +151,9 @@ final class VoiceMemoService {
 
     /// Move the memo at `url` to the Trash Bin instead of deleting it. The file
     /// is kept for `trashRetentionInterval` before purge.
-    func trashMemo(at url: URL, projectId: String) {
+    /// Returns the trashed record on success (usable for undo), nil on failure.
+    @discardableResult
+    func trashMemo(at url: URL, projectId: String) -> TrashedVoiceMemo? {
         if activePlayURL == url { stopPlayback() }
         let folder = Self.trashFolder(for: projectId)
         do {
@@ -165,8 +167,15 @@ final class VoiceMemoService {
                 target = folder.appendingPathComponent("\(deletedAtMs)\(Self.trashNameSeparator)\(url.lastPathComponent)")
             }
             try FileManager.default.moveItem(at: url, to: target)
+            return TrashedVoiceMemo(
+                url: target,
+                projectId: projectId,
+                originalName: url.lastPathComponent,
+                deletedAt: Date(timeIntervalSince1970: Double(deletedAtMs) / 1000)
+            )
         } catch {
             lastError = "Couldn't move recording to trash: \(error.localizedDescription)"
+            return nil
         }
     }
 

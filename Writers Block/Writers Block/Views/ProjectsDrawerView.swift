@@ -14,7 +14,7 @@ struct ProjectsDrawerView: View {
     @State private var importError: String?
     @State private var drawerVisible = false
     @State private var isClosing = false
-    @State private var pendingDeleteProject: SongProject?
+    @State private var undoToast: UndoToast?
     @State private var trashBinPresented = false
     @State private var activeTab: DrawerTab = .songs
     // Recordings folders refresh when the Recordings tab is shown and after delete/rename.
@@ -26,7 +26,6 @@ struct ProjectsDrawerView: View {
     // Rename alert state — non-nil means the alert is showing.
     @State private var renamingItem: RecordingItem?
     @State private var renameText: String = ""
-    @State private var pendingDeleteRecording: RecordingItem?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum DrawerTab: String, CaseIterable {
@@ -42,10 +41,66 @@ struct ProjectsDrawerView: View {
         let projectTitle: String // "Deleted song" when projectId not in SwiftData
     }
 
+    private struct UndoToast: Identifiable {
+        let id = UUID()
+        let message: String
+        let undo: () -> Void
+    }
+
     nonisolated private struct RecordingFolder: Identifiable, Sendable {
         let id: String          // projectId
         let title: String
         let items: [RecordingItem]
+    }
+
+    private func showUndoToast(_ message: String, undo: @escaping () -> Void) {
+        withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
+            undoToast = UndoToast(message: message, undo: undo)
+        }
+    }
+
+    private func trashRecordingWithUndo(_ item: RecordingItem) {
+        guard let trashed = viewModel.voiceMemoService.trashMemo(at: item.url, projectId: item.projectId) else {
+            reloadRecordings()
+            return
+        }
+        reloadRecordings()
+        showUndoToast("Recording moved to Trash") {
+            viewModel.voiceMemoService.restoreTrashedMemo(trashed)
+            reloadRecordings()
+        }
+    }
+
+    private func undoToastView(_ toast: UndoToast) -> some View {
+        HStack(spacing: RhymeAITokens.Spacing.sm) {
+            Text(toast.message)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+            Spacer(minLength: RhymeAITokens.Spacing.sm)
+            Button("Undo") {
+                toast.undo()
+                withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                    undoToast = nil
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.indigo)
+            .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+        }
+        .padding(.horizontal, RhymeAITokens.Spacing.lg)
+        .padding(.vertical, RhymeAITokens.Spacing.sm)
+        .frame(minHeight: RhymeAITokens.Touch.minimum)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.06), fallbackOpacity: 0.14)
+        .shadow(color: .black.opacity(0.3), radius: 14, y: 4)
+        // Auto-dismiss after 4s; a new toast restarts the clock via its id.
+        .task(id: toast.id) {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard undoToast?.id == toast.id else { return }
+            withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                undoToast = nil
+            }
+        }
     }
 
     private var filteredProjects: [SongProject] {
@@ -113,6 +168,15 @@ struct ProjectsDrawerView: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
                 .zIndex(2)
             }
+
+            if let toast = undoToast {
+                undoToastView(toast)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.horizontal, RhymeAITokens.Spacing.lg)
+                    .padding(.bottom, RhymeAITokens.Spacing.xl)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(3)
+            }
         }
         .onAppear {
             DispatchQueue.main.async {
@@ -127,24 +191,6 @@ struct ProjectsDrawerView: View {
             allowsMultipleSelection: false
         ) { result in
             handleImport(result)
-        }
-        .alert(
-            "Delete this song?",
-            isPresented: Binding(
-                get: { pendingDeleteProject != nil },
-                set: { if !$0 { pendingDeleteProject = nil } }
-            ),
-            presenting: pendingDeleteProject
-        ) { project in
-            Button("Cancel", role: .cancel) {
-                pendingDeleteProject = nil
-            }
-            Button("Move to Trash", role: .destructive) {
-                viewModel.moveProjectToTrash(project)
-                pendingDeleteProject = nil
-            }
-        } message: { project in
-            Text("\"\(project.title.isEmpty ? "Untitled Song" : project.title)\" will move to Trash Bin and be fully deleted after 30 days.")
         }
     }
 
@@ -328,7 +374,7 @@ struct ProjectsDrawerView: View {
                                         .listRowSeparator(.hidden)
                                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                             Button(role: .destructive) {
-                                                pendingDeleteRecording = item
+                                                trashRecordingWithUndo(item)
                                             } label: {
                                                 Label("Delete", systemImage: "trash")
                                             }
@@ -374,19 +420,6 @@ struct ProjectsDrawerView: View {
             }
         } message: {
             Text("Enter a new name for this recording.")
-        }
-        .confirmationDialog("Delete Recording?", isPresented: Binding(
-            get: { pendingDeleteRecording != nil },
-            set: { if !$0 { pendingDeleteRecording = nil } }
-        ), titleVisibility: .visible, presenting: pendingDeleteRecording) { item in
-            Button("Move to Trash", role: .destructive) {
-                viewModel.voiceMemoService.trashMemo(at: item.url, projectId: item.projectId)
-                reloadRecordings()
-                pendingDeleteRecording = nil
-            }
-            Button("Cancel", role: .cancel) { pendingDeleteRecording = nil }
-        } message: { _ in
-            Text("This recording will move to Trash Bin and be fully deleted after 30 days.")
         }
         .confirmationDialog("Delete Recordings?", isPresented: $pendingBulkDelete, titleVisibility: .visible) {
             Button("Move to Trash", role: .destructive) {
@@ -647,7 +680,14 @@ struct ProjectsDrawerView: View {
             .buttonStyle(.rhymePress)
 
             Button(role: .destructive) {
-                pendingDeleteProject = project
+                let title = project.title.isEmpty ? "Untitled Song" : project.title
+                let projectId = project.id
+                viewModel.moveProjectToTrash(project)
+                showUndoToast("\u{201c}\(title)\u{201d} moved to Trash") {
+                    if let trashed = trashedProjects.first(where: { $0.id == projectId }) {
+                        viewModel.restoreTrashedProject(trashed)
+                    }
+                }
             } label: {
                 Image(systemName: "xmark")
                     .font(.caption.weight(.semibold))

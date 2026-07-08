@@ -302,13 +302,14 @@ class VoiceMemoService(private val context: Context) {
      * to voice-memos-trash/<projectId>/<deletedAt>__<name>.m4a and kept for
      * [TRASH_RETENTION_MILLIS] before purge. Returns false on I/O failure.
      */
-    suspend fun trashMemo(memo: VoiceMemo): Boolean {
+    /** Returns the trashed record on success (usable for undo), null on failure. */
+    suspend fun trashMemo(memo: VoiceMemo): TrashedVoiceMemo? {
         if (playingFile == memo.file) stopPlayback()
         return withContext(Dispatchers.IO) {
-            val projectId = memo.file.parentFile?.name ?: return@withContext false
-            if (!memo.file.exists()) return@withContext true
+            val projectId = memo.file.parentFile?.name ?: return@withContext null
+            if (!memo.file.exists()) return@withContext null
             val dir = trashDir(projectId)
-            if (!dir.exists() && !dir.mkdirs()) return@withContext false
+            if (!dir.exists() && !dir.mkdirs()) return@withContext null
             // Bump the timestamp on collision so renameTo never overwrites an
             // existing trashed file (same name trashed twice in one millisecond).
             var deletedAt = System.currentTimeMillis()
@@ -317,7 +318,7 @@ class VoiceMemoService(private val context: Context) {
                 deletedAt++
                 target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
             }
-            memo.file.renameTo(target)
+            if (memo.file.renameTo(target)) trashedMemoFromFile(target, projectId) else null
         }
     }
 
