@@ -525,27 +525,29 @@ fun ProjectsDrawer(
                 }
             }
 
-            if (showTrashBin) {
-                AnimatedVisibility(
-                    visible = trashBinVisible,
-                    enter = slideInHorizontally(
-                        animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing),
-                        initialOffsetX = { it }
-                    ),
-                    exit = slideOutHorizontally(
-                        animationSpec = tween(if (animationsEnabled) DrawerDismissMillis else 0, easing = DesignTokens.Motion.exitEasing),
-                        targetOffsetX = { it }
-                    )
-                ) {
-                    TrashBinPage(
-                        trashedProjects = trashedProjects,
-                        onRestoreProject = onRestoreProject,
-                        onPermanentlyDeleteProject = onPermanentlyDeleteProject,
-                        onDismiss = ::closeTrashBin,
-                        service = service,
-                        projects = projects
-                    )
-                }
+            // No showTrashBin gate here: composing AnimatedVisibility in the
+            // same frame its target flips true skips the enter transition
+            // entirely (the page used to just appear). Kept in composition,
+            // the slide-in runs; content is only materialized while visible.
+            AnimatedVisibility(
+                visible = trashBinVisible,
+                enter = slideInHorizontally(
+                    animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing),
+                    initialOffsetX = { it }
+                ),
+                exit = slideOutHorizontally(
+                    animationSpec = tween(if (animationsEnabled) DrawerDismissMillis else 0, easing = DesignTokens.Motion.exitEasing),
+                    targetOffsetX = { it }
+                )
+            ) {
+                TrashBinPage(
+                    trashedProjects = trashedProjects,
+                    onRestoreProject = onRestoreProject,
+                    onPermanentlyDeleteProject = onPermanentlyDeleteProject,
+                    onDismiss = ::closeTrashBin,
+                    service = service,
+                    projects = projects
+                )
             }
 
             SnackbarHost(
