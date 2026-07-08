@@ -24,6 +24,10 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenuItem
@@ -392,6 +396,15 @@ fun AssistantPanel(
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
+            // Skeleton while the first suggestions are generated (the local model
+            // returns all-at-once after several seconds; a frozen panel reads as
+            // broken). Streamed providers replace this as soon as lines arrive.
+            if (viewModel.isLoading && viewModel.suggestions.isEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                    repeat(3) { SuggestionSkeletonRow() }
+                }
+            }
+
             // Suggestions
             if (viewModel.suggestions.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
@@ -524,4 +537,33 @@ private fun RhymeType.shortLabel(): String = when (this) {
     RhymeType.PERFECT -> "Perfect"
     RhymeType.NEAR -> "Near"
     RhymeType.SLANT -> "Slant"
+}
+
+@Composable
+private fun SuggestionSkeletonRow() {
+    val colorScheme = MaterialTheme.colorScheme
+    val animationsEnabled = com.rhymeai.app.ui.theme.LocalAnimationsEnabled.current
+    val alpha = if (animationsEnabled) {
+        val transition = rememberInfiniteTransition(label = "suggestionSkeleton")
+        transition.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 0.85f,
+            animationSpec = infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(700),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "suggestionSkeletonAlpha"
+        ).value
+    } else {
+        0.6f
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .background(
+                colorScheme.surfaceContainerHigh.copy(alpha = alpha),
+                RoundedCornerShape(DesignTokens.Radius.lg)
+            )
+    )
 }
