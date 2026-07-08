@@ -68,7 +68,8 @@ struct WordInspectorSheetView: View {
                 Image(systemName: "xmark")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(Color.primary.opacity(0.7))
-                    .frame(width: 36, height: 36)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Close")
         }

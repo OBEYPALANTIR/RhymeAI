@@ -779,9 +779,10 @@ private struct InlineRewriteReviewBar: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.caption.weight(.semibold))
+                        .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                        .contentShape(Rectangle())
                 }
                 .foregroundStyle(.indigo)
-                .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
                 .buttonStyle(.rhymePress)
                 .accessibilityLabel("Regenerate rewrite")
             }

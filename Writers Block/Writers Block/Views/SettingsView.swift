@@ -305,7 +305,8 @@ struct SettingsView: View {
                     Image(systemName: showKey ? "eye.slash" : "eye")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 34, height: 34)
+                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(showKey ? "Hide API key" : "Show API key")

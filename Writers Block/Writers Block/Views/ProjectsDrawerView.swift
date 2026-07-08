@@ -600,6 +600,8 @@ struct ProjectsDrawerView: View {
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.secondary)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.rhymePress)
             .accessibilityLabel(searchText.isEmpty ? "Close drawer" : "Clear search")
