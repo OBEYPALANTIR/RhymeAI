@@ -72,23 +72,28 @@ fun SlidingSegmentedControl(
         label = "segmentedPillOffset"
     )
 
-    // Squash-and-stretch: while the pill travels, its trailing edge flattens in
-    // proportion to the remaining distance, then springs back to a full pill as
-    // it settles. movingRight flattens the left corners and vice versa.
+    // The highlight is a cell fill, not a floating pill: at rest it takes the
+    // exact shape of its segment box — flat against the interior dividers, and
+    // curved only on an outer edge when it occupies the first or last segment
+    // (following the track's rounded ends). While traveling it rounds up, then
+    // settles flat into the destination box.
     val travel = targetOffset - pillOffset
     val morph = if (segmentWidth > 0.dp) {
         (abs(travel.value) / segmentWidth.value).coerceIn(0f, 1f)
     } else {
         0f
     }
-    val movingRight = travel.value > 0f
-    val pillRadius = DesignTokens.Radius.pill
-    val flattened = lerp(pillRadius, 6.dp, morph)
+    val trackRadius = DesignTokens.Radius.pill
+    val travelRadius = 12.dp
+    val restStart = if (selectedIndex == 0) trackRadius else 0.dp
+    val restEnd = if (selectedIndex == labels.lastIndex) trackRadius else 0.dp
+    val startRadius = lerp(restStart, travelRadius, morph)
+    val endRadius = lerp(restEnd, travelRadius, morph)
     val pillShape = RoundedCornerShape(
-        topStart = if (movingRight) flattened else pillRadius,
-        bottomStart = if (movingRight) flattened else pillRadius,
-        topEnd = if (movingRight) pillRadius else flattened,
-        bottomEnd = if (movingRight) pillRadius else flattened
+        topStart = startRadius,
+        bottomStart = startRadius,
+        topEnd = endRadius,
+        bottomEnd = endRadius
     )
 
     Box(
