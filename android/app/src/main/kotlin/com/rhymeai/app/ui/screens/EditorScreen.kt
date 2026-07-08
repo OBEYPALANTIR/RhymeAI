@@ -897,8 +897,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
 
-        // FAB row: mic FAB (left) + UnBlock FAB (right). Shared AnimatedVisibility so
-        // both show/hide together under the same conditions as the old UnBlock FAB.
+        // Floating action group, centered like a toolbar pill: UnBlock (left) +
+        // mic (right). Shared AnimatedVisibility so both show/hide together.
         AnimatedVisibility(
             visible = fabRowVisible,
             enter = fadeIn(
@@ -925,12 +925,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 ),
                 targetOffsetY = { fullHeight -> fullHeight + fabRowBottomOriginOffsetPx }
             ),
-            modifier = Modifier.align(Alignment.BottomEnd)
+            modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             KeyboardSafeActionArea(
-                modifier = Modifier.padding(end = DesignTokens.Spacing.xl),
                 extra = DesignTokens.Spacing.xxl,
-                horizontalAlignment = Alignment.End
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 val memoService = viewModel.voiceMemoService
                 val barCount = DesignTokens.EditorChrome.recordingBarCount
@@ -966,8 +965,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 val micRecordingWidth = DesignTokens.EditorChrome.micRecordingWidth
                 val unBlockExtendedWidth = DesignTokens.EditorChrome.unBlockExtendedWidth
 
-                // Pill width: compact FAB size → recording pill.
-                // The enclosing action area is right-aligned, so the Row grows left.
+                // Pill width: compact FAB size → recording pill. The group stays
+                // centered; the bars sweep left into the space the collapsing
+                // UnBlock frees up while the mic icon holds the right edge.
                 val pillWidth by micTransition.animateDp(
                     label = "pillWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
@@ -999,7 +999,56 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
                 ) {
-                    // Animated mic/pill — the right-aligned row makes this expand left.
+                    // UnBlock collapses into a pencil circle while recording.
+                    val unBlockInteractionSource = remember { MutableInteractionSource() }
+                    Box(
+                        modifier = Modifier
+                            .width(unBlockWidth)
+                            .height(DesignTokens.EditorChrome.fabSize)
+                            .clip(RoundedCornerShape(DesignTokens.Radius.pill))
+                            .background(
+                                colorScheme.primary,
+                                RoundedCornerShape(DesignTokens.Radius.pill)
+                            )
+                            .clickable(
+                                interactionSource = unBlockInteractionSource,
+                                indication = ripple()
+                            ) {
+                                openAssistantSheet()
+                            }
+                            .semantics {
+                                contentDescription = "Open AI suggestions"
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = null,
+                                tint = colorScheme.onPrimary,
+                                modifier = Modifier.size(DesignTokens.EditorChrome.unBlockIconSize)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .width(unBlockWordmarkWidth)
+                                    .graphicsLayer { alpha = unBlockWordmarkAlpha }
+                                    .clipToBounds()
+                            ) {
+                                Row(
+                                    modifier = Modifier.requiredWidth(DesignTokens.EditorChrome.unBlockWordmarkWidth),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Spacer(Modifier.width(DesignTokens.EditorChrome.unBlockWordmarkGap))
+                                    UnBlockWordmark()
+                                }
+                            }
+                        }
+                    }
+
+                    // Animated mic/pill — expands into the recording spectralizer.
                     val micPillInteractionSource = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
@@ -1101,55 +1150,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     .size(DesignTokens.EditorChrome.recordingIconSize)
                                     .alpha(recProgress)
                             )
-                        }
-                    }
-
-                    // UnBlock collapses toward its fixed right edge, leaving a pencil circle.
-                    val unBlockInteractionSource = remember { MutableInteractionSource() }
-                    Box(
-                        modifier = Modifier
-                            .width(unBlockWidth)
-                            .height(DesignTokens.EditorChrome.fabSize)
-                            .clip(RoundedCornerShape(DesignTokens.Radius.pill))
-                            .background(
-                                colorScheme.primary,
-                                RoundedCornerShape(DesignTokens.Radius.pill)
-                            )
-                            .clickable(
-                                interactionSource = unBlockInteractionSource,
-                                indication = ripple()
-                            ) {
-                                openAssistantSheet()
-                            }
-                            .semantics {
-                                contentDescription = "Open AI suggestions"
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = null,
-                                tint = colorScheme.onPrimary,
-                                modifier = Modifier.size(DesignTokens.EditorChrome.unBlockIconSize)
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .width(unBlockWordmarkWidth)
-                                    .graphicsLayer { alpha = unBlockWordmarkAlpha }
-                                    .clipToBounds()
-                            ) {
-                                Row(
-                                    modifier = Modifier.requiredWidth(DesignTokens.EditorChrome.unBlockWordmarkWidth),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Spacer(Modifier.width(DesignTokens.EditorChrome.unBlockWordmarkGap))
-                                    UnBlockWordmark()
-                                }
-                            }
                         }
                     }
                 }
