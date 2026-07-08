@@ -95,7 +95,7 @@ enum GGUFModelService {
                 let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 if t.isEmpty { return false }
                 // Drop bare `>`, turn delimiters, role markers
-                let markerRE = #"^(?:>|<start_of_turn>|<end_of_turn>|<\/?[a-z_]+>|model\s*$|user\s*$)$"#
+                let markerRE = #"^(?:>|<?/?(?:start|end)_?(?:of_?)?turn>?|<\/?[a-z_]+>|model\s*$|user\s*$)$"#
                 if t.range(of: markerRE, options: [.regularExpression, .caseInsensitive]) != nil { return false }
                 return true
             }

@@ -1485,19 +1485,27 @@ Rules:
 
     private val listPrefixPattern = Regex("^\\s*(?:[-*]\\s+|\\d+[.)\\-:]\\s*)")
     private val markerOnlyPattern = Regex(
-        pattern = "^\\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|model_response>|<?/?(?:start_of_turn|end_of_turn)>?\\w*|<[^>]+>|>|user|model|assistant)\\s*$",
+        pattern = "^\\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|model_response>|<?/?(?:start|end)_?(?:of_?)?turn>?\\w*|<[^>]+>|>|user|model|assistant)\\s*$",
         option = RegexOption.IGNORE_CASE
     )
     private val markerPrefixPattern = Regex(
-        pattern = "^\\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start_of_turn|end_of_turn)>?\\w*)\\s*",
+        pattern = "^\\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start|end)_?(?:of_?)?turn>?\\w*)\\s*",
         option = RegexOption.IGNORE_CASE
     )
     private val modelPayloadPrefixPattern = Regex(
-        pattern = ".*(?:<start_of_turn>\\s*model|start_of_turn>\\s*model|_?model_response>|assistant_response>|model_response>)\\s*",
+        pattern = ".*(?:<start_?(?:of_?)?turn>\\s*model|start_?(?:of_?)?turn>\\s*model|_?model_response>|assistant_response>|model_response>)\\s*",
         options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
+    // Turn markers are plain text to the gemma-4 tokenizer, so the model spells
+    // them out and a sampling derailment can glue a mutated or truncated marker
+    // (e.g. "<end_turn>", "<end_") to the end of an otherwise good line. Strip
+    // those instead of rejecting the lyric.
+    private val trailingControlMarkerPattern = Regex(
+        pattern = "(?:\\s*<?/?(?:start|end)_?(?:of_?)?turn>?)+\\s*$|\\s*<[a-z_/]{0,16}$",
+        option = RegexOption.IGNORE_CASE
+    )
     private val localControlMarkerPattern = Regex(
-        pattern = "<?/?(?:start_of_turn|end_of_turn)>?\\w*|_?response>|_?model_response>|assistant_response>|model_response>",
+        pattern = "<?/?(?:start|end)_?(?:of_?)?turn>?\\w*|_?response>|_?model_response>|assistant_response>|model_response>",
         option = RegexOption.IGNORE_CASE
     )
     private val promptEchoPattern = Regex(
@@ -1621,6 +1629,7 @@ $userPrompt
         if (cleaned.isBlank() || markerOnlyPattern.matches(cleaned)) return null
 
         cleaned = cleanLocalOutputLine(cleaned, maxLength = 140) ?: return null
+        cleaned = trailingControlMarkerPattern.replace(cleaned, "").trim()
 
         if (cleaned.isBlank()) return null
         if (markerOnlyPattern.matches(cleaned)) return null

@@ -410,11 +410,11 @@ struct AIService {
         if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleaned.isEmpty { return nil }
-        let markerOnly = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>]+>|user|model|assistant)\s*$"#
+        let markerOnly = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|<?/?(?:start|end)_?(?:of_?)?turn>?\w*|<[^>]+>|user|model|assistant)\s*$"#
         if cleaned.range(of: markerOnly, options: [.regularExpression, .caseInsensitive]) != nil {
             return nil
         }
-        let markerPrefix = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start_of_turn|end_of_turn)>?\w*)\s*"#
+        let markerPrefix = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start|end)_?(?:of_?)?turn>?\w*)\s*"#
         if let range = cleaned.range(of: markerPrefix, options: [.regularExpression, .caseInsensitive]) {
             cleaned = String(cleaned[range.upperBound...])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1771,7 +1771,7 @@ struct AIService {
 
     private func cleanLocalOutputLine(_ line: String, maxLength: Int) -> String? {
         var cleaned = stripLocalModelArtifacts(line)
-        let markerPrefix = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start_of_turn|end_of_turn)>?\w*)\s*"#
+        let markerPrefix = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|assistant:|model:|user:|<?/?(?:start|end)_?(?:of_?)?turn>?\w*)\s*"#
         if let range = cleaned.range(of: markerPrefix, options: [.regularExpression, .caseInsensitive]) {
             cleaned = String(cleaned[range.upperBound...])
         }
@@ -1783,8 +1783,17 @@ struct AIService {
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // gemma-4 spells turn markers as plain text; a sampling derailment can
+        // glue a mutated or truncated marker (e.g. "<end_turn>", "<end_") to the
+        // end of a good line — strip it instead of rejecting the lyric.
+        cleaned = cleaned.replacingOccurrences(
+            of: #"(?i)(?:\s*<?/?(?:start|end)_?(?:of_?)?turn>?)+\s*$|\s*<[a-z_/]{0,16}$"#,
+            with: "",
+            options: .regularExpression
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+
         guard !cleaned.isEmpty else { return nil }
-        let markerOnly = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>]+>|user|model|assistant)\s*$"#
+        let markerOnly = #"^(?:_?response>|_?model_response>|assistant_response>|model_response>|<?/?(?:start|end)_?(?:of_?)?turn>?\w*|<[^>]+>|user|model|assistant)\s*$"#
         guard cleaned.range(of: markerOnly, options: [.regularExpression, .caseInsensitive]) == nil else { return nil }
         let promptEcho = #"^(?:task:|theme:|rhyme scheme:|lyrics context:|rules:|return exactly|return only|one suggestion|no numbering|do not|keep each|you are rhymeai|sure[, ]|here are|i can(?:not|'t)|as an ai)"#
         guard cleaned.range(of: promptEcho, options: [.regularExpression, .caseInsensitive]) == nil else { return nil }
@@ -1794,15 +1803,15 @@ struct AIService {
 
     private func stripLocalModelArtifacts(_ text: String) -> String {
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let modelPayloadPrefix = #"(?is).*(?:<start_of_turn>\s*model|start_of_turn>\s*model|_?model_response>|assistant_response>|model_response>)\s*"#
+        let modelPayloadPrefix = #"(?is).*(?:<start_?(?:of_?)?turn>\s*model|start_?(?:of_?)?turn>\s*model|_?model_response>|assistant_response>|model_response>)\s*"#
         if let range = cleaned.range(of: modelPayloadPrefix, options: .regularExpression) {
             cleaned = String(cleaned[range.upperBound...])
         }
-        if let range = cleaned.range(of: #"<end_of_turn>|end_of_turn>"#, options: [.regularExpression, .caseInsensitive]) {
+        if let range = cleaned.range(of: #"<end_?(?:of_?)?turn>|end_?(?:of_?)?turn>"#, options: [.regularExpression, .caseInsensitive]) {
             cleaned = String(cleaned[..<range.lowerBound])
         }
         cleaned = cleaned.replacingOccurrences(
-            of: #"(?i)<?/?(?:start_of_turn|end_of_turn)>?\w*|_?response>|_?model_response>|assistant_response>|model_response>"#,
+            of: #"(?i)<?/?(?:start|end)_?(?:of_?)?turn>?\w*|_?response>|_?model_response>|assistant_response>|model_response>"#,
             with: "",
             options: .regularExpression
         )
@@ -1825,7 +1834,7 @@ struct AIService {
 
     private func containsLocalControlMarker(_ text: String) -> Bool {
         text.range(
-            of: #"(?i)<?/?(?:start_of_turn|end_of_turn)>?\w*|_?response>|_?model_response>|assistant_response>|model_response>"#,
+            of: #"(?i)<?/?(?:start|end)_?(?:of_?)?turn>?\w*|_?response>|_?model_response>|assistant_response>|model_response>"#,
             options: .regularExpression
         ) != nil
     }
