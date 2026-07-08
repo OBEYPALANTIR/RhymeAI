@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.ui.unit.lerp
+import kotlin.math.abs
 
 // Structural: matches the 40dp height of the M3 SegmentedButton rows this control replaces.
 private val TrackHeight = 40.dp
@@ -63,10 +65,30 @@ fun SlidingSegmentedControl(
     } else {
         0.dp
     }
+    val targetOffset = segmentWidth * selectedIndex
     val pillOffset by animateDpAsState(
-        targetValue = segmentWidth * selectedIndex,
+        targetValue = targetOffset,
         animationSpec = if (animationsEnabled) DesignTokens.Motion.standardSpring() else snap(),
         label = "segmentedPillOffset"
+    )
+
+    // Squash-and-stretch: while the pill travels, its trailing edge flattens in
+    // proportion to the remaining distance, then springs back to a full pill as
+    // it settles. movingRight flattens the left corners and vice versa.
+    val travel = targetOffset - pillOffset
+    val morph = if (segmentWidth > 0.dp) {
+        (abs(travel.value) / segmentWidth.value).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val movingRight = travel.value > 0f
+    val pillRadius = DesignTokens.Radius.pill
+    val flattened = lerp(pillRadius, 6.dp, morph)
+    val pillShape = RoundedCornerShape(
+        topStart = if (movingRight) flattened else pillRadius,
+        bottomStart = if (movingRight) flattened else pillRadius,
+        topEnd = if (movingRight) pillRadius else flattened,
+        bottomEnd = if (movingRight) pillRadius else flattened
     )
 
     Box(
@@ -83,9 +105,21 @@ fun SlidingSegmentedControl(
                     .offset(x = pillOffset)
                     .width(segmentWidth)
                     .fillMaxHeight()
-                    .clip(shape)
+                    .clip(pillShape)
                     .background(colorScheme.primary)
             )
+            // Segment dividers sit ABOVE the pill so the highlight slides
+            // beneath them (M3 segmented-button dividers, kept from the old
+            // control).
+            for (i in 1 until labels.size) {
+                Box(
+                    Modifier
+                        .offset(x = segmentWidth * i - 0.5.dp)
+                        .width(1.dp)
+                        .fillMaxHeight()
+                        .background(colorScheme.outlineVariant)
+                )
+            }
         }
         Row(Modifier.fillMaxSize().selectableGroup()) {
             labels.forEachIndexed { index, label ->
