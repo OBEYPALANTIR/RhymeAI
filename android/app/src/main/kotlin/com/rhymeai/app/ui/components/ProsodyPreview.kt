@@ -30,8 +30,8 @@ fun ProsodyPreview(
             Text(
                 prosody.feet,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
                 color = colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
             )
         }
@@ -39,9 +39,9 @@ fun ProsodyPreview(
             Text(
                 "/${prosody.ipa}/",
                 fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
-                color = colorScheme.onSurfaceVariant.copy(alpha = 0.56f)
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
         }
     }

@@ -98,7 +98,7 @@ private fun BeatGridLineRow(line: BeatGrid.LineResult) {
         // "Nsyl · M.m beats"
         Text(
             text = "${line.syllableCount}syl · ${"%.1f".format(line.beats)}b",
-            fontSize = 11.sp,
+            fontSize = 12.sp,
             color = labelColor,
             modifier = Modifier.width(80.dp)
         )

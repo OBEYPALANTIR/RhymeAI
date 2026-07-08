@@ -878,7 +878,7 @@ private fun FolderHeaderRow(
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     color = if (folder.title == "Deleted song") {
-                        colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     } else {
                         colorScheme.onSurface
                     }
@@ -1106,7 +1106,7 @@ private fun RecordingMemoRow(
                     )
                     Text(
                         text = VoiceMemoService.formatDuration(memo.durationMs),
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant
                     )
                 }
@@ -1144,7 +1144,7 @@ private fun EmptyDrawerState(icon: @Composable () -> Unit, text: String) {
             contentAlignment = Alignment.Center
         ) {
             androidx.compose.runtime.CompositionLocalProvider(
-                androidx.compose.material3.LocalContentColor provides colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                androidx.compose.material3.LocalContentColor provides colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             ) {
                 icon()
             }

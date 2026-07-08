@@ -128,7 +128,7 @@ fun SuggestionCard(
                 Text(
                     text = "${SyllableCounter.countText(suggestion)}",
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
                 )
             }
@@ -143,7 +143,7 @@ fun SuggestionCard(
             if (tierLabel != null) {
                 Text(
                     text = tierLabel,
-                    fontSize = 10.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     color = colorScheme.onTertiaryContainer,
                     modifier = Modifier

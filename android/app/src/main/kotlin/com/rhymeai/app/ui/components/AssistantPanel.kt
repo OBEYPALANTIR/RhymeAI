@@ -179,7 +179,7 @@ fun AssistantPanel(
                             Text(
                                 "${SyllableCounter.countText(rhymeContext.targetLine)} syllables",
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
+                                fontSize = 12.sp,
                                 color = colorScheme.onSurfaceVariant
                             )
                         }
@@ -347,15 +347,15 @@ fun AssistantPanel(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Simple", fontSize = 11.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                    Text("Moderate", fontSize = 11.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                    Text("Complex", fontSize = 11.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                    Text("Simple", fontSize = 12.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                    Text("Moderate", fontSize = 12.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                    Text("Complex", fontSize = 12.sp, color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
                 }
 
                 Text(
                     viewModel.rhymeComplexity.description,
-                    fontSize = 11.sp,
-                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    fontSize = 12.sp,
+                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     modifier = Modifier.padding(top = DesignTokens.Spacing.xs)
                 )
             }
@@ -411,7 +411,7 @@ fun AssistantPanel(
                     Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     Text(
                         stringResource(R.string.assistant_suggestions_caveat),
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         fontStyle = FontStyle.Italic
                     )
@@ -523,8 +523,8 @@ fun AssistantPanel(
             ) {
                 Text(
                     "Build ${com.rhymeai.app.BuildConfig.VERSION_NAME} (${com.rhymeai.app.BuildConfig.VERSION_CODE})  \u2022  Product of Tyler Manring",
-                    fontSize = 11.sp,
-                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    fontSize = 12.sp,
+                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
             }
 

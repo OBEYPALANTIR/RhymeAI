@@ -212,7 +212,7 @@ private fun FormatRow(
                 Text(format.label, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = colorScheme.onSurface)
                 Text(
                     format.description,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     color = colorScheme.onSurfaceVariant,
                     lineHeight = 14.sp
                 )

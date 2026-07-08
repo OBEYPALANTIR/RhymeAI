@@ -387,7 +387,7 @@ internal fun SettingsDialog(
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    fontSize = 11.sp
+                    fontSize = 12.sp
                 )
 
                 Spacer(Modifier.height(DesignTokens.Spacing.lg))
@@ -449,7 +449,7 @@ internal fun SettingsDialog(
                                         Text("Model loaded", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onTertiaryContainer)
                                         Text(
                                             localModelPath.substringAfterLast("/"),
-                                            fontSize = 11.sp,
+                                            fontSize = 12.sp,
                                             color = colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -528,8 +528,8 @@ internal fun SettingsDialog(
                                                     Text(model.label, fontWeight = FontWeight.Medium)
                                                     if (isRecommended) {
                                                         Text(
-                                                            "Recommended for this device",
-                                                            fontSize = 10.sp,
+                                                            "Recommended",
+                                                            fontSize = 12.sp,
                                                             fontWeight = FontWeight.Medium,
                                                             color = colorScheme.onTertiaryContainer,
                                                             modifier = Modifier
@@ -543,13 +543,13 @@ internal fun SettingsDialog(
                                                 }
                                                 Text(
                                                     installedLabel,
-                                                    fontSize = 11.sp,
+                                                    fontSize = 12.sp,
                                                     color = colorScheme.onSurfaceVariant
                                                 )
                                                 if (exceedsRam) {
                                                     Text(
                                                         "May be slow on this device — needs more memory",
-                                                        fontSize = 11.sp,
+                                                        fontSize = 12.sp,
                                                         color = colorScheme.error.copy(alpha = 0.75f)
                                                     )
                                                 }
@@ -742,7 +742,7 @@ internal fun SettingsDialog(
                                             text = {
                                                 Column {
                                                     Text(model.displayName, color = colorScheme.onSurface, fontSize = 14.sp)
-                                                    Text(model.id, color = colorScheme.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 11.sp)
+                                                    Text(model.id, color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 12.sp)
                                                 }
                                             },
                                             onClick = {
@@ -917,7 +917,7 @@ internal fun SettingsDialog(
                     Spacer(Modifier.height(6.dp))
                     Text(
                         result,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = if (result.startsWith("Sync complete") || result.startsWith("Restore complete")) colorScheme.tertiary
                         else colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         lineHeight = 15.sp
