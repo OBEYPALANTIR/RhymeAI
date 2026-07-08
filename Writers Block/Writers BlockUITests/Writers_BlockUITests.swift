@@ -284,6 +284,25 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testDeletingSongOffersUndoAndRestores() throws {
+        let app = isolatedUITestApp(arguments: ["--ui-test-seed-trash-song"])
+        app.launch()
+
+        let openDrawerButton = app.buttons["Open songs drawer"]
+        XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
+        openDrawerButton.tap()
+        let deleteButton = app.buttons["Delete UI Trash Song"]
+        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
+        deleteButton.tap()
+
+        let undoButton = app.buttons["Undo"]
+        XCTAssertTrue(undoButton.waitForExistence(timeout: 3))
+        undoButton.tap()
+
+        XCTAssertTrue(app.buttons["Delete UI Trash Song"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testMovingSongToTrashShowsFullPageTrashBinAndActions() throws {
         let app = isolatedUITestApp(arguments: ["--ui-test-seed-trash-song"])
         app.launch()
@@ -295,9 +314,8 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         deleteButton.tap()
 
-        let moveToTrashButton = app.buttons["Move to Trash"]
-        XCTAssertTrue(moveToTrashButton.waitForExistence(timeout: 3))
-        moveToTrashButton.tap()
+        // Delete is immediate (no confirmation); the undo toast confirms the move.
+        XCTAssertTrue(app.buttons["Undo"].waitForExistence(timeout: 3))
 
         let openTrashButton = app.buttons["Open Trash Bin"]
         XCTAssertTrue(openTrashButton.waitForExistence(timeout: 5))
@@ -409,8 +427,8 @@ final class Writers_BlockUITests: XCTestCase {
             XCTAssertTrue(app.buttons["Delete UI Trash Song"].waitForExistence(timeout: 5))
             app.buttons["Delete UI Trash Song"].tap()
 
-            XCTAssertTrue(app.buttons["Move to Trash"].waitForExistence(timeout: 3))
-            app.buttons["Move to Trash"].tap()
+            // Delete is immediate (no confirmation); the undo toast confirms the move.
+            XCTAssertTrue(app.buttons["Undo"].waitForExistence(timeout: 3))
 
             XCTAssertTrue(app.buttons["Open Trash Bin"].waitForExistence(timeout: 5))
             app.buttons["Open Trash Bin"].tap()
