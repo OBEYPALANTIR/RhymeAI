@@ -84,6 +84,7 @@ fun ExportSheet(
             decorFitsSystemWindows = false
         )
     ) {
+        EdgeToEdgeDialogEffect()
         Box(
             modifier = Modifier
                 .fillMaxSize()

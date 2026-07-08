@@ -265,6 +265,7 @@ fun ProjectsDrawer(
             decorFitsSystemWindows = false
         )
     ) {
+        EdgeToEdgeDialogEffect()
         Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
                 visible = drawerVisible,

@@ -104,6 +104,7 @@ fun WordInspectorSheet(
             decorFitsSystemWindows = false
         )
     ) {
+        EdgeToEdgeDialogEffect()
         Box(
             modifier = Modifier
                 .fillMaxSize()

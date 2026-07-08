@@ -277,6 +277,7 @@ internal fun SettingsDialog(
             decorFitsSystemWindows = false
         )
     ) {
+        EdgeToEdgeDialogEffect()
         Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
                 visible = pageVisible,
