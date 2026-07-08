@@ -128,6 +128,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 private val DrawerAnimationMillis: Int get() = DesignTokens.Motion.drawerPresentMillis
+private val DrawerDismissMillis: Int get() = DesignTokens.Motion.dismissMillis
 private val DialogBottomActionMinClearance = 120.dp
 private const val MillisPerDay = 24L * 60L * 60L * 1000L
 
@@ -175,7 +176,7 @@ fun ProjectsDrawer(
         isTrashBinClosing = true
         trashBinVisible = false
         scope.launch {
-            delay(DrawerAnimationMillis.toLong())
+            delay(DrawerDismissMillis.toLong())
             showTrashBin = false
             isTrashBinClosing = false
         }
@@ -190,7 +191,7 @@ fun ProjectsDrawer(
         isClosing = true
         drawerVisible = false
         scope.launch {
-            delay(DrawerAnimationMillis.toLong())
+            delay(DrawerDismissMillis.toLong())
             afterClose()
             onDismiss()
         }
@@ -244,10 +245,12 @@ fun ProjectsDrawer(
     val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
     val trashRevealProgress by animateFloatAsState(
         targetValue = if (trashBinVisible) 1f else 0f,
-        animationSpec = if (animationsEnabled) {
+        animationSpec = if (!animationsEnabled) {
+            snap()
+        } else if (trashBinVisible) {
             tween(DrawerAnimationMillis, easing = DesignTokens.Motion.standardEasing)
         } else {
-            snap()
+            tween(DrawerDismissMillis, easing = DesignTokens.Motion.exitEasing)
         },
         label = "trashRevealProgress"
     )
@@ -264,8 +267,8 @@ fun ProjectsDrawer(
         Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
                 visible = drawerVisible,
-                enter = fadeIn(animationSpec = tween(DrawerAnimationMillis)),
-                exit = fadeOut(animationSpec = tween(DrawerAnimationMillis))
+                enter = fadeIn(animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing)),
+                exit = fadeOut(animationSpec = tween(if (animationsEnabled) DrawerDismissMillis else 0, easing = DesignTokens.Motion.exitEasing))
             ) {
                 Box(
                     modifier = Modifier
@@ -281,14 +284,17 @@ fun ProjectsDrawer(
 
             AnimatedVisibility(
                 visible = drawerVisible,
+                // Pure slide — the moving edge carries the spatial story; a
+                // simultaneous fade just muddies it. Exit rides the faster
+                // dismiss tier with an accelerate curve.
                 enter = slideInHorizontally(
-                    animationSpec = tween(DrawerAnimationMillis),
+                    animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing),
                     initialOffsetX = { -it }
-                ) + fadeIn(animationSpec = tween(DrawerAnimationMillis)),
+                ),
                 exit = slideOutHorizontally(
-                    animationSpec = tween(DrawerAnimationMillis),
+                    animationSpec = tween(if (animationsEnabled) DrawerDismissMillis else 0, easing = DesignTokens.Motion.exitEasing),
                     targetOffsetX = { -it }
-                ) + fadeOut(animationSpec = tween(DrawerAnimationMillis))
+                )
             ) {
                 Surface(
                     modifier = Modifier
@@ -509,13 +515,13 @@ fun ProjectsDrawer(
                 AnimatedVisibility(
                     visible = trashBinVisible,
                     enter = slideInHorizontally(
-                        animationSpec = tween(DrawerAnimationMillis),
+                        animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing),
                         initialOffsetX = { it }
-                    ) + fadeIn(animationSpec = tween(DrawerAnimationMillis)),
+                    ),
                     exit = slideOutHorizontally(
-                        animationSpec = tween(DrawerAnimationMillis),
+                        animationSpec = tween(if (animationsEnabled) DrawerDismissMillis else 0, easing = DesignTokens.Motion.exitEasing),
                         targetOffsetX = { it }
-                    ) + fadeOut(animationSpec = tween(DrawerAnimationMillis))
+                    )
                 ) {
                     TrashBinPage(
                         trashedProjects = trashedProjects,

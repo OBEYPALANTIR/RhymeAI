@@ -141,6 +141,7 @@ internal fun SettingsDialog(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val context = LocalContext.current
+    val animationsEnabled = com.rhymeai.app.ui.theme.LocalAnimationsEnabled.current
 
     // Read total RAM once — used to show which Gemma model fits this device.
     val deviceTotalRamBytes = remember(context) {
@@ -254,7 +255,7 @@ internal fun SettingsDialog(
         isClosing = true
         pageVisible = false
         coroutineScope.launch {
-            delay(DesignTokens.Motion.drawerPresentMillis.toLong())
+            delay(DesignTokens.Motion.dismissMillis.toLong())
             onDismiss()
         }
     }
@@ -270,14 +271,16 @@ internal fun SettingsDialog(
         Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
                 visible = pageVisible,
+                // Pure slide with an accelerate-curve exit on the faster dismiss
+                // tier — matches the drawer/trash pages (exit-faster-than-enter).
                 enter = slideInHorizontally(
-                    animationSpec = tween(DesignTokens.Motion.drawerPresentMillis),
+                    animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.drawerPresentMillis else 0, easing = DesignTokens.Motion.standardEasing),
                     initialOffsetX = { it }
-                ) + fadeIn(animationSpec = tween(DesignTokens.Motion.drawerPresentMillis)),
+                ),
                 exit = slideOutHorizontally(
-                    animationSpec = tween(DesignTokens.Motion.drawerPresentMillis),
+                    animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.dismissMillis else 0, easing = DesignTokens.Motion.exitEasing),
                     targetOffsetX = { it }
-                ) + fadeOut(animationSpec = tween(DesignTokens.Motion.drawerPresentMillis))
+                )
             ) {
                 Surface(
                     modifier = Modifier
