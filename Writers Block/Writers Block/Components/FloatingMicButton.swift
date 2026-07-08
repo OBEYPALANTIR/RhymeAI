@@ -80,7 +80,7 @@ struct FloatingMicButton: View {
                     HStack(spacing: RhymeAITokens.Spacing.xs) {
                         spectralBars
                         Text(formattedElapsed)
-                            .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                            .font(.system(.caption, design: .monospaced).weight(.semibold))
                             .foregroundStyle(.white)
                             .monospacedDigit()
                             .fixedSize()

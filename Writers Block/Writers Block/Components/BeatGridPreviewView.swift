@@ -104,7 +104,7 @@ private struct BeatGridLineRow: View {
 
             // "Nsyl · M.m beats"
             Text("\(line.syllableCount)syl · \(String(format: "%.1f", line.beats))b")
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(labelColor)
                 .frame(width: 76, alignment: .trailing)
         }

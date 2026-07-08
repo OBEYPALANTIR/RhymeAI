@@ -20,18 +20,18 @@ struct RhymeSchemeDisplayView: View {
                             Text(letter)
                                 .font(.system(.caption, design: .monospaced))
                                 .fontWeight(.bold)
-                                .foregroundColor(isCurrent ? .indigo : .secondary.opacity(0.4))
+                                .foregroundColor(isCurrent ? .indigo : .secondary.opacity(0.6))
                                 .frame(width: RhymeAITokens.Spacing.md, alignment: .leading)
 
                             if line.trimmingCharacters(in: .whitespaces).isEmpty && isCurrent {
                                 Text("Typing here...")
                                     .font(.system(.caption, design: .monospaced))
                                     .italic()
-                                    .foregroundColor(.secondary.opacity(0.3))
+                                    .foregroundColor(.secondary.opacity(0.5))
                             } else {
                                 Text(line)
                                     .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(.primary.opacity(isCurrent ? 0.8 : 0.4))
+                                    .foregroundColor(.primary.opacity(isCurrent ? 0.9 : 0.6))
                                     .lineLimit(1)
                                     .truncationMode(.tail)
                             }

@@ -279,7 +279,7 @@ struct AssistantPanelView: View {
                         .foregroundStyle(.secondary)
 
                     Text("AI-generated · review before use")
-                        .font(.caption2.italic())
+                        .font(.caption.italic())
                         .foregroundStyle(.secondary.opacity(0.8))
 
                     ForEach(viewModel.suggestions) { suggestion in

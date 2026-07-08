@@ -687,9 +687,9 @@ struct EditorView: View {
             // Word & Syllable counts
             VStack(alignment: .trailing, spacing: EditorViewConstants.TopBar.counterSpacing) {
                 Text("\(viewModel.wordCount) words")
-                    .font(.caption2)
+                    .font(.caption)
                 Text("\(viewModel.syllableCount) syllables")
-                    .font(.caption2)
+                    .font(.caption)
             }
             .foregroundStyle(.secondary)
 

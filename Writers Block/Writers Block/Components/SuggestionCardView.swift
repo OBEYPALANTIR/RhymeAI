@@ -30,7 +30,7 @@ struct SuggestionCardView: View {
                     // Tier badge — hidden from AX so it doesn't pollute the button label.
                     if let badge = tierBadgeLabel {
                         Text(badge)
-                            .font(.system(.caption2, design: .rounded).weight(.medium))
+                            .font(.system(.caption, design: .rounded).weight(.medium))
                             .foregroundStyle(tierBadgeColor)
                             .padding(.horizontal, RhymeAITokens.Spacing.xs)
                             .padding(.vertical, 2)
@@ -47,7 +47,7 @@ struct SuggestionCardView: View {
 
                     Image(systemName: "chevron.right")
                         .font(.caption)
-                        .foregroundStyle(.secondary.opacity(0.3))
+                        .foregroundStyle(.secondary.opacity(0.5))
                 }
             }
             .padding(RhymeAITokens.Spacing.lg)
@@ -127,7 +127,7 @@ private struct SuggestionProsodyPreviewView: View {
                     Text("/\(prosody.ipa)/")
                 }
             }
-            .font(.caption2.monospaced())
+            .font(.caption.monospaced())
             .foregroundStyle(.secondary.opacity(0.72))
             .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)

@@ -428,7 +428,7 @@ struct SettingsView: View {
                 .accessibilityIdentifier("cloudBackupStatus")
 
             Text("Background backup runs only after you set up Google Drive and save a passphrase here. It will never open Google sign-in from the background.")
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 

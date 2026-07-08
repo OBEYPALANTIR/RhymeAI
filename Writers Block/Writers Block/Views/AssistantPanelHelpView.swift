@@ -86,7 +86,7 @@ struct AssistantProsodyPreviewView: View {
                     Text("/\(prosody.ipa)/")
                 }
             }
-            .font(.caption2.monospaced())
+            .font(.caption.monospaced())
             .foregroundStyle(.secondary.opacity(0.72))
             .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
