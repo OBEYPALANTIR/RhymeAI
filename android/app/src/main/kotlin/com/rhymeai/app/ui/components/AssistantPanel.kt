@@ -57,6 +57,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -597,7 +599,9 @@ private fun RhymeType.shortLabel(): String = when (this) {
 private fun SuggestionSkeletonRow() {
     val colorScheme = MaterialTheme.colorScheme
     val animationsEnabled = com.rhymeai.app.ui.theme.LocalAnimationsEnabled.current
-    val alpha = if (animationsEnabled) {
+    // State (not .value in composition): the pulse repaints in the draw phase
+    // only, instead of recomposing this row ~86 times a second.
+    val alpha: androidx.compose.runtime.State<Float> = if (animationsEnabled) {
         val transition = rememberInfiniteTransition(label = "suggestionSkeleton")
         transition.animateFloat(
             initialValue = 0.45f,
@@ -607,17 +611,17 @@ private fun SuggestionSkeletonRow() {
                 repeatMode = RepeatMode.Reverse
             ),
             label = "suggestionSkeletonAlpha"
-        ).value
+        )
     } else {
-        0.6f
+        remember { mutableStateOf(0.6f) }
     }
+    val pulseColor = colorScheme.surfaceContainerHigh
+    val pulseShape = RoundedCornerShape(DesignTokens.Radius.lg)
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp)
-            .background(
-                colorScheme.surfaceContainerHigh.copy(alpha = alpha),
-                RoundedCornerShape(DesignTokens.Radius.lg)
-            )
+            .clip(pulseShape)
+            .drawBehind { drawRect(pulseColor.copy(alpha = alpha.value)) }
     )
 }

@@ -47,7 +47,10 @@ val releaseStoreFile = releaseSigningProperties?.get("storeFile")?.let { rootPro
 val hasReleaseSigningConfig = releaseSigningProperties != null && releaseStoreFile?.isFile == true
 
 tasks.configureEach {
-    if (name == "assembleRelease" || name == "bundleRelease") {
+    // bundleRelease (Play upload) still demands real signing material.
+    // assembleRelease falls back to the debug key so optimized builds can be
+    // side-loaded for performance testing without a production keystore.
+    if (name == "bundleRelease") {
         doFirst {
             if (!hasReleaseSigningConfig) {
                 throw GradleException("Release signing material missing: create android/keystore.properties")
@@ -95,8 +98,11 @@ android {
         }
         release {
             isMinifyEnabled = true
-            if (hasReleaseSigningConfig) {
-                signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (hasReleaseSigningConfig) {
+                signingConfigs.getByName("release")
+            } else {
+                // Debug-key fallback: installable for local testing; not for Play.
+                signingConfigs.getByName("debug")
             }
             buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(""))
             buildConfigField("String", "DRIVE_OAUTH_CLIENT_ID", buildConfigString(driveOauthClientId))

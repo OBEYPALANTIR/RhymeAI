@@ -9,7 +9,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -43,6 +42,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.DialogWindowProvider
@@ -95,7 +95,7 @@ fun TemplatesDialog(
         // ourselves so it fades with the card; the window dim is disabled.
         val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
         SideEffect { dialogWindow?.setDimAmount(0f) }
-        val scrimAlpha by animateFloatAsState(
+        val scrimAlpha = animateFloatAsState(
             targetValue = if (visible) 0.42f else 0f,
             animationSpec = if (animationsEnabled) {
                 tween(
@@ -110,7 +110,9 @@ fun TemplatesDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = scrimAlpha))
+                // drawBehind: the fading scrim invalidates only the draw phase
+                // instead of recomposing the dialog every animation frame.
+                .drawBehind { drawRect(Color.Black.copy(alpha = scrimAlpha.value)) }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null

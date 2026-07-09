@@ -91,6 +91,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
@@ -968,32 +969,33 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 // Pill width: compact FAB size → recording pill. The group stays
                 // centered; the bars sweep left into the space the collapsing
                 // UnBlock frees up while the mic icon holds the right edge.
-                val pillWidth by micTransition.animateDp(
+                // State references (no `by`): the values are read inside layout
+                // and draw lambdas so each spring frame invalidates only those
+                // phases instead of recomposing the whole action group.
+                val pillWidth = micTransition.animateDp(
                     label = "pillWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) micRecordingWidth else DesignTokens.EditorChrome.fabSize }
 
-                val unBlockWidth by micTransition.animateDp(
+                val unBlockWidth = micTransition.animateDp(
                     label = "unBlockWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) DesignTokens.EditorChrome.fabSize else unBlockExtendedWidth }
 
-                val unBlockWordmarkAlpha by micTransition.animateFloat(
+                val unBlockWordmarkAlpha = micTransition.animateFloat(
                     label = "unBlockWordmarkAlpha",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 0f else 1f }
 
-                val unBlockWordmarkWidth by micTransition.animateDp(
+                val unBlockWordmarkWidth = micTransition.animateDp(
                     label = "unBlockWordmarkWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 0.dp else DesignTokens.EditorChrome.unBlockWordmarkWidth }
 
-                val recProgress by micTransition.animateFloat(
+                val recProgress = micTransition.animateFloat(
                     label = "recProgress",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 1f else 0f }
-
-                val barsAlpha = ((recProgress - DesignTokens.EditorChrome.recordingBarsFadeStart) / DesignTokens.EditorChrome.recordingBarsFadeDistance).coerceIn(0f, 1f)
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1003,7 +1005,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val unBlockInteractionSource = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
-                            .width(unBlockWidth)
+                            .animatedWidth(unBlockWidth)
                             .height(DesignTokens.EditorChrome.fabSize)
                             .clip(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
@@ -1033,8 +1035,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             )
                             Box(
                                 modifier = Modifier
-                                    .width(unBlockWordmarkWidth)
-                                    .graphicsLayer { alpha = unBlockWordmarkAlpha }
+                                    .animatedWidth(unBlockWordmarkWidth)
+                                    .graphicsLayer { alpha = unBlockWordmarkAlpha.value }
                                     .clipToBounds()
                             ) {
                                 Row(
@@ -1052,7 +1054,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val micPillInteractionSource = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
-                            .width(pillWidth)
+                            .animatedWidth(pillWidth)
                             .height(DesignTokens.EditorChrome.fabSize)
                             .background(
                                 colorScheme.surfaceContainerHigh,
@@ -1097,7 +1099,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 .align(Alignment.CenterStart)
                                 .fillMaxWidth()
                                 .padding(start = DesignTokens.EditorChrome.recordingContentStartPadding, end = DesignTokens.EditorChrome.fabSize)
-                                .alpha(barsAlpha)
+                                .graphicsLayer {
+                                    alpha = ((recProgress.value - DesignTokens.EditorChrome.recordingBarsFadeStart) /
+                                        DesignTokens.EditorChrome.recordingBarsFadeDistance).coerceIn(0f, 1f)
+                                }
                         ) {
                             Canvas(
                                 modifier = Modifier
@@ -1129,7 +1134,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
                         Box(
                             modifier = Modifier
-                                .align(BiasAlignment(horizontalBias = recProgress, verticalBias = 0f))
+                                .align(Alignment.CenterEnd)
                                 .padding(horizontal = DesignTokens.EditorChrome.recordingContentStartPadding)
                                 .size(DesignTokens.EditorChrome.recordingIconSize),
                             contentAlignment = Alignment.Center
@@ -1140,7 +1145,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 tint = colorScheme.onSurfaceVariant,
                                 modifier = Modifier
                                     .size(DesignTokens.EditorChrome.recordingIconSize)
-                                    .alpha(1f - recProgress)
+                                    .graphicsLayer { alpha = 1f - recProgress.value }
                             )
                             Icon(
                                 imageVector = Icons.Default.Pause,
@@ -1148,7 +1153,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 tint = colorScheme.error,
                                 modifier = Modifier
                                     .size(DesignTokens.EditorChrome.recordingIconSize)
-                                    .alpha(recProgress)
+                                    .graphicsLayer { alpha = recProgress.value }
                             )
                         }
                     }
@@ -1614,3 +1619,15 @@ private fun estimateCursorVisualLine(text: String, cursor: Int, charsPerLine: In
 
     return completedLines + currentLineOffset
 }
+
+/**
+ * Width driven by an animated State, read in the layout phase: each animation
+ * frame re-runs layout only, instead of recomposing the whole caller scope
+ * the way `Modifier.width(stateReadInComposition)` does.
+ */
+private fun Modifier.animatedWidth(width: androidx.compose.runtime.State<androidx.compose.ui.unit.Dp>): Modifier =
+    layout { measurable, constraints ->
+        val w = width.value.roundToPx().coerceAtLeast(0)
+        val placeable = measurable.measure(constraints.copy(minWidth = w, maxWidth = w))
+        layout(w, placeable.height) { placeable.placeRelative(0, 0) }
+    }
