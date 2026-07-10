@@ -1,7 +1,7 @@
 # Android UI Accessibility Polish Design
 
 Date: 2026-07-10
-Status: Approved design; pending written-spec review
+Status: Implemented and verified
 Scope: Android only
 
 ## Goal
