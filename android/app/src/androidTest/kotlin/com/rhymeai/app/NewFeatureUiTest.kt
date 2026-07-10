@@ -367,7 +367,6 @@ class NewFeatureUiTest {
     @OptIn(ExperimentalTestApi::class)
     @Test
     fun rewriteLoadingShowsShimmerOverSelection() {
-        composeRule.mainClock.autoAdvance = false
         composeRule.onNodeWithText("New Song").performClick()
 
         val lyrics = """
@@ -382,6 +381,7 @@ class NewFeatureUiTest {
         composeRule.onNodeWithTag("lyricsEditor").performClick()
         composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
         composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
+        composeRule.mainClock.autoAdvance = false
 
         scenario?.onActivity { activity ->
             ViewModelProvider(activity)[MainViewModel::class.java]
