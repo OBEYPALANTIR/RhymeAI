@@ -8,11 +8,14 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -24,7 +27,9 @@ import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.TextRange
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.core.app.ActivityScenario
@@ -35,6 +40,7 @@ import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.util.PronunciationDictionary
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.After
 import org.junit.Before
 import org.junit.Assume.assumeTrue
@@ -80,7 +86,7 @@ class NewFeatureUiTest {
 
         composeRule.onNodeWithContentDescription("Open songs drawer").performClick()
         composeRule.onNodeWithContentDescription("Delete UI Trash Song").performClick()
-        composeRule.onNodeWithText("Move to Trash").performClick()
+        composeRule.onNodeWithText("\"UI Trash Song\" moved to Trash").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Open Trash Bin").performClick()
 
         composeRule.onNodeWithText("Trash").assertIsDisplayed()
@@ -93,6 +99,54 @@ class NewFeatureUiTest {
     }
 
     @Test
+    fun editorSettingsSwitchesExposeAccessibleNames() {
+        composeRule.onNodeWithText("New Song").performClick()
+        composeRule.onNodeWithContentDescription("Settings").performClick()
+        composeRule.onNodeWithText("Editor").performClick()
+
+        listOf(
+            "Whole Song Context",
+            "Stress + IPA",
+            "Highlight Rhymes",
+            "Underline Syllables",
+            "Color Rhymes",
+            "Beat Grid"
+        ).forEach { label ->
+            composeRule.onNodeWithContentDescription(label).assertExists()
+        }
+    }
+
+    @Test
+    fun trashSelectorsExposeCheckboxSemanticsAndSingleEntryNode() {
+        val title = "UI Semantics ${System.currentTimeMillis()}"
+        createSavedSong(title)
+
+        composeRule.onNodeWithContentDescription("Open songs drawer").performClick()
+        assertEquals(
+            1,
+            composeRule.onAllNodesWithContentDescription(
+                "Open Trash Bin",
+                useUnmergedTree = true
+            ).fetchSemanticsNodes().size
+        )
+        composeRule.onNodeWithContentDescription("Delete $title").performClick()
+        composeRule.onNodeWithText("\"$title\" moved to Trash").assertIsDisplayed()
+        composeRule.waitUntil(timeoutMillis = 6_000) {
+            composeRule.onAllNodesWithText("Undo").fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onNodeWithContentDescription("Open Trash Bin").performClick()
+        composeRule.waitUntil(timeoutMillis = 3_000) {
+            composeRule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()
+        }
+
+        val selector = composeRule.onNodeWithContentDescription(title)
+        val before = selector.fetchSemanticsNode().config
+        assertEquals(Role.Checkbox, before[SemanticsProperties.Role])
+        assertEquals(ToggleableState.Off, before[SemanticsProperties.ToggleableState])
+        selector.assertIsOff().performClick().assertIsOn()
+    }
+
+    @Test
     fun stressAndIpaToggleRendersProsodyPreviewInAssistant() {
         // Stress + IPA was moved from the assistant panel to Settings → Editor tab.
         // Enable it there first, then open the assistant panel to verify prosody renders.
@@ -102,10 +156,10 @@ class NewFeatureUiTest {
 
         // Open Settings and navigate to the Editor tab.
         composeRule.onNodeWithContentDescription("Settings").performClick()
-        composeRule.onNodeWithText("Editor").performScrollTo().performClick()
+        composeRule.onNodeWithText("Editor").performClick()
 
         // Enable Stress + IPA in the Editor tab.
-        composeRule.onNodeWithContentDescription("Toggle Stress + IPA").performScrollTo().performClick()
+        composeRule.onNodeWithContentDescription("Stress + IPA").performScrollTo().performClick()
 
         // Dismiss Settings.
         composeRule.onNodeWithContentDescription("Close").performClick()
@@ -448,7 +502,7 @@ class NewFeatureUiTest {
         composeRule.onNodeWithText("New Song").performClick()
         composeRule.onNodeWithTag("songTitleEditor").performTextInput(title)
         composeRule.waitUntil(timeoutMillis = 3_000) {
-            composeRule.onAllNodesWithText("Saved").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithContentDescription("Saved").fetchSemanticsNodes().isNotEmpty()
         }
     }
 

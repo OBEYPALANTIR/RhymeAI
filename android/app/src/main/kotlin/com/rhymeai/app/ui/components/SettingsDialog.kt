@@ -1011,8 +1011,7 @@ private fun EditorTogglesSection(
             onCheckedChange = onStressPreviewChange,
             onHelp = onHelp,
             switchColors = switchColors,
-            colorScheme = colorScheme,
-            contentDescription = "Toggle Stress + IPA"
+            colorScheme = colorScheme
         )
         EditorToggleRow(
             label = "Highlight Rhymes",
@@ -1048,8 +1047,7 @@ private fun EditorTogglesSection(
             onCheckedChange = onBeatGridChange,
             onHelp = onHelp,
             switchColors = switchColors,
-            colorScheme = colorScheme,
-            contentDescription = "Toggle Beat Grid"
+            colorScheme = colorScheme
         )
     }
 }
@@ -1062,8 +1060,7 @@ private fun EditorToggleRow(
     onCheckedChange: (Boolean) -> Unit,
     onHelp: (FeatureHelp) -> Unit,
     switchColors: androidx.compose.material3.SwitchColors,
-    colorScheme: androidx.compose.material3.ColorScheme,
-    contentDescription: String? = null
+    colorScheme: androidx.compose.material3.ColorScheme
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1076,15 +1073,10 @@ private fun EditorToggleRow(
             onHelp = onHelp,
             color = colorScheme.onSurfaceVariant
         )
-        val switchModifier = if (contentDescription != null) {
-            Modifier.semantics { this.contentDescription = contentDescription }
-        } else {
-            Modifier
-        }
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            modifier = switchModifier,
+            modifier = Modifier.semantics { contentDescription = label },
             colors = switchColors
         )
     }

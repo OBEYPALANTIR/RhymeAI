@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -102,6 +103,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -514,7 +516,7 @@ fun ProjectsDrawer(
                                 ) {
                                     Icon(
                                         Icons.Default.Delete,
-                                        contentDescription = "Open Trash Bin",
+                                        contentDescription = null,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
@@ -1520,7 +1522,12 @@ private fun TrashRecordingSelectableRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
-            .clickable(onClick = onToggle)
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
+            .semantics { contentDescription = displayName }
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
@@ -1558,7 +1565,7 @@ private fun TrashRecordingSelectableRow(
             )
         }
 
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
@@ -1593,7 +1600,12 @@ private fun TrashSelectionHeaderRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(DesignTokens.Touch.minTarget)
-            .clickable(onClick = onToggle),
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
+            .semantics { contentDescription = "All items" },
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -1603,7 +1615,7 @@ private fun TrashSelectionHeaderRow(
             color = colorScheme.onSurface,
             modifier = Modifier.weight(1f)
         )
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
@@ -1621,7 +1633,14 @@ private fun TrashProjectSelectableRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
-            .clickable(onClick = onToggle)
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
+            .semantics {
+                contentDescription = project.title.ifEmpty { "Untitled Song" }
+            }
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
@@ -1659,12 +1678,12 @@ private fun TrashProjectSelectableRow(
             )
         }
 
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
 @Composable
-private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
+private fun SelectionCircle(selected: Boolean) {
     val colorScheme = MaterialTheme.colorScheme
     val fillColor by animateColorAsState(
         targetValue = if (selected) colorScheme.primary else colorScheme.surfaceContainerLow,
@@ -1675,9 +1694,7 @@ private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
         animationSpec = tween(DesignTokens.Motion.feedbackMillis)
     )
     Box(
-        modifier = Modifier
-            .size(DesignTokens.Touch.minTarget)
-            .clickable(onClick = onToggle),
+        modifier = Modifier.size(DesignTokens.Touch.minTarget),
         contentAlignment = Alignment.Center
     ) {
         Box(
