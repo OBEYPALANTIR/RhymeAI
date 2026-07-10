@@ -58,8 +58,10 @@ object DesignTokens {
         val statsEndPadding = 4.dp
         val fabSize = 56.dp
         val micRecordingWidth = 216.dp
+        val micRecordingRestWidth = fabSize
         val unBlockExtendedWidth = 150.dp
-        val unBlockWordmarkWidth = 76.dp
+        val unBlockScribbleWidth = 68.dp
+        val unBlockHorizontalPadding = 32.dp
         val recordingContentGap = 8.dp
         val recordingContentStartPadding = 16.dp
         val recordingMeterHeight = 24.dp

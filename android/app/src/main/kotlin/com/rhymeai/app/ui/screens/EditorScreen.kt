@@ -72,6 +72,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -119,6 +120,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.rhymeai.app.R
 import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
@@ -127,6 +129,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -964,7 +967,29 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 )
 
                 val micRecordingWidth = DesignTokens.EditorChrome.micRecordingWidth
-                val unBlockExtendedWidth = DesignTokens.EditorChrome.unBlockExtendedWidth
+                val unBlockTextStyle = LocalTextStyle.current.copy(fontWeight = FontWeight.Medium)
+                val unBlockTextMeasurer = rememberTextMeasurer()
+                val measuredUnBlockWordmarkWidth = remember(unBlockTextMeasurer, unBlockTextStyle, density) {
+                    with(density) {
+                        unBlockTextMeasurer.measure(
+                            text = AnnotatedString("UnBlock"),
+                            style = unBlockTextStyle,
+                            maxLines = 1,
+                            softWrap = false
+                        ).size.width.toDp()
+                    }
+                }
+                val maxUnBlockWidth = (
+                    configuration.screenWidthDp.dp -
+                        DesignTokens.EditorChrome.micRecordingRestWidth -
+                        DesignTokens.Spacing.sm -
+                        (DesignTokens.Spacing.lg * 2)
+                    ).coerceAtLeast(DesignTokens.EditorChrome.fabSize)
+                val unBlockExtendedWidth = unBlockButtonWidth(
+                    measuredWordmarkWidth = measuredUnBlockWordmarkWidth,
+                    maxAvailableWidth = maxUnBlockWidth
+                )
+                val unBlockExpandedWordmarkWidth = unBlockWordmarkWidth(measuredUnBlockWordmarkWidth)
 
                 // Pill width: compact FAB size → recording pill. The group stays
                 // centered; the bars sweep left into the space the collapsing
@@ -990,7 +1015,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 val unBlockWordmarkWidth = micTransition.animateDp(
                     label = "unBlockWordmarkWidth",
                     transitionSpec = { DesignTokens.Motion.expressiveSpring() }
-                ) { recording -> if (recording) 0.dp else DesignTokens.EditorChrome.unBlockWordmarkWidth }
+                ) { recording -> if (recording) 0.dp else unBlockExpandedWordmarkWidth }
 
                 val recProgress = micTransition.animateFloat(
                     label = "recProgress",
@@ -1005,6 +1030,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val unBlockInteractionSource = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
+                            .testTag("unBlockAction")
                             .animatedWidth(unBlockWidth)
                             .height(DesignTokens.EditorChrome.fabSize)
                             .clip(RoundedCornerShape(DesignTokens.Radius.pill))
@@ -1035,12 +1061,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             )
                             Box(
                                 modifier = Modifier
+                                    .testTag("unBlockWordmark")
                                     .animatedWidth(unBlockWordmarkWidth)
                                     .graphicsLayer { alpha = unBlockWordmarkAlpha.value }
                                     .clipToBounds()
                             ) {
                                 Row(
-                                    modifier = Modifier.requiredWidth(DesignTokens.EditorChrome.unBlockWordmarkWidth),
+                                    modifier = Modifier.requiredWidth(unBlockExpandedWordmarkWidth),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Spacer(Modifier.width(DesignTokens.EditorChrome.unBlockWordmarkGap))
@@ -1572,7 +1599,7 @@ private fun UnBlockWordmark() {
         Text("UnBlock", fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false)
         Canvas(
             modifier = Modifier
-                .width(68.dp)
+                .width(DesignTokens.EditorChrome.unBlockScribbleWidth)
                 .height(DesignTokens.Spacing.xs)
         ) {
             val strokeWidth = 1.6.dp.toPx()
