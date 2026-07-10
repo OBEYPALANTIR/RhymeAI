@@ -55,6 +55,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.IosShare
@@ -1344,6 +1345,19 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             .height(DesignTokens.Sheet.handleHeight)
                             .background(colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Sheet.handleHeight / 2))
                     )
+                    IconButton(
+                        onClick = { dismissAssistantSheet() },
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = DesignTokens.Spacing.sm)
+                            .size(DesignTokens.Touch.minTarget)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close assistant",
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
                 AssistantPanel(

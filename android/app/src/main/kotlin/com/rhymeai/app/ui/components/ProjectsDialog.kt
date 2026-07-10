@@ -337,46 +337,65 @@ fun ProjectsDrawer(
                                         DesignTokens.Spacing.lg
                                 )
                         ) {
-                            // Full-bleed search: one trailing X inside the field — clears the
-                            // query while typing, closes the drawer when the field is empty.
-                            OutlinedTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                singleLine = true,
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.Search,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                },
-                                trailingIcon = {
-                                    val isClearing = searchQuery.isNotEmpty()
-                                    IconButton(onClick = {
-                                        if (isClearing) searchQuery = "" else closeDrawer()
-                                    }) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = searchQuery,
+                                    onValueChange = { searchQuery = it },
+                                    singleLine = true,
+                                    leadingIcon = {
                                         Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = if (isClearing) "Clear search" else "Close drawer",
-                                            tint = colorScheme.onSurfaceVariant,
+                                            Icons.Default.Search,
+                                            contentDescription = null,
                                             modifier = Modifier.size(18.dp)
                                         )
-                                    }
-                                },
-                                placeholder = {
-                                    Text(
-                                        text = if (selectedTab == 0) {
-                                            "Search songs"
-                                        } else {
-                                            "Search recordings"
-                                        },
-                                        fontSize = 14.sp
+                                    },
+                                    trailingIcon = if (searchQuery.isNotEmpty()) {
+                                        {
+                                            IconButton(onClick = { searchQuery = "" }) {
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    contentDescription = "Clear search",
+                                                    tint = colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        null
+                                    },
+                                    placeholder = {
+                                        Text(
+                                            text = if (selectedTab == 0) {
+                                                "Search songs"
+                                            } else {
+                                                "Search recordings"
+                                            },
+                                            fontSize = 14.sp
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = textFieldColors,
+                                    shape = RoundedCornerShape(DesignTokens.Radius.xl)
+                                )
+
+                                OutlinedIconButton(
+                                    onClick = { closeDrawer() },
+                                    modifier = Modifier.size(56.dp),
+                                    shape = RoundedCornerShape(DesignTokens.Radius.xl),
+                                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close drawer",
+                                        tint = colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
                                     )
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = textFieldColors,
-                                shape = RoundedCornerShape(DesignTokens.Radius.xl)
-                            )
+                                }
+                            }
 
                             OutlinedButton(
                                 onClick = { closeDrawer(afterClose = onNewProject) },
@@ -1206,7 +1225,7 @@ private fun ProjectDrawerRow(
                 modifier = Modifier.size(DesignTokens.Touch.minTarget)
             ) {
                 Icon(
-                    Icons.Default.Close,
+                    Icons.Default.Delete,
                     contentDescription = "Delete ${project.title.ifEmpty { "Untitled Song" }}",
                     tint = colorScheme.error.copy(alpha = 0.75f),
                     modifier = Modifier.size(18.dp)

@@ -147,6 +147,31 @@ class NewFeatureUiTest {
     }
 
     @Test
+    fun drawerExposesSeparateClearAndCloseActions() {
+        composeRule.onNodeWithText("New Song").performClick()
+        composeRule.onNodeWithContentDescription("Open songs drawer").performClick()
+
+        composeRule.onNodeWithContentDescription("Close drawer").assertExists()
+        composeRule.onNodeWithText("Search songs").performTextInput("UI")
+        composeRule.onNodeWithContentDescription("Clear search").assertExists()
+        composeRule.onNodeWithContentDescription("Close drawer").assertExists()
+
+        composeRule.onNodeWithContentDescription("Clear search").performClick()
+        composeRule.onNodeWithText("Create New Song").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Close drawer").performClick()
+        composeRule.onNodeWithContentDescription("Open songs drawer").assertIsDisplayed()
+    }
+
+    @Test
+    fun assistantExposesExplicitCloseAction() {
+        composeRule.onNodeWithText("New Song").performClick()
+        composeRule.onNodeWithText("UnBlock").performClick()
+
+        composeRule.onNodeWithContentDescription("Close assistant").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("unBlockAction").assertIsDisplayed()
+    }
+
+    @Test
     fun stressAndIpaToggleRendersProsodyPreviewInAssistant() {
         // Stress + IPA was moved from the assistant panel to Settings → Editor tab.
         // Enable it there first, then open the assistant panel to verify prosody renders.
