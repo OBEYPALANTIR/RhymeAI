@@ -41,6 +41,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
@@ -54,6 +55,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.SONG_TEMPLATES
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.appWritingSurface
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -132,14 +134,16 @@ fun TemplatesDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = DesignTokens.Drawer.expandedWidth)
+                    .clip(RoundedCornerShape(DesignTokens.Radius.xxl))
+                    .appWritingSurface()
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) { /* consume so card taps don't dismiss */ },
                 shape = RoundedCornerShape(DesignTokens.Radius.xxl),
-                color = colorScheme.surfaceContainerLow,
+                color = Color.Transparent,
                 contentColor = colorScheme.onSurface,
-                tonalElevation = 6.dp,
+                tonalElevation = 0.dp,
                 border = BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {

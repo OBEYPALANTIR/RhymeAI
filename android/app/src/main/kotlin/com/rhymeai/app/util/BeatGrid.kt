@@ -8,6 +8,7 @@ package com.rhymeai.app.util
  * syllables and would produce misleading 0-beat rows.
  */
 object BeatGrid {
+    private const val MAX_VISUAL_SEGMENTS = 8
 
     // Mirrors SectionMap's header patterns so we skip the same lines.
     private val bracketedHeader = Regex("""^\s*\[(.+)]\s*$""")
@@ -101,4 +102,8 @@ object BeatGrid {
         val bpm = (60_000.0 / avgIntervalMs).toInt()
         return bpm.coerceIn(40, 220)
     }
+
+    fun visualSegmentCount(beats: Double, beatsPerBar: Int = 4): Int =
+        maxOf(beatsPerBar, beats.toInt().coerceAtLeast(1))
+            .coerceAtMost(MAX_VISUAL_SEGMENTS)
 }

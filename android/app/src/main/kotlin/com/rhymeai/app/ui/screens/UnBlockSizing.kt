@@ -4,7 +4,10 @@ import androidx.compose.ui.unit.Dp
 import com.rhymeai.app.ui.theme.DesignTokens
 
 internal fun unBlockWordmarkWidth(measuredWordmarkWidth: Dp): Dp =
-    maxOf(DesignTokens.EditorChrome.unBlockScribbleWidth, measuredWordmarkWidth)
+    maxOf(
+        DesignTokens.EditorChrome.unBlockScribbleWidth,
+        measuredWordmarkWidth + DesignTokens.Spacing.xs
+    )
 
 internal fun unBlockButtonWidth(
     measuredWordmarkWidth: Dp,

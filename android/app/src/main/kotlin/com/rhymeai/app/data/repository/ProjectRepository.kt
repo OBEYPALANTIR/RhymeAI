@@ -7,6 +7,9 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.rhymeai.app.data.model.AnalysisPresentation
+import com.rhymeai.app.data.model.AppAppearance
+import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
 import kotlinx.coroutines.Dispatchers
@@ -32,11 +35,15 @@ class ProjectRepository(
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
+        private val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
+        private val ANALYSIS_PRESENTATION_KEY = stringPreferencesKey("analysis_presentation")
         private val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         private val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
         private val CLAUDE_API_KEY = stringPreferencesKey("claude_api_key")
         private val SELECTED_PROVIDER_KEY = stringPreferencesKey("selected_provider")
         private val GEMINI_MODEL_KEY = stringPreferencesKey("gemini_model_id")
+        private val LOCAL_MODELS_KEY = stringPreferencesKey("local_models_json")
+        private val SELECTED_LOCAL_MODEL_ID_KEY = stringPreferencesKey("selected_local_model_id")
 
         // Editor toggle keys — persisted separately from project data so they
         // survive project switches and app restart without loading an entire project.
@@ -111,6 +118,26 @@ class ProjectRepository(
         )
     }
 
+    val appearanceFlow: Flow<AppAppearance> = context.dataStore.data.map { prefs ->
+        AppAppearance.fromStorage(prefs[APP_APPEARANCE_KEY])
+    }
+
+    suspend fun saveAppearance(appearance: AppAppearance) {
+        context.dataStore.edit { prefs ->
+            prefs[APP_APPEARANCE_KEY] = appearance.storageValue
+        }
+    }
+
+    val analysisPresentationFlow: Flow<AnalysisPresentation> = context.dataStore.data.map { prefs ->
+        AnalysisPresentation.fromStorage(prefs[ANALYSIS_PRESENTATION_KEY])
+    }
+
+    suspend fun saveAnalysisPresentation(value: AnalysisPresentation) {
+        context.dataStore.edit { prefs ->
+            prefs[ANALYSIS_PRESENTATION_KEY] = value.storageValue
+        }
+    }
+
     suspend fun saveApiKey(provider: String, key: String) {
         secureKeyStore.setKey(provider, key)
     }
@@ -146,6 +173,36 @@ class ProjectRepository(
     suspend fun saveModelId(id: String) {
         context.dataStore.edit { prefs ->
             prefs[GEMINI_MODEL_KEY] = id
+        }
+    }
+
+    val localModelsFlow: Flow<List<SavedLocalModel>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[LOCAL_MODELS_KEY] ?: "[]"
+        try {
+            json.decodeFromString<List<SavedLocalModel>>(raw)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }.flowOn(Dispatchers.Default)
+
+    suspend fun saveLocalModels(models: List<SavedLocalModel>) {
+        val encoded = withContext(Dispatchers.Default) { json.encodeToString(models) }
+        context.dataStore.edit { prefs ->
+            prefs[LOCAL_MODELS_KEY] = encoded
+        }
+    }
+
+    val selectedLocalModelIdFlow: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[SELECTED_LOCAL_MODEL_ID_KEY]
+    }
+
+    suspend fun saveSelectedLocalModelId(id: String?) {
+        context.dataStore.edit { prefs ->
+            if (id == null) {
+                prefs.remove(SELECTED_LOCAL_MODEL_ID_KEY)
+            } else {
+                prefs[SELECTED_LOCAL_MODEL_ID_KEY] = id
+            }
         }
     }
 

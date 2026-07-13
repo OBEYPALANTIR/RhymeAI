@@ -931,30 +931,20 @@ struct AIService {
     /// Returns true when calls should be routed through the Gemma GGUF runner.
     /// Conditions: llama.cpp engine is compiled in, engine choice is .gemma,
     /// and at least one GGUF file exists in the models directory.
-    static func shouldUseGemma() -> Bool {
+    static func shouldUseGemma(
+        engineChoice: GGUFEngineChoice = GGUFEngineChoice.current,
+        ggufPath: String? = firstGGUFPath()
+    ) -> Bool {
         guard GGUFModelService.isEngineAvailable else { return false }
-        guard GGUFEngineChoice.current == .gemma else { return false }
-        guard let dir = try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        ).appendingPathComponent("RhymeAI/Gemma", isDirectory: true) else { return false }
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        return contents.contains { $0.hasSuffix(".gguf") }
+        return engineChoice == .gemma && ggufPath != nil
     }
 
-    /// Returns the path to the first available GGUF model file, or nil.
     static func firstGGUFPath() -> String? {
-        guard let dir = try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        ).appendingPathComponent("RhymeAI/Gemma", isDirectory: true) else { return nil }
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        guard let gguf = contents.first(where: { $0.hasSuffix(".gguf") }) else { return nil }
-        return dir.appendingPathComponent(gguf).path
+        GGUFModelSelection.resolvedModelURL()?.path
+    }
+
+    static func unloadGGUFRunner() async {
+        await ggufRunner.unload()
     }
 
     /// Ensure the shared GGUF runner has the correct model loaded, then call
@@ -971,10 +961,9 @@ struct AIService {
             )
         }
 
-        // Load model if not already loaded (or if a different file is now present).
-        if !runner.isLoaded {
-            try await runner.loadModel(filePath: path)
-        }
+        // loadModel is idempotent for an already-loaded path, and reloads when
+        // the available GGUF file has changed since the last request.
+        try await runner.loadModel(filePath: path)
 
         return try await runner.generate(prompt: prompt)
     }

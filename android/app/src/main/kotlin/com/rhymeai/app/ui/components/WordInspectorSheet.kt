@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.appWritingSurface
 import com.rhymeai.app.util.RhymeMatches
 import com.rhymeai.app.util.WordProsody
 import kotlinx.coroutines.delay
@@ -146,7 +148,8 @@ fun WordInspectorSheet(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 560.dp)
-                            .background(colorScheme.surfaceContainerLow, RoundedCornerShape(DesignTokens.Radius.xxl))
+                            .clip(RoundedCornerShape(DesignTokens.Radius.xxl))
+                            .appWritingSurface()
                             .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.xxl))
                             .padding(DesignTokens.Spacing.lg)
                             .testTag("wordInspectorSheet")

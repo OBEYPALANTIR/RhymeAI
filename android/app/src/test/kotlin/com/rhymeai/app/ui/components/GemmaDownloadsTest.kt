@@ -12,6 +12,8 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.io.path.createTempDirectory
 
 class GemmaDownloadsTest {
@@ -26,7 +28,7 @@ class GemmaDownloadsTest {
 
     @Test
     fun validateDownloadedGemmaRejectsMissingIncompleteAndNonGgufFiles() {
-        val model = tinyGemma(expectedBytes = 8)
+        val model = tinyGemma(expectedBytes = 24)
         val dir = tempDir()
         val file = File(dir, model.fileName)
 
@@ -38,10 +40,18 @@ class GemmaDownloadsTest {
             validateDownloadedGemma(model, file)
         )
 
-        file.writeText("not-a-gguf")
+        file.writeBytes(ByteArray(24) { 1 })
         assertEquals("Gemma Tiny download did not produce a GGUF file", validateDownloadedGemma(model, file))
 
-        file.writeBytes(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte(), 1, 2, 3, 4))
+        file.writeBytes(
+            ByteBuffer.allocate(24)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .put("GGUF".toByteArray())
+                .putInt(3)
+                .putLong(1)
+                .putLong(1)
+                .array()
+        )
         assertNull(validateDownloadedGemma(model, file))
     }
 

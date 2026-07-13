@@ -6,13 +6,18 @@ import kotlin.test.assertEquals
 
 class UnBlockSizingTest {
     @Test
-    fun normalWordmarkKeepsExistingMinimumWidth() {
-        assertEquals(150.dp, unBlockButtonWidth(60.dp, 300.dp))
+    fun normalWordmarkUsesPhiSquaredRestingWidth() {
+        assertEquals(144.dp, unBlockButtonWidth(60.dp, 300.dp))
     }
 
     @Test
-    fun doubledWordmarkExpandsWithoutExceedingAvailableWidth() {
-        assertEquals(178.dp, unBlockButtonWidth(120.dp, 240.dp))
+    fun enlargedWordmarkExpandsWithoutExceedingAvailableWidth() {
+        assertEquals(171.dp, unBlockButtonWidth(120.dp, 240.dp))
         assertEquals(160.dp, unBlockButtonWidth(120.dp, 160.dp))
+    }
+
+    @Test
+    fun wordmarkWidthIncludesOpticalOverhang() {
+        assertEquals(74.dp, unBlockWordmarkWidth(70.dp))
     }
 }

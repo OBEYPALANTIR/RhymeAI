@@ -1,48 +1,6 @@
 import Foundation
 import SwiftUI
-
-private struct GemmaDownloadOption: Identifiable, Equatable {
-    let id: String
-    let title: String
-    let subtitle: String
-    let size: String
-    let fileName: String
-    let expectedBytes: Int64
-    let url: URL
-}
-
-private func validatedDownloadURL(_ string: String) -> URL {
-    guard let url = URL(string: string) else {
-        preconditionFailure("Invalid Gemma download URL: \(string)")
-    }
-    return url
-}
-
-private enum GemmaDownloadURL {
-    static let e2b = validatedDownloadURL("https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf?download=true")
-    static let e4b = validatedDownloadURL("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf?download=true")
-}
-
-private let gemmaDownloadOptions: [GemmaDownloadOption] = [
-    GemmaDownloadOption(
-        id: "gemma-4-e2b",
-        title: "Gemma 4 E2B",
-        subtitle: "Recommended faster local model",
-        size: "3.18 GB",
-        fileName: "gemma-4-E2B-it-UD-Q4_K_XL.gguf",
-        expectedBytes: 3_184_494_720,
-        url: GemmaDownloadURL.e2b
-    ),
-    GemmaDownloadOption(
-        id: "gemma-4-e4b",
-        title: "Gemma 4 E4B",
-        subtitle: "Larger model for richer suggestions",
-        size: "5.13 GB",
-        fileName: "gemma-4-E4B-it-UD-Q4_K_XL.gguf",
-        expectedBytes: 5_126_304_928,
-        url: GemmaDownloadURL.e4b
-    )
-]
+import UniformTypeIdentifiers
 
 private let providerSectionAnimation = RhymeAITokens.Motion.presentation
 
@@ -56,6 +14,7 @@ struct SettingsView: View {
     @EnvironmentObject private var persistenceState: AppPersistenceState
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAppearanceStyle) private var appearance
 
     @State private var editingKeys: [String: String] = [:]
     @State private var showKey: Bool = false
@@ -66,6 +25,9 @@ struct SettingsView: View {
     @State private var downloadError: String?
     @State private var downloadTask: Task<Void, Never>?
     @State private var ggufEngineChoice: GGUFEngineChoice = GGUFEngineChoice.current
+    @State private var selectedGGUFFileName: String? = GGUFModelSelection.currentFileName
+    @State private var customModels: [GGUFCustomModel] = GGUFCustomModelRegistry.models()
+    @State private var customModelImporterPresented = false
     @State private var activeHelp: FeatureHelp?
     @State private var cloudBackupPassphraseEntry: String = ""
 
@@ -98,49 +60,31 @@ struct SettingsView: View {
             .sheet(item: $activeHelp) { help in
                 FeatureHelpSheet(help: help)
             }
+            .fileImporter(
+                isPresented: $customModelImporterPresented,
+                allowedContentTypes: [.data],
+                allowsMultipleSelection: false,
+                onCompletion: importCustomModel
+            )
         }
+        .environment(\.colorScheme, appearance.preferredColorScheme)
+        .preferredColorScheme(appearance.preferredColorScheme)
     }
 
     private var settingsBackground: some View {
-        ZStack {
-            Color(UIColor.systemBackground).ignoresSafeArea()
-
-            LinearGradient(
-                colors: [
-                    Color.indigo.opacity(0.26),
-                    Color.teal.opacity(0.08),
-                    Color.clear
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            LinearGradient(
-                colors: [
-                    Color.clear,
-                    Color.pink.opacity(0.08)
-                ],
-                startPoint: .center,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-        }
+        AppWritingBackground()
     }
 
-    @ViewBuilder
     private var settingsContent: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 16) {
-                contentStack
-            }
-        } else {
-            contentStack
-        }
+        contentStack
     }
 
     private var contentStack: some View {
         VStack(alignment: .leading, spacing: 16) {
+            AppearanceSettingsSection()
+
+            AnalysisStyleSettingsSection()
+
             providerSection
 
             providerSpecificSection
@@ -175,7 +119,7 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
         }
         .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: 22)
     }
 
     @ViewBuilder
@@ -191,35 +135,39 @@ struct SettingsView: View {
 
     private var localModelSection: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if GGUFModelService.isEngineAvailable {
+                customModelSelector
+            }
+
             localStatusRow
 
             if GGUFModelService.isEngineAvailable {
                 // Engine picker: only shown when at least one GGUF is installed.
-                if !installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty {
+                if GGUFModelSelection.resolvedModelURL() != nil {
                     enginePickerRow
                 }
 
                 SettingsSectionTitle("Recommended Gemma Downloads", systemImage: "arrow.down.circle")
 
-                ForEach(gemmaDownloadOptions) { option in
+                ForEach(GGUFModelCatalog.models) { option in
                     gemmaDownloadRow(option)
                 }
 
                 if let downloadMessage {
                     Label(downloadMessage, systemImage: "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(appearance.palette.success)
                         .accessibilityIdentifier("gemmaDownloadMessage")
                 }
 
                 if let downloadError {
                     Label(downloadError, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(appearance.palette.error)
                         .accessibilityIdentifier("gemmaDownloadError")
                 }
 
-                Text(installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty
+                Text(GGUFModelSelection.resolvedModelURL() == nil
                      ? "Download a Gemma model to enable on-device inference without Apple Intelligence. Files are stored in the app sandbox."
                      : "Gemma uses the downloaded GGUF model directly via llama.cpp. Apple Intelligence is the fallback when no GGUF is present."
                 )
@@ -245,6 +193,9 @@ struct SettingsView: View {
                 set: { choice in
                     ggufEngineChoice = choice
                     choice.save()
+                    if choice == .appleIntelligence {
+                        Task { await AIService.unloadGGUFRunner() }
+                    }
                 }
             )) {
                 ForEach(GGUFEngineChoice.allCases, id: \.self) { choice in
@@ -255,16 +206,16 @@ struct SettingsView: View {
             .accessibilityIdentifier("ggufEnginePicker")
         }
         .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: 22)
     }
 
     private var localStatusRow: some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: "iphone.gen3.radiowaves.left.and.right")
                 .font(.title2)
-                .foregroundStyle(.teal)
+                .foregroundStyle(appearance.palette.action)
                 .frame(width: 42, height: 42)
-                .liquidGlassSurface(cornerRadius: 14, tint: .teal.opacity(0.14), fallbackOpacity: 0.08)
+                .liquidGlassSurface(cornerRadius: 14)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Apple Foundation Models")
@@ -279,7 +230,7 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: 22)
     }
 
     private var apiKeySection: some View {
@@ -289,12 +240,23 @@ struct SettingsView: View {
             HStack(spacing: 12) {
                 Group {
                     if showKey {
-                        TextField("API Key", text: apiKeyBinding)
+                        TextField(
+                            "",
+                            text: apiKeyBinding,
+                            prompt: Text("API Key")
+                                .foregroundStyle(appearance.palette.placeholder)
+                        )
                     } else {
-                        SecureField("API Key", text: apiKeyBinding)
+                        SecureField(
+                            "",
+                            text: apiKeyBinding,
+                            prompt: Text("API Key")
+                                .foregroundStyle(appearance.palette.placeholder)
+                        )
                     }
                 }
                 .font(.system(.body, design: .monospaced))
+                .foregroundStyle(appearance.palette.primaryInk)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .textFieldStyle(.plain)
@@ -312,14 +274,14 @@ struct SettingsView: View {
                 .accessibilityLabel(showKey ? "Hide API key" : "Show API key")
             }
             .padding(14)
-            .liquidGlassSurface(cornerRadius: 16, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .liquidGlassSurface(cornerRadius: 16, interactive: true)
 
             Text(viewModel.selectedProvider.keyHint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: 22)
     }
 
     private var modelSection: some View {
@@ -337,7 +299,7 @@ struct SettingsView: View {
             .pickerStyle(.menu)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .liquidGlassSurface(cornerRadius: 16, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .liquidGlassSurface(cornerRadius: 16, interactive: true)
 
             Text(viewModel.selectedModel.id)
                 .font(.caption.monospaced())
@@ -346,7 +308,7 @@ struct SettingsView: View {
                 .minimumScaleFactor(0.8)
         }
         .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: 22)
     }
 
     private var cloudSyncStatusRow: some View {
@@ -399,7 +361,7 @@ struct SettingsView: View {
             .textInputAutocapitalization(.never)
             .font(.system(.body, design: .rounded))
             .padding(14)
-            .liquidGlassSurface(cornerRadius: 16, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .liquidGlassSurface(cornerRadius: 16, interactive: true)
             .accessibilityIdentifier("cloudBackupPassphrase")
 
             HStack(spacing: 10) {
@@ -439,7 +401,7 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: 22)
     }
 
     private var cloudBackupControlsEnabled: Bool {
@@ -459,7 +421,7 @@ struct SettingsView: View {
         if viewModel.cloudBackupIsWorking {
             return .secondary
         }
-        return viewModel.cloudBackupLastResultIsError ? .orange : .green
+        return viewModel.cloudBackupLastResultIsError ? appearance.palette.error : appearance.palette.success
     }
 
     private func runCloudBackupAction(_ action: CloudBackupAction) {
@@ -493,30 +455,41 @@ struct SettingsView: View {
                     systemImage: savedConfirmation ? "checkmark.circle.fill" : "checkmark"
                 )
                 .font(.headline)
-                .foregroundStyle(savedConfirmation ? .green : .primary)
+                .foregroundStyle(savedConfirmation ? appearance.palette.success : appearance.palette.primaryInk)
                 Spacer()
             }
             .padding(.vertical, 15)
             .padding(.horizontal, 16)
-            .liquidGlassSurface(cornerRadius: 18, tint: .green.opacity(0.12), interactive: true, fallbackOpacity: 0.08)
+            .liquidGlassSurface(
+                cornerRadius: 18,
+                tint: savedConfirmation ? appearance.palette.success : nil,
+                interactive: true,
+                fallbackOpacity: 0.08
+            )
         }
         .buttonStyle(.rhymePress)
         .disabled(savedConfirmation)
     }
 
-    private func gemmaDownloadRow(_ option: GemmaDownloadOption) -> some View {
+    private func gemmaDownloadRow(_ option: GGUFModelDescriptor) -> some View {
         let isDownloaded = installedModelFiles.contains(option.fileName)
         let isDownloading = activeDownloadID == option.id
+        let isSelected = selectedGGUFFileName == option.fileName
+        let hasEnoughMemory = ProcessInfo.processInfo.physicalMemory >= option.minimumPhysicalMemoryBytes
 
         return Button {
-            startGemmaDownload(option)
+            if isDownloaded {
+                selectGGUFModel(option)
+            } else {
+                startGemmaDownload(option)
+            }
         } label: {
             HStack(alignment: .center, spacing: 14) {
                 Image(systemName: isDownloaded ? "checkmark.circle.fill" : "arrow.down.circle.fill")
                     .font(.title3)
-                    .foregroundStyle(isDownloaded ? .green : .teal)
+                    .foregroundStyle(isDownloaded ? appearance.palette.success : appearance.palette.action)
                     .frame(width: 36, height: 36)
-                    .liquidGlassSurface(cornerRadius: 18, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
+                    .liquidGlassSurface(cornerRadius: 18)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(option.title)
@@ -531,19 +504,64 @@ struct SettingsView: View {
 
                 Spacer(minLength: 8)
 
-                Text(isDownloaded ? "Downloaded" : (isDownloading ? "Downloading" : "Download"))
+                Text(isSelected ? "Selected" : (isDownloaded ? "Select" : (isDownloading ? "Downloading" : "Download")))
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(isDownloaded ? .green : .primary)
+                    .foregroundStyle(isDownloaded ? appearance.palette.success : appearance.palette.primaryInk)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
-                    .liquidGlassSurface(cornerRadius: 14, tint: .white.opacity(0.05), fallbackOpacity: 0.07)
+                    .liquidGlassSurface(cornerRadius: 14)
             }
             .padding(14)
-            .liquidGlassSurface(cornerRadius: 18, tint: .teal.opacity(0.08), interactive: !isDownloaded, fallbackOpacity: 0.05)
+            .liquidGlassSurface(cornerRadius: 18, interactive: !isDownloaded)
         }
         .buttonStyle(.rhymePress)
-        .disabled(activeDownloadID != nil || isDownloaded)
+        .disabled(activeDownloadID != nil || !hasEnoughMemory)
         .accessibilityIdentifier("gemmaDownload.\(option.id)")
+    }
+
+    private var customModelSelector: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SettingsSectionTitle("Custom Models", systemImage: "externaldrive")
+
+            ForEach(customModels) { model in
+                Button {
+                    selectCustomGGUFModel(model)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: selectedGGUFFileName == model.fileName
+                              ? "checkmark.circle.fill"
+                              : "externaldrive.fill")
+                            .foregroundStyle(appearance.palette.action)
+                        Text(model.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(selectedGGUFFileName == model.fileName ? "Selected" : "Select")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(appearance.palette.secondaryInk)
+                    }
+                    .padding(14)
+                    .liquidGlassSurface(cornerRadius: 18, interactive: true)
+                }
+                .buttonStyle(.rhymePress)
+                .disabled(activeDownloadID != nil)
+                .accessibilityIdentifier("customGGUF.\(model.id)")
+            }
+
+            Button {
+                customModelImporterPresented = true
+            } label: {
+                Label("Import Custom GGUF", systemImage: "folder.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .liquidGlassSurface(cornerRadius: 18, interactive: true)
+            }
+            .buttonStyle(.rhymePress)
+            .disabled(activeDownloadID != nil)
+            .accessibilityIdentifier("importCustomGGUF")
+        }
     }
 
     // MARK: - Editor Section
@@ -571,7 +589,7 @@ struct SettingsView: View {
             )
 
             settingsToggleRow(
-                "Underline Syllables",
+                "Syllable Guide",
                 help: .underlineSyllables,
                 isOn: Binding(
                     get: { viewModel.isSyllableColoringEnabled },
@@ -589,7 +607,7 @@ struct SettingsView: View {
             )
 
             settingsToggleRow(
-                "Color Rhymes",
+                "Rhyme Families",
                 help: .colorRhymes,
                 isOn: Binding(
                     get: { viewModel.isRhymeHighlightEnabled },
@@ -607,7 +625,7 @@ struct SettingsView: View {
             )
         }
         .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: 22)
     }
 
     // Replicates AssistantPanelView's toggleHelpRow pattern with the persisting
@@ -627,7 +645,7 @@ struct SettingsView: View {
             Spacer()
             Toggle("", isOn: isOn)
                 .labelsHidden()
-                .tint(.indigo)
+                .tint(appearance.palette.action)
                 .accessibilityLabel(text)
         }
     }
@@ -676,7 +694,97 @@ struct SettingsView: View {
         }
     }
 
-    private func startGemmaDownload(_ option: GemmaDownloadOption) {
+    private func selectGGUFModel(_ option: GGUFModelDescriptor) {
+        guard activeDownloadID == nil else { return }
+        downloadTask = Task {
+            await MainActor.run {
+                activeDownloadID = option.id
+                downloadMessage = "Verifying \(option.title)..."
+                downloadError = nil
+            }
+            do {
+                let modelURL = try Self.modelsDirectory().appendingPathComponent(option.fileName)
+                try await Task.detached(priority: .userInitiated) {
+                    try GGUFModelCatalog.validateFile(at: modelURL, against: option)
+                }.value
+                await MainActor.run { activateGGUFModel(option, message: "\(option.title) selected.") }
+            } catch {
+                await MainActor.run {
+                    activeDownloadID = nil
+                    downloadMessage = nil
+                    downloadError = "Could not select \(option.title): \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func selectCustomGGUFModel(_ model: GGUFCustomModel) {
+        guard activeDownloadID == nil else { return }
+        do {
+            let modelURL = try Self.modelsDirectory().appendingPathComponent(model.fileName)
+            try GGUFModelCatalog.validateCustomFile(at: modelURL)
+            activateCustomGGUFModel(model, message: "\(model.displayName) selected.")
+        } catch {
+            downloadMessage = nil
+            downloadError = "Could not select \(model.displayName): \(error.localizedDescription)"
+        }
+    }
+
+    private func importCustomModel(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let sourceURL = urls.first else {
+            if case .failure(let error) = result {
+                downloadError = "Could not open the model: \(error.localizedDescription)"
+            }
+            return
+        }
+        guard activeDownloadID == nil else { return }
+        downloadTask?.cancel()
+        downloadTask = Task {
+            activeDownloadID = "custom-import"
+            downloadMessage = "Importing \(sourceURL.lastPathComponent)..."
+            downloadError = nil
+            do {
+                let model = try await Task.detached(priority: .userInitiated) {
+                    let accessed = sourceURL.startAccessingSecurityScopedResource()
+                    defer { if accessed { sourceURL.stopAccessingSecurityScopedResource() } }
+                    try GGUFModelCatalog.validateCustomFile(at: sourceURL)
+                    let directory = try GGUFModelCatalog.modelsDirectory(create: true)
+                    let fileName = "custom-\(UUID().uuidString).gguf"
+                    let destination = directory.appendingPathComponent(fileName)
+                    let stagingURL = directory.appendingPathComponent("\(fileName).import")
+                    var importCompleted = false
+                    defer {
+                        if !importCompleted {
+                            try? FileManager.default.removeItem(at: stagingURL)
+                            try? FileManager.default.removeItem(at: destination)
+                        }
+                    }
+                    try FileManager.default.copyItem(at: sourceURL, to: stagingURL)
+                    try GGUFModelCatalog.validateCustomFile(at: stagingURL)
+                    try FileManager.default.moveItem(at: stagingURL, to: destination)
+                    importCompleted = true
+                    let displayName = sourceURL.deletingPathExtension().lastPathComponent
+                    return GGUFCustomModel(
+                        id: fileName,
+                        displayName: displayName.isEmpty ? "Custom Model" : displayName,
+                        fileName: fileName
+                    )
+                }.value
+                GGUFCustomModelRegistry.register(model)
+                customModels = GGUFCustomModelRegistry.models()
+                activateCustomGGUFModel(model, message: "\(model.displayName) imported and selected.")
+            } catch is CancellationError {
+                activeDownloadID = nil
+                downloadMessage = nil
+            } catch {
+                activeDownloadID = nil
+                downloadMessage = nil
+                downloadError = "Could not import this model: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func startGemmaDownload(_ option: GGUFModelDescriptor) {
         guard activeDownloadID == nil else { return }
         downloadTask?.cancel()
         downloadTask = Task {
@@ -690,46 +798,30 @@ struct SettingsView: View {
                 let directory = try Self.modelsDirectory()
                 let destination = directory.appendingPathComponent(option.fileName)
                 let stagingURL = directory.appendingPathComponent("\(option.fileName).download")
+                try Self.ensureDeviceSuitability(for: option, directory: directory)
 
                 if FileManager.default.fileExists(atPath: destination.path) {
-                    await MainActor.run {
-                        installedModelFiles.insert(option.fileName)
-                        activeDownloadID = nil
-                        downloadMessage = "\(option.title) is already downloaded."
-                    }
+                    try await Task.detached(priority: .userInitiated) {
+                        try GGUFModelCatalog.validateFile(at: destination, against: option)
+                    }.value
+                    await MainActor.run { activateGGUFModel(option, message: "\(option.title) selected.") }
                     return
                 }
 
                 try? FileManager.default.removeItem(at: stagingURL)
-
-                let (temporaryURL, response) = try await URLSession.shared.download(from: option.url)
-                try Task.checkCancellation()
-
-                if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-                    throw URLError(.badServerResponse)
-                }
-
-                try FileManager.default.moveItem(at: temporaryURL, to: stagingURL)
-                let attributes = try FileManager.default.attributesOfItem(atPath: stagingURL.path)
-                let downloadedBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
-                guard downloadedBytes >= option.expectedBytes else {
-                    try? FileManager.default.removeItem(at: stagingURL)
-                    throw DownloadValidationError.incomplete(expected: option.expectedBytes, actual: downloadedBytes)
-                }
+                try await BoundedFileDownloader.download(
+                    from: option.url,
+                    to: stagingURL,
+                    expectedBytes: option.expectedBytes
+                )
+                try await Task.detached(priority: .userInitiated) {
+                    try GGUFModelCatalog.validateFile(at: stagingURL, against: option)
+                }.value
 
                 try? FileManager.default.removeItem(at: destination)
                 try FileManager.default.moveItem(at: stagingURL, to: destination)
 
-                await MainActor.run {
-                    viewModel.saveProvider(.local)
-                    viewModel.saveModel(.localModel)
-                    // Automatically switch to Gemma engine now that a GGUF is available.
-                    GGUFEngineChoice.gemma.save()
-                    ggufEngineChoice = .gemma
-                    installedModelFiles.insert(option.fileName)
-                    activeDownloadID = nil
-                    downloadMessage = "\(option.title) downloaded. Gemma engine selected."
-                }
+                await MainActor.run { activateGGUFModel(option, message: "\(option.title) downloaded and selected.") }
             } catch is CancellationError {
                 await MainActor.run {
                     activeDownloadID = nil
@@ -745,6 +837,29 @@ struct SettingsView: View {
         }
     }
 
+    private func activateGGUFModel(_ option: GGUFModelDescriptor, message: String) {
+        viewModel.saveProvider(.local)
+        viewModel.saveModel(.localModel)
+        GGUFModelSelection.save(fileName: option.fileName)
+        selectedGGUFFileName = option.fileName
+        GGUFEngineChoice.gemma.save()
+        ggufEngineChoice = .gemma
+        installedModelFiles.insert(option.fileName)
+        activeDownloadID = nil
+        downloadMessage = message
+    }
+
+    private func activateCustomGGUFModel(_ model: GGUFCustomModel, message: String) {
+        viewModel.saveProvider(.local)
+        viewModel.saveModel(.localModel)
+        GGUFModelSelection.save(fileName: model.fileName)
+        selectedGGUFFileName = model.fileName
+        GGUFEngineChoice.gemma.save()
+        ggufEngineChoice = .gemma
+        activeDownloadID = nil
+        downloadMessage = message
+    }
+
     private func refreshInstalledModels() {
         guard let directory = try? Self.modelsDirectory(),
               let contents = try? FileManager.default.contentsOfDirectory(
@@ -754,31 +869,48 @@ struct SettingsView: View {
             installedModelFiles = []
             return
         }
-        installedModelFiles = Set(contents.map(\.lastPathComponent))
+        installedModelFiles = Set(contents.map(\.lastPathComponent).filter {
+            GGUFModelCatalog.descriptor(fileName: $0) != nil
+        })
+        customModels = GGUFCustomModelRegistry.models().filter { model in
+            contents.contains { $0.lastPathComponent == model.fileName }
+        }
+        GGUFCustomModelRegistry.save(customModels)
+        selectedGGUFFileName = GGUFModelSelection.resolvedModelURL()?.lastPathComponent
     }
 
     private static func modelsDirectory() throws -> URL {
-        let baseURL = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let directory = baseURL
-            .appendingPathComponent("RhymeAI", isDirectory: true)
-            .appendingPathComponent("Gemma", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
+        try GGUFModelCatalog.modelsDirectory(create: true)
+    }
+
+    private static func ensureDeviceSuitability(for option: GGUFModelDescriptor, directory: URL) throws {
+        guard ProcessInfo.processInfo.physicalMemory >= option.minimumPhysicalMemoryBytes else {
+            throw DownloadValidationError.insufficientMemory
+        }
+        let values = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        if let available = values.volumeAvailableCapacityForImportantUsage,
+           available < option.expectedBytes + 1_000_000_000 {
+            throw DownloadValidationError.insufficientStorage
+        }
     }
 }
 
 private enum DownloadValidationError: LocalizedError {
     case incomplete(expected: Int64, actual: Int64)
+    case oversized
+    case insufficientMemory
+    case insufficientStorage
 
     var errorDescription: String? {
         switch self {
         case let .incomplete(expected, actual):
             return "download was incomplete: \(Self.format(actual)) of \(Self.format(expected))"
+        case .oversized:
+            return "the download exceeded the approved model size"
+        case .insufficientMemory:
+            return "this device does not have enough memory for that model"
+        case .insufficientStorage:
+            return "at least 1 GB of free space beyond the model size is required"
         }
     }
 
@@ -787,7 +919,128 @@ private enum DownloadValidationError: LocalizedError {
     }
 }
 
+private final class BoundedFileDownloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let destination: URL
+    private let expectedBytes: Int64
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var fileHandle: FileHandle?
+    private var task: URLSessionDataTask?
+    private var session: URLSession?
+    private var receivedBytes: Int64 = 0
+    private var terminalError: Error?
+
+    private init(destination: URL, expectedBytes: Int64) {
+        self.destination = destination
+        self.expectedBytes = expectedBytes
+    }
+
+    static func download(from url: URL, to destination: URL, expectedBytes: Int64) async throws {
+        let downloader = BoundedFileDownloader(destination: destination, expectedBytes: expectedBytes)
+        try await withTaskCancellationHandler {
+            try await downloader.start(url: url)
+        } onCancel: {
+            downloader.cancel()
+        }
+    }
+
+    private func start(url: URL) async throws {
+        try? FileManager.default.removeItem(at: destination)
+        guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        fileHandle = try FileHandle(forWritingTo: destination)
+
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            self.continuation = continuation
+            let configuration = URLSessionConfiguration.ephemeral
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1
+            let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+            self.session = session
+            let task = session.dataTask(with: url)
+            self.task = task
+            lock.unlock()
+            task.resume()
+        }
+    }
+
+    private func cancel() {
+        lock.lock()
+        terminalError = CancellationError()
+        let task = task
+        lock.unlock()
+        task?.cancel()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            terminalError = URLError(.badServerResponse)
+            completionHandler(.cancel)
+            return
+        }
+        if response.expectedContentLength > 0,
+           response.expectedContentLength != expectedBytes {
+            terminalError = DownloadValidationError.incomplete(
+                expected: expectedBytes,
+                actual: response.expectedContentLength
+            )
+            completionHandler(.cancel)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        let nextTotal = receivedBytes + Int64(data.count)
+        guard nextTotal <= expectedBytes else {
+            terminalError = DownloadValidationError.oversized
+            dataTask.cancel()
+            return
+        }
+        do {
+            try fileHandle?.write(contentsOf: data)
+            receivedBytes = nextTotal
+        } catch {
+            terminalError = error
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        try? fileHandle?.close()
+        let resultError = terminalError ?? error
+        if resultError == nil, receivedBytes != expectedBytes {
+            terminalError = DownloadValidationError.incomplete(expected: expectedBytes, actual: receivedBytes)
+        }
+        let finalError = terminalError ?? resultError
+        if finalError != nil {
+            try? FileManager.default.removeItem(at: destination)
+        }
+
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        if let finalError {
+            continuation?.resume(throwing: finalError)
+        } else {
+            continuation?.resume()
+        }
+        session.finishTasksAndInvalidate()
+    }
+}
+
 private struct SettingsSectionTitle: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let title: String
     let systemImage: String
 
@@ -799,7 +1052,7 @@ private struct SettingsSectionTitle: View {
     var body: some View {
         Label(title, systemImage: systemImage)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(appearance.palette.secondaryInk)
             .textCase(.uppercase)
             .labelStyle(.titleAndIcon)
     }

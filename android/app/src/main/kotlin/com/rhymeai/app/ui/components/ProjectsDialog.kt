@@ -97,6 +97,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -109,8 +110,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.R
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
@@ -120,6 +119,7 @@ import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.service.TrashedVoiceMemo
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.appWritingSurface
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -200,6 +200,10 @@ fun ProjectsDrawer(
         }
     }
 
+    BackHandler(enabled = !showTrashBin) {
+        closeDrawer()
+    }
+
     LaunchedEffect(Unit) {
         drawerVisible = true
     }
@@ -258,17 +262,7 @@ fun ProjectsDrawer(
         label = "trashRevealProgress"
     )
 
-    Dialog(
-        onDismissRequest = {
-            if (showTrashBin) closeTrashBin() else closeDrawer()
-        },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
-    ) {
-        EdgeToEdgeDialogEffect()
-        Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
                 visible = drawerVisible,
                 enter = fadeIn(animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing)),
@@ -304,16 +298,17 @@ fun ProjectsDrawer(
                     modifier = Modifier
                         .graphicsLayer { translationX = -screenWidthPx * 0.3f * trashRevealProgress }
                         .fillMaxSize()
+                        .appWritingSurface()
                         .imePadding()
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = {}
-                        ),
+                    ),
                     shape = RoundedCornerShape(0.dp),
-                    color = colorScheme.surfaceContainerLow,
+                    color = Color.Transparent,
                     contentColor = colorScheme.onSurface,
-                    tonalElevation = 8.dp
+                    tonalElevation = 0.dp
                 ) {
                     val bottomActionClearance = maxOf(
                         navigationBarBottomPadding(),
@@ -580,7 +575,6 @@ fun ProjectsDrawer(
                     .padding(bottom = navigationBarBottomPadding())
                     .padding(DesignTokens.Spacing.lg)
             )
-        }
     }
 
 }
@@ -1345,8 +1339,10 @@ private fun TrashBinPage(
     }
 
     Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = colorScheme.surfaceContainerLow,
+        modifier = Modifier
+            .fillMaxSize()
+            .appWritingSurface(),
+        color = Color.Transparent,
         contentColor = colorScheme.onSurface
     ) {
         Box(modifier = Modifier.fillMaxSize()) {

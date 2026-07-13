@@ -116,41 +116,69 @@ struct GGUFRoutingDecisionTests {
     // shouldUseGemma returns false when engine is Apple Intelligence regardless
     // of whether GGUF files are present.
     @Test func appleEngineNeverRoutesToGemma() {
-        let defaults = UserDefaults.standard
-        let original = defaults.string(forKey: "ggufEngineChoice")
-        defer {
-            if let r = original { defaults.set(r, forKey: "ggufEngineChoice") }
-            else { defaults.removeObject(forKey: "ggufEngineChoice") }
-        }
-
-        GGUFEngineChoice.appleIntelligence.save()
-        // Even if a GGUF magically exists, Apple engine must short-circuit.
-        let result = AIService.shouldUseGemma()
+        let result = AIService.shouldUseGemma(
+            engineChoice: .appleIntelligence,
+            ggufPath: "/tmp/model.gguf"
+        )
         #expect(result == false)
     }
 
     // shouldUseGemma returns false when engine is Gemma but no GGUF exists
     // (the models directory is either absent or empty).
     @Test func gemmaEngineWithNoFileReturnsFalse() {
-        let defaults = UserDefaults.standard
-        let original = defaults.string(forKey: "ggufEngineChoice")
-        defer {
-            if let r = original { defaults.set(r, forKey: "ggufEngineChoice") }
-            else { defaults.removeObject(forKey: "ggufEngineChoice") }
-        }
+        let result = AIService.shouldUseGemma(engineChoice: .gemma, ggufPath: nil)
+        #expect(result == false)
+    }
+}
 
-        GGUFEngineChoice.gemma.save()
-        // In the test sandbox, no GGUF has been downloaded, so directory is
-        // either missing or has no .gguf files.
-        // We can't guarantee the models directory is empty in all CI configs,
-        // so only assert the general correctness: if the real device has no
-        // GGUF then false is returned. This test is a logic sanity check,
-        // not a file-system mutation test.
-        let result = AIService.shouldUseGemma()
-        // On CI / simulator without any model: must be false.
-        // On a device where user downloaded a GGUF: could be true, skip assertion.
-        if AIService.firstGGUFPath() == nil {
-            #expect(result == false)
+@Suite(.serialized)
+struct GGUFCustomModelRegistryTests {
+    @Test func customModelRegistrationAndSelectionSurviveReload() throws {
+        let suiteName = "GGUFCustomModelRegistryTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let modelURL = directory.appendingPathComponent("custom-night-drive.gguf")
+        let header = Data([
+            0x47, 0x47, 0x55, 0x46,
+            0x03, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        FileManager.default.createFile(atPath: modelURL.path, contents: header)
+        let model = GGUFCustomModel(
+            id: "custom-night-drive",
+            displayName: "Night Drive",
+            fileName: modelURL.lastPathComponent
+        )
+
+        GGUFCustomModelRegistry.save([model], defaults: defaults)
+        GGUFModelSelection.save(fileName: model.fileName, defaults: defaults)
+
+        #expect(GGUFCustomModelRegistry.models(defaults: defaults) == [model])
+        #expect(
+            GGUFModelSelection.resolvedModelURL(
+                defaults: defaults,
+                modelsDirectory: directory
+            ) == modelURL
+        )
+    }
+}
+
+struct GGUFCustomModelValidationTests {
+    @Test func rejectsTruncatedMagicOnlyFile() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).gguf")
+        try Data("GGUF".utf8).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        do {
+            try GGUFModelCatalog.validateCustomFile(at: fileURL)
+            Issue.record("Expected a truncated GGUF header to be rejected")
+        } catch AIServiceError.localModelUnavailable {
         }
     }
 }
@@ -188,6 +216,17 @@ struct GGUFModelStubTests {
         let stub = GGUFModelStub()
         stub.unload()
         #expect(stub.isLoaded == false)
+    }
+}
+
+struct GGUFLlamaFrameworkEmbeddingTests {
+    @Test func appBundleContainsLinkedLlamaFramework() {
+        let frameworkURL = Bundle.main.privateFrameworksURL?
+            .appendingPathComponent("llama.framework/llama")
+
+        #expect(frameworkURL != nil)
+        #expect(FileManager.default.fileExists(atPath: frameworkURL?.path ?? ""))
+        #expect(GGUFModelService.isEngineAvailable)
     }
 }
 

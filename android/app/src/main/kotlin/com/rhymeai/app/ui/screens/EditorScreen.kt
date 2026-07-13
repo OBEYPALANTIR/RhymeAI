@@ -2,6 +2,7 @@ package com.rhymeai.app.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import com.rhymeai.app.BuildConfig
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,7 +29,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +52,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -81,6 +84,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -96,12 +100,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -118,6 +119,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import com.rhymeai.app.R
 import androidx.compose.ui.text.PlatformTextStyle
@@ -137,22 +140,31 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.SaveStatus
+import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.ExportFormat
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.ui.components.AssistantPanel
 import com.rhymeai.app.ui.components.ExportSheet
+import com.rhymeai.app.ui.components.EditorUndoRedoControls
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.RhymeHighlightedText
-import com.rhymeai.app.ui.components.SyllableWordColoredText
 import com.rhymeai.app.ui.components.WordInspectorSheet
 import com.rhymeai.app.ui.components.buildSyllableUnderlineSpans
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.components.keyboardAwareBottomPadding
 import com.rhymeai.app.ui.components.syllableUnderlines
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAnalysisPresentation
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.LocalAppAppearance
+import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.selectionColorFor
+import com.rhymeai.app.ui.motion.RewriteHighlightColors
+import com.rhymeai.app.ui.motion.RewriteHighlightState
+import com.rhymeai.app.ui.motion.RewriteMotionStyle
+import com.rhymeai.app.ui.motion.rewriteLoadingHighlight
 import com.rhymeai.app.util.LyricsExporter
 import com.rhymeai.app.util.SyllableCounter
 import kotlin.math.abs
@@ -168,6 +180,9 @@ private data class LyricStats(
     val syllableCount: Int
 )
 
+internal fun compactEditorStats(wordCount: Int, syllableCount: Int): String =
+    "${wordCount}w · ${syllableCount}s"
+
 @Composable
 private fun rememberExportDocumentLauncher(
     format: ExportFormat,
@@ -181,6 +196,7 @@ private fun rememberExportDocumentLauncher(
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     var showBottomSheet by remember { mutableStateOf(false) }
+    var titleFocused by remember { mutableStateOf(false) }
     var lyricsFocused by remember { mutableStateOf(false) }
     var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var titleHeightPx by remember { mutableIntStateOf(0) }
@@ -188,6 +204,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     var lyricStats by remember { mutableStateOf(LyricStats(0, 0)) }
 
     val colorScheme = MaterialTheme.colorScheme
+    val animationsEnabled = LocalAnimationsEnabled.current
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
@@ -451,17 +468,30 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     LaunchedEffect(showBottomSheet, pendingAssistantSheet, modalOpen) {
         if (showBottomSheet || pendingAssistantSheet || modalOpen) {
             viewModel.clearPendingRewriteSelection()
+            if (modalOpen) {
+                focusManager.clearFocus(force = true)
+            }
         }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(colorScheme.background)
+            .appWritingSurface()
     ) {
         val fabRowVisible = !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite
-        val fabRowBottomOriginOffsetPx = with(density) { DesignTokens.Spacing.xxl.roundToPx() }
-        Column(modifier = Modifier.fillMaxSize()) {
+        val fabRowBottomOriginOffsetPx = with(density) { DesignTokens.Rhythm.section.roundToPx() }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (showBottomSheet || pendingAssistantSheet) {
+                        Modifier.clearAndSetSemantics { }
+                    } else {
+                        Modifier
+                    }
+                )
+        ) {
             // Top bar — always visible
             TopAppBar(
                 navigationIcon = {
@@ -497,40 +527,31 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 strokeWidth = DesignTokens.EditorChrome.saveStatusStrokeWidth,
                                 color = colorScheme.onSurfaceVariant
                             )
-                            SaveStatus.SAVED -> Icon(
-                                Icons.Default.Check,
-                                contentDescription = stringResource(R.string.editor_saved),
-                                tint = colorScheme.tertiary,
-                                modifier = Modifier.size(DesignTokens.Indicator.spinnerSm)
-                            )
+                            SaveStatus.SAVED -> if (animationsEnabled) {
+                                SavedFlourish(
+                                    contentDescription = stringResource(R.string.editor_saved),
+                                    modifier = Modifier.size(DesignTokens.Indicator.spinnerSm)
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = stringResource(R.string.editor_saved),
+                                    tint = colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(DesignTokens.Indicator.spinnerSm)
+                                )
+                            }
                             else -> {}
                         }
                     }
                 },
                 actions = {
-                    Column(
-                        horizontalAlignment = Alignment.End,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier.padding(end = DesignTokens.EditorChrome.statsEndPadding)
-                    ) {
-                        Text(
-                            "${lyricStats.wordCount} words",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            "${lyricStats.syllableCount} syllables",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colorScheme.onSurfaceVariant
-                        )
-                    }
                     IconButton(
                         onClick = { viewModel.showExportSheet = true },
                         enabled = viewModel.lyrics.isNotBlank()
                     ) {
                         Icon(
                             Icons.Default.IosShare,
-                            contentDescription = stringResource(R.string.editor_export),
+                            contentDescription = stringResource(R.string.editor_share),
                             tint = if (viewModel.lyrics.isNotBlank())
                                 colorScheme.onSurfaceVariant
                             else
@@ -572,11 +593,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     activeRewriteSurfaceHeightPx.toDp()
                 }
                 val bottomActionPadding = keyboardAwareBottomPadding(
-                    extra = DesignTokens.Spacing.lg
+                    extra = DesignTokens.Rhythm.standard
                 )
                 // Reserve the full FAB footprint so the caret never scrolls behind it.
                 val fabFootprint = if (fabRowVisible) {
-                    keyboardAwareBottomPadding(extra = DesignTokens.Spacing.xxl) + DesignTokens.EditorChrome.fabSize + DesignTokens.Spacing.md
+                    keyboardAwareBottomPadding(extra = DesignTokens.Rhythm.section) +
+                        DesignTokens.EditorChrome.fabSize +
+                        DesignTokens.Rhythm.related
                 } else {
                     0.dp
                 }
@@ -614,7 +637,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     )
                 }
                 val lyricsTopPx = with(density) {
-                    (DesignTokens.Spacing.lg + DesignTokens.Spacing.xl).roundToPx()
+                    (
+                        DesignTokens.Rhythm.standard +
+                            5.dp +
+                            3.dp +
+                            DesignTokens.Rhythm.standard
+                        ).roundToPx() + DesignTokens.Editor.metadataLineHeight.roundToPx()
                 } + titleHeightPx
                 val lineHeightPx = with(density) { DesignTokens.Editor.lyricMeasureLineHeight.roundToPx() }
                 val activeRangeInLyricsPx = selectedTextVerticalRange(
@@ -696,27 +724,31 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         .verticalScroll(scrollState)
                         .padding(horizontal = DesignTokens.Editor.horizontalPadding)
                 ) {
-                    Spacer(Modifier.height(DesignTokens.Spacing.lg))
+                    Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
                     // Title field
+                    val titleStyle = MaterialTheme.typography.headlineLarge.copy(
+                        color = colorScheme.onBackground,
+                        fontSize = DesignTokens.Editor.titleFontSize,
+                        lineHeight = DesignTokens.Editor.titleLineHeight
+                    )
                     BasicTextField(
                         value = viewModel.title,
                         onValueChange = { viewModel.onTitleChanged(it) },
-                        textStyle = MaterialTheme.typography.headlineLarge.copy(
-                            color = colorScheme.onBackground
-                        ),
+                        textStyle = titleStyle,
                         cursorBrush = SolidColor(colorScheme.primary),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("songTitleEditor")
+                            .onFocusChanged { titleFocused = it.isFocused }
                             .onSizeChanged { titleHeightPx = it.height },
                         decorationBox = { innerTextField ->
                             Box {
                                 if (viewModel.title.isEmpty()) {
                                     Text(
                                         "Song Title...",
-                                        style = MaterialTheme.typography.headlineLarge,
-                                        color = colorScheme.onBackground.copy(alpha = 0.2f)
+                                        style = titleStyle,
+                                        color = colorScheme.onSurfaceVariant
                                     )
                                 }
                                 innerTextField()
@@ -724,27 +756,43 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
                     )
 
-                    Spacer(Modifier.height(DesignTokens.Spacing.xl))
+                    TitleFocusMark(
+                        focused = titleFocused,
+                        modifier = Modifier
+                            .width(89.dp)
+                            .height(5.dp)
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = compactEditorStats(
+                            wordCount = lyricStats.wordCount,
+                            syllableCount = lyricStats.syllableCount
+                        ),
+                        color = colorScheme.onSurfaceVariant,
+                        fontSize = DesignTokens.Editor.metadataFontSize,
+                        lineHeight = DesignTokens.Editor.metadataLineHeight,
+                        modifier = Modifier.testTag("editorStats")
+                    )
+                    Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
                     // Expensive lyric analysis waits until typing pauses so editor redraws stay stable.
                     val lyricAnalysisReady = analyzedLyrics == viewModel.lyrics
-                    // Rhyme colors need a text overlay; keep it off mid-edit so the real field remains visible.
-                    val rhymeOverlayActive = viewModel.isRhymeHighlightEnabled &&
+                    val analysisOverlayActive = (
+                        viewModel.isRhymeHighlightEnabled || viewModel.isSyllableColoringEnabled
+                    ) &&
                         viewModel.lyrics.isNotEmpty() &&
                         !viewModel.hasActiveRewrite &&
-                        lyricAnalysisReady
-                    val syllableWordColorActive = viewModel.isSyllableColoringEnabled &&
-                        !viewModel.isRhymeHighlightEnabled &&
-                        viewModel.lyrics.isNotEmpty() &&
-                        !viewModel.hasActiveRewrite &&
+                        selection.collapsed &&
                         lyricAnalysisReady
                     // Underlines only when rhyme coloring owns the foreground; otherwise syllables tint the word itself.
+                    val analysisPresentation = LocalAnalysisPresentation.current
                     val syllableUnderlineActive = viewModel.isSyllableColoringEnabled &&
                         viewModel.isRhymeHighlightEnabled &&
+                        analysisPresentation == AnalysisPresentation.COLOR &&
                         viewModel.lyrics.isNotEmpty() &&
                         !viewModel.hasActiveRewrite &&
+                        selection.collapsed &&
                         lyricAnalysisReady
-                    val wordColorOverlayActive = rhymeOverlayActive || syllableWordColorActive
                     // Center glyphs in the 28sp line box and drop legacy font padding so the
                     // cursor, placeholder, and color overlays all share one vertical metric.
                     val lyricsTextStyle = TextStyle(
@@ -759,7 +807,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     )
                     val syllableUnderlineGap = with(density) { DesignTokens.Editor.syllableUnderlineGap.toPx() }
                     val syllableUnderlineWidth = with(density) { DesignTokens.Editor.syllableUnderlineWidth.toPx() }
-                    val syllableIsDark = isSystemInDarkTheme()
+                    val syllableIsDark = LocalAppAppearance.current.isDark
                     val syllableUnderlineSpans = remember(analyzedLyrics, syllableUnderlineActive, syllableIsDark) {
                         buildSyllableUnderlineSpans(
                             text = analyzedLyrics,
@@ -786,32 +834,34 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             )
                         )
                     }
-                    val animationsEnabled = LocalAnimationsEnabled.current
-                    val rewriteShimmerActive = viewModel.hasActiveRewrite &&
+                    val rewriteMotionStyle = remember {
+                        RewriteMotionStyle.fromBuildValue(BuildConfig.REWRITE_MOTION_STYLE)
+                    }
+                    val rewriteMotionActive = viewModel.hasActiveRewrite &&
                         viewModel.rewriteLoading &&
                         animationsEnabled
-                    val rewriteShimmerProgress: () -> Float = if (rewriteShimmerActive) {
+                    val rewriteMotionProgress: () -> Float = if (rewriteMotionActive) {
                         val shimmerState = rememberInfiniteTransition(
-                            label = "rewriteShimmer"
+                            label = "rewriteMotion"
                         ).animateFloat(
                             initialValue = 0f,
                             targetValue = 1f,
                             animationSpec = infiniteRepeatable(
                                 animation = tween(
-                                    durationMillis = DesignTokens.Motion.rewriteShimmerMillis,
+                                    durationMillis = DesignTokens.Motion.rewriteMotionLoopMillis,
                                     easing = LinearEasing
                                 ),
                                 repeatMode = RepeatMode.Restart
                             ),
-                            label = "rewriteShimmerProgress"
+                            label = "rewriteMotionProgress"
                         )
                         val readShimmerProgress: () -> Float = { shimmerState.value }
                         readShimmerProgress
                     } else {
-                        { 0f }
+                        { RewriteHighlightState.stableProgress }
                     }
                     val colorOverlayAlpha by animateFloatAsState(
-                        targetValue = if (wordColorOverlayActive) 1f else 0f,
+                        targetValue = if (analysisOverlayActive) 1f else 0f,
                         animationSpec = if (animationsEnabled) {
                             tween(DesignTokens.Motion.standardMillis)
                         } else {
@@ -820,26 +870,23 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         label = "lyricColorOverlayAlpha"
                     )
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        // Colored overlay behind the transparent field: rhyme families, or syllable-count word color when rhyme is off.
                         if (colorOverlayAlpha > 0f) {
-                            if (viewModel.isRhymeHighlightEnabled) {
-                                RhymeHighlightedText(
-                                    text = analyzedLyrics,
-                                    enabled = true,
-                                    modifier = Modifier.graphicsLayer { alpha = colorOverlayAlpha },
-                                    style = lyricsTextStyle
-                                )
-                            } else {
-                                SyllableWordColoredText(
-                                    text = analyzedLyrics,
-                                    modifier = Modifier.graphicsLayer { alpha = colorOverlayAlpha },
-                                    style = lyricsTextStyle
-                                )
-                            }
+                            RhymeHighlightedText(
+                                text = analyzedLyrics,
+                                enabled = viewModel.isRhymeHighlightEnabled,
+                                syllablesEnabled = viewModel.isSyllableColoringEnabled,
+                                modifier = Modifier.graphicsLayer { alpha = colorOverlayAlpha },
+                                style = lyricsTextStyle
+                            )
                         }
 
                         // Actual text field. Keep it visible for syllable underlines so editing does not redraw through
                         // a second text layer on every delete/backspace.
+                        val selectionColors = TextSelectionColors(
+                            handleColor = colorScheme.primary,
+                            backgroundColor = selectionColorFor(LocalAppAppearance.current)
+                        )
+                        CompositionLocalProvider(LocalTextSelectionColors provides selectionColors) {
                         BasicTextField(
                             value = if (viewModel.hasActiveRewrite) inlineRewriteValue else viewModel.lyricsFieldValue,
                             onValueChange = {
@@ -856,23 +903,29 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("lyricsEditor")
-                                .inlineRewriteHighlight(
+                                .rewriteLoadingHighlight(
                                     textLayoutResult = lyricsTextLayout,
-                                    range = rewriteHighlightRange,
-                                    shimmer = rewriteShimmerActive,
-                                    error = viewModel.hasActiveRewrite && viewModel.rewriteError != null,
-                                    shimmerProgress = rewriteShimmerProgress,
-                                    highlightColor = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
-                                        colorScheme.error.copy(alpha = 0.22f)
-                                    } else {
-                                        colorScheme.primary.copy(alpha = 0.20f)
-                                    },
-                                    strokeColor = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
-                                        colorScheme.error.copy(alpha = 0.70f)
-                                    } else {
-                                        colorScheme.tertiary.copy(alpha = 0.78f)
-                                    },
-                                    shimmerColor = colorScheme.primary.copy(alpha = 0.6f)
+                                    state = RewriteHighlightState(
+                                        range = rewriteHighlightRange,
+                                        loading = viewModel.rewriteLoading,
+                                        error = viewModel.hasActiveRewrite && viewModel.rewriteError != null,
+                                        motionStyle = rewriteMotionStyle,
+                                        progress = rewriteMotionProgress
+                                    ),
+                                    colors = RewriteHighlightColors(
+                                        fill = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
+                                            colorScheme.error.copy(alpha = 0.22f)
+                                        } else {
+                                            colorScheme.primary.copy(alpha = 0.20f)
+                                        },
+                                        stroke = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
+                                            colorScheme.error.copy(alpha = 0.70f)
+                                        } else {
+                                            colorScheme.tertiary.copy(alpha = 0.78f)
+                                        },
+                                        motion = colorScheme.primary.copy(alpha = 0.72f),
+                                        paper = colorScheme.surfaceContainerHigh.copy(alpha = 0.98f)
+                                    )
                                 )
                                 .syllableUnderlines(
                                     spans = syllableUnderlineSpans,
@@ -887,13 +940,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                         Text(
                                             "Start writing your lyrics here...",
                                             style = lyricsTextStyle,
-                                            color = colorScheme.onBackground.copy(alpha = 0.2f)
+                                            color = colorScheme.onSurfaceVariant
                                         )
                                     }
                                     innerTextField()
                                 }
                             }
                         )
+                        }
                     }
 
                     // Extra space lets the last line settle around the same point while typing.
@@ -902,8 +956,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
         }
 
-        // Floating action group, centered like a toolbar pill: UnBlock (left) +
-        // mic (right). Shared AnimatedVisibility so both show/hide together.
         AnimatedVisibility(
             visible = fabRowVisible,
             enter = fadeIn(
@@ -930,11 +982,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 ),
                 targetOffsetY = { fullHeight -> fullHeight + fabRowBottomOriginOffsetPx }
             ),
-            modifier = Modifier.align(Alignment.BottomCenter)
+            modifier = Modifier.align(Alignment.BottomEnd)
         ) {
             KeyboardSafeActionArea(
-                extra = DesignTokens.Spacing.xxl,
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier.padding(end = DesignTokens.Rhythm.standard),
+                extra = DesignTokens.Rhythm.section,
+                horizontalAlignment = Alignment.End
             ) {
                 val memoService = viewModel.voiceMemoService
                 val barCount = DesignTokens.EditorChrome.recordingBarCount
@@ -981,10 +1034,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     }
                 }
                 val maxUnBlockWidth = (
-                    configuration.screenWidthDp.dp -
+                        configuration.screenWidthDp.dp -
                         DesignTokens.EditorChrome.micRecordingRestWidth -
                         DesignTokens.Spacing.sm -
-                        (DesignTokens.Spacing.lg * 2)
+                        (DesignTokens.Rhythm.standard * 2)
                     ).coerceAtLeast(DesignTokens.EditorChrome.fabSize)
                 val unBlockExtendedWidth = unBlockButtonWidth(
                     measuredWordmarkWidth = measuredUnBlockWordmarkWidth,
@@ -992,9 +1045,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 )
                 val unBlockExpandedWordmarkWidth = unBlockWordmarkWidth(measuredUnBlockWordmarkWidth)
 
-                // Pill width: compact FAB size → recording pill. The group stays
-                // centered; the bars sweep left into the space the collapsing
-                // UnBlock frees up while the mic icon holds the right edge.
                 // State references (no `by`): the values are read inside layout
                 // and draw lambdas so each spring frame invalidates only those
                 // phases instead of recomposing the whole action group.
@@ -1029,11 +1079,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 ) {
                     // UnBlock collapses into a pencil circle while recording.
                     val unBlockInteractionSource = remember { MutableInteractionSource() }
+                    val unBlockPressScale = rememberPressScale(unBlockInteractionSource)
                     Box(
                         modifier = Modifier
                             .testTag("unBlockAction")
                             .animatedWidth(unBlockWidth)
                             .height(DesignTokens.EditorChrome.fabSize)
+                            .graphicsLayer {
+                                scaleX = unBlockPressScale
+                                scaleY = unBlockPressScale
+                            }
                             .clip(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
                                 colorScheme.primary,
@@ -1080,10 +1135,15 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
                     // Animated mic/pill — expands into the recording spectralizer.
                     val micPillInteractionSource = remember { MutableInteractionSource() }
+                    val micPressScale = rememberPressScale(micPillInteractionSource)
                     Box(
                         modifier = Modifier
                             .animatedWidth(pillWidth)
                             .height(DesignTokens.EditorChrome.fabSize)
+                            .graphicsLayer {
+                                scaleX = micPressScale
+                                scaleY = micPressScale
+                            }
                             .background(
                                 colorScheme.surfaceContainerHigh,
                                 RoundedCornerShape(DesignTokens.Radius.pill)
@@ -1186,6 +1246,38 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
                     }
                 }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = fabRowVisible,
+            enter = fadeIn(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.standardMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                )
+            ),
+            exit = fadeOut(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                )
+            ),
+            modifier = Modifier.align(Alignment.BottomStart)
+        ) {
+            KeyboardSafeActionArea(
+                modifier = Modifier.padding(start = DesignTokens.Rhythm.standard),
+                extra = DesignTokens.Rhythm.section,
+                horizontalAlignment = Alignment.Start
+            ) {
+                EditorUndoRedoControls(
+                    canUndo = viewModel.canUndoLyrics,
+                    canRedo = viewModel.canRedoLyrics,
+                    undoContentDescription = stringResource(R.string.editor_undo),
+                    redoContentDescription = stringResource(R.string.editor_redo),
+                    onUndo = viewModel::undoLyrics,
+                    onRedo = viewModel::redoLyrics
+                )
             }
         }
 
@@ -1318,7 +1410,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 modifier = Modifier
                     .fillMaxSize()
                     .offset { IntOffset(x = 0, y = assistantSheetDragOffsetPx.roundToInt()) }
-                    .background(colorScheme.surfaceContainerLow)
+                    .appWritingSurface()
+                    .semantics {
+                        paneTitle = "Assistant"
+                        contentDescription = "Assistant panel"
+                    }
             ) {
                 Box(
                     modifier = Modifier
@@ -1418,78 +1514,6 @@ private fun selectedTextVerticalRange(
         top = layout.getLineTop(startLine).roundToInt(),
         bottom = layout.getLineBottom(endLine).roundToInt()
     )
-}
-
-private fun Modifier.inlineRewriteHighlight(
-    textLayoutResult: TextLayoutResult?,
-    range: TextRange?,
-    shimmer: Boolean,
-    error: Boolean,
-    shimmerProgress: () -> Float,
-    highlightColor: Color,
-    strokeColor: Color,
-    shimmerColor: Color
-): Modifier {
-    if (range == null) return this
-
-    return drawWithContent {
-        val layout = textLayoutResult
-        val textLength = layout?.layoutInput?.text?.text?.length ?: 0
-        val start = range.min.coerceIn(0, textLength)
-        val end = range.max.coerceIn(0, textLength)
-
-        if (layout != null && start < end) {
-            val path = layout.getPathForRange(start, end)
-            // Highlight fill + stroke render behind the text.
-            drawPath(path = path, color = highlightColor)
-            drawPath(path = path, color = strokeColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()))
-
-            // The lyric text itself.
-            drawContent()
-
-            // Shimmer glint sweeps over the text, like the iOS overlay.
-            if (shimmer && !error) {
-                val progress = shimmerProgress()
-                val startLine = layout.getLineForOffset(start)
-                val endLine = layout.getLineForOffset(end)
-                clipPath(path) {
-                    for (line in startLine..endLine) {
-                        val top = layout.getLineTop(line)
-                        val bottom = layout.getLineBottom(line)
-                        val left = if (line == startLine) {
-                            layout.getHorizontalPosition(start, usePrimaryDirection = true)
-                        } else {
-                            layout.getLineLeft(line)
-                        }
-                        val right = if (line == endLine) {
-                            layout.getHorizontalPosition(end, usePrimaryDirection = true)
-                        } else {
-                            layout.getLineRight(line)
-                        }
-                        val lineWidth = right - left
-                        if (lineWidth <= 0f) continue
-                        val bandWidth = (lineWidth * 0.45f).coerceAtLeast(24.dp.toPx())
-                        val travel = lineWidth + bandWidth * 2f
-                        val centerX = left - bandWidth + travel * progress
-                        val brush = Brush.horizontalGradient(
-                            0f to Color.Transparent,
-                            0.5f to shimmerColor,
-                            1f to Color.Transparent,
-                            startX = centerX - bandWidth,
-                            endX = centerX + bandWidth
-                        )
-                        drawRect(
-                            brush = brush,
-                            topLeft = Offset(left, top),
-                            size = Size(lineWidth, bottom - top)
-                        )
-                    }
-                }
-            }
-        } else {
-            drawContent()
-        }
-    }
 }
 
 @Composable
@@ -1606,11 +1630,112 @@ private fun inlineRewriteStatusText(
 }
 
 @Composable
+private fun TitleFocusMark(
+    focused: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val animationsEnabled = LocalAnimationsEnabled.current
+    val progress by animateFloatAsState(
+        targetValue = if (focused) 1f else 0f,
+        animationSpec = if (animationsEnabled) {
+            tween(
+                durationMillis = DesignTokens.Motion.standardMillis,
+                easing = DesignTokens.Motion.standardEasing
+            )
+        } else {
+            snap()
+        },
+        label = "titleFocusMark"
+    )
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Canvas(modifier = modifier) {
+        clipRect(right = size.width * progress) {
+            val strokeWidth = 1.5.dp.toPx()
+            drawLine(
+                color = color,
+                start = Offset(0f, size.height * 0.58f),
+                end = Offset(size.width * 0.30f, size.height * 0.25f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = color,
+                start = Offset(size.width * 0.30f, size.height * 0.25f),
+                end = Offset(size.width * 0.66f, size.height * 0.72f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = color,
+                start = Offset(size.width * 0.66f, size.height * 0.72f),
+                end = Offset(size.width, size.height * 0.36f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round
+            )
+        }
+    }
+}
+
+@Composable
+private fun SavedFlourish(
+    contentDescription: String,
+    modifier: Modifier = Modifier
+) {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Canvas(
+        modifier = modifier
+            .semantics { this.contentDescription = contentDescription }
+    ) {
+        val strokeWidth = 1.8.dp.toPx()
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.08f, size.height * 0.56f),
+            end = Offset(size.width * 0.38f, size.height * 0.82f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.38f, size.height * 0.82f),
+            end = Offset(size.width * 0.94f, size.height * 0.16f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+private fun rememberPressScale(interactionSource: MutableInteractionSource): Float {
+    val pressed by interactionSource.collectIsPressedAsState()
+    val animationsEnabled = LocalAnimationsEnabled.current
+    return animateFloatAsState(
+        targetValue = if (animationsEnabled && pressed) 0.97f else 1f,
+        animationSpec = if (animationsEnabled) {
+            tween(
+                durationMillis = DesignTokens.Motion.feedbackMillis,
+                easing = DesignTokens.Motion.standardEasing
+            )
+        } else {
+            snap()
+        },
+        label = "writerActionPress"
+    ).value
+}
+
+@Composable
 private fun UnBlockWordmark() {
     val color = MaterialTheme.colorScheme.onPrimary
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("UnBlock", fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false)
+        Text(
+            text = "UnBlock",
+            color = color,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false
+        )
         Canvas(
             modifier = Modifier
                 .width(DesignTokens.EditorChrome.unBlockScribbleWidth)

@@ -3,6 +3,10 @@ import SwiftData
 import UIKit
 import UniformTypeIdentifiers
 
+func compactEditorStatsText(wordCount: Int, syllableCount: Int) -> String {
+    "\(wordCount)w · \(syllableCount)s"
+}
+
 private enum EditorViewConstants {
     enum UnBlockChrome {
         static let expandedButtonWidth: CGFloat = 136
@@ -86,6 +90,8 @@ struct EditorView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.appAppearanceStyle) private var appearance
     @State private var keyboardIsVisible = false
     @State private var keyboardHeight: CGFloat = EditorViewConstants.Keyboard.hiddenHeight
     @State private var assistantSheetDragOffset: CGFloat = EditorViewConstants.AssistantSheet.restingOffset
@@ -94,6 +100,9 @@ struct EditorView: View {
     @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
     @State private var fileExporterPresented: Bool = false
     @State private var projectDrawerOpen: Bool = false
+    @State private var iPadProjectSidebarVisible: Bool = false
+    @State private var iPadProjectSidebarPreferred: Bool = true
+    @State private var iPadTrashBinPresented: Bool = false
     @State private var lyricsEditorIsFocused = false
     @State private var rewriteAccessoryHeight: CGFloat = EditorViewConstants.EditorLayout.noAccessoryHeight
     @State private var lyricColorRevealOpacity: Double = 1
@@ -112,9 +121,25 @@ struct EditorView: View {
                 iPhoneLayout
             }
         }
+        .accessibilityHidden(iPadTrashBinPresented)
+        .background { AppWritingBackground() }
         .overlay {
-            if projectDrawerOpen {
+            if horizontalSizeClass != .regular && projectDrawerOpen {
                 ProjectsDrawerView(isPresented: $projectDrawerOpen)
+            }
+        }
+        .overlay {
+            if iPadTrashBinPresented {
+                TrashBinView(onDismiss: {
+                    withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                        iPadTrashBinPresented = false
+                    }
+                })
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("ipadTrashBin")
+                .accessibilityAddTraits(.isModal)
+                .zIndex(EditorViewConstants.EditorLayout.assistantSheetZIndex)
             }
         }
         .onAppear {
@@ -205,24 +230,108 @@ struct EditorView: View {
     // MARK: - iPad Layout (split view)
 
     private var iPadLayout: some View {
-        HStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
-            // Editor column
-            VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
-                topBar
-                editorScrollView
-            }
-            .safeAreaInset(edge: .bottom, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
-                rewriteAccessoryBar
-                    .padding(.horizontal, RhymeAITokens.Spacing.md)
-                    .padding(.bottom, RhymeAITokens.Spacing.sm)
-            }
-            .frame(maxWidth: .infinity)
+        GeometryReader { proxy in
+            let usesThreeColumns = proxy.size.width >= RhymeAITokens.Layout.threeColumnWorkspaceMinWidth
 
-            Divider()
+            HStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
+                if usesThreeColumns && iPadProjectSidebarVisible {
+                    ProjectsDrawerView(
+                        isPresented: iPadProjectSidebarBinding,
+                        presentation: .persistentSidebar,
+                        onOpenTrash: { iPadTrashBinPresented = true }
+                    )
+                    .frame(width: RhymeAITokens.Layout.projectSidebarWidth)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
 
-            // Persistent assistant column
-            AssistantPanelView(isInline: true)
+                    Divider()
+                }
+
+                iPadEditorColumn
+
+                Divider()
+
+                AssistantPanelView(
+                    isInline: true,
+                    onOpenSettings: { viewModel.showSettingsSheet = true }
+                )
                 .frame(width: RhymeAITokens.Layout.assistantColumnWidth)
+            }
+            .accessibilityHidden(!usesThreeColumns && iPadProjectSidebarVisible)
+            .overlay(alignment: .leading) {
+                if !usesThreeColumns && iPadProjectSidebarVisible {
+                    ZStack(alignment: .leading) {
+                        appearance.palette.scrim
+                            .ignoresSafeArea()
+                            .onTapGesture {
+                                setIPadProjectSidebarVisible(false, updatePreference: false)
+                            }
+
+                        ProjectsDrawerView(
+                            isPresented: iPadTransientProjectSidebarBinding,
+                            presentation: .transientSidebar,
+                            onOpenTrash: { iPadTrashBinPresented = true }
+                        )
+                        .frame(width: RhymeAITokens.Layout.projectSidebarWidth)
+                        .shadow(
+                            color: appearance.palette.primaryInk.opacity(0.22),
+                            radius: RhymeAITokens.Spacing.lg,
+                            x: RhymeAITokens.Spacing.xs
+                        )
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                        .accessibilityAddTraits(.isModal)
+                    }
+                }
+            }
+            .onAppear {
+                iPadProjectSidebarVisible = usesThreeColumns && iPadProjectSidebarPreferred
+            }
+            .onChange(of: usesThreeColumns) { _, isWideWorkspace in
+                setIPadProjectSidebarVisible(
+                    isWideWorkspace && iPadProjectSidebarPreferred,
+                    updatePreference: false
+                )
+            }
+        }
+    }
+
+    private var iPadEditorColumn: some View {
+        VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
+            topBar
+            editorScrollView
+        }
+        .safeAreaInset(edge: .bottom, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
+            rewriteAccessoryBar
+                .padding(.horizontal, RhymeAITokens.Spacing.md)
+                .padding(.bottom, RhymeAITokens.Spacing.sm)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var iPadProjectSidebarBinding: Binding<Bool> {
+        Binding(
+            get: { iPadProjectSidebarVisible },
+            set: { setIPadProjectSidebarVisible($0) }
+        )
+    }
+
+    private var iPadTransientProjectSidebarBinding: Binding<Bool> {
+        Binding(
+            get: { iPadProjectSidebarVisible },
+            set: {
+                setIPadProjectSidebarVisible($0, updatePreference: false)
+            }
+        )
+    }
+
+    private func setIPadProjectSidebarVisible(
+        _ isVisible: Bool,
+        updatePreference: Bool = true
+    ) {
+        if updatePreference {
+            iPadProjectSidebarPreferred = isVisible
+        }
+        withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
+            iPadProjectSidebarVisible = isVisible
         }
     }
 
@@ -230,7 +339,7 @@ struct EditorView: View {
 
     private var iPhoneLayout: some View {
         ZStack(alignment: .bottom) {
-            Color(UIColor.systemBackground).ignoresSafeArea()
+            AppWritingBackground()
 
             VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                 topBar
@@ -245,6 +354,9 @@ struct EditorView: View {
                 .zIndex(EditorViewConstants.EditorLayout.accessoryZIndex)
 
             assistantFloatingButton
+                .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
+
+            phoneUndoRedoControls
                 .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
 
             assistantSheetOverlay
@@ -297,6 +409,37 @@ struct EditorView: View {
         viewModel.showAssistantSheet ? RhymeAITokens.Motion.presentation : RhymeAITokens.Motion.dismiss
     }
 
+    private var phoneEditorActionsVisible: Bool {
+        !assistantSheetIsActive &&
+            !assistantModalOpen &&
+            !viewModel.hasActiveRewrite &&
+            !shouldShowRewriteChipBar
+    }
+
+    @ViewBuilder
+    private var phoneUndoRedoControls: some View {
+        if phoneEditorActionsVisible {
+            VStack {
+                Spacer()
+                HStack {
+                    EditorUndoRedoControls(
+                        canUndo: viewModel.canUndoLyrics,
+                        canRedo: viewModel.canRedoLyrics,
+                        floating: true,
+                        onUndo: viewModel.undoLyrics,
+                        onRedo: viewModel.redoLyrics
+                    )
+                    Spacer()
+                }
+                .padding(.leading, RhymeAITokens.Spacing.md)
+                .padding(.bottom, keyboardIsVisible
+                         ? keyboardHeight + RhymeAITokens.Spacing.sm
+                         : RhymeAITokens.Spacing.md)
+            }
+            .transition(.scale(scale: 0.92, anchor: .bottomLeading).combined(with: .opacity))
+        }
+    }
+
     @ViewBuilder
     private var assistantFloatingButton: some View {
         // Hidden when the assistant sheet is up, a modal is up, or an inline
@@ -306,43 +449,43 @@ struct EditorView: View {
         // during selection because its bottom-end FAB and centered chip bar do
         // not overlap.) Keyboard does NOT hide the button — it rides above it.
         // The mic button shares this exact condition so both appear/disappear together.
-        if !assistantSheetIsActive && !assistantModalOpen && !viewModel.hasActiveRewrite && !shouldShowRewriteChipBar {
+        if phoneEditorActionsVisible {
             VStack {
                 Spacer()
                 HStack(alignment: .bottom, spacing: RhymeAITokens.Spacing.sm) {
                     Spacer()
 
                     HStack(spacing: RhymeAITokens.Spacing.xs) {
-                        // Floating mic — visible exactly when UnBlock is. Recording
-                        // before any lyrics exist creates the project on demand.
+                        Button {
+                            presentAssistantSheet()
+                        } label: {
+                            HStack(spacing: dynamicTypeSize.isAccessibilitySize || unblockCollapsed ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : RhymeAITokens.Spacing.xs) {
+                                Image(systemName: "pencil")
+                                    .font(.body.weight(.semibold))
+                                if !dynamicTypeSize.isAccessibilitySize {
+                                    UnBlockWordmark()
+                                        .opacity(unblockWordmarkOpacity)
+                                        .frame(width: unblockWordmarkWidth)
+                                        .clipped()
+                                }
+                            }
+                            .foregroundStyle(appearance.palette.onAction)
+                            .padding(.vertical, RhymeAITokens.Spacing.sm)
+                            .frame(
+                                width: dynamicTypeSize.isAccessibilitySize ? RhymeAITokens.Touch.comfortable : unblockButtonWidth,
+                                height: RhymeAITokens.Touch.comfortable
+                            )
+                            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.pill)
+                            .shadow(color: appearance.palette.primaryInk.opacity(EditorViewConstants.UnBlockChrome.shadowOpacity), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
+                        }
+                        .accessibilityIdentifier("unblockButton")
+                        .accessibilityLabel("Open Assistant")
+
                         FloatingMicButton(
                             service: viewModel.voiceMemoService,
                             ensureProjectId: { viewModel.ensureProjectForRecording() }
                         )
                         .accessibilityIdentifier("micButton")
-
-                        // UnBlock collapses toward its fixed right edge into a pencil circle.
-                        Button {
-                            presentAssistantSheet()
-                        } label: {
-                            HStack(spacing: unblockCollapsed ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : RhymeAITokens.Spacing.xs) {
-                                Image(systemName: "pencil")
-                                    .font(.body.weight(.semibold))
-                                UnBlockWordmark()
-                                    .opacity(unblockWordmarkOpacity)
-                                    .frame(width: unblockWordmarkWidth)
-                                    .clipped()
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.vertical, RhymeAITokens.Spacing.sm)
-                            .frame(
-                                width: unblockButtonWidth,
-                                height: RhymeAITokens.Touch.comfortable
-                            )
-                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo, interactive: true, fallbackOpacity: EditorViewConstants.UnBlockChrome.surfaceFallbackOpacity)
-                            .shadow(color: .indigo.opacity(EditorViewConstants.UnBlockChrome.shadowOpacity), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
-                        }
-                        .accessibilityIdentifier("unblockButton")
                     }
                 }
                 .padding(.trailing, RhymeAITokens.Spacing.md)
@@ -362,11 +505,14 @@ struct EditorView: View {
                     assistantSheetDragHandle(sheetHeight: proxy.size.height)
                         .padding(.top, proxy.safeAreaInsets.top + RhymeAITokens.Spacing.xs)
 
-                    AssistantPanelView(onDismiss: dismissAssistantSheetWithAnimation)
+                    AssistantPanelView(
+                        onDismiss: dismissAssistantSheetWithAnimation,
+                        onOpenSettings: openSettingsFromAssistant
+                    )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
-                .background(Color(UIColor.systemBackground))
+                .background(AppWritingBackground())
                 .offset(y: assistantSheetDragOffset)
                 .transition(.move(edge: .bottom))
                 .ignoresSafeArea()
@@ -467,6 +613,14 @@ struct EditorView: View {
         scheduleAssistantDismissalGateRelease()
     }
 
+    private func openSettingsFromAssistant() {
+        dismissAssistantSheetWithAnimation()
+        Task { @MainActor in
+            await Task.yield()
+            viewModel.showSettingsSheet = true
+        }
+    }
+
     private func holdAssistantDismissalGate() {
         assistantSheetLifecycleTask?.cancel()
         assistantSheetIsDismissing = true
@@ -502,7 +656,8 @@ struct EditorView: View {
                         error: viewModel.rewriteError,
                         onApply: { viewModel.applyRewrite() },
                         onCancel: { viewModel.dismissRewrite() },
-                        onRetry: { viewModel.retryRewrite() }
+                        onRetry: { viewModel.retryRewrite() },
+                        onOpenSettings: { viewModel.showSettingsSheet = true }
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 } else if shouldShowRewriteChipBar {
@@ -544,7 +699,12 @@ struct EditorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                 // Title Field
-                TextField("Song Title...", text: $viewModel.title)
+                TextField(
+                    "",
+                    text: $viewModel.title,
+                    prompt: Text("Song Title...")
+                        .foregroundStyle(appearance.palette.placeholder)
+                )
                     .font(.system(.largeTitle, design: .serif, weight: .bold))
                     .padding(.horizontal, RhymeAITokens.Spacing.md)
                     .padding(.top, RhymeAITokens.Spacing.md)
@@ -563,14 +723,16 @@ struct EditorView: View {
                             enabled: viewModel.isRhymeHighlightEnabled,
                             syllablesEnabled: viewModel.isSyllableColoringEnabled
                         )
-                        .equatable()
                         .padding(.horizontal, RhymeAITokens.Spacing.md)
                         .opacity(lyricColorRevealOpacity)
                     }
 
                     // Actual text view
                     LyricsTextView(
-                        text: $viewModel.lyrics,
+                        text: Binding(
+                            get: { viewModel.lyrics },
+                            set: { viewModel.onLyricsChanged($0) }
+                        ),
                         displayText: viewModel.hasActiveRewrite ? viewModel.inlineRewriteText : nil,
                         rewriteHighlight: inlineRewriteHighlight,
                         onCursorChange: { pos in
@@ -603,7 +765,7 @@ struct EditorView: View {
             .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.immediately)
-        .background(Color(UIColor.systemBackground))
+        .background(Color.clear)
         .onChange(of: viewModel.isRhymeHighlightEnabled) {
             pendingColorReveal = true
         }
@@ -650,70 +812,13 @@ struct EditorView: View {
 
     // MARK: - Top Bar
 
+    @ViewBuilder
     private var topBar: some View {
-        HStack(spacing: RhymeAITokens.Spacing.sm) {
-            Button {
-                projectDrawerOpen = true
-            } label: {
-                Image(systemName: "line.3.horizontal")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-            }
-            .accessibilityLabel("Open songs drawer")
-
-            HStack(spacing: RhymeAITokens.Spacing.xs) {
-                Text(viewModel.title.isEmpty ? "Untitled Song" : viewModel.title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .accessibilityIdentifier("editorTopBarTitle")
-                if viewModel.saveStatus == .saving {
-                    ProgressView()
-                        .scaleEffect(EditorViewConstants.TopBar.saveProgressScale)
-                        .accessibilityLabel("Saving...")
-                } else if viewModel.saveStatus == .saved {
-                    Image(systemName: "checkmark")
-                        .font(.caption)
-                        .foregroundStyle(.green.opacity(EditorViewConstants.TopBar.savedStatusOpacity))
-                        .accessibilityLabel("Saved")
-                }
-            }
-            .rhymeAnimation(RhymeAITokens.Motion.feedback, value: viewModel.saveStatus)
-
-            Spacer()
-
-            // Word & Syllable counts
-            VStack(alignment: .trailing, spacing: EditorViewConstants.TopBar.counterSpacing) {
-                Text("\(viewModel.wordCount) words")
-                    .font(.caption)
-                Text("\(viewModel.syllableCount) syllables")
-                    .font(.caption)
-            }
-            .foregroundStyle(.secondary)
-
-            // Export
-            Button {
-                dismissKeyboard()
-                viewModel.showExportSheet = true
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.body)
-                    .foregroundStyle(Color.secondary.opacity(viewModel.lyrics.isEmpty ? EditorViewConstants.TopBar.disabledExportOpacity : EditorViewConstants.TopBar.enabledExportOpacity))
-                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-            }
-            .disabled(viewModel.lyrics.isEmpty)
-
-            // Settings
-            Button {
-                dismissKeyboard()
-                viewModel.showSettingsSheet = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                accessibilityTopBar
+            } else {
+                standardTopBar
             }
         }
         .padding(.horizontal, RhymeAITokens.Spacing.xs)
@@ -722,6 +827,149 @@ struct EditorView: View {
         .overlay(
             Divider(), alignment: .bottom
         )
+    }
+
+    private var standardTopBar: some View {
+        HStack(spacing: RhymeAITokens.Spacing.sm) {
+            songsDrawerButton
+            titleAndSaveStatus
+            Spacer()
+            wordAndSyllableCounts
+            if horizontalSizeClass == .regular {
+                compactUndoRedoControls
+            }
+            exportButton
+            settingsButton
+        }
+    }
+
+    private var accessibilityTopBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                songsDrawerButton
+                titleAndSaveStatus
+                Spacer(minLength: RhymeAITokens.Spacing.xs)
+            }
+
+            Divider()
+
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                wordAndSyllableCounts
+                Spacer()
+                if horizontalSizeClass == .regular {
+                    compactUndoRedoControls
+                }
+                exportButton
+                settingsButton
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("accessibilityTopBar")
+    }
+
+    private var songsDrawerButton: some View {
+        Button {
+            if horizontalSizeClass == .regular {
+                setIPadProjectSidebarVisible(!iPadProjectSidebarVisible)
+            } else {
+                projectDrawerOpen = true
+            }
+        } label: {
+            Image(systemName: "line.3.horizontal")
+                .font(.body)
+                .foregroundStyle(appearance.palette.secondaryInk)
+                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+        }
+        .accessibilityLabel(songsDrawerButtonLabel)
+    }
+
+    private var songsDrawerButtonLabel: String {
+        guard horizontalSizeClass == .regular else { return "Open songs drawer" }
+        return iPadProjectSidebarVisible ? "Hide songs sidebar" : "Show songs sidebar"
+    }
+
+    private var titleAndSaveStatus: some View {
+        HStack(spacing: RhymeAITokens.Spacing.xs) {
+            Text(viewModel.title.isEmpty ? "Untitled Song" : viewModel.title)
+                .font(.subheadline)
+                .foregroundStyle(appearance.palette.secondaryInk)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityIdentifier("editorTopBarTitle")
+            if viewModel.saveStatus == .saving {
+                ProgressView()
+                    .scaleEffect(EditorViewConstants.TopBar.saveProgressScale)
+                    .accessibilityLabel("Saving...")
+            } else if viewModel.saveStatus == .saved {
+                Image(systemName: "checkmark")
+                    .font(.caption)
+                    .foregroundStyle(appearance.palette.success.opacity(EditorViewConstants.TopBar.savedStatusOpacity))
+                    .accessibilityLabel("Saved")
+            }
+        }
+        .rhymeAnimation(RhymeAITokens.Motion.feedback, value: viewModel.saveStatus)
+        .layoutPriority(2)
+    }
+
+    private var wordAndSyllableCounts: some View {
+        ViewThatFits(in: .horizontal) {
+            VStack(alignment: .trailing, spacing: EditorViewConstants.TopBar.counterSpacing) {
+                Text("\(viewModel.wordCount) words")
+                Text("\(viewModel.syllableCount) syllables")
+            }
+            .fixedSize(horizontal: true, vertical: false)
+
+            Text(compactEditorStatsText(
+                wordCount: viewModel.wordCount,
+                syllableCount: viewModel.syllableCount
+            ))
+                .accessibilityIdentifier("editorCompactStats")
+                .accessibilityLabel("\(viewModel.wordCount) words, \(viewModel.syllableCount) syllables")
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .font(.caption)
+        .foregroundStyle(appearance.palette.secondaryInk)
+    }
+
+    private var compactUndoRedoControls: some View {
+        EditorUndoRedoControls(
+            canUndo: viewModel.canUndoLyrics && !viewModel.hasActiveRewrite,
+            canRedo: viewModel.canRedoLyrics && !viewModel.hasActiveRewrite,
+            floating: false,
+            onUndo: viewModel.undoLyrics,
+            onRedo: viewModel.redoLyrics
+        )
+    }
+
+    private var exportButton: some View {
+        Button {
+            dismissKeyboard()
+            viewModel.showExportSheet = true
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.body)
+                .foregroundStyle(
+                    viewModel.lyrics.isEmpty
+                        ? appearance.palette.secondaryInk.opacity(EditorViewConstants.TopBar.disabledExportOpacity)
+                        : appearance.palette.secondaryInk
+                )
+                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+        }
+        .disabled(viewModel.lyrics.isEmpty)
+        .accessibilityLabel("Share")
+    }
+
+    private var settingsButton: some View {
+        Button {
+            dismissKeyboard()
+            viewModel.showSettingsSheet = true
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.body)
+                .foregroundStyle(appearance.palette.secondaryInk)
+                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+        }
+        .accessibilityLabel("Settings")
     }
 }
 
@@ -734,6 +982,8 @@ private struct RewriteAccessoryHeightPreferenceKey: PreferenceKey {
 }
 
 private struct InlineRewriteReviewBar: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let action: RewriteAction
     let loading: Bool
     let preview: String?
@@ -741,6 +991,7 @@ private struct InlineRewriteReviewBar: View {
     var onApply: () -> Void
     var onCancel: () -> Void
     var onRetry: () -> Void
+    var onOpenSettings: () -> Void
 
     var body: some View {
         HStack(spacing: RhymeAITokens.Spacing.xs) {
@@ -758,21 +1009,25 @@ private struct InlineRewriteReviewBar: View {
                     .lineLimit(EditorViewConstants.RewriteReview.statusLineLimit)
                     .minimumScaleFactor(EditorViewConstants.RewriteReview.statusMinimumScale)
             }
-            .foregroundStyle(error == nil ? .indigo : .red)
+            .foregroundStyle(error == nil ? appearance.palette.action : appearance.palette.error)
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if error != nil {
-                Button("Retry", action: onRetry)
+            if let error {
+                let recoveryAction = AIErrorRecoveryAction(errorMessage: error)
+                Button(
+                    recoveryAction == .openSettings ? "Open Settings" : "Retry",
+                    action: recoveryAction == .openSettings ? onOpenSettings : onRetry
+                )
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.indigo)
+                    .foregroundStyle(appearance.palette.action)
                     .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
                     .buttonStyle(.rhymePress)
             } else if preview != nil {
                 Button("Apply", action: onApply)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(appearance.palette.onAction)
                     .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
-                    .background(.indigo, in: Capsule())
+                    .background(appearance.palette.action, in: Capsule())
                     .buttonStyle(.rhymePress)
                 Button {
                     onRetry()
@@ -782,7 +1037,7 @@ private struct InlineRewriteReviewBar: View {
                         .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
                         .contentShape(Rectangle())
                 }
-                .foregroundStyle(.indigo)
+                .foregroundStyle(appearance.palette.action)
                 .buttonStyle(.rhymePress)
                 .accessibilityLabel("Regenerate rewrite")
             }
@@ -796,7 +1051,7 @@ private struct InlineRewriteReviewBar: View {
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
         .padding(.vertical, RhymeAITokens.Spacing.xs)
         .frame(maxWidth: RhymeAITokens.Layout.drawerMaxWidth)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo.opacity(EditorViewConstants.RewriteReview.surfaceTintOpacity), fallbackOpacity: EditorViewConstants.RewriteReview.surfaceFallbackOpacity)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill)
         .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
         .accessibilityIdentifier("inlineRewriteReviewBar")
     }
@@ -828,6 +1083,8 @@ private struct UnBlockWordmark: View {
 }
 
 private struct ScribbleUnderline: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     var body: some View {
         Canvas { context, size in
             var path = Path()
@@ -839,7 +1096,7 @@ private struct ScribbleUnderline: View {
 
             context.stroke(
                 path,
-                with: .color(.white.opacity(EditorViewConstants.Scribble.strokeOpacity)),
+                with: .color(appearance.palette.onAction.opacity(EditorViewConstants.Scribble.strokeOpacity)),
                 style: StrokeStyle(lineWidth: EditorViewConstants.Scribble.strokeWidth, lineCap: .round, lineJoin: .round)
             )
         }

@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ExportSheet: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     var onPick: (ExportFormat) -> Void
     var onDismiss: () -> Void
 
@@ -18,9 +20,9 @@ struct ExportSheet: View {
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: format.iconSystemName)
-                                .foregroundStyle(.indigo)
+                                .foregroundStyle(appearance.palette.action)
                                 .frame(width: 36, height: 36)
-                                .liquidGlassSurface(cornerRadius: 8, tint: .indigo.opacity(0.14), fallbackOpacity: 0.08)
+                                .liquidGlassSurface(cornerRadius: 8)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(format.label)
                                     .font(.body.weight(.medium))
@@ -35,7 +37,7 @@ struct ExportSheet: View {
                         }
                         .padding(.horizontal, RhymeAITokens.Spacing.sm)
                         .padding(.vertical, RhymeAITokens.Spacing.sm)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, interactive: true)
                     }
                     .buttonStyle(.rhymePress)
                 }
@@ -44,7 +46,7 @@ struct ExportSheet: View {
             }
             .padding(RhymeAITokens.Spacing.md)
             .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
-            .background(Color(UIColor.systemBackground))
+            .background(AppWritingBackground())
             .navigationTitle("Export Song")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

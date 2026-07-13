@@ -13,6 +13,7 @@ struct TrashBinView: View {
     @State private var trashedMemos: [TrashedVoiceMemo] = []
     @State private var selectedMemoIds: Set<String> = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAppearanceStyle) private var appearance
 
     var onDismiss: (() -> Void)? = nil
 
@@ -59,8 +60,7 @@ struct TrashBinView: View {
 
     var body: some View {
         ZStack {
-            Color(UIColor.systemBackground)
-                .ignoresSafeArea()
+            AppWritingBackground()
 
             VStack(spacing: 0) {
                 topBar
@@ -139,7 +139,7 @@ struct TrashBinView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.md)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
-        .background(.ultraThinMaterial)
+        .liquidGlassSurface(cornerRadius: 0)
         .overlay(Divider().opacity(0.18), alignment: .bottom)
     }
 
@@ -193,7 +193,7 @@ struct TrashBinView: View {
             HStack(spacing: RhymeAITokens.Spacing.sm) {
                 ZStack {
                     RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
-                        .fill(Color(UIColor.secondarySystemBackground))
+                        .fill(appearance.palette.raisedSurface)
 
                     Image(systemName: "doc.text")
                         .font(.title3.weight(.semibold))
@@ -276,7 +276,7 @@ struct TrashBinView: View {
             HStack(spacing: RhymeAITokens.Spacing.sm) {
                 ZStack {
                     RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
-                        .fill(Color(UIColor.secondarySystemBackground))
+                        .fill(appearance.palette.raisedSurface)
 
                     Image(systemName: "mic")
                         .font(.title3.weight(.semibold))
@@ -361,7 +361,7 @@ struct TrashBinView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
-        .background(.ultraThinMaterial)
+        .liquidGlassSurface(cornerRadius: 0)
     }
 
     private func restoreSelected() {
@@ -389,10 +389,10 @@ struct TrashBinView: View {
     private func selectionCircle(selected: Bool) -> some View {
         ZStack {
             Circle()
-                .strokeBorder(selected ? Color.indigo : Color.secondary.opacity(0.9), lineWidth: 2)
+                .strokeBorder(selected ? appearance.palette.action : appearance.palette.outlineStrong, lineWidth: 2)
                 .background(
                     Circle()
-                        .fill(Color.indigo)
+                        .fill(appearance.palette.action)
                         .scaleEffect(selected ? 1 : 0.72)
                         .opacity(selected ? 1 : 0)
                 )
@@ -400,7 +400,7 @@ struct TrashBinView: View {
             if selected {
                 Image(systemName: "checkmark")
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(appearance.palette.onAction)
                     .transition(.scale(scale: 0.72).combined(with: .opacity))
             }
         }

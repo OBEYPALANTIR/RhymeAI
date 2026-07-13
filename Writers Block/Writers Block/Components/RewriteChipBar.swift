@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct RewriteChipBar: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     var onAction: (RewriteAction) -> Void
     /// When non-nil (single-word selection), the bar shows a leading look-up
     /// button into the Word Inspector. Multi-word selections leave it nil and
@@ -15,11 +17,10 @@ struct RewriteChipBar: View {
                 } label: {
                     Image(systemName: "magnifyingglass")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.indigo)
+                        .foregroundStyle(appearance.palette.action)
                         .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                         .liquidGlassSurface(
                             cornerRadius: RhymeAITokens.Radius.pill,
-                            tint: .indigo.opacity(0.12),
                             interactive: true,
                             fallbackOpacity: 0.08
                         )
@@ -38,13 +39,12 @@ struct RewriteChipBar: View {
                 } label: {
                     Text(action.label)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.indigo)
+                        .foregroundStyle(appearance.palette.action)
                         .lineLimit(1)
                         .minimumScaleFactor(0.86)
                         .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
                         .liquidGlassSurface(
                             cornerRadius: RhymeAITokens.Radius.pill,
-                            tint: .indigo.opacity(0.12),
                             interactive: true,
                             fallbackOpacity: 0.08
                         )
@@ -55,7 +55,7 @@ struct RewriteChipBar: View {
         }
         .padding(RhymeAITokens.Spacing.xs)
         .frame(maxWidth: RhymeAITokens.Layout.drawerMaxWidth)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo.opacity(0.08), fallbackOpacity: 0.85)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill)
         .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
         .accessibilityIdentifier("rewriteChipBar")
     }

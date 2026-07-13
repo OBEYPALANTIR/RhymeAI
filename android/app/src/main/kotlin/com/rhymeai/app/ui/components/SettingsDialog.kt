@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.launch
@@ -21,6 +22,9 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +73,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -79,7 +87,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -87,12 +97,18 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.isGgufFile
+import com.rhymeai.app.data.model.AnalysisPresentation
+import com.rhymeai.app.data.model.AppAppearance
+import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAppAppearance
+import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.outlineStrongColorFor
+import com.rhymeai.app.ui.theme.placeholderColorFor
+import com.rhymeai.app.ui.theme.subtleColorFor
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -101,6 +117,10 @@ import kotlinx.coroutines.delay
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsDialog(
+    currentAppearance: AppAppearance,
+    onAppearanceChange: (AppAppearance) -> Unit,
+    currentAnalysisPresentation: AnalysisPresentation,
+    onAnalysisPresentationChange: (AnalysisPresentation) -> Unit,
     apiKeyPresence: Map<String, Boolean>,
     currentProvider: AIProvider,
     currentModel: AIModel,
@@ -108,10 +128,13 @@ internal fun SettingsDialog(
     localModelLoaded: Boolean,
     localModelPath: String?,
     localModelError: String?,
+    savedLocalModels: List<SavedLocalModel>,
+    selectedLocalModelId: String?,
     onSaveApiKey: (AIProvider, String) -> Unit,
     onSaveProvider: (AIProvider) -> Unit,
     onSaveModel: (AIModel) -> Unit,
-    onLoadLocalModel: (String) -> Unit,
+    onRegisterLocalModel: (String, String) -> Unit,
+    onSelectSavedLocalModel: (String) -> Unit,
     onUnloadLocalModel: () -> Unit,
     // Gemma download state lives in MainViewModel so it survives leaving this
     // screen; the dialog only renders it and forwards intents.
@@ -146,6 +169,10 @@ internal fun SettingsDialog(
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val appearance = LocalAppAppearance.current
+    val placeholderColor = placeholderColorFor(appearance)
+    val subtleColor = subtleColorFor(appearance)
+    val outlineStrongColor = outlineStrongColorFor(appearance)
     val context = LocalContext.current
     val animationsEnabled = com.rhymeai.app.ui.theme.LocalAnimationsEnabled.current
 
@@ -209,7 +236,16 @@ internal fun SettingsDialog(
                 try {
                     val inputStream = context.contentResolver.openInputStream(it)
                         ?: throw Exception("Cannot open file")
-                    val fileName = "local_model.gguf"
+                    val sourceName = context.contentResolver.query(
+                        it,
+                        arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                        null,
+                        null,
+                        null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    } ?: "Custom Model.gguf"
+                    val fileName = "custom-${java.util.UUID.randomUUID()}.gguf"
                     val destFile = File(context.filesDir, fileName)
                     // Delete old model file if exists
                     if (destFile.exists()) destFile.delete()
@@ -228,7 +264,10 @@ internal fun SettingsDialog(
                         selectedModel = AIModel.LOCAL_MODEL
                         onSaveProvider(AIProvider.LOCAL)
                         onSaveModel(AIModel.LOCAL_MODEL)
-                        onLoadLocalModel(destFile.absolutePath)
+                        onRegisterLocalModel(
+                            destFile.absolutePath,
+                            sourceName.substringBeforeLast('.').ifBlank { "Custom Model" }
+                        )
                         saved = true
                     }
                 } catch (e: Exception) {
@@ -243,15 +282,15 @@ internal fun SettingsDialog(
     }
 
     val textFieldColors = OutlinedTextFieldDefaults.colors(
-        unfocusedBorderColor = colorScheme.outlineVariant,
-        focusedBorderColor = colorScheme.primary.copy(alpha = 0.5f),
+        unfocusedBorderColor = outlineStrongColor,
+        focusedBorderColor = colorScheme.primary,
         unfocusedContainerColor = colorScheme.surfaceContainerLow,
         focusedContainerColor = colorScheme.surfaceContainerLow,
         cursorColor = colorScheme.primary,
         unfocusedTextColor = colorScheme.onSurface,
         focusedTextColor = colorScheme.onSurface,
-        unfocusedPlaceholderColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-        focusedPlaceholderColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        unfocusedPlaceholderColor = placeholderColor,
+        focusedPlaceholderColor = placeholderColor
     )
 
     // Full-screen page slide-in/out lifecycle (mirrors ProjectsDrawer). pageVisible
@@ -270,14 +309,8 @@ internal fun SettingsDialog(
     }
     LaunchedEffect(Unit) { pageVisible = true }
 
-    Dialog(
-        onDismissRequest = { closePage() },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
-    ) {
-        EdgeToEdgeDialogEffect()
+    BackHandler(onBack = ::closePage)
+
         Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
                 visible = pageVisible,
@@ -295,18 +328,24 @@ internal fun SettingsDialog(
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
-                        .imePadding(),
+                        .appWritingSurface()
+                        .imePadding()
+                        .pointerInput(Unit) { detectTapGestures(onTap = {}) }
+                        .semantics {
+                            paneTitle = "Settings"
+                            contentDescription = "Settings page"
+                        },
                     shape = RoundedCornerShape(0.dp),
-                    color = colorScheme.surfaceContainerLow,
+                    color = Color.Transparent,
                     contentColor = colorScheme.onSurface,
-                    tonalElevation = 8.dp
+                    tonalElevation = 0.dp
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .statusBarsPadding()
-                            .padding(horizontal = DesignTokens.Spacing.lg)
-                            .padding(top = DesignTokens.Spacing.lg)
+                            .padding(horizontal = DesignTokens.Rhythm.standard)
+                            .padding(top = DesignTokens.Rhythm.standard)
                     ) {
                 // Header
                 Row(
@@ -318,15 +357,25 @@ internal fun SettingsDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.Settings, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
-                        Text("Settings", fontWeight = FontWeight.Medium, fontSize = 18.sp, color = colorScheme.onSurface)
+                        Icon(
+                            Icons.Default.Settings,
+                            null,
+                            tint = colorScheme.primary,
+                            modifier = Modifier.size(DesignTokens.Rhythm.standard)
+                        )
+                        Text(
+                            "Settings",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 21.sp,
+                            color = colorScheme.onSurface
+                        )
                     }
                     IconButton(onClick = { closePage() }) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = colorScheme.onSurfaceVariant)
                     }
                 }
 
-                Spacer(Modifier.height(DesignTokens.Spacing.lg))
+                Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
                 // General | Editor tab switcher
                 SlidingSegmentedControl(
@@ -336,7 +385,7 @@ internal fun SettingsDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(Modifier.height(DesignTokens.Spacing.lg))
+                Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
                 // Only the tab content scrolls; header, tabs, and Save stay pinned.
                 Column(
@@ -344,7 +393,7 @@ internal fun SettingsDialog(
                         .weight(1f)
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
-                        .padding(bottom = DesignTokens.Spacing.xxl)
+                        .padding(bottom = DesignTokens.Rhythm.section)
                 ) {
 
                 if (settingsTab == 1) {
@@ -370,6 +419,22 @@ internal fun SettingsDialog(
                 } else {
                 // ── General tab (existing content) ────────────────────────────
 
+                AppearanceSelector(
+                    currentAppearance = currentAppearance,
+                    onAppearanceChange = onAppearanceChange,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(DesignTokens.Rhythm.section))
+
+                AnalysisStyleSelector(
+                    current = currentAnalysisPresentation,
+                    onChange = onAnalysisPresentationChange,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(DesignTokens.Rhythm.section))
+
                 // Provider selector
                 Text("AI Provider", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
@@ -390,7 +455,7 @@ internal fun SettingsDialog(
                     fontSize = 12.sp
                 )
 
-                Spacer(Modifier.height(DesignTokens.Spacing.lg))
+                Spacer(Modifier.height(DesignTokens.Rhythm.section))
 
                 AnimatedContent(
                     targetState = selectedProvider,
@@ -427,11 +492,44 @@ internal fun SettingsDialog(
                             Text(
                                 "Load a GGUF model to run AI entirely on your device. No data leaves your phone. You can choose your own file or download a recommended Gemma model from Hugging Face.",
                                 fontSize = 12.sp,
-                                color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                color = subtleColor,
                                 lineHeight = 16.sp
                             )
 
                             Spacer(Modifier.height(12.dp))
+
+                            if (savedLocalModels.isNotEmpty()) {
+                                Text(
+                                    "Saved Models",
+                                    fontSize = DesignTokens.Typography.caption,
+                                    fontWeight = FontWeight.Medium,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                savedLocalModels.forEach { model ->
+                                    val isSelected = model.id == selectedLocalModelId
+                                    OutlinedButton(
+                                        onClick = { onSelectSavedLocalModel(model.id) },
+                                        enabled = !localModelLoading,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(DesignTokens.Radius.lg)
+                                    ) {
+                                        Icon(
+                                            if (isSelected) Icons.Default.CheckCircle else Icons.Default.FileOpen,
+                                            null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Text(
+                                            model.displayName,
+                                            modifier = Modifier.weight(1f).padding(start = 8.dp),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(if (isSelected) "Selected" else "Select", fontSize = 12.sp)
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                }
+                            }
 
                             // Model status
                             if (localModelLoaded && localModelPath != null) {
@@ -448,7 +546,8 @@ internal fun SettingsDialog(
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text("Model loaded", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onTertiaryContainer)
                                         Text(
-                                            localModelPath.substringAfterLast("/"),
+                                            savedLocalModels.firstOrNull { it.id == selectedLocalModelId }
+                                                ?.displayName ?: localModelPath.substringAfterLast("/"),
                                             fontSize = 12.sp,
                                             color = colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
                                             maxLines = 1,
@@ -531,10 +630,10 @@ internal fun SettingsDialog(
                                                             "Recommended",
                                                             fontSize = 12.sp,
                                                             fontWeight = FontWeight.Medium,
-                                                            color = colorScheme.onTertiaryContainer,
+                                                            color = colorScheme.onSurfaceVariant,
                                                             modifier = Modifier
                                                                 .background(
-                                                                    colorScheme.tertiaryContainer,
+                                                                    colorScheme.surfaceVariant,
                                                                     RoundedCornerShape(4.dp)
                                                                 )
                                                                 .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
@@ -550,7 +649,7 @@ internal fun SettingsDialog(
                                                     Text(
                                                         "May be slow on this device — needs more memory",
                                                         fontSize = 12.sp,
-                                                        color = colorScheme.error.copy(alpha = 0.75f)
+                                                        color = colorScheme.error
                                                     )
                                                 }
                                             }
@@ -651,7 +750,7 @@ internal fun SettingsDialog(
                                     AIProvider.LOCAL -> ""
                                 },
                                 fontSize = 12.sp,
-                                color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                color = subtleColor
                             )
 
                             Spacer(Modifier.height(8.dp))
@@ -673,14 +772,14 @@ internal fun SettingsDialog(
                                     )
                                 },
                                 leadingIcon = {
-                                    Icon(Icons.Default.Key, null, tint = colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.Key, null, tint = placeholderColor, modifier = Modifier.size(18.dp))
                                 },
                                 trailingIcon = {
                                     IconButton(onClick = { showKey = !showKey }) {
                                         Icon(
                                             if (showKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                                             contentDescription = if (showKey) "Hide" else "Show",
-                                            tint = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                            tint = placeholderColor,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
@@ -742,7 +841,7 @@ internal fun SettingsDialog(
                                             text = {
                                                 Column {
                                                     Text(model.displayName, color = colorScheme.onSurface, fontSize = 14.sp)
-                                                    Text(model.id, color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 12.sp)
+                                                    Text(model.id, color = subtleColor, fontSize = 12.sp)
                                                 }
                                             },
                                             onClick = {
@@ -789,7 +888,7 @@ internal fun SettingsDialog(
                                 else -> "Not set up"
                             },
                             fontSize = 12.sp,
-                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            color = subtleColor
                         )
                     }
                     val chevronRotation by animateFloatAsState(
@@ -819,7 +918,7 @@ internal fun SettingsDialog(
                 Text(
                     "Backs up projects, trash, and recordings to Google Drive. API keys stay on this device. Backup is encrypted with your passphrase.",
                     fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    color = subtleColor,
                     lineHeight = 16.sp
                 )
                 Spacer(Modifier.height(8.dp))
@@ -834,14 +933,14 @@ internal fun SettingsDialog(
                         )
                     },
                     leadingIcon = {
-                        Icon(Icons.Default.Key, null, tint = colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Key, null, tint = placeholderColor, modifier = Modifier.size(18.dp))
                     },
                     trailingIcon = {
                         IconButton(onClick = { showSyncPassphrase = !showSyncPassphrase }) {
                             Icon(
                                 if (showSyncPassphrase) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                                 contentDescription = if (showSyncPassphrase) "Hide" else "Show",
-                                tint = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                tint = placeholderColor,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -906,7 +1005,7 @@ internal fun SettingsDialog(
                 Text(
                     "Your songs and recordings are included in Android's automatic backup. Only the optional Google Drive backup is encrypted with your passphrase. API keys never leave this device.",
                     fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    color = subtleColor,
                     lineHeight = 16.sp
                 )
 
@@ -916,7 +1015,7 @@ internal fun SettingsDialog(
                         result,
                         fontSize = 12.sp,
                         color = if (result.startsWith("Sync complete") || result.startsWith("Restore complete")) colorScheme.tertiary
-                        else colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        else subtleColor,
                         lineHeight = 15.sp
                     )
                 }
@@ -934,6 +1033,17 @@ internal fun SettingsDialog(
                         .padding(top = DesignTokens.Spacing.sm)
                         .bottomSafeActionPadding(extra = DesignTokens.Spacing.sm)
                 ) {
+                    if (settingsTab == 1) {
+                        Text(
+                            "Changes save automatically",
+                            fontSize = DesignTokens.Typography.caption,
+                            color = subtleColor,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = DesignTokens.Spacing.md),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    } else {
                     Button(
                         onClick = {
                             // Empty fields mean "keep the stored key" — only save typed values.
@@ -946,7 +1056,9 @@ internal fun SettingsDialog(
                             }
                             saved = true
                         },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(DesignTokens.Rhythm.primary),
                         shape = RoundedCornerShape(DesignTokens.Radius.lg),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = colorScheme.primary,
@@ -958,11 +1070,11 @@ internal fun SettingsDialog(
                             fontWeight = FontWeight.Medium
                         )
                     }
+                    }
                 }
             }
                 }
             }
-        }
     }
 }
 
@@ -995,6 +1107,40 @@ private fun EditorTogglesSection(
     )
 
     Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)) {
+        Text(
+            "Lyrics",
+            fontSize = DesignTokens.Typography.caption,
+            fontWeight = FontWeight.SemiBold,
+            color = colorScheme.onSurface,
+            modifier = Modifier.semantics { heading() }
+        )
+        EditorToggleRow(
+            label = "Syllable Guide",
+            help = FeatureHelp.UNDERLINE_SYLLABLES,
+            checked = isSyllableColoringEnabled,
+            onCheckedChange = onSyllableColoringChange,
+            onHelp = onHelp,
+            switchColors = switchColors,
+            colorScheme = colorScheme
+        )
+        EditorToggleRow(
+            label = "Rhyme Families",
+            help = FeatureHelp.RHYME_FAMILIES,
+            checked = isRhymeHighlightEnabled,
+            onCheckedChange = onRhymeHighlightChange,
+            onHelp = onHelp,
+            switchColors = switchColors,
+            colorScheme = colorScheme
+        )
+
+        Spacer(Modifier.height(DesignTokens.Spacing.sm))
+        Text(
+            "Assistant",
+            fontSize = DesignTokens.Typography.caption,
+            fontWeight = FontWeight.SemiBold,
+            color = colorScheme.onSurface,
+            modifier = Modifier.semantics { heading() }
+        )
         EditorToggleRow(
             label = "Whole Song Context",
             help = FeatureHelp.WHOLE_SONG_CONTEXT,
@@ -1014,28 +1160,10 @@ private fun EditorTogglesSection(
             colorScheme = colorScheme
         )
         EditorToggleRow(
-            label = "Highlight Rhymes",
+            label = "Highlight Suggestion Rhymes",
             help = FeatureHelp.HIGHLIGHT_RHYMES,
             checked = isHighlightEnabled,
             onCheckedChange = onHighlightChange,
-            onHelp = onHelp,
-            switchColors = switchColors,
-            colorScheme = colorScheme
-        )
-        EditorToggleRow(
-            label = "Underline Syllables",
-            help = FeatureHelp.UNDERLINE_SYLLABLES,
-            checked = isSyllableColoringEnabled,
-            onCheckedChange = onSyllableColoringChange,
-            onHelp = onHelp,
-            switchColors = switchColors,
-            colorScheme = colorScheme
-        )
-        EditorToggleRow(
-            label = "Color Rhymes",
-            help = FeatureHelp.COLOR_RHYMES,
-            checked = isRhymeHighlightEnabled,
-            onCheckedChange = onRhymeHighlightChange,
             onHelp = onHelp,
             switchColors = switchColors,
             colorScheme = colorScheme
@@ -1063,7 +1191,15 @@ private fun EditorToggleRow(
     colorScheme: androidx.compose.material3.ColorScheme
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = DesignTokens.Touch.minTarget)
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onCheckedChange
+            )
+            .semantics(mergeDescendants = true) { },
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1075,8 +1211,8 @@ private fun EditorToggleRow(
         )
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier.semantics { contentDescription = label },
+            onCheckedChange = null,
+            modifier = Modifier.clearAndSetSemantics { },
             colors = switchColors
         )
     }

@@ -2,7 +2,6 @@ package com.rhymeai.app.ui.components
 
 import android.os.Build
 import android.view.WindowManager
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
@@ -23,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAppAppearance
 
 val LocalNavBottom = compositionLocalOf<Dp> { 0.dp }
 val LocalImeBottom = compositionLocalOf<Dp> { 0.dp }
@@ -115,7 +115,7 @@ internal fun EdgeToEdgeDialogEffect() {
     val window = (view.parent as? DialogWindowProvider)?.window
     // The dialog window draws behind the status bar now, so its icon
     // appearance must track the theme like the activity's does.
-    val darkTheme = isSystemInDarkTheme()
+    val darkTheme = LocalAppAppearance.current.isDark
     SideEffect {
         window?.let {
             WindowInsetsControllerCompat(it, view).apply {

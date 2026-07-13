@@ -1,8 +1,6 @@
 import AVFoundation
 import SwiftUI
 
-// Floating mic button that lives LEFT of the UnBlock FAB in EditorView.
-//
 // IDLE STATE  — circular mic icon (56 pt, matches pill corner-radius family).
 //
 // ON RECORD PRESS — single animatable `progress` (0 → 1) drives everything
@@ -20,6 +18,7 @@ import SwiftUI
 // observes `service.isRecording` directly. This component stays self-contained.
 struct FloatingMicButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAppearanceStyle) private var appearance
 
     let service: VoiceMemoService
     /// Called at record time to obtain (or lazily create) the project for this recording.
@@ -38,13 +37,16 @@ struct FloatingMicButton: View {
         count: FloatingMicButton.barCount
     )
 
+    init(service: VoiceMemoService, ensureProjectId: @escaping () -> String) {
+        self.service = service
+        self.ensureProjectId = ensureProjectId
+        _progress = State(initialValue: service.isRecording ? 1 : 0)
+    }
+
     // MARK: - Layout constants
 
     // Idle circle diameter — matches Touch.comfortable token.
     private let idleSize: CGFloat = RhymeAITokens.Touch.comfortable          // 56
-    // Recording pill total width — wide enough to hold bars + timer + stop button
-    // and for its right edge to align with where UnBlock's right edge was before
-    // it fell away. Tuned to roughly match UnBlock's footprint (~210 pt).
     private let recordingPillWidth: CGFloat = 220
     // Height stays constant — same as the idle circle.
     private let pillHeight: CGFloat = RhymeAITokens.Touch.comfortable         // 56
@@ -58,14 +60,9 @@ struct FloatingMicButton: View {
             // Background pill / circle — width interpolates with progress.
             Color.clear
                 .frame(width: interpolatedWidth, height: pillHeight)
-                .liquidGlassSurface(
-                    cornerRadius: RhymeAITokens.Radius.pill,
-                    tint: .indigo,
-                    interactive: progress < 0.5,
-                    fallbackOpacity: 0.35
-                )
+                .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.pill)
                 .shadow(
-                    color: .indigo.opacity(0.22),
+                    color: appearance.palette.primaryInk.opacity(0.18),
                     radius: RhymeAITokens.Spacing.sm,
                     y: RhymeAITokens.Spacing.xxs
                 )
@@ -81,7 +78,7 @@ struct FloatingMicButton: View {
                         spectralBars
                         Text(formattedElapsed)
                             .font(.system(.caption, design: .monospaced).weight(.semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(appearance.palette.onAction)
                             .monospacedDigit()
                             .fixedSize()
                     }
@@ -108,19 +105,19 @@ struct FloatingMicButton: View {
                         // Idle mic glyph
                         Image(systemName: "mic.fill")
                             .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(appearance.palette.onAction)
                             .opacity(Double(max(0, 1 - progress * 2.5)))
                             .scaleEffect(max(0.6, 1 - Double(progress) * 0.4))
 
                         // Recording pause glyph (pause per design spec; action stops + saves)
                         Image(systemName: "pause.fill")
                             .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(appearance.palette.onAction)
                             .opacity(Double(max(0, progress * 2.5 - 1.5)))
                             .scaleEffect(max(0.6, Double(progress) * 0.9 + 0.1))
                             .background(
                                 Circle()
-                                    .fill(.red.opacity(min(0.85, Double(progress))))
+                                    .fill(appearance.palette.recording.opacity(min(0.85, Double(progress))))
                                     .frame(
                                         width: RhymeAITokens.Touch.minimum,
                                         height: RhymeAITokens.Touch.minimum
@@ -212,7 +209,7 @@ struct FloatingMicButton: View {
                 )
                 ctx.fill(
                     Path(roundedRect: rect, cornerRadius: barW / 2),
-                    with: .color(.white.opacity(0.9))
+                    with: .color(appearance.palette.onAction.opacity(0.9))
                 )
             }
         }

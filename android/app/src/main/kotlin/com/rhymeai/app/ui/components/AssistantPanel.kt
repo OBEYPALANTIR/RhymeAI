@@ -77,6 +77,10 @@ import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAppAppearance
+import com.rhymeai.app.ui.theme.outlineStrongColorFor
+import com.rhymeai.app.ui.theme.placeholderColorFor
+import com.rhymeai.app.ui.theme.subtleColorFor
 import com.rhymeai.app.util.BeatGrid
 import com.rhymeai.app.util.SyllableCounter
 
@@ -89,16 +93,20 @@ fun AssistantPanel(
     onSuggestionInserted: () -> Unit = {}
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val appearance = LocalAppAppearance.current
+    val placeholderColor = placeholderColorFor(appearance)
+    val subtleColor = subtleColorFor(appearance)
+    val outlineStrongColor = outlineStrongColorFor(appearance)
     val textFieldColors = OutlinedTextFieldDefaults.colors(
-        unfocusedBorderColor = colorScheme.outlineVariant,
-        focusedBorderColor = colorScheme.primary.copy(alpha = 0.5f),
+        unfocusedBorderColor = outlineStrongColor,
+        focusedBorderColor = colorScheme.primary,
         unfocusedContainerColor = colorScheme.surfaceContainerLow,
         focusedContainerColor = colorScheme.surfaceContainerLow,
         cursorColor = colorScheme.primary,
         unfocusedTextColor = colorScheme.onSurface,
         focusedTextColor = colorScheme.onSurface,
-        unfocusedPlaceholderColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-        focusedPlaceholderColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        unfocusedPlaceholderColor = placeholderColor,
+        focusedPlaceholderColor = placeholderColor
     )
     var activeHelp by remember { mutableStateOf<FeatureHelp?>(null) }
     var rhymeOptionsExpanded by remember { mutableStateOf(false) }
@@ -398,7 +406,7 @@ fun AssistantPanel(
                         Text(
                             viewModel.rhymeComplexity.description,
                             fontSize = 12.sp,
-                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            color = subtleColor,
                             modifier = Modifier.padding(top = DesignTokens.Spacing.xs)
                         )
                     }
@@ -468,7 +476,7 @@ fun AssistantPanel(
                     Text(
                         stringResource(R.string.assistant_suggestions_caveat),
                         fontSize = 12.sp,
-                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        color = colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic
                     )
                     viewModel.suggestions.forEach { suggestedLine ->
@@ -529,7 +537,8 @@ fun AssistantPanel(
 
                         // Stepper: decrement
                         TextButton(
-                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm - 1).coerceAtLeast(40) }
+                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm - 1).coerceAtLeast(40) },
+                            modifier = Modifier.semantics { contentDescription = "Decrease BPM" }
                         ) { Text("−", fontSize = 16.sp) }
 
                         Text(
@@ -543,7 +552,8 @@ fun AssistantPanel(
 
                         // Stepper: increment
                         TextButton(
-                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm + 1).coerceAtMost(220) }
+                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm + 1).coerceAtMost(220) },
+                            modifier = Modifier.semantics { contentDescription = "Increase BPM" }
                         ) { Text("+", fontSize = 16.sp) }
                     }
                 }
@@ -558,7 +568,9 @@ fun AssistantPanel(
                         activeTrackColor = colorScheme.primary,
                         inactiveTrackColor = colorScheme.outlineVariant
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "BPM, ${viewModel.beatGridBpm}" }
                 )
 
                 // Per-line beat strip
@@ -580,7 +592,7 @@ fun AssistantPanel(
                 Text(
                     "Build ${com.rhymeai.app.BuildConfig.VERSION_NAME} (${com.rhymeai.app.BuildConfig.VERSION_CODE})  \u2022  Product of Tyler Manring",
                     fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    color = colorScheme.onSurfaceVariant
                 )
             }
 
