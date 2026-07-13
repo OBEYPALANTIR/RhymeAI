@@ -464,7 +464,11 @@ PROMPT_ECHO_RE = re.compile(
 )
 CONTROL_MARKER_RE = re.compile(
     r"<?/?(?:start_of_turn|end_of_turn)>?\w*|_?response>|_?model_response>|"
-    r"assistant_response>|model_response>",
+    r"assistant_response>|model_response>|"
+    r"<\|?/?im_(?:start|end)\|?>?|</?think>|"
+    # Gemma 4 native forms: thinking channel + turn markers, whole or leaked
+    # halves — the v3 pollution shipped bare "<channel|>" closers unpenalized.
+    r"<\|channel>\w*|<channel\|>|<\|turn>\w*|<turn\|>",
     re.IGNORECASE,
 )
 SINGLE_WORD_RE = re.compile(r"(?:[^\W_]|['-])+$", re.UNICODE)
@@ -492,12 +496,14 @@ def strip_model_output(raw):
     # Drop anything up to and including a "model turn" marker the model echoed.
     payload = re.match(
         r".*(?:<start_of_turn>\s*model|start_of_turn>\s*model|_?model_response>|"
-        r"assistant_response>|model_response>)\s*",
+        r"assistant_response>|model_response>|"
+        r"<\|im_start\|>\s*assistant|</think>)\s*",
         text, re.IGNORECASE | re.DOTALL,
     )
     if payload:
         text = text[payload.end():]
     text = text.split("<end_of_turn>")[0].split("end_of_turn>")[0]
+    text = text.split("<|im_end|>")[0].split("im_end|>")[0]
     lines = []
     for line in text.split("\n"):
         stripped = line.strip()
