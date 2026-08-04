@@ -180,8 +180,15 @@ private data class LyricStats(
     val syllableCount: Int
 )
 
+private const val FAKE_RECORDING_EXTRA = "com.rhymeai.app.FAKE_RECORDING"
+
 internal fun compactEditorStats(wordCount: Int, syllableCount: Int): String =
     "${wordCount}w · ${syllableCount}s"
+
+internal fun historyControlsVisible(
+    editorActionsVisible: Boolean,
+    isRecording: Boolean
+): Boolean = editorActionsVisible && !isRecording
 
 @Composable
 private fun rememberExportDocumentLauncher(
@@ -480,7 +487,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             .appWritingSurface()
     ) {
         val fabRowVisible = !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite
+        val memoService = viewModel.voiceMemoService
         val fabRowBottomOriginOffsetPx = with(density) { DesignTokens.Rhythm.section.roundToPx() }
+        LaunchedEffect(memoService) {
+            val activity = context as? android.app.Activity
+            if (BuildConfig.DEBUG &&
+                activity?.intent?.getBooleanExtra(FAKE_RECORDING_EXTRA, false) == true
+            ) {
+                memoService.seedRecordingForTesting()
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -989,7 +1005,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 extra = DesignTokens.Rhythm.section,
                 horizontalAlignment = Alignment.End
             ) {
-                val memoService = viewModel.voiceMemoService
                 val barCount = DesignTokens.EditorChrome.recordingBarCount
                 // Amplitude + elapsed polling while recording — drives the spectralizer pill.
                 var amplitudeBars by remember { mutableStateOf(FloatArray(barCount) { 0f }) }
@@ -1250,18 +1265,33 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
 
         AnimatedVisibility(
-            visible = fabRowVisible,
+            visible = historyControlsVisible(
+                editorActionsVisible = fabRowVisible,
+                isRecording = memoService.isRecording
+            ),
             enter = fadeIn(
                 animationSpec = tween(
                     durationMillis = DesignTokens.Motion.standardMillis,
                     easing = DesignTokens.Motion.emphasizedEasing
                 )
+            ) + slideInVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.standardMillis,
+                    easing = DesignTokens.Motion.emphasizedEasing
+                ),
+                initialOffsetY = { it }
             ),
             exit = fadeOut(
                 animationSpec = tween(
                     durationMillis = DesignTokens.Motion.dismissMillis,
                     easing = DesignTokens.Motion.exitEasing
                 )
+            ) + slideOutVertically(
+                animationSpec = tween(
+                    durationMillis = DesignTokens.Motion.dismissMillis,
+                    easing = DesignTokens.Motion.exitEasing
+                ),
+                targetOffsetY = { it }
             ),
             modifier = Modifier.align(Alignment.BottomStart)
         ) {

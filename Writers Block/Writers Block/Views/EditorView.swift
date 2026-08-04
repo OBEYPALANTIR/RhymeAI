@@ -365,6 +365,12 @@ struct EditorView: View {
         .rhymeAnimation(assistantSheetTransitionAnimation, value: viewModel.showAssistantSheet)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: keyboardIsVisible)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: lyricsEditorIsFocused)
+        .rhymeAnimation(
+            viewModel.voiceMemoService.isRecording
+                ? RhymeAITokens.Motion.dismiss
+                : RhymeAITokens.Motion.state,
+            value: viewModel.voiceMemoService.isRecording
+        )
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
@@ -416,9 +422,13 @@ struct EditorView: View {
             !shouldShowRewriteChipBar
     }
 
+    private var phoneHistoryControlsVisible: Bool {
+        phoneEditorActionsVisible && !viewModel.voiceMemoService.isRecording
+    }
+
     @ViewBuilder
     private var phoneUndoRedoControls: some View {
-        if phoneEditorActionsVisible {
+        if phoneHistoryControlsVisible {
             VStack {
                 Spacer()
                 HStack {
@@ -436,7 +446,7 @@ struct EditorView: View {
                          ? keyboardHeight + RhymeAITokens.Spacing.sm
                          : RhymeAITokens.Spacing.md)
             }
-            .transition(.scale(scale: 0.92, anchor: .bottomLeading).combined(with: .opacity))
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 

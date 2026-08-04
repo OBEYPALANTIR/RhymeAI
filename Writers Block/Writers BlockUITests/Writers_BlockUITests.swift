@@ -138,6 +138,33 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testUndoRedoButtonsDismissWhileRecordingAndReturnAfterStopping() throws {
+        try requirePhone()
+
+        let app = isolatedUITestApp(arguments: ["--ui-test-fake-voice-recording"])
+        app.launch()
+        createNewSong(in: app)
+
+        let undoButton = app.buttons["undoLyricsButton"]
+        let redoButton = app.buttons["redoLyricsButton"]
+        let micButton = app.buttons["micButton"]
+        XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(redoButton.exists)
+        XCTAssertTrue(micButton.waitForExistence(timeout: 5))
+
+        micButton.tap()
+
+        XCTAssertTrue(undoButton.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(redoButton.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(micButton.exists)
+
+        micButton.tap()
+
+        XCTAssertTrue(undoButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(redoButton.exists)
+    }
+
+    @MainActor
     func testSavedCustomModelRemainsSelectableAfterRelaunch() throws {
         let app = isolatedUITestApp(arguments: ["--ui-test-seed-custom-gguf-model"])
         app.launch()

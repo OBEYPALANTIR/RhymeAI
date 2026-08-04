@@ -12,6 +12,7 @@ enum UITestFlags {
     static let forceRewriteBar = "--ui-test-force-rewrite-bar"
     static let accessibilityTextSize = "--ui-test-accessibility-text-size"
     static let seedCustomGGUFModel = "--ui-test-seed-custom-gguf-model"
+    static let fakeVoiceRecording = "--ui-test-fake-voice-recording"
 
     #if DEBUG
     static func isEnabled(_ flag: String, in arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
