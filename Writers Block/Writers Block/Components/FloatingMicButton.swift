@@ -66,13 +66,14 @@ struct FloatingMicButton: View {
                 // Recording region — spectralizer + timer
                 // Fades in once the pill is mostly stretched (progress > 0.55).
                 if progress > 0.01 {
-                    HStack(spacing: RhymeAITokens.Spacing.xs) {
+                    HStack(spacing: 0) {
                         spectralBars
                         Text(formattedElapsed)
                             .font(.system(.caption, design: .monospaced).weight(.semibold))
                             .foregroundStyle(appearance.palette.onAction)
                             .monospacedDigit()
                             .fixedSize()
+                            .frame(width: RhymeAITokens.Touch.minimum, alignment: .center)
                     }
                     .padding(.leading, RhymeAITokens.Spacing.sm)
                     .opacity(recordingContentOpacity)
