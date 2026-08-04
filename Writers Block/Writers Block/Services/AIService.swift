@@ -196,7 +196,37 @@ struct AIService {
             let task = Task {
                 do {
                     if provider == .local {
-                        // Local model already token-streams internally; needs its own AsyncStream surface (follow-up).
+                        let localPrompt = buildLocalPrompt(
+                            theme: theme,
+                            lyrics: lyrics,
+                            targetRhymeLine: targetRhymeLine,
+                            rhymeType: rhymeType,
+                            currentLetter: currentLetter,
+                            currentSection: currentSection,
+                            sectionOrdinal: sectionOrdinal,
+                            firstChorusLines: firstChorusLines,
+                            useWholeSongContext: useWholeSongContext
+                        )
+                        let filter = RhymeLineFilter(
+                            targetLine: targetRhymeLine,
+                            rhymeType: rhymeType
+                        )
+                        if Self.shouldUseGemma() {
+                            let excludedKeys = Set(
+                                lyrics.components(separatedBy: .newlines)
+                                    .map(normalizeSuggestionKey)
+                                    .filter { !$0.isEmpty }
+                            )
+                            try await emitLines(
+                                from: streamGGUFTokens(prompt: localPrompt),
+                                into: continuation,
+                                filter: filter,
+                                excludedKeys: excludedKeys
+                            )
+                            continuation.finish()
+                            return
+                        }
+
                         let results = try await getSuggestions(
                             provider: provider,
                             apiKey: apiKey,
@@ -266,7 +296,8 @@ struct AIService {
     private func emitLines(
         from tokens: AsyncThrowingStream<String, Error>,
         into continuation: AsyncThrowingStream<String, Error>.Continuation,
-        filter: RhymeLineFilter? = nil
+        filter: RhymeLineFilter? = nil,
+        excludedKeys: Set<String> = []
     ) async throws {
         var buffer = ""
         var seen = Set<String>()
@@ -284,7 +315,11 @@ struct AIService {
                 buffer = String(buffer[buffer.index(after: newlineIdx)...])
                 guard let cleaned = cleanSuggestionLine(rawLine) else { continue }
                 let key = normalizeSuggestionKey(cleaned)
-                guard !key.isEmpty, seen.insert(key).inserted else { continue }
+                guard !key.isEmpty,
+                      !excludedKeys.contains(key),
+                      seen.insert(key).inserted else {
+                    continue
+                }
                 accepted += 1
                 if let filter, filter.tier(of: cleaned) == 0 {
                     held.append(cleaned)
@@ -301,7 +336,9 @@ struct AIService {
             let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
             if !remaining.isEmpty, let cleaned = cleanSuggestionLine(remaining) {
                 let key = normalizeSuggestionKey(cleaned)
-                if !key.isEmpty, seen.insert(key).inserted {
+                if !key.isEmpty,
+                   !excludedKeys.contains(key),
+                   seen.insert(key).inserted {
                     if let filter, filter.tier(of: cleaned) == 0 {
                         held.append(cleaned)
                     } else {
@@ -964,6 +1001,31 @@ struct AIService {
         try await runner.loadModel(filePath: path)
 
         return try await runner.generate(prompt: prompt)
+    }
+
+    private func streamGGUFTokens(
+        prompt: String
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let path = Self.firstGGUFPath() else {
+                        throw AIServiceError.localModelUnavailable(
+                            reason: "No GGUF model found. Download a Gemma model in Settings."
+                        )
+                    }
+                    let runner = Self.ggufRunner
+                    try await runner.loadModel(filePath: path)
+                    _ = try await runner.generate(prompt: prompt) { token in
+                        continuation.yield(token)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     /// Route a suggestion prompt through Gemma and parse the result.

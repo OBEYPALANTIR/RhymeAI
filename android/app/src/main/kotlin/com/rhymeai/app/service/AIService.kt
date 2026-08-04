@@ -443,9 +443,32 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             targetRhymeLine, rhymeType, sectionRef = sectionRef, chorusEndWords = chorusEnds
         )
         if (provider == AIProvider.LOCAL) {
-            // Local model already streams tokens internally; needs its own Flow surface (follow-up).
-            getSuggestions(provider, apiKey, modelId, theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, sectionRef, fullLyrics)
-                .forEach { emit(it) }
+            val service = localModelService
+                ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
+            if (!service.isLoaded) {
+                throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
+            }
+            val localPrompt = buildLocalPrompt(
+                theme = theme,
+                lyrics = lyrics,
+                targetRhymeLine = targetRhymeLine,
+                rhymeType = rhymeType,
+                rhymeScheme = rhymeScheme,
+                currentLetter = currentLetter,
+                currentSection = currentSection,
+                complexity = complexity,
+                useWholeSongContext = useWholeSongContext,
+                constraint = constraint
+            )
+            val existingKeys = lyrics.lines()
+                .map(::normalizeSuggestionKey)
+                .filter(String::isNotEmpty)
+                .toSet()
+            emitLinesFromTokens(
+                tokens = service.streamResponse(localPrompt),
+                constraint = constraint,
+                excludedKeys = existingKeys
+            )
         } else {
             val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
             when (provider) {
@@ -606,7 +629,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
 
     private suspend fun FlowCollector<SuggestedLine>.emitLinesFromTokens(
         tokens: Flow<String>,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        excludedKeys: Set<String> = emptySet()
     ) {
         val buffer = StringBuilder()
         val seen = mutableSetOf<String>()
@@ -628,7 +652,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             if (accepted >= acceptLimit || emitted >= SUGGESTION_COUNT) return false
             val cleaned = cleanLocalSuggestionLine(rawLine) ?: return false
             val key = normalizeSuggestionKey(cleaned)
-            if (key.isEmpty() || !seen.add(key)) return false
+            if (key.isEmpty() || key in excludedKeys || !seen.add(key)) return false
             accepted++
 
             // Determine phonetic tier; treat chorus-repeat end-words as tier 2

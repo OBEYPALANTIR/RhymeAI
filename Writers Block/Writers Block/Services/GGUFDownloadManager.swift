@@ -125,6 +125,9 @@ enum GGUFModelSelection {
 
 @MainActor
 final class GGUFDownloadManager: NSObject, ObservableObject {
+    nonisolated private static let progressUpdateBytes: Int64 = 8 * 1024 * 1024
+    nonisolated private static let verificationBufferBytes = 8 * 1024 * 1024
+
     @Published private(set) var installedModelFiles: Set<String> = []
     @Published private(set) var activeDownloadID: String?
     @Published private(set) var progress: Double = 0
@@ -242,8 +245,15 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
               let option = GGUFDownloadCatalog.option(id: optionID) else {
             return
         }
+        let nextProgress = min(1, Double(bytes) / Double(option.expectedBytes))
+        let percentChanged = Int(nextProgress * 100) != Int(progress * 100)
+        guard bytes >= option.expectedBytes ||
+              bytes - receivedBytes >= Self.progressUpdateBytes ||
+              percentChanged else {
+            return
+        }
         receivedBytes = bytes
-        progress = min(1, Double(bytes) / Double(option.expectedBytes))
+        progress = nextProgress
         statusMessage = "Downloading \(option.title)… \(Int(progress * 100))%"
     }
 
@@ -362,7 +372,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         try handle.seek(toOffset: 0)
 
         var hasher = SHA256()
-        while let chunk = try handle.read(upToCount: 4 * 1024 * 1024), !chunk.isEmpty {
+        while let chunk = try handle.read(upToCount: verificationBufferBytes), !chunk.isEmpty {
             hasher.update(data: chunk)
         }
         let checksum = hasher.finalize().map { String(format: "%02x", $0) }.joined()

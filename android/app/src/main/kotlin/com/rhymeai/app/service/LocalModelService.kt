@@ -2,13 +2,19 @@ package com.rhymeai.app.service
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -16,6 +22,16 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import org.nehuatl.llamacpp.LlamaHelper
 import java.io.File
+
+data class LocalGenerationMetrics(
+    val timeToFirstChunkMs: Long,
+    val totalDurationMs: Long,
+    val outputCharacters: Int,
+    val chunkCount: Int
+) {
+    val chunksPerSecond: Double
+        get() = if (totalDurationMs > 0) chunkCount * 1_000.0 / totalDurationMs else 0.0
+}
 
 class LocalModelService {
     private companion object {
@@ -39,6 +55,10 @@ class LocalModelService {
 
     private var llamaHelper: LlamaHelper? = null
     private var _loadedModelPath: String? = null
+
+    @Volatile
+    var lastGenerationMetrics: LocalGenerationMetrics? = null
+        private set
 
     val isLoaded: Boolean get() = _loadedModelPath != null
 
@@ -93,55 +113,100 @@ class LocalModelService {
         }
     }
 
-    suspend fun generateResponse(prompt: String): String = withContext(Dispatchers.IO) {
-        modelMutex.withLock {
-            val helper = llamaHelper ?: throw IllegalStateException("No model loaded")
-            if (!isLoaded) throw IllegalStateException("No model loaded. Go to Settings to load a GGUF model file.")
+    fun streamResponse(prompt: String): Flow<String> = channelFlow {
+        withContext(Dispatchers.IO) {
+            modelMutex.withLock {
+                val helper = llamaHelper ?: throw IllegalStateException("No model loaded")
+                if (!isLoaded) {
+                    throw IllegalStateException(
+                        "No model loaded. Go to Settings to load a GGUF model file."
+                    )
+                }
 
-            val result = StringBuilder()
-            val deferred = CompletableDeferred<String>()
+                val result = StringBuilder()
+                val deferred = CompletableDeferred<Unit>()
+                val startedAtNs = System.nanoTime()
+                var firstChunkAtNs: Long? = null
+                var chunkCount = 0
 
-            val job = scope.launch {
-                llmFlow.collect { event ->
-                    when (event) {
-                        is LlamaHelper.LLMEvent.Ongoing -> {
-                            result.append(event.word)
-                            if (result.length >= MAX_RESPONSE_CHARS && !deferred.isCompleted) {
+                val job = launch {
+                    llmFlow.collect { event ->
+                        when (event) {
+                            is LlamaHelper.LLMEvent.Ongoing -> {
+                                val remaining = MAX_RESPONSE_CHARS - result.length
+                                val chunk = event.word.take(remaining.coerceAtLeast(0))
+                                if (chunk.isNotEmpty()) {
+                                    if (firstChunkAtNs == null) firstChunkAtNs = System.nanoTime()
+                                    result.append(chunk)
+                                    chunkCount++
+                                    send(chunk)
+                                }
+                                if (result.length >= MAX_RESPONSE_CHARS && !deferred.isCompleted) {
+                                    helper.stopPrediction()
+                                    deferred.complete(Unit)
+                                }
+                            }
+                            is LlamaHelper.LLMEvent.Done -> {
                                 helper.stopPrediction()
-                                deferred.complete(result.toString())
+                                if (!deferred.isCompleted) {
+                                    if (result.isEmpty() && event.fullText.isNotBlank()) {
+                                        val chunk = event.fullText.take(MAX_RESPONSE_CHARS)
+                                        firstChunkAtNs = System.nanoTime()
+                                        result.append(chunk)
+                                        chunkCount++
+                                        send(chunk)
+                                    }
+                                    deferred.complete(Unit)
+                                }
                             }
-                        }
-                        is LlamaHelper.LLMEvent.Done -> {
-                            helper.stopPrediction()
-                            if (!deferred.isCompleted) {
-                                deferred.complete(event.fullText.ifBlank { result.toString() })
+                            is LlamaHelper.LLMEvent.Error -> {
+                                helper.stopPrediction()
+                                if (!deferred.isCompleted) {
+                                    deferred.completeExceptionally(RuntimeException(event.message))
+                                }
                             }
+                            else -> {}
                         }
-                        is LlamaHelper.LLMEvent.Error -> {
-                            helper.stopPrediction()
-                            if (!deferred.isCompleted) {
-                                deferred.completeExceptionally(RuntimeException(event.message))
-                            }
-                        }
-                        else -> {}
+                    }
+                }
+
+                try {
+                    helper.predict(prompt)
+                    withTimeout(GENERATION_TIMEOUT_MS) { deferred.await() }
+                } catch (e: TimeoutCancellationException) {
+                    throw IllegalStateException(
+                        "Local model took too long to respond. Try Gemma E2B or shorten the lyric context.",
+                        e
+                    )
+                } finally {
+                    job.cancel()
+                    // Always stop the native prediction: without this, caller cancellation
+                    // (user taps Stop) leaves llama generating, and its late events on the
+                    // shared llmFlow would leak into the next call's collector.
+                    try { helper.stopPrediction() } catch (_: Exception) {}
+                    val finishedAtNs = System.nanoTime()
+                    firstChunkAtNs?.let { firstNs ->
+                        val metrics = LocalGenerationMetrics(
+                            timeToFirstChunkMs = (firstNs - startedAtNs) / 1_000_000,
+                            totalDurationMs = (finishedAtNs - startedAtNs) / 1_000_000,
+                            outputCharacters = result.length,
+                            chunkCount = chunkCount
+                        )
+                        lastGenerationMetrics = metrics
+                        Log.i(
+                            "RhymeAI.LocalModel",
+                            "generation ttfc_ms=${metrics.timeToFirstChunkMs} " +
+                                "total_ms=${metrics.totalDurationMs} chunks=${metrics.chunkCount} " +
+                                "chunks_per_s=${"%.2f".format(metrics.chunksPerSecond)}"
+                        )
                     }
                 }
             }
-
-            try {
-                helper.predict(prompt)
-                withTimeout(GENERATION_TIMEOUT_MS) { deferred.await() }
-            } catch (e: TimeoutCancellationException) {
-                throw IllegalStateException("Local model took too long to respond. Try Gemma E2B or shorten the lyric context.", e)
-            } finally {
-                job.cancel()
-                // Always stop the native prediction: without this, caller cancellation
-                // (user taps Stop) leaves llama generating, and its late events on the
-                // shared llmFlow would leak into the next call's collector.
-                try { helper.stopPrediction() } catch (_: Exception) {}
-            }
         }
-    }
+    }.buffer(Channel.UNLIMITED)
+
+    suspend fun generateResponse(prompt: String): String =
+        streamResponse(prompt).toList().joinToString(separator = "")
 
     fun unload() {
         llamaHelper?.let {

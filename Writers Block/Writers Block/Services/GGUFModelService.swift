@@ -1,4 +1,13 @@
 import Foundation
+import OSLog
+
+nonisolated struct LocalGenerationMetrics: Sendable {
+    let timeToFirstTokenMilliseconds: Double
+    let totalDurationMilliseconds: Double
+    let outputCharacters: Int
+    let generatedTokenCount: Int
+    let tokensPerSecond: Double
+}
 
 // MARK: - Protocol
 
@@ -8,8 +17,16 @@ protocol LocalGGUFRunner: AnyObject {
     /// Load a GGUF file at the given absolute path.
     func loadModel(filePath: String) async throws
 
-    /// Generate a response for the given prompt. Cancellation-safe.
-    func generate(prompt: String) async throws -> String
+    func generate(
+        prompt: String,
+        onToken: @escaping @Sendable (String) -> Void
+    ) async throws -> String
+}
+
+extension LocalGGUFRunner {
+    func generate(prompt: String) async throws -> String {
+        try await generate(prompt: prompt) { _ in }
+    }
 }
 
 // MARK: - Factory
@@ -35,7 +52,10 @@ final class GGUFModelStub: LocalGGUFRunner {
         )
     }
 
-    func generate(prompt: String) async throws -> String {
+    func generate(
+        prompt: String,
+        onToken: @escaping @Sendable (String) -> Void
+    ) async throws -> String {
         throw AIServiceError.localModelUnavailable(
             reason: "Gemma on-device engine is not compiled into this build."
         )
@@ -116,6 +136,10 @@ actor GGUFLlamaService: LocalGGUFRunner {
     nonisolated private static let contextLength: Int32 = 2048
     nonisolated private static let generationTimeoutSeconds: Double = 120
     nonisolated private static let maxResponseBytes = 4096
+    nonisolated private static let performanceLogger = Logger(
+        subsystem: "ShaydeTree.Writers-Block",
+        category: "LocalModelPerformance"
+    )
     nonisolated private static let backendInitialization: Void = {
         llama_backend_init()
     }()
@@ -123,6 +147,7 @@ actor GGUFLlamaService: LocalGGUFRunner {
     private var model: OpaquePointer?
     private var context: OpaquePointer?
     private var loadedPath: String?
+    private(set) var lastGenerationMetrics: LocalGenerationMetrics?
 
     func loadModel(filePath: String) async throws {
         if loadedPath == filePath, model != nil, context != nil {
@@ -148,6 +173,8 @@ actor GGUFLlamaService: LocalGGUFRunner {
 
         var ctxParams = llama_context_default_params()
         ctxParams.n_ctx = UInt32(Self.contextLength)
+        ctxParams.n_batch = UInt32(Self.contextLength)
+        ctxParams.n_ubatch = 256
         let threadCount = Int32(max(1, min(8, ProcessInfo.processInfo.processorCount - 2)))
         ctxParams.n_threads = threadCount
         ctxParams.n_threads_batch = threadCount
@@ -162,7 +189,10 @@ actor GGUFLlamaService: LocalGGUFRunner {
         self.loadedPath = filePath
     }
 
-    func generate(prompt: String) async throws -> String {
+    func generate(
+        prompt: String,
+        onToken: @escaping @Sendable (String) -> Void
+    ) async throws -> String {
         guard let ctx = context, let model = model else {
             throw AIServiceError.localModelUnavailable(
                 reason: "No GGUF model loaded. Download a Gemma model in Settings."
@@ -172,6 +202,7 @@ actor GGUFLlamaService: LocalGGUFRunner {
             throw AIServiceError.localModelUnavailable(reason: "The downloaded model has no compatible vocabulary.")
         }
 
+        let startedAtNs = DispatchTime.now().uptimeNanoseconds
         let fullPrompt = GGUFModelService.gemmaPrompt(prompt)
         guard let cStr = fullPrompt.cString(using: .utf8) else {
             throw AIServiceError.localModelUnavailable(reason: "Failed to encode prompt for the local model.")
@@ -228,7 +259,12 @@ actor GGUFLlamaService: LocalGGUFRunner {
         defer { llama_sampler_free(sampler) }
 
         var outputBytes: [UInt8] = []
+        outputBytes.reserveCapacity(Self.maxResponseBytes)
+        var pendingStreamBytes: [UInt8] = []
+        pendingStreamBytes.reserveCapacity(32)
         var nCur = Int32(nTokens)
+        var generatedTokenCount = 0
+        var firstTokenAtNs: UInt64?
         let deadline = Date().addingTimeInterval(Self.generationTimeoutSeconds)
 
         while nCur < Self.contextLength && outputBytes.count < Self.maxResponseBytes {
@@ -241,7 +277,17 @@ actor GGUFLlamaService: LocalGGUFRunner {
 
             let nextToken = llama_sampler_sample(sampler, ctx, batch.n_tokens - 1)
             if llama_vocab_is_eog(vocab, nextToken) { break }
-            outputBytes.append(contentsOf: tokenPiece(nextToken, vocab: vocab).map { UInt8(bitPattern: $0) })
+            let pieceBytes = tokenPiece(nextToken, vocab: vocab).map { UInt8(bitPattern: $0) }
+            outputBytes.append(contentsOf: pieceBytes)
+            pendingStreamBytes.append(contentsOf: pieceBytes)
+            generatedTokenCount += 1
+            if firstTokenAtNs == nil {
+                firstTokenAtNs = DispatchTime.now().uptimeNanoseconds
+            }
+            if let chunk = String(bytes: pendingStreamBytes, encoding: .utf8) {
+                onToken(chunk)
+                pendingStreamBytes.removeAll(keepingCapacity: true)
+            }
 
             llamaBatchClear(&batch)
             llamaBatchAdd(&batch, token: nextToken, position: llama_pos(nCur), logits: true)
@@ -252,6 +298,25 @@ actor GGUFLlamaService: LocalGGUFRunner {
         }
 
         let result = String(decoding: outputBytes, as: UTF8.self)
+        let finishedAtNs = DispatchTime.now().uptimeNanoseconds
+        if let firstTokenAtNs {
+            let totalMs = Double(finishedAtNs - startedAtNs) / 1_000_000
+            let decodeSeconds = max(
+                Double(finishedAtNs - firstTokenAtNs) / 1_000_000_000,
+                0.001
+            )
+            let metrics = LocalGenerationMetrics(
+                timeToFirstTokenMilliseconds: Double(firstTokenAtNs - startedAtNs) / 1_000_000,
+                totalDurationMilliseconds: totalMs,
+                outputCharacters: result.count,
+                generatedTokenCount: generatedTokenCount,
+                tokensPerSecond: Double(generatedTokenCount) / decodeSeconds
+            )
+            lastGenerationMetrics = metrics
+            Self.performanceLogger.info(
+                "generation ttft_ms=\(metrics.timeToFirstTokenMilliseconds) total_ms=\(metrics.totalDurationMilliseconds) tokens=\(metrics.generatedTokenCount) tok_per_s=\(metrics.tokensPerSecond)"
+            )
+        }
         return GGUFModelService.stripMarkers(result)
     }
 
