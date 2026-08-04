@@ -36,8 +36,6 @@ enum RhymeAITokens {
         static let drawerMinWidth: CGFloat = 300
         static let drawerMaxWidth: CGFloat = 360
         static let drawerHorizontalMargin: CGFloat = 36
-        static let projectSidebarWidth: CGFloat = 320
-        static let threeColumnWorkspaceMinWidth: CGFloat = 1_100
         static let assistantColumnWidth: CGFloat = 380
         static let assistantReadableWidth: CGFloat = 420
         static let assistantSheetHandleArea: CGFloat = 72

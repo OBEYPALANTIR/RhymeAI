@@ -19,7 +19,7 @@ struct TemplatesView: View {
                                     .font(.title2)
                                     .foregroundStyle(appearance.palette.action)
                                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
+                                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .indigo.opacity(0.16), fallbackOpacity: 0.10)
 
                                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                                     Text(template.name)
@@ -38,7 +38,7 @@ struct TemplatesView: View {
                             }
                             .padding(RhymeAITokens.Spacing.lg)
                             .frame(minHeight: RhymeAITokens.Touch.minimum)
-                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.08), interactive: true)
                         }
                         .buttonStyle(.rhymePress)
                     }

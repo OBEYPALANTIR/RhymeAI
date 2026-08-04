@@ -21,7 +21,7 @@ struct RhymeSchemeDisplayView: View {
                             Text(letter)
                                 .font(.system(.caption, design: .monospaced))
                                 .fontWeight(.bold)
-                                .foregroundColor(isCurrent ? appearance.palette.action : appearance.palette.secondaryInk.opacity(0.75))
+                                .foregroundColor(isCurrent ? .indigo : .secondary.opacity(0.6))
                                 .frame(width: RhymeAITokens.Spacing.md, alignment: .leading)
 
                             if line.trimmingCharacters(in: .whitespaces).isEmpty && isCurrent {
@@ -49,7 +49,7 @@ struct RhymeSchemeDisplayView: View {
             .clipShape(RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md))
             .overlay(
                 RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md)
-                    .strokeBorder(appearance.palette.outline, lineWidth: RhymeAITokens.Spacing.hairline)
+                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: RhymeAITokens.Spacing.hairline)
             )
         }
     }

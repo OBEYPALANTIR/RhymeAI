@@ -321,22 +321,6 @@ final class EditorViewModel: ObservableObject {
             showAssistantSheet = UITestFlags.isEnabled(UITestFlags.openAssistant)
         }
 
-        if UITestFlags.isEnabled(UITestFlags.seedLongTitleSong) {
-            title = "Midnight Letters from the Far Side of the City Lights"
-            lyrics = """
-            [Verse]
-            I trace the signal through the city light
-            A silver echo keeps the windows bright
-            The midnight engines turn a patient wheel
-            While quiet words reveal the way I feel
-            """
-            currentProjectId = "ui-test-long-title-song"
-            saveStatus = .saved
-            isRhymeHighlightEnabled = true
-            isSyllableColoringEnabled = true
-            showWelcome = false
-        }
-
         if UITestFlags.isEnabled(UITestFlags.seedRewriteSelection) {
             let seededLyrics = "yellow music\nfollow music"
             title = "UI Rewrite Song"

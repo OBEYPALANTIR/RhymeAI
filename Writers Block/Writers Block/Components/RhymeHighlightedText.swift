@@ -1,16 +1,5 @@
 import SwiftUI
 
-extension InkUnderlinePattern {
-    var lineStyle: Text.LineStyle {
-        switch self {
-        case .solid: Text.LineStyle(pattern: .solid)
-        case .dashed: Text.LineStyle(pattern: .dash)
-        case .dotted: Text.LineStyle(pattern: .dot)
-        case .dashDot: Text.LineStyle(pattern: .dashDot)
-        }
-    }
-}
-
 // Per-word rhyme keys and syllable counts are pure functions of the word and the
 // static pronunciation dictionary, but the editor overlay recomputes them for every
 // word on every keystroke, which drops frames on long lyrics. Caching by lowercased
@@ -46,8 +35,7 @@ struct RhymeHighlightedText: View, Equatable {
     let enabled: Bool
     let syllablesEnabled: Bool
 
-    @Environment(\.appAppearanceStyle) private var appearance
-    @Environment(\.analysisPresentationStyle) private var analysisPresentation
+    @Environment(\.colorScheme) private var colorScheme
 
     init(text: String, enabled: Bool, syllablesEnabled: Bool = false) {
         self.text = text
@@ -61,17 +49,47 @@ struct RhymeHighlightedText: View, Equatable {
             && lhs.syllablesEnabled == rhs.syllablesEnabled
     }
 
+    private static let palettePastel: [Color] = [
+        Color(red: 252/255, green: 165/255, blue: 165/255), // rose
+        Color(red: 252/255, green: 211/255, blue: 77/255),  // amber
+        Color(red: 134/255, green: 239/255, blue: 172/255), // green
+        Color(red: 125/255, green: 211/255, blue: 252/255), // sky
+        Color(red: 196/255, green: 181/255, blue: 253/255), // violet
+        Color(red: 249/255, green: 168/255, blue: 212/255), // pink
+        Color(red: 253/255, green: 186/255, blue: 116/255), // orange
+        Color(red: 103/255, green: 232/255, blue: 249/255), // cyan
+        Color(red: 167/255, green: 243/255, blue: 208/255), // mint
+        Color(red: 233/255, green: 213/255, blue: 255/255), // light purple
+        Color(red: 254/255, green: 240/255, blue: 138/255), // yellow
+        Color(red: 190/255, green: 242/255, blue: 100/255)  // lime
+    ]
+
+    private static let paletteDark: [Color] = [
+        Color(red: 185/255, green:  28/255, blue:  28/255), // rose-700
+        Color(red: 180/255, green:  83/255, blue:   9/255), // amber-700
+        Color(red:  21/255, green: 128/255, blue:  61/255), // green-700
+        Color(red:   3/255, green: 105/255, blue: 161/255), // sky-700
+        Color(red: 109/255, green:  40/255, blue: 217/255), // violet-700
+        Color(red: 190/255, green:  24/255, blue:  93/255), // pink-700
+        Color(red: 194/255, green:  65/255, blue:  12/255), // orange-700
+        Color(red:  14/255, green: 116/255, blue: 144/255), // cyan-700
+        Color(red:   4/255, green: 120/255, blue:  87/255), // emerald-700
+        Color(red: 126/255, green:  34/255, blue: 206/255), // purple-700
+        Color(red: 161/255, green:  98/255, blue:   7/255), // yellow-700
+        Color(red:  77/255, green: 124/255, blue:  15/255)  // lime-700
+    ]
+
     private var palette: [Color] {
-        appearance.analysisRhymeHexValues.map { Color(hex: $0) }
+        colorScheme == .dark ? Self.palettePastel : Self.paletteDark
     }
 
     var body: some View {
         if (enabled || syllablesEnabled) && !text.isEmpty {
             Text(highlightedAttributedString)
-                .font(.body)
+                .font(.system(size: 16))
         } else {
             Text(text)
-                .font(.body)
+                .font(.system(size: 16))
                 .foregroundStyle(.primary)
         }
     }
@@ -114,32 +132,17 @@ struct RhymeHighlightedText: View, Equatable {
             let count = analyses[i].syllableCount
             var seg = AttributedString(tok.value)
             if enabled, let familyKey = familyKeyPerToken[i] {
-                switch analysisPresentation {
-                case .color:
-                    seg.foregroundColor = colorFor(key: familyKey)
-                    seg.font = .body.weight(.semibold)
-                    if syllablesEnabled {
-                        seg.underlineStyle = Text.LineStyle(
-                            pattern: .solid,
-                            color: syllableColor(for: count)
-                        )
-                    }
-                case .inkMarks:
-                    seg.foregroundColor = appearance.palette.primaryInk
-                    seg.underlineStyle = analysisInkPattern(for: familyKey).lineStyle
-                    if let weight = analysisFontWeight(
-                        syllableCount: count,
-                        syllableGuideEnabled: syllablesEnabled
-                    ) {
-                        seg.font = .body.weight(weight)
-                    }
+                seg.foregroundColor = colorFor(key: familyKey)
+                seg.font = .system(size: 16, weight: .semibold)
+                if syllablesEnabled {
+                    seg.underlineStyle = Text.LineStyle(
+                        pattern: .solid,
+                        color: syllableColor(for: count)
+                    )
                 }
-            } else if analysisPresentation == .inkMarks, syllablesEnabled {
-                seg.foregroundColor = appearance.palette.primaryInk
-                seg.font = .body.weight(analysisFontWeight(syllableCount: count))
             } else if !enabled && syllablesEnabled {
                 seg.foregroundColor = syllableColor(for: count)
-                seg.font = .body.weight(.semibold)
+                seg.font = .system(size: 16, weight: .semibold)
             } else {
                 seg.foregroundColor = .primary
                 if syllablesEnabled {
@@ -177,7 +180,7 @@ struct RhymeHighlightedText: View, Equatable {
     }
 
     private func syllableColor(for count: Int) -> Color {
-        if appearance.usesDarkAnalysisPalette {
+        if colorScheme == .dark {
             switch count {
             case 1: return Color(red: 110.0 / 255, green: 231.0 / 255, blue: 183.0 / 255)
             case 2: return Color(red: 147.0 / 255, green: 197.0 / 255, blue: 253.0 / 255)

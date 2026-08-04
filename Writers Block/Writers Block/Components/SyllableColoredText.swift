@@ -4,16 +4,15 @@ struct SyllableColoredText: View {
     let text: String
     let enabled: Bool
 
-    @Environment(\.appAppearanceStyle) private var appearance
-    @Environment(\.analysisPresentationStyle) private var analysisPresentation
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         if enabled && !text.isEmpty {
             Text(coloredAttributedString)
-                .font(.body)
+                .font(.system(size: 16))
         } else {
             Text(text)
-                .font(.body)
+                .font(.system(size: 16))
                 .foregroundStyle(.primary)
         }
     }
@@ -38,16 +37,11 @@ struct SyllableColoredText: View {
             let word = String(text[matchRange])
             let count = SyllableCounter.count(word)
             var segment = AttributedString(word)
-            if analysisPresentation == .inkMarks {
-                segment.foregroundColor = appearance.palette.primaryInk
-                segment.font = .body.weight(analysisFontWeight(syllableCount: count))
-            } else {
-                segment.foregroundColor = .primary
-                segment.underlineStyle = Text.LineStyle(
-                    pattern: .solid,
-                    color: syllableColor(for: count)
-                )
-            }
+            segment.foregroundColor = .primary
+            segment.underlineStyle = Text.LineStyle(
+                pattern: .solid,
+                color: syllableColor(for: count)
+            )
             result += segment
 
             lastEnd = matchRange.upperBound
@@ -64,11 +58,11 @@ struct SyllableColoredText: View {
     }
 
     private func syllableColor(for count: Int) -> Color {
-        Self.syllableColor(for: count, usesDarkPalette: appearance.usesDarkAnalysisPalette)
+        Self.syllableColor(for: count, scheme: colorScheme)
     }
 
-    static func syllableColor(for count: Int, usesDarkPalette: Bool) -> Color {
-        if usesDarkPalette {
+    static func syllableColor(for count: Int, scheme: ColorScheme) -> Color {
+        if scheme == .dark {
             switch count {
             case 1: return Color(red: 110.0 / 255, green: 231.0 / 255, blue: 183.0 / 255) // Emerald-300
             case 2: return Color(red: 147.0 / 255, green: 197.0 / 255, blue: 253.0 / 255) // Blue-300

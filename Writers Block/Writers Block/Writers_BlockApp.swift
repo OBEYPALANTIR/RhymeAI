@@ -148,7 +148,6 @@ struct Writers_BlockApp: App {
                 persistenceDegradedBanner
             }
             .task {
-                UITestFlags.seedCustomGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
             }
             .onChange(of: scenePhase) { _, phase in
@@ -191,8 +190,7 @@ struct Writers_BlockApp: App {
         ])
         let logger = Logger(subsystem: "ShaydeTree.Writers-Block", category: "storage")
 
-        let isHostedUnitTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-in-memory-store") || isHostedUnitTest {
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-in-memory-store") {
             let inMemory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
             do {
                 return ModelContainerBootstrap(
@@ -259,17 +257,6 @@ struct Writers_BlockApp: App {
                 cloudSyncStatus: AppPersistenceState.initialCloudSyncStatus(usesCloudBackedStore: false),
                 usesCloudBackedStore: false
             )
-        }
-    }
-}
-
-private struct UITestDynamicTypeSizeModifier: ViewModifier {
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if UITestFlags.isEnabled(UITestFlags.accessibilityTextSize) {
-            content.environment(\.dynamicTypeSize, .accessibility3)
-        } else {
-            content
         }
     }
 }

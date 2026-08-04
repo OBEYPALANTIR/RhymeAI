@@ -56,15 +56,7 @@ struct SettingsView: View {
             .sheet(item: $activeHelp) { help in
                 FeatureHelpSheet(help: help)
             }
-            .fileImporter(
-                isPresented: $customModelImporterPresented,
-                allowedContentTypes: [.data],
-                allowsMultipleSelection: false,
-                onCompletion: importCustomModel
-            )
         }
-        .environment(\.colorScheme, appearance.preferredColorScheme)
-        .preferredColorScheme(appearance.preferredColorScheme)
     }
 
     @ViewBuilder
@@ -126,23 +118,12 @@ struct SettingsView: View {
             HStack(spacing: RhymeAITokens.Spacing.md) {
                 Group {
                     if showKey {
-                        TextField(
-                            "",
-                            text: apiKeyBinding,
-                            prompt: Text("API Key")
-                                .foregroundStyle(appearance.palette.placeholder)
-                        )
+                        TextField("API Key", text: apiKeyBinding)
                     } else {
-                        SecureField(
-                            "",
-                            text: apiKeyBinding,
-                            prompt: Text("API Key")
-                                .foregroundStyle(appearance.palette.placeholder)
-                        )
+                        SecureField("API Key", text: apiKeyBinding)
                     }
                 }
                 .font(.system(.body, design: .monospaced))
-                .foregroundStyle(appearance.palette.primaryInk)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .textFieldStyle(.plain)

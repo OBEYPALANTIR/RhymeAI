@@ -205,134 +205,6 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
-    func testPhoneAssistantControlsMatchAndroidOrder() throws {
-        try requirePhone()
-
-        let app = isolatedUITestApp(arguments: ["--ui-test-seed-prosody-song"])
-        app.launch()
-
-        let unblockButton = app.buttons["unblockButton"]
-        let micButton = app.buttons["micButton"]
-        XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(micButton.waitForExistence(timeout: 5))
-        XCTAssertLessThan(
-            unblockButton.frame.midX,
-            micButton.frame.midX,
-            "iOS should match Android with UnBlock on the left and the microphone on the right"
-        )
-    }
-
-    @MainActor
-    func testUndoRedoButtonsRestoreLyrics() throws {
-        // Given
-        let app = isolatedUITestApp()
-        app.launch()
-        createNewSong(in: app)
-
-        let editor = app.textViews["lyricsEditor"]
-        let undoButton = app.buttons["undoLyricsButton"]
-        let redoButton = app.buttons["redoLyricsButton"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(redoButton.waitForExistence(timeout: 5))
-        XCTAssertFalse(undoButton.isEnabled)
-        XCTAssertFalse(redoButton.isEnabled)
-
-        // When
-        editor.tap()
-        editor.typeText("first line")
-        XCTAssertEqual(
-            XCTWaiter.wait(
-                for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "enabled == true"),
-                    object: undoButton
-                )],
-                timeout: 5
-            ),
-            .completed
-        )
-        undoButton.tap()
-
-        // Then
-        XCTAssertEqual(editor.value as? String, "")
-        XCTAssertEqual(
-            XCTWaiter.wait(
-                for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "enabled == true"),
-                    object: redoButton
-                )],
-                timeout: 5
-            ),
-            .completed
-        )
-
-        // When
-        redoButton.tap()
-
-        // Then
-        XCTAssertEqual(editor.value as? String, "first line")
-        attachScreenshot(app, name: "undo-redo-phone")
-    }
-
-    @MainActor
-    func testUndoRedoButtonsDismissWhileRecordingAndReturnAfterStopping() throws {
-        try requirePhone()
-
-        let app = isolatedUITestApp(arguments: ["--ui-test-fake-voice-recording"])
-        app.launch()
-        createNewSong(in: app)
-
-        let undoButton = app.buttons["undoLyricsButton"]
-        let redoButton = app.buttons["redoLyricsButton"]
-        let micButton = app.buttons["micButton"]
-        XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(redoButton.exists)
-        XCTAssertTrue(micButton.waitForExistence(timeout: 5))
-
-        micButton.tap()
-
-        XCTAssertTrue(undoButton.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(redoButton.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(micButton.exists)
-
-        micButton.tap()
-
-        XCTAssertTrue(undoButton.waitForExistence(timeout: 3))
-        XCTAssertTrue(redoButton.exists)
-    }
-
-    @MainActor
-    func testSavedCustomModelRemainsSelectableAfterRelaunch() throws {
-        let app = isolatedUITestApp(arguments: ["--ui-test-seed-custom-gguf-model"])
-        app.launch()
-        createNewSong(in: app)
-
-        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
-        app.buttons["Settings"].tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        app.buttons["Local"].tap()
-        XCTAssertTrue(app.staticTexts["Night Drive QA"].waitForExistence(timeout: 5))
-        let selector = app.buttons["customGGUF.ui-test-custom-model"]
-        XCTAssertTrue(selector.exists)
-        selector.tap()
-        XCTAssertTrue(app.staticTexts["Selected"].firstMatch.waitForExistence(timeout: 5))
-
-        app.terminate()
-        app.launchArguments = ["--ui-test-in-memory-store"]
-        app.launch()
-        createNewSong(in: app)
-        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
-        app.buttons["Settings"].tap()
-        app.buttons["Local"].tap()
-        let savedModel = app.staticTexts["Night Drive QA"]
-        XCTAssertTrue(savedModel.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["customGGUF.ui-test-custom-model"].exists)
-        XCTAssertTrue(app.staticTexts["Selected"].firstMatch.exists)
-        app.scrollViews.firstMatch.swipeUp()
-        attachScreenshot(app, name: "saved-custom-model-after-relaunch")
-    }
-
-    @MainActor
     func testRewriteChipBarStaysAboveKeyboardForSelectedLyrics() throws {
         let app = XCUIApplication()
         app.launchArguments.append("--ui-test-force-rewrite-bar")
@@ -435,7 +307,7 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
-    func testRewriteLoadingShowsRippleOverSelection() throws {
+    func testRewriteLoadingShowsShimmerOverSelection() throws {
         let app = isolatedUITestApp(arguments: [
             "--ui-test-seed-prosody-song",
             "--ui-test-seed-rewrite-loading"
@@ -446,7 +318,7 @@ final class Writers_BlockUITests: XCTestCase {
             app.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5),
             "seeded rewrite loading state did not show the inline review bar"
         )
-        attachScreenshot(app, name: "rewrite-loading-ripple")
+        attachScreenshot(app, name: "rewrite-loading-shimmer")
     }
 
     @MainActor
@@ -556,7 +428,7 @@ final class Writers_BlockUITests: XCTestCase {
         let openDrawerButton = app.buttons["Open songs drawer"]
         XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
         openDrawerButton.tap()
-        let deleteButton = app.buttons["Move UI Trash Song to Trash"]
+        let deleteButton = app.buttons["Delete UI Trash Song"]
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         deleteButton.tap()
 
@@ -564,7 +436,7 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(undoButton.waitForExistence(timeout: 3))
         undoButton.tap()
 
-        XCTAssertTrue(app.buttons["Move UI Trash Song to Trash"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Delete UI Trash Song"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -575,7 +447,7 @@ final class Writers_BlockUITests: XCTestCase {
         let openDrawerButton = app.buttons["Open songs drawer"]
         XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
         openDrawerButton.tap()
-        let deleteButton = app.buttons["Move UI Trash Song to Trash"]
+        let deleteButton = app.buttons["Delete UI Trash Song"]
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         deleteButton.tap()
 
@@ -587,40 +459,12 @@ final class Writers_BlockUITests: XCTestCase {
         openTrashButton.tap()
 
         XCTAssertTrue(app.staticTexts["Trash"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Undo"].exists)
         XCTAssertTrue(app.buttons["UI Trash Song"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "30 days left")).firstMatch.waitForExistence(timeout: 3))
 
         app.buttons["UI Trash Song"].tap()
         XCTAssertTrue(app.buttons["Restore"].isEnabled)
         XCTAssertTrue(app.buttons["Delete"].isEnabled)
-    }
-
-    @MainActor
-    func testDrawerKeepsCloseAndClearSearchAsSeparateActions() throws {
-        let app = isolatedUITestApp(arguments: ["--ui-test-seed-trash-song"])
-        app.launch()
-
-        app.buttons["Open songs drawer"].tap()
-
-        let closeButton = app.buttons["Close drawer"]
-        XCTAssertTrue(closeButton.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Clear search"].exists)
-
-        let searchField = app.textFields["Search songs"]
-        XCTAssertTrue(searchField.waitForExistence(timeout: 5))
-        searchField.tap()
-        searchField.typeText("missing")
-
-        let clearButton = app.buttons["Clear search"]
-        XCTAssertTrue(clearButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(closeButton.exists)
-        clearButton.tap()
-
-        XCTAssertTrue(app.buttons["Create New Song"].exists)
-        XCTAssertTrue(closeButton.exists)
-        closeButton.tap()
-        XCTAssertTrue(app.buttons["unblockButton"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -706,121 +550,6 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
-    func testIPadUndoRedoControlsStayInTopBar() throws {
-        try requireIPad()
-        XCUIDevice.shared.orientation = .portrait
-
-        let app = isolatedUITestApp()
-        app.launch()
-        createNewSong(in: app)
-
-        let editor = app.textViews["lyricsEditor"]
-        let undoButton = app.buttons["undoLyricsButton"]
-        let redoButton = app.buttons["redoLyricsButton"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(redoButton.waitForExistence(timeout: 5))
-        XCTAssertFalse(undoButton.isEnabled)
-        XCTAssertFalse(redoButton.isEnabled)
-
-        editor.tap()
-        editor.typeText("iPad history check")
-
-        XCTAssertEqual(
-            XCTWaiter.wait(
-                for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "enabled == true"),
-                    object: undoButton
-                )],
-                timeout: 5
-            ),
-            .completed
-        )
-        XCTAssertLessThan(
-            undoButton.frame.midY,
-            editor.frame.minY,
-            "iPad history controls should remain in the top bar instead of floating over the editor"
-        )
-        XCTAssertLessThan(undoButton.frame.midX, redoButton.frame.midX)
-        attachScreenshot(app, name: "undo-redo-ipad")
-    }
-
-    @MainActor
-    func testIPadWorkspaceHasCollapsibleProjectsSidebar() throws {
-        try requireIPad()
-        XCUIDevice.shared.orientation = .landscapeLeft
-
-        let app = isolatedUITestApp(arguments: ["--ui-test-seed-prosody-song"])
-        app.launch()
-
-        let landscapeReady = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in app.frame.width > app.frame.height },
-            object: app
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [landscapeReady], timeout: 5), .completed)
-
-        let projectsSidebar = app.descendants(matching: .any)
-            .matching(identifier: "ipadProjectsSidebar")
-            .firstMatch
-        let showSidebarButton = app.buttons["Show songs sidebar"]
-        if app.frame.width >= 1_100 {
-            XCTAssertTrue(projectsSidebar.waitForExistence(timeout: 5))
-            attachScreenshot(app, name: "ipad-workspace-landscape")
-
-            app.buttons["Create New Song"].tap()
-            XCTAssertFalse(showSidebarButton.waitForExistence(timeout: 1))
-            XCTAssertTrue(projectsSidebar.exists)
-
-            let hideSidebarButton = app.buttons["Hide songs sidebar"]
-            XCTAssertTrue(hideSidebarButton.waitForExistence(timeout: 5))
-            hideSidebarButton.tap()
-            XCTAssertFalse(projectsSidebar.waitForExistence(timeout: 1))
-
-            XCTAssertTrue(showSidebarButton.waitForExistence(timeout: 5))
-            showSidebarButton.tap()
-            XCTAssertTrue(projectsSidebar.waitForExistence(timeout: 5))
-        } else {
-            XCTAssertTrue(showSidebarButton.waitForExistence(timeout: 5))
-            XCTAssertFalse(projectsSidebar.exists)
-            showSidebarButton.tap()
-            XCTAssertTrue(projectsSidebar.waitForExistence(timeout: 5))
-            XCTAssertTrue(app.alerts["ipadProjectsSidebar"].exists)
-            attachScreenshot(app, name: "ipad-workspace-landscape-sidebar")
-        }
-
-        XCUIDevice.shared.orientation = .portrait
-        let portraitReady = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in app.frame.height > app.frame.width },
-            object: app
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [portraitReady], timeout: 5), .completed)
-        XCTAssertTrue(showSidebarButton.waitForExistence(timeout: 5))
-        XCTAssertFalse(projectsSidebar.exists)
-        attachScreenshot(app, name: "ipad-workspace-portrait")
-
-        showSidebarButton.tap()
-        XCTAssertTrue(projectsSidebar.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.alerts["ipadProjectsSidebar"].exists)
-        attachScreenshot(app, name: "ipad-workspace-portrait-sidebar")
-
-        app.buttons["Create New Song"].tap()
-        XCTAssertFalse(projectsSidebar.waitForExistence(timeout: 1))
-
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let returnedToLandscape = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in app.frame.width > app.frame.height },
-            object: app
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [returnedToLandscape], timeout: 5), .completed)
-        if app.frame.width >= 1_100 {
-            XCTAssertTrue(projectsSidebar.waitForExistence(timeout: 5))
-        } else {
-            XCTAssertFalse(projectsSidebar.exists)
-            XCTAssertTrue(showSidebarButton.waitForExistence(timeout: 5))
-        }
-    }
-
-    @MainActor
     func testIPadTrashFlowUsesFullPageTrashAndActions() throws {
         try requireIPad()
 
@@ -829,18 +558,11 @@ final class Writers_BlockUITests: XCTestCase {
             let app = isolatedUITestApp(arguments: ["--ui-test-seed-trash-song"])
             app.launch()
 
-            let projectsSidebar = app.descendants(matching: .any)
-                .matching(identifier: "ipadProjectsSidebar")
-                .firstMatch
-            if !projectsSidebar.exists {
-                let showSidebarButton = app.buttons["Show songs sidebar"]
-                XCTAssertTrue(showSidebarButton.waitForExistence(timeout: 5))
-                showSidebarButton.tap()
-            }
-            XCTAssertTrue(projectsSidebar.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Open songs drawer"].waitForExistence(timeout: 5))
+            app.buttons["Open songs drawer"].tap()
 
-            XCTAssertTrue(app.buttons["Move UI Trash Song to Trash"].waitForExistence(timeout: 5))
-            app.buttons["Move UI Trash Song to Trash"].tap()
+            XCTAssertTrue(app.buttons["Delete UI Trash Song"].waitForExistence(timeout: 5))
+            app.buttons["Delete UI Trash Song"].tap()
 
             // Delete is immediate (no confirmation); the undo toast confirms the move.
             XCTAssertTrue(app.buttons["Undo"].waitForExistence(timeout: 3))
@@ -849,11 +571,6 @@ final class Writers_BlockUITests: XCTestCase {
             app.buttons["Open Trash Bin"].tap()
 
             XCTAssertTrue(app.staticTexts["Trash"].waitForExistence(timeout: 5))
-            XCTAssertTrue(app.alerts["ipadTrashBin"].exists)
-            attachScreenshot(
-                app,
-                name: orientation == .portrait ? "ipad-trash-portrait" : "ipad-trash-landscape"
-            )
             XCTAssertTrue(app.buttons["UI Trash Song"].waitForExistence(timeout: 5))
             XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "30 days left")).firstMatch.waitForExistence(timeout: 3))
 
@@ -926,16 +643,13 @@ final class Writers_BlockUITests: XCTestCase {
         lyricsEditor.tap()
         lyricsEditor.typeText("yellow music")
 
-        if !app.otherElements["ipadProjectsSidebar"].exists {
-            let showSidebarButton = app.buttons["Show songs sidebar"]
-            XCTAssertTrue(showSidebarButton.waitForExistence(timeout: 5))
-            showSidebarButton.tap()
-        }
+        XCTAssertTrue(app.buttons["Open songs drawer"].waitForExistence(timeout: 5))
+        app.buttons["Open songs drawer"].tap()
         XCTAssertTrue(app.textFields["Search songs"].waitForExistence(timeout: 5))
         app.buttons["Close drawer"].tap()
 
-        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
-        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["gearshape"].waitForExistence(timeout: 5))
+        app.buttons["gearshape"].tap()
         XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()
 
@@ -1004,11 +718,6 @@ final class Writers_BlockUITests: XCTestCase {
                 .firstMatch
                 .waitForExistence(timeout: 10)
         )
-        let openSettingsButton = app.buttons["Open Settings"]
-        XCTAssertTrue(openSettingsButton.waitForExistence(timeout: 5))
-        openSettingsButton.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["Assistant"].exists)
     }
 
     @MainActor
@@ -1028,120 +737,7 @@ final class Writers_BlockUITests: XCTestCase {
                 .firstMatch
                 .waitForExistence(timeout: 10)
         )
-        let openSettingsButton = app.buttons["Open Settings"]
-        XCTAssertTrue(openSettingsButton.waitForExistence(timeout: 5))
-        openSettingsButton.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-    }
-
-    @MainActor
-    func testAccessibilityTextSizeKeepsPrimaryActionsReachable() throws {
-        try requirePhone()
-
-        let app = isolatedUITestApp(arguments: ["--ui-test-accessibility-text-size"])
-        app.launch()
-
-        let newSongButton = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "New Song")
-        ).firstMatch
-        let loadSongButton = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Load Song")
-        ).firstMatch
-        let templatesButton = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Song Templates")
-        ).firstMatch
-
-        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(newSongButton.isHittable)
-
-        app.swipeUp()
-        XCTAssertTrue(loadSongButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(loadSongButton.isHittable)
-
-        app.swipeUp()
-        XCTAssertTrue(templatesButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(templatesButton.isHittable)
-
-        app.swipeDown()
-        app.swipeDown()
-        XCTAssertTrue(newSongButton.isHittable)
-
-        newSongButton.tap()
-
-        XCTAssertTrue(app.otherElements["accessibilityTopBar"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Open songs drawer"].isHittable)
-        XCTAssertTrue(app.buttons["unblockButton"].isHittable)
-        XCTAssertTrue(app.buttons["micButton"].exists)
-        XCTAssertTrue(app.textViews["lyricsEditor"].exists)
-    }
-
-    @MainActor
-    func testCompactTopBarPreservesLongTitleAndActions() throws {
-        // Given
-        try requirePhone()
-        let app = isolatedUITestApp(arguments: ["--ui-test-seed-long-title-song"])
-
-        // When
-        app.launch()
-
-        // Then
-        let title = app.staticTexts["editorTopBarTitle"]
-        let compactStats = app.staticTexts["editorCompactStats"]
-        let savedStatus = app.images["Saved"]
-        let lyricsEditor = app.textViews["lyricsEditor"]
-        let shareButton = app.buttons["Share"]
-        let settingsButton = app.buttons["Settings"]
-        XCTAssertTrue(title.waitForExistence(timeout: 5))
-        XCTAssertTrue(compactStats.waitForExistence(timeout: 5))
-        XCTAssertTrue(savedStatus.waitForExistence(timeout: 5))
-        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
-        XCTAssertTrue(
-            (lyricsEditor.value as? String)?.contains("I trace the signal through the city light") == true,
-            "The long-title fixture should expose deterministic multi-line rhyme content"
-        )
-        let frameEvidence = XCTAttachment(
-            string: "title=\(title.frame), saved=\(savedStatus.frame), counter=\(compactStats.frame), share=\(shareButton.frame), settings=\(settingsButton.frame), app=\(app.frame)"
-        )
-        frameEvidence.name = "Compact top bar frames"
-        frameEvidence.lifetime = .keepAlways
-        add(frameEvidence)
-        attachScreenshot(app, name: "compact-top-bar-long-title")
-        XCTAssertGreaterThan(title.frame.width, 100)
-        XCTAssertGreaterThan(compactStats.frame.width, 0)
-        XCTAssertGreaterThan(compactStats.frame.height, 0)
-        XCTAssertTrue(app.frame.intersects(compactStats.frame))
-        XCTAssertGreaterThan(savedStatus.frame.width, 0)
-        XCTAssertGreaterThan(savedStatus.frame.height, 0)
-        XCTAssertTrue(app.frame.contains(savedStatus.frame))
-        XCTAssertTrue(shareButton.isHittable)
-        XCTAssertTrue(settingsButton.isHittable)
-
-        settingsButton.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        let syllablesToggle = app.switches["Syllable Guide"]
-        let rhymeFamiliesToggle = app.switches["Rhyme Families"]
-        XCTAssertTrue(syllablesToggle.waitForExistence(timeout: 5))
-        XCTAssertTrue(rhymeFamiliesToggle.waitForExistence(timeout: 5))
-        XCTAssertEqual(syllablesToggle.value as? String, "1")
-        XCTAssertEqual(rhymeFamiliesToggle.value as? String, "1")
-    }
-
-    @MainActor
-    func testWelcomeCardsGrowAtAccessibilityTextSize() throws {
-        // Given
-        try requirePhone()
-        let app = isolatedUITestApp(arguments: ["--ui-test-accessibility-text-size"])
-
-        // When
-        app.launch()
-
-        // Then
-        for label in ["New Song", "Load Song", "Song Templates"] {
-            let button = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
-            XCTAssertTrue(button.waitForExistence(timeout: 5))
-            XCTAssertTrue(button.isHittable)
-        }
-        attachScreenshot(app, name: "welcome-accessibility-fixed-geometry")
+        app.buttons["Cancel"].tap()
     }
 
     @MainActor

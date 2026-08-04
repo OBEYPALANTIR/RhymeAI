@@ -8,7 +8,6 @@ struct AssistantPanelView: View {
     @Environment(\.appAppearanceStyle) private var appearance
     var isInline: Bool = false
     var onDismiss: (() -> Void)?
-    var onOpenSettings: (() -> Void)?
 
     var body: some View {
         let rhymeContext = viewModel.rhymeContext
@@ -88,16 +87,9 @@ struct AssistantPanelView: View {
                     helpButton(.contextTheme)
                 }
 
-                TextField(
-                    "",
-                    text: $viewModel.theme,
-                    prompt: Text("What is this song about?")
-                        .foregroundStyle(appearance.palette.placeholder),
-                    axis: .vertical
-                )
+                TextField("What is this song about?", text: $viewModel.theme, axis: .vertical)
                     .lineLimit(3...6)
                     .textFieldStyle(.plain)
-                    .foregroundStyle(appearance.palette.primaryInk)
                     .padding(RhymeAITokens.Spacing.sm)
                     .liquidGlassSurface(
                         cornerRadius: RhymeAITokens.Radius.md,
@@ -115,7 +107,7 @@ struct AssistantPanelView: View {
                 HStack {
                     Label("Target Line", systemImage: "text.alignleft")
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .foregroundStyle(.secondary)
                     helpButton(.targetLine)
 
                     Spacer()
@@ -123,7 +115,7 @@ struct AssistantPanelView: View {
                     if let targetLine = rhymeContext.targetLine {
                         Text("\(SyllableCounter.countText(targetLine)) syl")
                             .font(.caption.monospaced())
-                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal, RhymeAITokens.Spacing.xs)
                             .padding(.vertical, RhymeAITokens.Spacing.xxs)
                             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, fallbackOpacity: 0.08)
@@ -145,7 +137,7 @@ struct AssistantPanelView: View {
                     } else {
                         Text("New rhyme sound (or place cursor on a line)")
                             .font(.caption)
-                            .foregroundStyle(appearance.palette.placeholder)
+                            .foregroundStyle(.secondary.opacity(0.5))
                             .italic()
                     }
                 }
@@ -167,14 +159,14 @@ struct AssistantPanelView: View {
                     HStack(spacing: RhymeAITokens.Spacing.sm) {
                         Text("Rhyme Options")
                             .font(.subheadline.weight(.medium))
-                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .foregroundStyle(.secondary)
                         Spacer()
                         Text("\(viewModel.rhymeScheme.label) \u{00b7} \(viewModel.rhymeType.shortName) \u{00b7} \(viewModel.rhymeComplexity.label)")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(appearance.palette.action)
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(rhymeOptionsExpanded ? 180 : 0))
                     }
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
@@ -253,7 +245,7 @@ struct AssistantPanelView: View {
 
                     Text(viewModel.rhymeComplexity.description)
                         .font(.caption)
-                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .foregroundStyle(.secondary)
                 }
 
                 }
@@ -337,11 +329,11 @@ struct AssistantPanelView: View {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                     Text("Suggestions")
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .foregroundStyle(.secondary)
 
                     Text("AI-generated · review before use")
                         .font(.caption.italic())
-                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .foregroundStyle(.secondary.opacity(0.8))
 
                     ForEach(viewModel.suggestions) { suggestion in
                         SuggestionCardView(
@@ -365,12 +357,13 @@ struct AssistantPanelView: View {
     private func featureHelpLabel(
         _ text: String,
         help: FeatureHelp,
-        font: Font = .subheadline.weight(.medium)
+        font: Font = .subheadline.weight(.medium),
+        color: Color = .secondary
     ) -> some View {
         HStack(spacing: RhymeAITokens.Spacing.xs) {
             Text(text)
                 .font(font)
-                .foregroundStyle(appearance.palette.secondaryInk)
+                .foregroundStyle(color)
             helpButton(help)
         }
     }
@@ -397,7 +390,7 @@ struct AssistantPanelView: View {
             ZStack {
                 Image(systemName: "questionmark.circle")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .foregroundStyle(.secondary)
             }
             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum, alignment: .center)
         }

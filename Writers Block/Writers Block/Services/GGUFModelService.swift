@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 // MARK: - Protocol
@@ -17,7 +16,7 @@ protocol LocalGGUFRunner: AnyObject {
 
 /// Returns the best available runner: llama.cpp when the framework is linked,
 /// otherwise a stub that throws localModelUnavailable immediately.
-nonisolated func makeLocalGGUFRunner() -> LocalGGUFRunner {
+func makeLocalGGUFRunner() -> LocalGGUFRunner {
 #if canImport(llama)
     return GGUFLlamaService()
 #else
@@ -27,7 +26,7 @@ nonisolated func makeLocalGGUFRunner() -> LocalGGUFRunner {
 
 // MARK: - Stub (always compiled, used when llama.cpp is unavailable)
 
-nonisolated final class GGUFModelStub: LocalGGUFRunner {
+final class GGUFModelStub: LocalGGUFRunner {
     var isLoaded: Bool { false }
 
     func loadModel(filePath: String) async throws {
@@ -50,7 +49,7 @@ nonisolated final class GGUFModelStub: LocalGGUFRunner {
 /// Pure text utilities for Gemma chat format. These are factored out so that
 /// unit tests can exercise prompt template and marker-stripping logic without
 /// requiring the llama.cpp SPM package to be resolved.
-nonisolated enum GGUFModelService {
+enum GGUFModelService {
     /// True only when the llama.cpp engine is linked into this target.
     nonisolated static var isEngineAvailable: Bool {
 #if canImport(llama)
@@ -109,9 +108,8 @@ nonisolated private func llamaBatchAdd(
 
 /// On-device Gemma runner backed by llama.cpp.
 ///
-/// Thread-safety: all llama calls are serialized through this actor. The
-/// `isLoaded` flag is a lock-protected snapshot so AIService can read it
-/// synchronously from any thread.
+/// Thread-safety: all calls are serialized through an actor so the underlying
+/// llama context is accessed from a single concurrency domain.
 actor GGUFLlamaService: LocalGGUFRunner {
 
     // Match Android's constants (LocalModelService.kt).
@@ -121,9 +119,6 @@ actor GGUFLlamaService: LocalGGUFRunner {
     nonisolated private static let backendInitialization: Void = {
         llama_backend_init()
     }()
-
-    /// Process-wide backend init, executed once on first model load.
-    private static let backendReady: Void = llama_backend_init()
 
     private var model: OpaquePointer?
     private var context: OpaquePointer?
@@ -165,7 +160,6 @@ actor GGUFLlamaService: LocalGGUFRunner {
         self.model = loadedModel
         self.context = ctx
         self.loadedPath = filePath
-        loadedFlag.set(true)
     }
 
     func generate(prompt: String) async throws -> String {
@@ -179,11 +173,8 @@ actor GGUFLlamaService: LocalGGUFRunner {
         }
 
         let fullPrompt = GGUFModelService.gemmaPrompt(prompt)
-        let utf8Length = Int32(fullPrompt.utf8.count)
-        var tokens = [llama_token](repeating: 0, count: Int(utf8Length) + 64)
-        // parse_special: the Gemma turn markers must map to their special tokens.
-        let nTokens = fullPrompt.withCString { cStr in
-            llama_tokenize(vocab, cStr, utf8Length, &tokens, Int32(tokens.count), true, true)
+        guard let cStr = fullPrompt.cString(using: .utf8) else {
+            throw AIServiceError.localModelUnavailable(reason: "Failed to encode prompt for the local model.")
         }
         let estimatedTokenCount = Int32(max(64, fullPrompt.utf8.count / 3 + 64))
         var tokens = [llama_token](repeating: 0, count: Int(estimatedTokenCount))
@@ -232,7 +223,6 @@ actor GGUFLlamaService: LocalGGUFRunner {
         guard llama_decode(ctx, batch) == 0 else {
             throw AIServiceError.localModelUnavailable(reason: "Failed to evaluate prompt tokens.")
         }
-        tokens.removeSubrange(Int(nTokens)...)
 
         let sampler = try makeSampler()
         defer { llama_sampler_free(sampler) }
@@ -275,7 +265,6 @@ actor GGUFLlamaService: LocalGGUFRunner {
         context = nil
         model = nil
         loadedPath = nil
-        loadedFlag.set(false)
     }
 
     private func makeSampler() throws -> UnsafeMutablePointer<llama_sampler> {

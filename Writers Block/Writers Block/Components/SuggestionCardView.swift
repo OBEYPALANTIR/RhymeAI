@@ -1,8 +1,6 @@
 import SwiftUI
 
 struct SuggestionCardView: View {
-    @Environment(\.appAppearanceStyle) private var appearance
-
     let suggestion: String
     /// Rhyme quality tier: 2 = perfect/multi, 1 = near, 0 = unverified (no badge shown).
     var rhymeTier: Int = 0
@@ -70,7 +68,7 @@ struct SuggestionCardView: View {
     }
 
     private var tierBadgeColor: Color {
-        if isHookRepeat { return analysisHighlightColor }
+        if isHookRepeat { return .indigo }
         return rhymeTier >= 2 ? .green : .orange
     }
 
@@ -100,9 +98,9 @@ struct SuggestionCardView: View {
         // Last word - highlighted
         if let wordRange = Range(match.range(at: 2), in: text) {
             var word = AttributedString(String(text[wordRange]))
-            word.foregroundColor = analysisHighlightColor
+            word.foregroundColor = Color(red: 165.0 / 255, green: 180.0 / 255, blue: 252.0 / 255) // Indigo 200
             word.underlineStyle = .single
-            word.underlineColor = UIColor(analysisHighlightColor.opacity(0.65))
+            word.underlineColor = UIColor(Color.indigo.opacity(0.6))
             result += word
         }
 
@@ -112,12 +110,6 @@ struct SuggestionCardView: View {
         }
 
         return result
-    }
-
-    private var analysisHighlightColor: Color {
-        appearance.usesDarkAnalysisPalette
-            ? Color(red: 196.0 / 255, green: 181.0 / 255, blue: 253.0 / 255)
-            : Color(red: 109.0 / 255, green: 40.0 / 255, blue: 217.0 / 255)
     }
 }
 
