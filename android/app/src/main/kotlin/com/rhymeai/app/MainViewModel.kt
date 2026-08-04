@@ -1473,7 +1473,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val destFile = java.io.File(app.filesDir, model.fileName)
             val tempFile = java.io.File(app.cacheDir, "${model.fileName}.download")
             try {
-                if (com.rhymeai.app.ui.components.validateDownloadedGemma(model, destFile) == null) {
+                if (com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, destFile) == null) {
                     withContext(Dispatchers.Main) {
                         gemmaDownloadingModel = null
                         gemmaDownloadProgress = null
@@ -1485,16 +1485,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 com.rhymeai.app.ui.components.ensureEnoughSpaceForGemma(model, destFile, tempFile)
                 if (destFile.exists()) destFile.delete()
 
-                if (com.rhymeai.app.ui.components.validateDownloadedGemma(model, tempFile) != null) {
+                if (com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, tempFile) != null) {
                     com.rhymeai.app.ui.components.downloadGemmaToTemp(model, tempFile) { progress ->
                         withContext(Dispatchers.Main) {
                             gemmaDownloadProgress = progress
                         }
                     }
-                }
 
-                com.rhymeai.app.ui.components.validateDownloadedGemma(model, tempFile)?.let {
-                    throw IllegalStateException(it)
+                    com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, tempFile)?.let {
+                        throw IllegalStateException(it)
+                    }
                 }
 
                 if (!tempFile.renameTo(destFile)) {

@@ -5,9 +5,11 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.Locale
 
 internal const val DOWNLOAD_BUFFER_BYTES = 8 * 1024 * 1024
+internal const val GEMMA_HUGGING_FACE_REVISION = "27492c6696f2f868bbbe3aeafb633009ef932598"
 private const val MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES = 750L * 1024L * 1024L
 
 // E4B needs roughly 7 GB of RAM headroom to run without thrashing. On a real 8 GB device
@@ -30,7 +32,8 @@ internal data class GemmaDownload(
     val description: String,
     val fileName: String,
     val url: String,
-    val expectedBytes: Long
+    val expectedBytes: Long,
+    val sha256: String
 )
 
 // RhymeAI's own fine-tunes of Gemma 4 (LoRA-trained on the app's exact prompt
@@ -40,15 +43,17 @@ internal val GEMMA_DOWNLOADS = listOf(
         label = "RhymeAI Gemma E2B",
         description = "Tuned for RhymeAI — best default for phones, 3.43 GB.",
         fileName = "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
-        url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/main/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true",
-        expectedBytes = 3_427_878_784L
+        url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/$GEMMA_HUGGING_FACE_REVISION/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true",
+        expectedBytes = 3_427_878_784L,
+        sha256 = "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626"
     ),
     GemmaDownload(
         label = "RhymeAI Gemma E4B",
         description = "Tuned for RhymeAI — higher quality, slower, 5.34 GB.",
         fileName = "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
-        url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/main/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true",
-        expectedBytes = 5_335_290_784L
+        url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/$GEMMA_HUGGING_FACE_REVISION/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true",
+        expectedBytes = 5_335_290_784L,
+        sha256 = "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3"
     )
 )
 
@@ -62,7 +67,31 @@ internal fun validateDownloadedGemma(model: GemmaDownload, file: File): String? 
     if (file.length() < model.expectedBytes) {
         return "${model.label} download is incomplete: ${formatFileSize(file.length())} of ${formatFileSize(model.expectedBytes)}"
     }
+    if (file.length() > model.expectedBytes) {
+        return "${model.label} download has an unexpected size: ${formatFileSize(file.length())} instead of ${formatFileSize(model.expectedBytes)}"
+    }
     if (!file.isGgufFile()) return "${model.label} download did not produce a GGUF file"
+    return null
+}
+
+internal fun validateDownloadedGemmaIntegrity(model: GemmaDownload, file: File): String? {
+    validateDownloadedGemma(model, file)?.let { return it }
+
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(DOWNLOAD_BUFFER_BYTES)
+        while (true) {
+            val read = input.read(buffer)
+            if (read == -1) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    val actualSha256 = digest.digest().joinToString("") {
+        String.format(Locale.US, "%02x", it.toInt() and 0xff)
+    }
+    if (!actualSha256.equals(model.sha256, ignoreCase = true)) {
+        return "${model.label} download failed its integrity check"
+    }
     return null
 }
 

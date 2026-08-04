@@ -15,6 +15,8 @@ struct GGUFDownloadOption: Identifiable, Equatable, Sendable {
 }
 
 enum GGUFDownloadCatalog {
+    nonisolated static let huggingFaceRevision = "27492c6696f2f868bbbe3aeafb633009ef932598"
+
     nonisolated static let options: [GGUFDownloadOption] = [
         GGUFDownloadOption(
             id: "gemma-4-e2b",
@@ -25,7 +27,7 @@ enum GGUFDownloadCatalog {
             expectedBytes: 3_427_878_784,
             sha256: "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
             url: requiredURL(
-                "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/27492c6696f2f868bbbe3aeafb633009ef932598/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true"
+                "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true"
             ),
             isRecommended: true
         ),
@@ -38,7 +40,7 @@ enum GGUFDownloadCatalog {
             expectedBytes: 5_335_290_784,
             sha256: "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3",
             url: requiredURL(
-                "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/27492c6696f2f868bbbe3aeafb633009ef932598/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true"
+                "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true"
             ),
             isRecommended: false
         ),

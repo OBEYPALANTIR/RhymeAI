@@ -71,8 +71,15 @@ struct GGUFDownloadCatalogTests {
         #expect(options.allSatisfy { $0.url.host == "huggingface.co" })
         #expect(options.allSatisfy { $0.url.path.contains("Shayde182/rhymeai-gemma-4-gguf") })
         #expect(options.allSatisfy { $0.fileName.contains("rhymeai-Q4_K_M") })
-        #expect(options.allSatisfy { $0.sha256.count == 64 })
+        #expect(options.allSatisfy {
+            $0.url.path.contains("/resolve/\(GGUFDownloadCatalog.huggingFaceRevision)/")
+        })
+        #expect(options.allSatisfy { !$0.url.path.contains("/resolve/main/") })
         #expect(options.map(\.expectedBytes) == [3_427_878_784, 5_335_290_784])
+        #expect(options.map(\.sha256) == [
+            "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+            "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3",
+        ])
     }
 
     @Test func preferredModelUsesCatalogOrder() {

@@ -3,6 +3,7 @@ package com.rhymeai.app.ui.components
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -14,6 +15,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
 import kotlin.io.path.createTempDirectory
 
 class GemmaDownloadsTest {
@@ -53,6 +55,51 @@ class GemmaDownloadsTest {
                 .array()
         )
         assertNull(validateDownloadedGemma(model, file))
+
+        file.appendBytes(byteArrayOf(0))
+        assertEquals(
+            "Gemma Tiny download has an unexpected size: 0.00 GB instead of 0.00 GB",
+            validateDownloadedGemma(model, file)
+        )
+    }
+
+    @Test
+    fun validateDownloadedGemmaIntegrityRequiresMatchingSha256() {
+        val bytes = validTinyGguf()
+        val dir = tempDir()
+        val file = File(dir, "tiny.gguf")
+        file.writeBytes(bytes)
+
+        val validModel = tinyGemma(
+            expectedBytes = bytes.size.toLong(),
+            sha256 = sha256(bytes)
+        )
+        assertNull(validateDownloadedGemmaIntegrity(validModel, file))
+
+        val mismatchedModel = validModel.copy(sha256 = "0".repeat(64))
+        assertEquals(
+            "Gemma Tiny download failed its integrity check",
+            validateDownloadedGemmaIntegrity(mismatchedModel, file)
+        )
+    }
+
+    @Test
+    fun catalogPinsTheSameImmutableHuggingFaceArtifactsAsIos() {
+        assertEquals(
+            listOf(3_427_878_784L, 5_335_290_784L),
+            GEMMA_DOWNLOADS.map(GemmaDownload::expectedBytes)
+        )
+        assertEquals(
+            listOf(
+                "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+                "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3"
+            ),
+            GEMMA_DOWNLOADS.map(GemmaDownload::sha256)
+        )
+        GEMMA_DOWNLOADS.forEach { model ->
+            assertTrue(model.url.contains("/resolve/$GEMMA_HUGGING_FACE_REVISION/"))
+            assertFalse(model.url.contains("/resolve/main/"))
+        }
     }
 
     @Test
@@ -162,14 +209,30 @@ class GemmaDownloadsTest {
 
     private fun tinyGemma(
         url: String = "https://example.invalid/tiny.gguf",
-        expectedBytes: Long
+        expectedBytes: Long,
+        sha256: String = "0".repeat(64)
     ) = GemmaDownload(
         label = "Gemma Tiny",
         description = "Tiny test model.",
         fileName = "tiny.gguf",
         url = url,
-        expectedBytes = expectedBytes
+        expectedBytes = expectedBytes,
+        sha256 = sha256
     )
+
+    private fun validTinyGguf(): ByteArray =
+        ByteBuffer.allocate(24)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .put("GGUF".toByteArray())
+            .putInt(3)
+            .putLong(1)
+            .putLong(1)
+            .array()
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString("") { String.format("%02x", it.toInt() and 0xff) }
 
     private fun tempDir(): File {
         val dir = createTempDirectory("rhymeai-gemma-test").toFile()
