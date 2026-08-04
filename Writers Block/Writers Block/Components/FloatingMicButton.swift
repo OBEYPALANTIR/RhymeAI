@@ -34,6 +34,7 @@ struct FloatingMicButton: View {
         repeating: 0,
         count: FloatingMicButton.barCount
     )
+    @State private var barCursor = 0
 
     // MARK: - Layout constants
 
@@ -138,6 +139,7 @@ struct FloatingMicButton: View {
         .task(id: service.isRecording) {
             guard service.isRecording else {
                 barHistory = Array(repeating: 0, count: Self.barCount)
+                barCursor = 0
                 return
             }
 
@@ -149,10 +151,8 @@ struct FloatingMicButton: View {
                 }
 
                 guard service.isRecording && !Task.isCancelled else { break }
-                var next = barHistory
-                next.removeFirst()
-                next.append(service.averagePowerNormalized)
-                barHistory = next
+                barHistory[barCursor] = service.averagePowerNormalized
+                barCursor = (barCursor + 1) % Self.barCount
             }
         }
         // Permission denied alert lives here so the mic button is self-contained.
@@ -191,7 +191,8 @@ struct FloatingMicButton: View {
             let pitch = size.width / CGFloat(n)
             let barW = pitch * 0.6
 
-            for (i, sample) in barHistory.enumerated() {
+            for i in barHistory.indices {
+                let sample = barHistory[(barCursor + i) % n]
                 let h = max(2, CGFloat(sample) * size.height)
                 let x = CGFloat(i) * pitch + (pitch - barW) / 2
                 let rect = CGRect(

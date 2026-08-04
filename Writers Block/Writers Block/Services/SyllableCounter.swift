@@ -1,6 +1,6 @@
 import Foundation
 
-enum SyllableCounter {
+nonisolated enum SyllableCounter {
     static func count(_ word: String) -> Int {
         ProsodyAnalyzer.countWord(word)
     }

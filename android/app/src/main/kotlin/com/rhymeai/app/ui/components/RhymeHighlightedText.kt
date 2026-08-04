@@ -4,6 +4,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,10 +31,42 @@ import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.RhymePhonetics
 import com.rhymeai.app.util.SyllableCounter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private val wordPattern = LyricTokenizer.wordPattern
 
 private data class Token(val text: String, val start: Int, val end: Int)
+
+private data class WordAnalysis(
+    val rhymeKeys: List<String>,
+    val syllableCount: Int
+)
+
+private object WordAnalysisCache {
+    private const val CAPACITY = 4096
+    private val entries = LinkedHashMap<String, WordAnalysis>()
+
+    fun analysisFor(word: String): WordAnalysis {
+        val key = word.lowercase()
+        synchronized(entries) {
+            entries[key]?.let { return it }
+        }
+
+        val computed = WordAnalysis(
+            rhymeKeys = RhymePhonetics.rhymeKeys(key, maxDepth = 2),
+            syllableCount = SyllableCounter.count(key)
+        )
+        synchronized(entries) {
+            entries[key]?.let { return it }
+            if (entries.size >= CAPACITY) {
+                entries.clear()
+            }
+            entries[key] = computed
+        }
+        return computed
+    }
+}
 
 @Immutable
 data class RhymeUnderlineSpan(
@@ -75,7 +108,7 @@ fun RhymeHighlightedText(
         return
     }
 
-    val result = remember(
+    var result by remember(
         text,
         baseTextColor,
         palette,
@@ -84,15 +117,34 @@ fun RhymeHighlightedText(
         enabled,
         syllablesEnabled
     ) {
-        buildAnalysisText(
-            text = text,
-            baseTextColor = baseTextColor,
-            rhymePalette = palette,
-            isDark = isDark,
-            presentation = presentation,
-            rhymeEnabled = enabled,
-            syllablesEnabled = syllablesEnabled
+        mutableStateOf(
+            AnalysisTextResult(
+                text = AnnotatedString(text),
+                rhymeSpans = emptyList(),
+                wordWeights = emptyList()
+            )
         )
+    }
+    LaunchedEffect(
+        text,
+        baseTextColor,
+        palette,
+        isDark,
+        presentation,
+        enabled,
+        syllablesEnabled
+    ) {
+        result = withContext(Dispatchers.Default) {
+            buildAnalysisText(
+                text = text,
+                baseTextColor = baseTextColor,
+                rhymePalette = palette,
+                isDark = isDark,
+                presentation = presentation,
+                rhymeEnabled = enabled,
+                syllablesEnabled = syllablesEnabled
+            )
+        }
     }
     var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     val density = LocalDensity.current
@@ -124,8 +176,9 @@ internal fun buildAnalysisText(
     val tokens = wordPattern.findAll(text)
         .map { Token(it.value, it.range.first, it.range.last + 1) }
         .toList()
+    val analyses = tokens.map { WordAnalysisCache.analysisFor(it.text) }
     val keysPerToken = if (rhymeEnabled) {
-        tokens.map { RhymePhonetics.rhymeKeys(it.text, maxDepth = 2) }
+        analyses.map(WordAnalysis::rhymeKeys)
     } else {
         List(tokens.size) { emptyList() }
     }
@@ -146,7 +199,7 @@ internal fun buildAnalysisText(
             }
 
             val syllableCount = if (syllablesEnabled) {
-                SyllableCounter.count(token.text)
+                analyses[index].syllableCount
             } else {
                 null
             }

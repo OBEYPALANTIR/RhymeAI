@@ -1007,25 +1007,25 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             ) {
                 val barCount = DesignTokens.EditorChrome.recordingBarCount
                 // Amplitude + elapsed polling while recording — drives the spectralizer pill.
-                var amplitudeBars by remember { mutableStateOf(FloatArray(barCount) { 0f }) }
-                var smoothedBars by remember { mutableStateOf(FloatArray(barCount) { 0f }) }
+                val amplitudeBars = remember(barCount) { FloatArray(barCount) }
+                var amplitudeCursor by remember(barCount) { mutableIntStateOf(0) }
+                var waveformRevision by remember(barCount) { mutableIntStateOf(0) }
 
                 LaunchedEffect(memoService.isRecording) {
                     if (!memoService.isRecording) {
-                        amplitudeBars = FloatArray(barCount) { 0f }
-                        smoothedBars = FloatArray(barCount) { 0f }
+                        amplitudeBars.fill(0f)
+                        amplitudeCursor = 0
+                        waveformRevision++
                         return@LaunchedEffect
                     }
                     while (memoService.isRecording) {
                         delay(100)
                         val raw = memoService.currentAmplitude()
-                        // Shift bars left and push new reading on the right side.
-                        val next = FloatArray(barCount)
-                        for (i in 0 until barCount - 1) next[i] = smoothedBars[i + 1]
-                        // Exponential moving average smoothing so bars don't jump abruptly.
-                        next[barCount - 1] = smoothedBars[barCount - 1] * 0.7f + raw * 0.3f
-                        smoothedBars = next
-                        amplitudeBars = next
+                        val previousIndex = (amplitudeCursor - 1 + barCount) % barCount
+                        amplitudeBars[amplitudeCursor] =
+                            amplitudeBars[previousIndex] * 0.7f + raw * 0.3f
+                        amplitudeCursor = (amplitudeCursor + 1) % barCount
+                        waveformRevision++
                     }
                 }
 
@@ -1213,9 +1213,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     .weight(1f)
                                     .height(DesignTokens.EditorChrome.recordingMeterHeight)
                             ) {
+                                waveformRevision
                                 val pitch = size.width / amplitudeBars.size
                                 val barWidthPx = pitch * 0.6f
-                                amplitudeBars.forEachIndexed { i, amplitude ->
+                                amplitudeBars.indices.forEach { i ->
+                                    val amplitude = amplitudeBars[(amplitudeCursor + i) % amplitudeBars.size]
                                     val barHeight = (amplitude * size.height).coerceAtLeast(DesignTokens.EditorChrome.recordingMinBarHeight.toPx())
                                     val x = i * pitch + (pitch - barWidthPx) / 2f
                                     drawRoundRect(

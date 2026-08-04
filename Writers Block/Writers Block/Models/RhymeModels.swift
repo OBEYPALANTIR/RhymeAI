@@ -66,7 +66,7 @@ enum RhymeComplexity: Int, CaseIterable, Codable {
     }
 }
 
-enum SongSection: String, Codable {
+nonisolated enum SongSection: String, Codable, Sendable {
     case verse
     case chorus
     case bridge
@@ -131,7 +131,7 @@ struct SuggestedLine: Identifiable {
     }
 }
 
-struct RhymeContext {
+nonisolated struct RhymeContext: Sendable {
     let targetLine: String?
     let currentLetter: String
     let stanzaLines: [String]

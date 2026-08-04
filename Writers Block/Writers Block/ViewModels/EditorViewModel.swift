@@ -348,35 +348,49 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Rhyme Context
 
+    private nonisolated struct LyricsDerivedState: Sendable {
+        let wordCount: Int
+        let syllableCount: Int
+        let rhymeContext: RhymeContext
+    }
+
     private func scheduleDerivedStateRefresh() {
         derivedStateTask?.cancel()
         derivedStateTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled, let self else { return }
-            self.refreshLyricsDerivedState()
+            let lyrics = self.lyrics
+            let cursorPosition = self.cursorPosition
+            let rhymeScheme = self.activeRhymeScheme
+            let derived = await Task.detached(priority: .userInitiated) {
+                LyricsDerivedState(
+                    wordCount: SyllableCounter.wordCount(lyrics),
+                    syllableCount: SyllableCounter.countText(lyrics),
+                    rhymeContext: Self.computeRhymeContext(
+                        lyrics: lyrics,
+                        cursorPosition: cursorPosition,
+                        activeRhymeScheme: rhymeScheme
+                    )
+                )
+            }.value
+            guard !Task.isCancelled,
+                  self.lyrics == lyrics,
+                  self.cursorPosition == cursorPosition,
+                  self.activeRhymeScheme == rhymeScheme else {
+                return
+            }
+            self.objectWillChange.send()
+            self.wordCount = derived.wordCount
+            self.syllableCount = derived.syllableCount
+            self.rhymeContext = derived.rhymeContext
         }
-    }
-
-    private func refreshLyricsDerivedState() {
-        // wordCount/syllableCount/rhymeContext are deliberately not @Published
-        // (they recompute on a debounce, not per keystroke), so views must be
-        // told explicitly when the batch lands — otherwise counters and the
-        // assistant's target line stay stale until the next unrelated render.
-        objectWillChange.send()
-        wordCount = SyllableCounter.wordCount(lyrics)
-        syllableCount = SyllableCounter.countText(lyrics)
-        refreshRhymeContext()
-    }
-
-    private func refreshRhymeContext() {
-        rhymeContext = computeRhymeContext()
     }
 
     /// `cursorPosition` comes from UITextView in UTF-16 units, but the String
     /// operations in this file count Characters (grapheme clusters). Convert once
     /// at the boundary so emoji/CJK lyrics don't skew offsets; snaps to the nearest
     /// preceding grapheme boundary when the offset lands inside a cluster.
-    static func characterOffset(forUTF16Offset offset: Int, in text: String) -> Int {
+    nonisolated static func characterOffset(forUTF16Offset offset: Int, in text: String) -> Int {
         var clamped = min(max(offset, 0), text.utf16.count)
         while clamped > 0 {
             if let utf16Index = text.utf16.index(text.utf16.startIndex, offsetBy: clamped, limitedBy: text.utf16.endIndex),
@@ -389,6 +403,18 @@ final class EditorViewModel: ObservableObject {
     }
 
     func computeRhymeContext() -> RhymeContext {
+        Self.computeRhymeContext(
+            lyrics: lyrics,
+            cursorPosition: cursorPosition,
+            activeRhymeScheme: activeRhymeScheme
+        )
+    }
+
+    nonisolated private static func computeRhymeContext(
+        lyrics: String,
+        cursorPosition: Int,
+        activeRhymeScheme: String
+    ) -> RhymeContext {
         guard !lyrics.isEmpty else {
             return RhymeContext.emptyContext(currentLetter: String(activeRhymeScheme.first ?? Character("A")))
         }
@@ -466,13 +492,13 @@ final class EditorViewModel: ObservableObject {
         )
     }
 
-    private struct RhymeSectionContext {
+    private nonisolated struct RhymeSectionContext {
         let currentSection: SongSection
         let sectionOrdinal: Int
         let firstChorusLines: [String]?
     }
 
-    private static func sectionContext(
+    nonisolated private static func sectionContext(
         forLineIndex lineIndex: Int,
         sectionMap: SectionMap,
         rawLines: [String]
@@ -494,7 +520,7 @@ final class EditorViewModel: ObservableObject {
         )
     }
 
-    private static func targetLine(
+    nonisolated private static func targetLine(
         in stanzaLines: [String],
         before rawCursorLineIndex: Int,
         matching currentLetter: String,
@@ -517,7 +543,7 @@ final class EditorViewModel: ObservableObject {
         return targetLine
     }
 
-    private static func isSectionHeader(_ line: String) -> Bool {
+    nonisolated private static func isSectionHeader(_ line: String) -> Bool {
         SectionMap.headerTitle(line.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
     }
 

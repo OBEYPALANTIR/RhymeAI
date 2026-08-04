@@ -5,7 +5,7 @@ import SwiftUI
 // word on every keystroke, which drops frames on long lyrics. Caching by lowercased
 // word (both lookups normalize case internally, so this is output-identical) means a
 // keystroke only pays for words it hasn't seen before.
-private final class WordAnalysisCache: @unchecked Sendable {
+nonisolated private final class WordAnalysisCache: @unchecked Sendable {
     static let shared = WordAnalysisCache()
 
     private let lock = NSLock()
@@ -15,13 +15,16 @@ private final class WordAnalysisCache: @unchecked Sendable {
     func analysis(for word: String) -> (rhymeKeys: [String], syllableCount: Int) {
         let key = word.lowercased()
         lock.lock()
-        defer { lock.unlock() }
-        if let hit = entries[key] { return hit }
+        if let hit = entries[key] {
+            lock.unlock()
+            return hit
+        }
+        lock.unlock()
 
         let value = (RhymePhonetics.rhymeKeys(for: key), SyllableCounter.count(key))
-        // A song's vocabulary is far below the cap, so wholesale eviction is
-        // effectively never hit; it just bounds memory without LRU bookkeeping,
-        // and a refill costs one render.
+        lock.lock()
+        defer { lock.unlock() }
+        if let hit = entries[key] { return hit }
         if entries.count >= Self.capacity {
             entries.removeAll(keepingCapacity: true)
         }
@@ -30,17 +33,44 @@ private final class WordAnalysisCache: @unchecked Sendable {
     }
 }
 
+private struct HighlightToken: Sendable {
+    let value: String
+    let location: Int
+    let length: Int
+    let familyKey: String?
+    let syllableCount: Int
+}
+
+private struct HighlightAnalysis: Sendable {
+    let source: String
+    let tokens: [HighlightToken]
+}
+
+private struct HighlightRequest: Hashable {
+    let source: String
+    let rhymeEnabled: Bool
+    let syllablesEnabled: Bool
+    let isDark: Bool
+}
+
+private struct RenderedHighlight {
+    let source: String
+    let attributed: AttributedString
+}
+
 struct RhymeHighlightedText: View, Equatable {
     let text: String
     let enabled: Bool
     let syllablesEnabled: Bool
 
     @Environment(\.colorScheme) private var colorScheme
+    @State private var renderedHighlight: RenderedHighlight?
 
     init(text: String, enabled: Bool, syllablesEnabled: Bool = false) {
         self.text = text
         self.enabled = enabled
         self.syllablesEnabled = syllablesEnabled
+        _renderedHighlight = State(initialValue: nil)
     }
 
     static func == (lhs: RhymeHighlightedText, rhs: RhymeHighlightedText) -> Bool {
@@ -85,8 +115,26 @@ struct RhymeHighlightedText: View, Equatable {
 
     var body: some View {
         if (enabled || syllablesEnabled) && !text.isEmpty {
-            Text(highlightedAttributedString)
+            Text(renderedHighlight?.source == text ? renderedHighlight!.attributed : AttributedString(text))
                 .font(.system(size: 16))
+                .foregroundStyle(.primary)
+                .task(id: highlightRequest) {
+                    let request = highlightRequest
+                    let analysis = await Task.detached(priority: .userInitiated) {
+                        Self.analyze(
+                            text: request.source,
+                            rhymeEnabled: request.rhymeEnabled
+                        )
+                    }.value
+                    guard !Task.isCancelled else { return }
+                    renderedHighlight = RenderedHighlight(
+                        source: request.source,
+                        attributed: highlightedAttributedString(
+                            analysis: analysis,
+                            request: request
+                        )
+                    )
+                }
         } else {
             Text(text)
                 .font(.system(size: 16))
@@ -94,70 +142,97 @@ struct RhymeHighlightedText: View, Equatable {
         }
     }
 
-    private var highlightedAttributedString: AttributedString {
+    private var highlightRequest: HighlightRequest {
+        HighlightRequest(
+            source: text,
+            rhymeEnabled: enabled,
+            syllablesEnabled: syllablesEnabled,
+            isDark: colorScheme == .dark
+        )
+    }
+
+    nonisolated private static func analyze(
+        text: String,
+        rhymeEnabled: Bool
+    ) -> HighlightAnalysis {
         let nsText = text as NSString
-        let matches = LyricRegex.word.matches(in: text, range: NSRange(location: 0, length: nsText.length))
-
-        struct Token {
-            let value: String
-            let range: Range<String.Index>
+        let matches = LyricRegex.word.matches(
+            in: text,
+            range: NSRange(location: 0, length: nsText.length)
+        )
+        let analyses = matches.map { match in
+            WordAnalysisCache.shared.analysis(for: nsText.substring(with: match.range))
         }
-        var tokens: [Token] = []
-        for match in matches {
-            guard let r = Range(match.range, in: text) else { continue }
-            tokens.append(Token(value: String(text[r]), range: r))
-        }
-
-        let analyses = tokens.map { WordAnalysisCache.shared.analysis(for: $0.value) }
-        let keysPerToken: [[String]] = analyses.map(\.rhymeKeys)
+        let keysPerToken: [[String]] = analyses.map { $0.rhymeKeys }
 
         var keyOccurrences: [String: Int] = [:]
-        for keys in keysPerToken {
-            for k in keys { keyOccurrences[k, default: 0] += 1 }
+        if rhymeEnabled {
+            for keys in keysPerToken {
+                for key in keys { keyOccurrences[key, default: 0] += 1 }
+            }
         }
-
         let familyKeyPerToken: [String?] = keysPerToken.map { keys in
-            keys.last { (keyOccurrences[$0] ?? 0) >= 2 }
+            rhymeEnabled ? keys.last { (keyOccurrences[$0] ?? 0) >= 2 } : nil
         }
 
-        var result = AttributedString()
-        var cursor = text.startIndex
+        let tokens = matches.enumerated().map { index, match in
+            HighlightToken(
+                value: nsText.substring(with: match.range),
+                location: match.range.location,
+                length: match.range.length,
+                familyKey: familyKeyPerToken[index],
+                syllableCount: analyses[index].syllableCount
+            )
+        }
+        return HighlightAnalysis(source: text, tokens: tokens)
+    }
 
-        for (i, tok) in tokens.enumerated() {
-            if cursor < tok.range.lowerBound {
-                var pre = AttributedString(String(text[cursor..<tok.range.lowerBound]))
+    private func highlightedAttributedString(
+        analysis: HighlightAnalysis,
+        request: HighlightRequest
+    ) -> AttributedString {
+        let nsText = analysis.source as NSString
+        var result = AttributedString()
+        var cursor = 0
+
+        for token in analysis.tokens {
+            if cursor < token.location {
+                var pre = AttributedString(
+                    nsText.substring(with: NSRange(location: cursor, length: token.location - cursor))
+                )
                 pre.foregroundColor = .primary
                 result += pre
             }
-            let count = analyses[i].syllableCount
-            var seg = AttributedString(tok.value)
-            if enabled, let familyKey = familyKeyPerToken[i] {
+            var seg = AttributedString(token.value)
+            if request.rhymeEnabled, let familyKey = token.familyKey {
                 seg.foregroundColor = colorFor(key: familyKey)
                 seg.font = .system(size: 16, weight: .semibold)
-                if syllablesEnabled {
+                if request.syllablesEnabled {
                     seg.underlineStyle = Text.LineStyle(
                         pattern: .solid,
-                        color: syllableColor(for: count)
+                        color: syllableColor(for: token.syllableCount)
                     )
                 }
-            } else if !enabled && syllablesEnabled {
-                seg.foregroundColor = syllableColor(for: count)
+            } else if !request.rhymeEnabled && request.syllablesEnabled {
+                seg.foregroundColor = syllableColor(for: token.syllableCount)
                 seg.font = .system(size: 16, weight: .semibold)
             } else {
                 seg.foregroundColor = .primary
-                if syllablesEnabled {
+                if request.syllablesEnabled {
                     seg.underlineStyle = Text.LineStyle(
                         pattern: .solid,
-                        color: syllableColor(for: count)
+                        color: syllableColor(for: token.syllableCount)
                     )
                 }
             }
             result += seg
-            cursor = tok.range.upperBound
+            cursor = token.location + token.length
         }
 
-        if cursor < text.endIndex {
-            var tail = AttributedString(String(text[cursor...]))
+        if cursor < nsText.length {
+            var tail = AttributedString(
+                nsText.substring(with: NSRange(location: cursor, length: nsText.length - cursor))
+            )
             tail.foregroundColor = .primary
             result += tail
         }
