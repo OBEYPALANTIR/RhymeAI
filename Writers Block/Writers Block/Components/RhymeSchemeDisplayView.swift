@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RhymeSchemeDisplayView: View {
+    @Environment(\.appAppearanceStyle) private var appearance
     let rhymeContext: RhymeContext
     let activeScheme: String
 
@@ -44,7 +45,7 @@ struct RhymeSchemeDisplayView: View {
                 .padding(RhymeAITokens.Spacing.sm)
             }
             .frame(maxHeight: 160)
-            .background(Color(UIColor.secondarySystemBackground).opacity(0.72))
+            .background(appearance.palette.surface)
             .clipShape(RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md))
             .overlay(
                 RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md)

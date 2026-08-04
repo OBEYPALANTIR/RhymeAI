@@ -3,20 +3,13 @@ import SwiftUI
 struct WelcomeView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.appAppearanceStyle) private var appearance
 
     private var isRegular: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
         ZStack {
-            Color(UIColor.systemBackground).ignoresSafeArea()
-
-            // Background gradient
-            LinearGradient(
-                colors: [Color.indigo.opacity(0.1), Color.clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            AppWritingBackground()
 
             VStack(spacing: 0) {
                 Spacer()
@@ -31,7 +24,7 @@ struct WelcomeView: View {
                         RoundedRectangle(cornerRadius: 22, style: .continuous)
                             .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
                     )
-                    .shadow(color: .indigo.opacity(0.32), radius: 22, y: 10)
+                    .shadow(color: appearance.palette.primaryInk.opacity(0.18), radius: 22, y: 10)
                     .padding(10)
                     .liquidGlassSurface(cornerRadius: 30, tint: .indigo.opacity(0.06))
                 .padding(.bottom, RhymeAITokens.Spacing.xl)
@@ -39,7 +32,7 @@ struct WelcomeView: View {
                 // Title
                 Text("Writers Block")
                     .font(.system(.largeTitle, design: .serif, weight: .bold))
-                    .foregroundStyle(Color.indigo)
+                    .foregroundStyle(appearance.palette.primaryInk)
                     .padding(.bottom, 8)
 
                 // Subtitle
@@ -71,6 +64,7 @@ struct WelcomeView: View {
                 Spacer()
             }
         }
+        .foregroundStyle(appearance.palette.primaryInk)
     }
 
     @ViewBuilder
@@ -105,6 +99,8 @@ struct WelcomeView: View {
 }
 
 private struct WelcomeCard: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let icon: String
     let title: String
     let subtitle: String
@@ -119,7 +115,7 @@ private struct WelcomeCard: View {
                     VStack(spacing: RhymeAITokens.Spacing.sm) {
                         Image(systemName: icon)
                             .font(.title2)
-                            .foregroundStyle(.indigo)
+                            .foregroundStyle(appearance.palette.primaryInk)
                             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .indigo.opacity(0.16), fallbackOpacity: 0.10)
 
@@ -140,7 +136,7 @@ private struct WelcomeCard: View {
                     HStack(spacing: RhymeAITokens.Spacing.lg) {
                         Image(systemName: icon)
                             .font(.title2)
-                            .foregroundStyle(.indigo)
+                            .foregroundStyle(appearance.palette.primaryInk)
                             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .indigo.opacity(0.16), fallbackOpacity: 0.10)
 

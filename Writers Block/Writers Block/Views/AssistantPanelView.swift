@@ -5,6 +5,7 @@ struct AssistantPanelView: View {
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAppearanceStyle) private var appearance
     var isInline: Bool = false
     var onDismiss: (() -> Void)?
 
@@ -18,6 +19,7 @@ struct AssistantPanelView: View {
                 sheetContent(rhymeContext: rhymeContext)
             }
         }
+        .foregroundStyle(appearance.palette.primaryInk)
         .onAppear {
             viewModel.positionSeededProsodyCursorForUITests()
         }
@@ -29,7 +31,9 @@ struct AssistantPanelView: View {
     private func sheetContent(rhymeContext: RhymeContext) -> some View {
         NavigationStack {
             panelScrollView(rhymeContext: rhymeContext)
-                .background(Color(UIColor.systemBackground))
+                .background {
+                    AppWritingBackground()
+                }
                 .navigationTitle("Assistant")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -60,7 +64,9 @@ struct AssistantPanelView: View {
 
             panelScrollView(rhymeContext: rhymeContext)
         }
-        .background(Color(UIColor.systemBackground))
+        .background {
+            AppWritingBackground()
+        }
     }
 
     private func panelScrollView(rhymeContext: RhymeContext) -> some View {
@@ -157,7 +163,7 @@ struct AssistantPanelView: View {
                         Spacer()
                         Text("\(viewModel.rhymeScheme.label) \u{00b7} \(viewModel.rhymeType.shortName) \u{00b7} \(viewModel.rhymeComplexity.label)")
                             .font(.caption.weight(.medium))
-                            .foregroundStyle(.indigo)
+                            .foregroundStyle(appearance.palette.action)
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
@@ -183,7 +189,7 @@ struct AssistantPanelView: View {
                             }
                         }
                         .pickerStyle(.menu)
-                        .tint(.indigo)
+                        .tint(appearance.palette.action)
                     }
 
                     if viewModel.rhymeScheme == .custom {
@@ -224,7 +230,7 @@ struct AssistantPanelView: View {
                         Spacer()
                         Text(viewModel.rhymeComplexity.label)
                             .font(.caption)
-                            .foregroundStyle(.indigo)
+                            .foregroundStyle(appearance.palette.action)
                     }
 
                     Slider(
@@ -235,7 +241,7 @@ struct AssistantPanelView: View {
                         in: 0...2,
                         step: 1
                     )
-                    .tint(.indigo)
+                    .tint(appearance.palette.action)
 
                     Text(viewModel.rhymeComplexity.description)
                         .font(.caption)
@@ -277,7 +283,7 @@ struct AssistantPanelView: View {
                 HStack {
                     if viewModel.isLoading {
                         ProgressView()
-                            .tint(.white)
+                            .tint(appearance.palette.onAction)
                         Text("Stop")
                     } else {
                         Image(systemName: "sparkles")
@@ -285,16 +291,12 @@ struct AssistantPanelView: View {
                     }
                 }
                 .font(.body.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(appearance.palette.onAction)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, RhymeAITokens.Spacing.sm)
                 .frame(minHeight: RhymeAITokens.Touch.minimum)
-                .liquidGlassSurface(
-                    cornerRadius: RhymeAITokens.Radius.md,
-                    tint: isDisabled ? .gray.opacity(0.2) : .indigo,
-                    interactive: !isDisabled,
-                    fallbackOpacity: isDisabled ? 0.12 : 0.32
-                )
+                .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.md)
+                .opacity(isDisabled ? 0.45 : 1)
             }
             .disabled(viewModel.lyrics.isEmpty && !viewModel.isLoading)
             .buttonStyle(.rhymePress)
@@ -303,10 +305,23 @@ struct AssistantPanelView: View {
             if let error = viewModel.errorMessage {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(appearance.palette.error)
                     .padding(RhymeAITokens.Spacing.sm)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm, tint: .red.opacity(0.12), fallbackOpacity: 0.08)
+            }
+
+            if viewModel.isLoading && viewModel.suggestions.isEmpty {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    Text("Suggestions")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    ForEach(0..<3, id: \.self) { _ in
+                        SuggestionSkeletonRow()
+                    }
+                }
+                .accessibilityIdentifier("suggestionSkeletons")
             }
 
             // MARK: - Suggestions
@@ -363,7 +378,7 @@ struct AssistantPanelView: View {
             Spacer()
             Toggle("", isOn: isOn)
                 .labelsHidden()
-                .tint(.indigo)
+                .tint(appearance.palette.action)
                 .accessibilityLabel(text)
         }
     }
@@ -382,6 +397,25 @@ struct AssistantPanelView: View {
         .buttonStyle(.rhymePress)
         .contentShape(Rectangle())
         .accessibilityLabel("\(help.title) help")
+    }
+}
+
+private struct SuggestionSkeletonRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: RhymeAITokens.Radius.lg, style: .continuous)
+            .fill(Color.secondary.opacity(0.18))
+            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+            .opacity(reduceMotion ? 0.6 : (pulse ? 0.85 : 0.45))
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+                    pulse = true
+                }
+            }
+            .accessibilityHidden(true)
     }
 }
 

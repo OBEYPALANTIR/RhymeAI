@@ -46,5 +46,6 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environmentObject(EditorViewModel())
+        .environmentObject(GGUFDownloadManager())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self], inMemory: true)
 }

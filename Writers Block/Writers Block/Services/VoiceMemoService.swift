@@ -263,6 +263,17 @@ final class VoiceMemoService {
     // MARK: - Record
 
     func startRecording(projectId: String) async {
+        #if DEBUG
+        if UITestFlags.isEnabled(UITestFlags.fakeVoiceRecording) {
+            stopPlayback()
+            recordingStartTime = Date()
+            recordingElapsed = 3
+            averagePowerNormalized = 0.55
+            isRecording = true
+            return
+        }
+        #endif
+
         guard await requestPermissionIfNeeded() else { return }
 
         stopPlayback()

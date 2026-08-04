@@ -84,10 +84,24 @@ private struct ModelContainerBootstrap {
 @main
 struct Writers_BlockApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(AppAppearanceStyle.storageKey)
+    private var appearanceRawValue = AppAppearanceStyle.ink.rawValue
     @StateObject private var viewModel = EditorViewModel(backupService: BackupService.shared)
     @StateObject private var persistenceState: AppPersistenceState
+    @StateObject private var ggufDownloadManager = GGUFDownloadManager()
 
     private let sharedModelContainer: ModelContainer?
+
+    private var appearance: AppAppearanceStyle {
+        AppAppearanceStyle.resolve(appearanceRawValue)
+    }
+
+    private var appearanceBinding: Binding<AppAppearanceStyle> {
+        Binding(
+            get: { appearance },
+            set: { appearanceRawValue = $0.rawValue }
+        )
+    }
 
     init() {
         let bootstrap = Self.makeModelContainer()
@@ -111,18 +125,25 @@ struct Writers_BlockApp: App {
                     VStack(spacing: 12) {
                         Image(systemName: "externaldrive.badge.exclamationmark")
                             .font(.largeTitle)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(appearance.palette.warning)
                         Text("Your library couldn't be opened; changes won't be saved this session.")
                             .font(.headline)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(UIColor.systemBackground))
+                    .foregroundStyle(appearance.palette.primaryInk)
+                    .background(appearance.palette.canvas)
                 }
             }
             .environmentObject(viewModel)
             .environmentObject(persistenceState)
+            .environmentObject(ggufDownloadManager)
+            .environment(\.appAppearanceStyle, appearance)
+            .environment(\.appAppearanceBinding, appearanceBinding)
+            .environment(\.colorScheme, appearance.preferredColorScheme)
+            .preferredColorScheme(appearance.preferredColorScheme)
+            .tint(appearance.palette.action)
             .safeAreaInset(edge: .top) {
                 persistenceDegradedBanner
             }
@@ -153,11 +174,12 @@ struct Writers_BlockApp: App {
                 systemImage: "exclamationmark.triangle.fill"
             )
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.orange)
+            .foregroundStyle(appearance.palette.warning)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(.regularMaterial)
+            .foregroundStyle(appearance.palette.primaryInk)
+            .background(appearance.palette.surface)
         }
     }
 

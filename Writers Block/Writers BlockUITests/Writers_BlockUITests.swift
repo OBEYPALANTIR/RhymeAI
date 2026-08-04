@@ -39,6 +39,143 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testFloatingActionGroupsMatchAndroidEdgesAndOrder() throws {
+        try requirePhone()
+
+        let app = isolatedUITestApp()
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let unblockButton = app.buttons["unblockButton"]
+        let micButton = app.buttons["micButton"]
+        let undoButton = app.buttons["undoLyricsButton"]
+        let redoButton = app.buttons["redoLyricsButton"]
+        XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(micButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(redoButton.exists)
+        XCTAssertLessThan(unblockButton.frame.maxX, micButton.frame.minX)
+
+        let window = app.windows.firstMatch.frame
+        XCTAssertEqual(undoButton.frame.minX, window.minX + 20, accuracy: 6)
+        XCTAssertEqual(micButton.frame.maxX, window.maxX - 20, accuracy: 6)
+        XCTAssertLessThan(redoButton.frame.maxX, unblockButton.frame.minX)
+    }
+
+    @MainActor
+    func testSettingsKeepsTabsAndSaveBarPinned() throws {
+        try requirePhone()
+
+        let app = isolatedUITestApp()
+        app.launch()
+
+        let newSongButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
+        newSongButton.tap()
+
+        let settingsButton = app.buttons["gearshape"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+
+        let generalTab = app.buttons["General"]
+        let editorTab = app.buttons["Editor"]
+        let saveButton = app.buttons["saveSettingsButton"]
+        XCTAssertTrue(generalTab.waitForExistence(timeout: 5))
+        XCTAssertTrue(editorTab.exists)
+        XCTAssertTrue(saveButton.exists)
+
+        editorTab.tap()
+        XCTAssertTrue(app.switches["Whole Song Context"].waitForExistence(timeout: 5))
+        XCTAssertTrue(saveButton.exists)
+        XCTAssertTrue(saveButton.isHittable)
+    }
+
+    @MainActor
+    func testAppearancePickerAppliesInkPaperAndGraphiteImmediately() throws {
+        try requirePhone()
+
+        let app = isolatedUITestApp()
+        app.launch()
+        createNewSong(in: app)
+
+        let settingsButton = app.buttons["gearshape"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+
+        for name in ["Ink", "Paper", "Graphite"] {
+            let option = app.buttons[name]
+            XCTAssertTrue(option.waitForExistence(timeout: 5))
+            option.tap()
+            XCTAssertEqual(option.value as? String, "Selected")
+            XCTAssertTrue(app.buttons["saveSettingsButton"].isHittable)
+        }
+    }
+
+    @MainActor
+    func testLyricsUndoAndRedoControlsRestoreTyping() throws {
+        try requirePhone()
+
+        let app = isolatedUITestApp()
+        app.launch()
+        createNewSong(in: app)
+
+        let undoButton = app.buttons["undoLyricsButton"]
+        let redoButton = app.buttons["redoLyricsButton"]
+        XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(redoButton.exists)
+        XCTAssertFalse(undoButton.isEnabled)
+        XCTAssertFalse(redoButton.isEnabled)
+
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        lyricsEditor.tap()
+        lyricsEditor.typeText("First line")
+
+        let undoEnabled = NSPredicate(format: "enabled == true")
+        expectation(for: undoEnabled, evaluatedWith: undoButton)
+        waitForExpectations(timeout: 3)
+        XCTAssertFalse(redoButton.isEnabled)
+
+        undoButton.tap()
+        XCTAssertEqual(lyricsEditor.value as? String, "")
+        XCTAssertTrue(redoButton.isEnabled)
+
+        redoButton.tap()
+        XCTAssertEqual(lyricsEditor.value as? String, "First line")
+        XCTAssertTrue(undoButton.isEnabled)
+    }
+
+    @MainActor
+    func testUndoAndRedoControlsDismissWhileRecordingAndReturnAfterStopping() throws {
+        try requirePhone()
+
+        let app = isolatedUITestApp(arguments: ["--ui-test-fake-voice-recording"])
+        app.launch()
+        createNewSong(in: app)
+
+        let undoButton = app.buttons["undoLyricsButton"]
+        let redoButton = app.buttons["redoLyricsButton"]
+        let micButton = app.buttons["micButton"]
+        XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(redoButton.exists)
+        XCTAssertTrue(micButton.waitForExistence(timeout: 5))
+
+        micButton.tap()
+
+        XCTAssertTrue(undoButton.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(redoButton.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(micButton.exists)
+
+        micButton.tap()
+
+        XCTAssertTrue(undoButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(redoButton.exists)
+    }
+
+    @MainActor
     func testUnBlockButtonStaysVisibleWhileEditingLyrics() throws {
         try requirePhone()
 

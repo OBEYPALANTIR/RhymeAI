@@ -41,6 +41,8 @@ final class EditorViewModel: ObservableObject {
             scheduleDerivedStateRefresh()
         }
     }
+    @Published private(set) var canUndoLyrics: Bool = false
+    @Published private(set) var canRedoLyrics: Bool = false
 
     // MARK: - AI State
 
@@ -165,6 +167,7 @@ final class EditorViewModel: ObservableObject {
     private let aiService = AIService()
     private let keychainStore: KeychainStore
     private let backupService: CloudBackupServicing?
+    private let lyricsHistory = EditHistory<LyricsEditState>()
     private var autoSaveTask: Task<Void, Never>?
     private var trashSchedulerTask: Task<Void, Never>?
     private var didSeedTrashProjectForUITests = false
@@ -708,11 +711,11 @@ final class EditorViewModel: ObservableObject {
             dismissRewrite()
             return
         }
-        let updated = ns.replacingCharacters(in: range, with: preview)
-        lyrics = updated
         let newCursor = range.location + (preview as NSString).length
-        cursorPosition = newCursor
-        selectedRange = NSRange(location: newCursor, length: 0)
+        applyAtomicLyricsEdit(
+            text: ns.replacingCharacters(in: range, with: preview),
+            cursorPosition: newCursor
+        )
         dismissRewrite()
         triggerAutoSave()
     }
@@ -830,11 +833,11 @@ final class EditorViewModel: ObservableObject {
             dismissInspector()
             return
         }
-        let updated = ns.replacingCharacters(in: range, with: replacement)
-        lyrics = updated
         let newCursor = range.location + (replacement as NSString).length
-        cursorPosition = newCursor
-        selectedRange = NSRange(location: newCursor, length: 0)
+        applyAtomicLyricsEdit(
+            text: ns.replacingCharacters(in: range, with: replacement),
+            cursorPosition: newCursor
+        )
         dismissInspector()
         triggerAutoSave()
     }
@@ -865,11 +868,94 @@ final class EditorViewModel: ObservableObject {
         let needsNewline = !before.isEmpty && !before.hasSuffix("\n")
         let insertText = (needsNewline ? "\n" : "") + suggestion + "\n"
 
-        lyrics = before + insertText + after
-        // cursorPosition is a UTF-16 offset (UITextView units).
-        cursorPosition = before.utf16.count + insertText.utf16.count
+        applyAtomicLyricsEdit(
+            text: before + insertText + after,
+            // cursorPosition is a UTF-16 offset (UITextView units).
+            cursorPosition: before.utf16.count + insertText.utf16.count
+        )
         suggestions = []
         triggerAutoSave()
+    }
+
+    func onLyricsChanged(
+        _ newLyrics: String,
+        timestampMilliseconds: Int64 = Int64(ProcessInfo.processInfo.systemUptime * 1_000)
+    ) {
+        let previous = currentLyricsEditState
+        let next = LyricsEditState(
+            text: newLyrics,
+            cursorPosition: min(cursorPosition, newLyrics.utf16.count),
+            selectedRange: clampedSelection(selectedRange, text: newLyrics)
+        )
+        lyricsHistory.recordUserEdit(
+            previous: previous,
+            current: next,
+            timestampMilliseconds: timestampMilliseconds
+        )
+        lyrics = newLyrics
+        updateLyricsHistoryAvailability()
+    }
+
+    func undoLyrics() {
+        guard let previous = lyricsHistory.undo(current: currentLyricsEditState) else { return }
+        applyHistoryState(previous)
+    }
+
+    func redoLyrics() {
+        guard let next = lyricsHistory.redo(current: currentLyricsEditState) else { return }
+        applyHistoryState(next)
+    }
+
+    private var currentLyricsEditState: LyricsEditState {
+        LyricsEditState(
+            text: lyrics,
+            cursorPosition: min(cursorPosition, lyrics.utf16.count),
+            selectedRange: clampedSelection(selectedRange, text: lyrics)
+        )
+    }
+
+    private func applyAtomicLyricsEdit(text: String, cursorPosition: Int) {
+        let safeCursor = min(max(cursorPosition, 0), text.utf16.count)
+        let next = LyricsEditState(
+            text: text,
+            cursorPosition: safeCursor,
+            selectedRange: NSRange(location: safeCursor, length: 0)
+        )
+        lyricsHistory.recordAtomicEdit(previous: currentLyricsEditState, current: next)
+        lyrics = next.text
+        self.cursorPosition = next.cursorPosition
+        selectedRange = next.selectedRange
+        updateLyricsHistoryAvailability()
+    }
+
+    private func applyHistoryState(_ state: LyricsEditState) {
+        dismissRewrite()
+        dismissInspector()
+        lyrics = state.text
+        cursorPosition = min(state.cursorPosition, state.text.utf16.count)
+        selectedRange = clampedSelection(state.selectedRange, text: state.text)
+        suggestions = []
+        updateLyricsHistoryAvailability()
+        triggerAutoSave()
+    }
+
+    private func resetLyricsHistory() {
+        lyricsHistory.reset()
+        updateLyricsHistoryAvailability()
+    }
+
+    private func updateLyricsHistoryAvailability() {
+        canUndoLyrics = lyricsHistory.canUndo
+        canRedoLyrics = lyricsHistory.canRedo
+    }
+
+    private func clampedSelection(_ range: NSRange, text: String) -> NSRange {
+        let textLength = text.utf16.count
+        guard range.location <= textLength,
+              range.length <= textLength - range.location else {
+            return NSRange(location: min(range.location, textLength), length: 0)
+        }
+        return range
     }
 
     // MARK: - Project Management
@@ -886,6 +972,7 @@ final class EditorViewModel: ObservableObject {
         saveStatus = .idle
         showWelcome = false
         showProjectsSheet = false
+        resetLyricsHistory()
     }
 
     func loadProject(_ project: SongProject) {
@@ -900,6 +987,7 @@ final class EditorViewModel: ObservableObject {
         saveStatus = .idle
         showWelcome = false
         showProjectsSheet = false
+        resetLyricsHistory()
     }
 
     func moveProjectToTrash(_ project: SongProject) {
@@ -1014,6 +1102,7 @@ final class EditorViewModel: ObservableObject {
         suggestions = []
         errorMessage = nil
         saveStatus = .idle
+        resetLyricsHistory()
     }
 
     func positionSeededProsodyCursorForUITests() {
@@ -1099,6 +1188,7 @@ final class EditorViewModel: ObservableObject {
         saveStatus = .saved
         showWelcome = false
         showProjectsSheet = false
+        resetLyricsHistory()
     }
 
     func snapshotForExport() -> SongProject {
@@ -1115,6 +1205,7 @@ final class EditorViewModel: ObservableObject {
         saveStatus = .idle
         showWelcome = false
         showTemplatesSheet = false
+        resetLyricsHistory()
         triggerAutoSave()
     }
 

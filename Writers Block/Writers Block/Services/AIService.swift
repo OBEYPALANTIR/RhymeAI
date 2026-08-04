@@ -934,27 +934,17 @@ struct AIService {
     static func shouldUseGemma() -> Bool {
         guard GGUFModelService.isEngineAvailable else { return false }
         guard GGUFEngineChoice.current == .gemma else { return false }
-        guard let dir = try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        ).appendingPathComponent("RhymeAI/Gemma", isDirectory: true) else { return false }
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        return contents.contains { $0.hasSuffix(".gguf") }
+        return firstGGUFPath() != nil
     }
 
     /// Returns the path to the first available GGUF model file, or nil.
     static func firstGGUFPath() -> String? {
-        guard let dir = try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        ).appendingPathComponent("RhymeAI/Gemma", isDirectory: true) else { return nil }
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        guard let gguf = contents.first(where: { $0.hasSuffix(".gguf") }) else { return nil }
-        return dir.appendingPathComponent(gguf).path
+        let installed = GGUFModelStorage.installedModelFileNames()
+        guard let fileName = GGUFModelSelection.preferredFileName(in: installed),
+              let directory = try? GGUFModelStorage.modelsDirectory(create: false) else {
+            return nil
+        }
+        return directory.appendingPathComponent(fileName).path
     }
 
     /// Ensure the shared GGUF runner has the correct model loaded, then call
@@ -971,10 +961,7 @@ struct AIService {
             )
         }
 
-        // Load model if not already loaded (or if a different file is now present).
-        if !runner.isLoaded {
-            try await runner.loadModel(filePath: path)
-        }
+        try await runner.loadModel(filePath: path)
 
         return try await runner.generate(prompt: prompt)
     }
@@ -1961,6 +1948,11 @@ struct AIService {
     }
 
     private func parseLines(_ text: String) -> [String] {
-        text.components(separatedBy: .newlines)
+        let normalized = text.contains("\n")
+            ? text
+            : text
+                .replacingOccurrences(of: "\\r\\n", with: "\n")
+                .replacingOccurrences(of: "\\n", with: "\n")
+        return normalized.components(separatedBy: .newlines)
     }
 }

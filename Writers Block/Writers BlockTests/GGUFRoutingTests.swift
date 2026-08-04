@@ -63,6 +63,62 @@ struct GGUFMarkerStrippingTests {
     }
 }
 
+struct GGUFDownloadCatalogTests {
+    @Test func catalogUsesRhymeAITunedModels() {
+        let options = GGUFDownloadCatalog.options
+
+        #expect(options.count == 2)
+        #expect(options.allSatisfy { $0.url.host == "huggingface.co" })
+        #expect(options.allSatisfy { $0.url.path.contains("Shayde182/rhymeai-gemma-4-gguf") })
+        #expect(options.allSatisfy { $0.fileName.contains("rhymeai-Q4_K_M") })
+        #expect(options.allSatisfy { $0.sha256.count == 64 })
+        #expect(options.map(\.expectedBytes) == [3_427_878_784, 5_335_290_784])
+    }
+
+    @Test func preferredModelUsesCatalogOrder() {
+        let options = GGUFDownloadCatalog.options
+        let preferred = GGUFModelSelection.preferredFileName(
+            in: [options[1].fileName, options[0].fileName]
+        )
+
+        #expect(preferred == options[0].fileName)
+    }
+}
+
+struct GGUFSuggestionParsingTests {
+    @Test func parsesLiteralEscapedLineBreaksFromTunedModel() {
+        let raw = #"A hazy amber glow begins to gleam\nA whispered, fragile, waking dream\nAcross the slick and darkened stream\nA silent, solitary, waking theme\nBeneath the shadows of a waking gleam\nA fading, ephemeral, silver gleam<end_of_turn>"#
+        let parsed = AIService().parseSuggestionList(raw)
+
+        #expect(parsed.count == 6)
+        #expect(parsed.first == "A hazy amber glow begins to gleam")
+        #expect(parsed.last == "A fading, ephemeral, silver gleam")
+    }
+}
+
+@Suite(.serialized)
+struct GGUFModelSelectionTests {
+    @Test func selectionPersistsAndWinsOverCatalogOrder() {
+        let original = GGUFModelSelection.currentFileName
+        defer {
+            if let original {
+                GGUFModelSelection.save(fileName: original)
+            } else {
+                GGUFModelSelection.clear()
+            }
+        }
+
+        let options = GGUFDownloadCatalog.options
+        GGUFModelSelection.save(fileName: options[1].fileName)
+
+        #expect(GGUFModelSelection.currentFileName == options[1].fileName)
+        #expect(
+            GGUFModelSelection.preferredFileName(in: options.map(\.fileName))
+                == options[1].fileName
+        )
+    }
+}
+
 // MARK: - GGUFEngineChoice
 
 // Serialized: every test reads/writes the same UserDefaults key, so the
@@ -157,6 +213,7 @@ struct GGUFRoutingDecisionTests {
 
 // MARK: - GGUFModelStub (always compiled, no model needed)
 
+@MainActor
 struct GGUFModelStubTests {
     @Test func stubIsNotLoaded() {
         let stub = GGUFModelStub()

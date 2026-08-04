@@ -27,6 +27,7 @@ struct ProjectsDrawerView: View {
     @State private var renamingItem: RecordingItem?
     @State private var renameText: String = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAppearanceStyle) private var appearance
 
     private enum DrawerTab: String, CaseIterable {
         case songs = "Songs"
@@ -148,9 +149,8 @@ struct ProjectsDrawerView: View {
                     drawerContent(topInset: proxy.safeAreaInsets.top, bottomInset: proxy.safeAreaInsets.bottom)
                         .frame(width: drawerWidth)
                         .frame(maxHeight: .infinity)
-                        .background(.ultraThinMaterial)
-                        .background(Color(UIColor.systemBackground).opacity(0.88))
-                        .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
+                        .background(appearance.palette.canvas)
+                        .shadow(color: appearance.palette.primaryInk.opacity(0.22), radius: 26, x: 10, y: 0)
                         // Push-style reveal: while the trash screen slides in from
                         // the right, the drawer slides toward the left like a
                         // navigation push instead of sitting still under an overlay.

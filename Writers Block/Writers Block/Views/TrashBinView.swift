@@ -3,6 +3,7 @@ import SwiftData
 import SwiftUI
 
 struct TrashBinView: View {
+    @Environment(\.appAppearanceStyle) private var appearance
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
@@ -59,8 +60,7 @@ struct TrashBinView: View {
 
     var body: some View {
         ZStack {
-            Color(UIColor.systemBackground)
-                .ignoresSafeArea()
+            AppWritingBackground()
 
             VStack(spacing: 0) {
                 topBar
@@ -193,7 +193,7 @@ struct TrashBinView: View {
             HStack(spacing: RhymeAITokens.Spacing.sm) {
                 ZStack {
                     RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
-                        .fill(Color(UIColor.secondarySystemBackground))
+                        .fill(appearance.palette.raisedSurface)
 
                     Image(systemName: "doc.text")
                         .font(.title3.weight(.semibold))
@@ -276,7 +276,7 @@ struct TrashBinView: View {
             HStack(spacing: RhymeAITokens.Spacing.sm) {
                 ZStack {
                     RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
-                        .fill(Color(UIColor.secondarySystemBackground))
+                        .fill(appearance.palette.raisedSurface)
 
                     Image(systemName: "mic")
                         .font(.title3.weight(.semibold))

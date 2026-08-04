@@ -119,7 +119,9 @@ struct FeatureHelpSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(RhymeAITokens.Spacing.md)
             }
-            .background(Color(UIColor.systemBackground))
+            .background {
+                AppWritingBackground()
+            }
             .navigationTitle(help.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

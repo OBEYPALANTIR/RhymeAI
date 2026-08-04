@@ -1,187 +1,109 @@
-import Foundation
 import SwiftUI
-
-private struct GemmaDownloadOption: Identifiable, Equatable {
-    let id: String
-    let title: String
-    let subtitle: String
-    let size: String
-    let fileName: String
-    let expectedBytes: Int64
-    let url: URL
-}
-
-private func validatedDownloadURL(_ string: String) -> URL {
-    guard let url = URL(string: string) else {
-        preconditionFailure("Invalid Gemma download URL: \(string)")
-    }
-    return url
-}
-
-private enum GemmaDownloadURL {
-    static let e2b = validatedDownloadURL("https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf?download=true")
-    static let e4b = validatedDownloadURL("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf?download=true")
-}
-
-private let gemmaDownloadOptions: [GemmaDownloadOption] = [
-    GemmaDownloadOption(
-        id: "gemma-4-e2b",
-        title: "Gemma 4 E2B",
-        subtitle: "Recommended faster local model",
-        size: "3.18 GB",
-        fileName: "gemma-4-E2B-it-UD-Q4_K_XL.gguf",
-        expectedBytes: 3_184_494_720,
-        url: GemmaDownloadURL.e2b
-    ),
-    GemmaDownloadOption(
-        id: "gemma-4-e4b",
-        title: "Gemma 4 E4B",
-        subtitle: "Larger model for richer suggestions",
-        size: "5.13 GB",
-        fileName: "gemma-4-E4B-it-UD-Q4_K_XL.gguf",
-        expectedBytes: 5_126_304_928,
-        url: GemmaDownloadURL.e4b
-    )
-]
 
 private let providerSectionAnimation = RhymeAITokens.Motion.presentation
 
-private enum CloudBackupAction {
-    case backup
-    case restore
-}
-
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
-    @EnvironmentObject private var persistenceState: AppPersistenceState
+    @EnvironmentObject private var ggufDownloadManager: GGUFDownloadManager
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAppearanceStyle) private var appearance
 
     @State private var editingKeys: [String: String] = [:]
-    @State private var showKey: Bool = false
-    @State private var savedConfirmation: Bool = false
-    @State private var installedModelFiles: Set<String> = []
-    @State private var activeDownloadID: String?
-    @State private var downloadMessage: String?
-    @State private var downloadError: String?
-    @State private var downloadTask: Task<Void, Never>?
-    @State private var ggufEngineChoice: GGUFEngineChoice = GGUFEngineChoice.current
+    @State private var showKey = false
+    @State private var savedConfirmation = false
     @State private var activeHelp: FeatureHelp?
-    @State private var cloudBackupPassphraseEntry: String = ""
+    @State private var selectedTab: SettingsTab = .general
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                settingsBackground
+            VStack(spacing: 0) {
+                SettingsTabPicker(selection: $selectedTab)
+                    .padding(.horizontal, RhymeAITokens.Spacing.lg)
+                    .padding(.vertical, RhymeAITokens.Spacing.sm)
+
+                Divider()
 
                 ScrollView {
                     settingsContent
-                        .padding(.horizontal, 20)
-                        .padding(.top, 18)
-                        .padding(.bottom, 34)
+                        .padding(.horizontal, RhymeAITokens.Spacing.lg)
+                        .padding(.vertical, RhymeAITokens.Spacing.md)
                 }
+
+                Divider()
+
+                SettingsSaveBar(saved: savedConfirmation, action: saveAll)
+                    .padding(.horizontal, RhymeAITokens.Spacing.lg)
+                    .padding(.top, RhymeAITokens.Spacing.sm)
+                    .padding(.bottom, RhymeAITokens.Spacing.sm)
+                    .background(appearance.palette.surface)
+            }
+            .foregroundStyle(appearance.palette.primaryInk)
+            .background {
+                AppWritingBackground()
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(appearance.palette.canvas, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(appearance.preferredColorScheme, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
             }
-            .onAppear {
-                loadSettingsState()
-            }
-            .onDisappear {
-                downloadTask?.cancel()
-                cloudBackupPassphraseEntry = ""
-            }
+            .onAppear(perform: loadSettingsState)
             .sheet(item: $activeHelp) { help in
                 FeatureHelpSheet(help: help)
             }
         }
     }
 
-    private var settingsBackground: some View {
-        ZStack {
-            Color(UIColor.systemBackground).ignoresSafeArea()
-
-            LinearGradient(
-                colors: [
-                    Color.indigo.opacity(0.26),
-                    Color.teal.opacity(0.08),
-                    Color.clear
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            LinearGradient(
-                colors: [
-                    Color.clear,
-                    Color.pink.opacity(0.08)
-                ],
-                startPoint: .center,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-        }
+    @ViewBuilder
+    private var settingsContent: some View {
+        selectedTabContent
     }
 
     @ViewBuilder
-    private var settingsContent: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 16) {
-                contentStack
+    private var selectedTabContent: some View {
+        switch selectedTab {
+        case .general:
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.lg) {
+                AppearanceSettingsSection()
+                providerSection
+                providerSpecificSection
+                modelSection
+                SettingsCloudBackupSection()
             }
-        } else {
-            contentStack
+            .transition(.opacity)
+        case .editor:
+            SettingsEditorSection(activeHelp: $activeHelp)
+                .transition(.opacity)
         }
-    }
-
-    private var contentStack: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            providerSection
-
-            providerSpecificSection
-
-            modelSection
-
-            editorSection
-
-            cloudBackupSection
-
-            saveSection
-        }
-        .rhymeAnimation(providerSectionAnimation, value: viewModel.selectedProvider)
     }
 
     private var providerSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             SettingsSectionTitle("AI Provider", systemImage: "sparkles")
 
-            Picker("AI Provider", selection: Binding(
-                get: { viewModel.selectedProvider },
-                set: { provider in
-                    withRhymeAnimation(providerSectionAnimation, reduceMotion: reduceMotion) {
-                        viewModel.saveProvider(provider)
-                    }
-                }
-            )) {
-                ForEach(AIProvider.allCases, id: \.self) { provider in
-                    Text(provider.displayName).tag(provider)
-                }
-            }
-            .pickerStyle(.segmented)
+            RhymeSegmentedControl(
+                options: AIProvider.allCases,
+                selection: Binding(
+                    get: { viewModel.selectedProvider },
+                    set: saveProvider
+                ),
+                accessibilityIdentifier: "providerPicker",
+                title: \.displayName
+            )
         }
-        .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
+        .padding(RhymeAITokens.Spacing.lg)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     @ViewBuilder
     private var providerSpecificSection: some View {
         if viewModel.selectedProvider == .local {
-            localModelSection
+            SettingsLocalModelSection()
                 .transition(.opacity)
         } else {
             apiKeySection
@@ -189,104 +111,11 @@ struct SettingsView: View {
         }
     }
 
-    private var localModelSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            localStatusRow
-
-            if GGUFModelService.isEngineAvailable {
-                // Engine picker: only shown when at least one GGUF is installed.
-                if !installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty {
-                    enginePickerRow
-                }
-
-                SettingsSectionTitle("Recommended Gemma Downloads", systemImage: "arrow.down.circle")
-
-                ForEach(gemmaDownloadOptions) { option in
-                    gemmaDownloadRow(option)
-                }
-
-                if let downloadMessage {
-                    Label(downloadMessage, systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                        .accessibilityIdentifier("gemmaDownloadMessage")
-                }
-
-                if let downloadError {
-                    Label(downloadError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .accessibilityIdentifier("gemmaDownloadError")
-                }
-
-                Text(installedModelFiles.filter({ $0.hasSuffix(".gguf") }).isEmpty
-                     ? "Download a Gemma model to enable on-device inference without Apple Intelligence. Files are stored in the app sandbox."
-                     : "Gemma uses the downloaded GGUF model directly via llama.cpp. Apple Intelligence is the fallback when no GGUF is present."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text("Gemma downloads and the GGUF engine are unavailable in this build. Apple Intelligence remains the on-device local option.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("gemmaUnavailableMessage")
-            }
-        }
-    }
-
-    private var enginePickerRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SettingsSectionTitle("On-Device Engine", systemImage: "cpu")
-
-            Picker("On-device engine", selection: Binding(
-                get: { ggufEngineChoice },
-                set: { choice in
-                    ggufEngineChoice = choice
-                    choice.save()
-                }
-            )) {
-                ForEach(GGUFEngineChoice.allCases, id: \.self) { choice in
-                    Text(choice.displayName).tag(choice)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("ggufEnginePicker")
-        }
-        .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
-    }
-
-    private var localStatusRow: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: "iphone.gen3.radiowaves.left.and.right")
-                .font(.title2)
-                .foregroundStyle(.teal)
-                .frame(width: 42, height: 42)
-                .liquidGlassSurface(cornerRadius: 14, tint: .teal.opacity(0.14), fallbackOpacity: 0.08)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Apple Foundation Models")
-                    .font(.headline)
-
-                Text("Runs suggestions on-device when Apple Intelligence is available. No API key is needed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
-    }
-
     private var apiKeySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             SettingsSectionTitle("\(viewModel.selectedProvider.displayName) API Key", systemImage: "key")
 
-            HStack(spacing: 12) {
+            HStack(spacing: RhymeAITokens.Spacing.md) {
                 Group {
                     if showKey {
                         TextField("API Key", text: apiKeyBinding)
@@ -306,29 +135,28 @@ struct SettingsView: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.rhymePress)
                 .accessibilityLabel(showKey ? "Hide API key" : "Show API key")
             }
-            .padding(14)
-            .liquidGlassSurface(cornerRadius: 16, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .padding(RhymeAITokens.Spacing.md)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             Text(viewModel.selectedProvider.keyHint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
+        .padding(RhymeAITokens.Spacing.lg)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     private var modelSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             SettingsSectionTitle("Model", systemImage: "cpu")
 
             Picker("Model", selection: Binding(
                 get: { viewModel.selectedModel },
-                set: { viewModel.saveModel($0) }
+                set: viewModel.saveModel
             )) {
                 ForEach(AIModel.models(for: viewModel.selectedProvider)) { model in
                     Text(model.displayName).tag(model)
@@ -336,8 +164,8 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .liquidGlassSurface(cornerRadius: 16, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .padding(RhymeAITokens.Spacing.md)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             Text(viewModel.selectedModel.id)
                 .font(.caption.monospaced())
@@ -345,305 +173,8 @@ struct SettingsView: View {
                 .lineLimit(2)
                 .minimumScaleFactor(0.8)
         }
-        .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
-    }
-
-    private var cloudSyncStatusRow: some View {
-        Label(cloudSyncStatusText, systemImage: cloudSyncStatusIcon)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("iCloudSyncStatus")
-    }
-
-    private var cloudSyncStatusText: String {
-        switch persistenceState.cloudSyncStatus {
-        case .syncing:
-            return "iCloud sync: Checking…"
-        case .available:
-            return "iCloud sync: On"
-        case .localOnly, .accountUnavailable:
-            return "iCloud sync: Off — sign in to iCloud in system Settings to sync across devices."
-        }
-    }
-
-    private var cloudSyncStatusIcon: String {
-        switch persistenceState.cloudSyncStatus {
-        case .syncing:
-            return "arrow.triangle.2.circlepath"
-        case .available:
-            return "checkmark.icloud.fill"
-        case .localOnly, .accountUnavailable:
-            return "icloud.slash"
-        }
-    }
-
-    private var cloudBackupSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SettingsSectionTitle("Cloud Backup", systemImage: "externaldrive.badge.icloud")
-
-            cloudSyncStatusRow
-
-            Text("Backs up projects, trash, and voice recordings to your Google Drive app data. API keys stay on this device and are never included.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            SecureField(
-                viewModel.cloudBackupHasStoredPassphrase ? "Stored passphrase ready" : "Backup passphrase",
-                text: $cloudBackupPassphraseEntry
-            )
-            .textContentType(.password)
-            .autocorrectionDisabled()
-            .textInputAutocapitalization(.never)
-            .font(.system(.body, design: .rounded))
-            .padding(14)
-            .liquidGlassSurface(cornerRadius: 16, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
-            .accessibilityIdentifier("cloudBackupPassphrase")
-
-            HStack(spacing: 10) {
-                Button {
-                    runCloudBackupAction(.backup)
-                } label: {
-                    Label("Back Up Now", systemImage: "arrow.up.doc.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.rhymePress)
-
-                Button {
-                    runCloudBackupAction(.restore)
-                } label: {
-                    Label("Restore", systemImage: "arrow.down.doc.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.rhymePress)
-            }
-            .font(.subheadline.weight(.semibold))
-            .disabled(!cloudBackupControlsEnabled)
-
-            Label(viewModel.cloudBackupStatusText, systemImage: cloudBackupStatusIcon)
-                .font(.caption)
-                .foregroundStyle(cloudBackupStatusColor)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("cloudBackupStatus")
-
-            Text("Background backup runs only after you set up Google Drive and save a passphrase here. It will never open Google sign-in from the background.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Your songs and recordings are also included in your device's iCloud backup and synced across your iCloud devices. Only the optional Google Drive backup is encrypted with your passphrase. API keys never leave this device.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
-    }
-
-    private var cloudBackupControlsEnabled: Bool {
-        viewModel.cloudBackupConfigured
-            && !viewModel.cloudBackupIsWorking
-            && (viewModel.cloudBackupHasStoredPassphrase || !cloudBackupPassphraseEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    }
-
-    private var cloudBackupStatusIcon: String {
-        if viewModel.cloudBackupIsWorking {
-            return "arrow.triangle.2.circlepath"
-        }
-        return viewModel.cloudBackupLastResultIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
-    }
-
-    private var cloudBackupStatusColor: Color {
-        if viewModel.cloudBackupIsWorking {
-            return .secondary
-        }
-        return viewModel.cloudBackupLastResultIsError ? .orange : .green
-    }
-
-    private func runCloudBackupAction(_ action: CloudBackupAction) {
-        let passphrase = cloudBackupPassphraseEntry.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !passphrase.isEmpty {
-            viewModel.updateCloudBackupPassphrase(passphrase)
-        }
-
-        Task { @MainActor in
-            switch action {
-            case .backup:
-                await viewModel.backUpNow()
-            case .restore:
-                await viewModel.restoreBackupNow()
-            }
-            if !passphrase.isEmpty {
-                cloudBackupPassphraseEntry = ""
-            }
-        }
-    }
-
-
-    private var saveSection: some View {
-        Button {
-            saveAll()
-        } label: {
-            HStack {
-                Spacer()
-                Label(
-                    savedConfirmation ? "Saved" : "Save Settings",
-                    systemImage: savedConfirmation ? "checkmark.circle.fill" : "checkmark"
-                )
-                .font(.headline)
-                .foregroundStyle(savedConfirmation ? .green : .primary)
-                Spacer()
-            }
-            .padding(.vertical, 15)
-            .padding(.horizontal, 16)
-            .liquidGlassSurface(cornerRadius: 18, tint: .green.opacity(0.12), interactive: true, fallbackOpacity: 0.08)
-        }
-        .buttonStyle(.rhymePress)
-        .disabled(savedConfirmation)
-    }
-
-    private func gemmaDownloadRow(_ option: GemmaDownloadOption) -> some View {
-        let isDownloaded = installedModelFiles.contains(option.fileName)
-        let isDownloading = activeDownloadID == option.id
-
-        return Button {
-            startGemmaDownload(option)
-        } label: {
-            HStack(alignment: .center, spacing: 14) {
-                Image(systemName: isDownloaded ? "checkmark.circle.fill" : "arrow.down.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(isDownloaded ? .green : .teal)
-                    .frame(width: 36, height: 36)
-                    .liquidGlassSurface(cornerRadius: 18, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(option.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-
-                    Text("\(option.subtitle) - \(option.size)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 8)
-
-                Text(isDownloaded ? "Downloaded" : (isDownloading ? "Downloading" : "Download"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(isDownloaded ? .green : .primary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .liquidGlassSurface(cornerRadius: 14, tint: .white.opacity(0.05), fallbackOpacity: 0.07)
-            }
-            .padding(14)
-            .liquidGlassSurface(cornerRadius: 18, tint: .teal.opacity(0.08), interactive: !isDownloaded, fallbackOpacity: 0.05)
-        }
-        .buttonStyle(.rhymePress)
-        .disabled(activeDownloadID != nil || isDownloaded)
-        .accessibilityIdentifier("gemmaDownload.\(option.id)")
-    }
-
-    // MARK: - Editor Section
-
-    private var editorSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SettingsSectionTitle("Editor", systemImage: "textformat")
-
-            settingsToggleRow(
-                "Whole Song Context",
-                help: .wholeSongContext,
-                isOn: Binding(
-                    get: { viewModel.useWholeSongContext },
-                    set: { viewModel.saveUseWholeSongContext($0) }
-                )
-            )
-
-            settingsToggleRow(
-                "Highlight Rhymes",
-                help: .highlightRhymes,
-                isOn: Binding(
-                    get: { viewModel.isHighlightEnabled },
-                    set: { viewModel.saveIsHighlightEnabled($0) }
-                )
-            )
-
-            settingsToggleRow(
-                "Underline Syllables",
-                help: .underlineSyllables,
-                isOn: Binding(
-                    get: { viewModel.isSyllableColoringEnabled },
-                    set: { viewModel.saveIsSyllableColoringEnabled($0) }
-                )
-            )
-
-            settingsToggleRow(
-                "Stress + IPA",
-                help: .stressIPA,
-                isOn: Binding(
-                    get: { viewModel.isStressPreviewEnabled },
-                    set: { viewModel.saveIsStressPreviewEnabled($0) }
-                )
-            )
-
-            settingsToggleRow(
-                "Color Rhymes",
-                help: .colorRhymes,
-                isOn: Binding(
-                    get: { viewModel.isRhymeHighlightEnabled },
-                    set: { viewModel.saveIsRhymeHighlightEnabled($0) }
-                )
-            )
-
-            settingsToggleRow(
-                "Beat Grid",
-                help: .beatGrid,
-                isOn: Binding(
-                    get: { viewModel.isBeatGridEnabled },
-                    set: { viewModel.saveIsBeatGridEnabled($0) }
-                )
-            )
-        }
-        .padding(16)
-        .liquidGlassSurface(cornerRadius: 22, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
-    }
-
-    // Replicates AssistantPanelView's toggleHelpRow pattern with the persisting
-    // save functions, keeping FeatureHelp affordances alongside each toggle.
-    private func settingsToggleRow(
-        _ text: String,
-        help: FeatureHelp,
-        isOn: Binding<Bool>
-    ) -> some View {
-        HStack {
-            HStack(spacing: RhymeAITokens.Spacing.xs) {
-                Text(text)
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
-                settingsHelpButton(help)
-            }
-            Spacer()
-            Toggle("", isOn: isOn)
-                .labelsHidden()
-                .tint(.indigo)
-                .accessibilityLabel(text)
-        }
-    }
-
-    private func settingsHelpButton(_ help: FeatureHelp) -> some View {
-        Button {
-            activeHelp = help
-        } label: {
-            Image(systemName: "questionmark.circle")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum, alignment: .center)
-        }
-        .buttonStyle(.rhymePress)
-        .contentShape(Rectangle())
-        .accessibilityLabel("\(help.title) help")
+        .padding(RhymeAITokens.Spacing.lg)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     private var apiKeyBinding: Binding<String> {
@@ -653,14 +184,18 @@ struct SettingsView: View {
         )
     }
 
+    private func saveProvider(_ provider: AIProvider) {
+        withRhymeAnimation(providerSectionAnimation, reduceMotion: reduceMotion) {
+            viewModel.saveProvider(provider)
+        }
+    }
+
     private func loadSettingsState() {
         for provider in AIProvider.allCases {
             editingKeys[provider.rawValue] = viewModel.apiKey(for: provider)
         }
-        ggufEngineChoice = GGUFEngineChoice.current
-        cloudBackupPassphraseEntry = ""
         viewModel.refreshCloudBackupState()
-        refreshInstalledModels()
+        ggufDownloadManager.refreshInstalledModels()
     }
 
     private func saveAll() {
@@ -675,138 +210,11 @@ struct SettingsView: View {
             savedConfirmation = false
         }
     }
-
-    private func startGemmaDownload(_ option: GemmaDownloadOption) {
-        guard activeDownloadID == nil else { return }
-        downloadTask?.cancel()
-        downloadTask = Task {
-            await MainActor.run {
-                activeDownloadID = option.id
-                downloadMessage = "Downloading \(option.title)..."
-                downloadError = nil
-            }
-
-            do {
-                let directory = try Self.modelsDirectory()
-                let destination = directory.appendingPathComponent(option.fileName)
-                let stagingURL = directory.appendingPathComponent("\(option.fileName).download")
-
-                if FileManager.default.fileExists(atPath: destination.path) {
-                    await MainActor.run {
-                        installedModelFiles.insert(option.fileName)
-                        activeDownloadID = nil
-                        downloadMessage = "\(option.title) is already downloaded."
-                    }
-                    return
-                }
-
-                try? FileManager.default.removeItem(at: stagingURL)
-
-                let (temporaryURL, response) = try await URLSession.shared.download(from: option.url)
-                try Task.checkCancellation()
-
-                if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-                    throw URLError(.badServerResponse)
-                }
-
-                try FileManager.default.moveItem(at: temporaryURL, to: stagingURL)
-                let attributes = try FileManager.default.attributesOfItem(atPath: stagingURL.path)
-                let downloadedBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
-                guard downloadedBytes >= option.expectedBytes else {
-                    try? FileManager.default.removeItem(at: stagingURL)
-                    throw DownloadValidationError.incomplete(expected: option.expectedBytes, actual: downloadedBytes)
-                }
-
-                try? FileManager.default.removeItem(at: destination)
-                try FileManager.default.moveItem(at: stagingURL, to: destination)
-
-                await MainActor.run {
-                    viewModel.saveProvider(.local)
-                    viewModel.saveModel(.localModel)
-                    // Automatically switch to Gemma engine now that a GGUF is available.
-                    GGUFEngineChoice.gemma.save()
-                    ggufEngineChoice = .gemma
-                    installedModelFiles.insert(option.fileName)
-                    activeDownloadID = nil
-                    downloadMessage = "\(option.title) downloaded. Gemma engine selected."
-                }
-            } catch is CancellationError {
-                await MainActor.run {
-                    activeDownloadID = nil
-                    downloadMessage = nil
-                }
-            } catch {
-                await MainActor.run {
-                    activeDownloadID = nil
-                    downloadMessage = nil
-                    downloadError = "Failed to download \(option.title): \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private func refreshInstalledModels() {
-        guard let directory = try? Self.modelsDirectory(),
-              let contents = try? FileManager.default.contentsOfDirectory(
-                  at: directory,
-                  includingPropertiesForKeys: nil
-              ) else {
-            installedModelFiles = []
-            return
-        }
-        installedModelFiles = Set(contents.map(\.lastPathComponent))
-    }
-
-    private static func modelsDirectory() throws -> URL {
-        let baseURL = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let directory = baseURL
-            .appendingPathComponent("RhymeAI", isDirectory: true)
-            .appendingPathComponent("Gemma", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
-    }
-}
-
-private enum DownloadValidationError: LocalizedError {
-    case incomplete(expected: Int64, actual: Int64)
-
-    var errorDescription: String? {
-        switch self {
-        case let .incomplete(expected, actual):
-            return "download was incomplete: \(Self.format(actual)) of \(Self.format(expected))"
-        }
-    }
-
-    private static func format(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
-}
-
-private struct SettingsSectionTitle: View {
-    let title: String
-    let systemImage: String
-
-    init(_ title: String, systemImage: String) {
-        self.title = title
-        self.systemImage = systemImage
-    }
-
-    var body: some View {
-        Label(title, systemImage: systemImage)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .textCase(.uppercase)
-            .labelStyle(.titleAndIcon)
-    }
 }
 
 #Preview {
     SettingsView()
         .environmentObject(EditorViewModel())
         .environmentObject(AppPersistenceState(persistenceDegraded: false, cloudSyncStatus: .available, usesCloudBackedStore: true))
+        .environmentObject(GGUFDownloadManager())
 }

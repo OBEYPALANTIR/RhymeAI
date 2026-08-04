@@ -8,6 +8,8 @@ struct LyricsRewriteHighlight: Equatable {
 }
 
 struct LyricsTextView: UIViewRepresentable {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     @Binding var text: String
     var displayText: String? = nil
     var rewriteHighlight: LyricsRewriteHighlight? = nil
@@ -24,8 +26,7 @@ struct LyricsTextView: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.font = UIFont.systemFont(ofSize: 16, weight: .regular)
         textView.backgroundColor = .clear
-        textView.textColor = isTransparentText ? .clear : UIColor.label
-        textView.tintColor = UIColor(Color.indigo)
+        applyAppearance(to: textView)
         textView.autocorrectionType = .no
         textView.spellCheckingType = .no
         textView.isScrollEnabled = false
@@ -42,6 +43,7 @@ struct LyricsTextView: UIViewRepresentable {
         context.coordinator.parent = self
         let currentRenderedText = renderedText
         if textView.text != currentRenderedText {
+            context.coordinator.isApplyingProgrammaticUpdate = true
             let selectedRange = textView.selectedRange
             textView.text = currentRenderedText
             // Restore selection if still valid — the whole range must fit, not just
@@ -49,11 +51,11 @@ struct LyricsTextView: UIViewRepresentable {
             if selectedRange.location + selectedRange.length <= currentRenderedText.utf16.count {
                 textView.selectedRange = selectedRange
             }
+            context.coordinator.isApplyingProgrammaticUpdate = false
         }
         textView.isEditable = isEditable
         textView.isSelectable = isEditable
-        textView.textColor = isTransparentText ? .clear : UIColor.label
-        textView.tintColor = isEditable ? UIColor(Color.indigo) : .clear
+        applyAppearance(to: textView)
         context.coordinator.updatePlaceholder(textView, text: currentRenderedText)
         context.coordinator.updateRewriteHighlight(textView, highlight: rewriteHighlight)
         context.coordinator.scheduleKeepCursorVisible()
@@ -67,6 +69,14 @@ struct LyricsTextView: UIViewRepresentable {
         displayText ?? text
     }
 
+    private func applyAppearance(to textView: UITextView) {
+        let foreground = UIColor(appearance.palette.primaryInk)
+        textView.textColor = isTransparentText ? .clear : foreground
+        textView.tintColor = isEditable ? UIColor(appearance.palette.caret) : .clear
+        textView.keyboardAppearance = appearance == .graphite ? .dark : .light
+        textView.typingAttributes[.foregroundColor] = isTransparentText ? UIColor.clear : foreground
+    }
+
     class Coordinator: NSObject, UITextViewDelegate {
         var parent: LyricsTextView
         private var placeholderLabel: UILabel?
@@ -75,6 +85,7 @@ struct LyricsTextView: UIViewRepresentable {
         private var isObservingKeyboard = false
         private var keyboardFrameInScreen: CGRect = .zero
         private var isKeyboardVisible = false
+        var isApplyingProgrammaticUpdate = false
 
         init(_ parent: LyricsTextView) {
             self.parent = parent
@@ -122,7 +133,6 @@ struct LyricsTextView: UIViewRepresentable {
                 let label = UILabel()
                 label.text = parent.placeholder
                 label.font = textView.font
-                label.textColor = UIColor.label.withAlphaComponent(0.2)
                 label.translatesAutoresizingMaskIntoConstraints = false
                 textView.addSubview(label)
                 NSLayoutConstraint.activate([
@@ -131,10 +141,12 @@ struct LyricsTextView: UIViewRepresentable {
                 ])
                 placeholderLabel = label
             }
+            placeholderLabel?.textColor = UIColor(parent.appearance.palette.placeholder)
             placeholderLabel?.isHidden = !text.isEmpty
         }
 
         func textViewDidChange(_ textView: UITextView) {
+            guard !isApplyingProgrammaticUpdate else { return }
             parent.text = textView.text
             parent.onCursorChange(textView.selectedRange.location)
             parent.onSelectionChange?(textView.selectedRange)
@@ -149,7 +161,7 @@ struct LyricsTextView: UIViewRepresentable {
             // .text clamps the selection to {0,0} before first focus). Only
             // user-driven changes may move the app-level cursor — otherwise a
             // background reset clobbers seeded or restored cursor state.
-            guard textView.isFirstResponder else { return }
+            guard textView.isFirstResponder, !isApplyingProgrammaticUpdate else { return }
             parent.onCursorChange(textView.selectedRange.location)
             parent.onSelectionChange?(textView.selectedRange)
             scheduleKeepCursorVisible()

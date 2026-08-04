@@ -53,7 +53,9 @@ struct RewriteSheet: View {
                 .padding(RhymeAITokens.Spacing.md)
                 .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
             }
-            .background(Color(UIColor.systemBackground))
+            .background {
+                AppWritingBackground()
+            }
             .navigationTitle(action.label)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

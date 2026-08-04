@@ -1,42 +1,20 @@
 import Foundation
 
-// MARK: - Manual setup required (SPM)
-//
-// This service is intentionally compilable WITHOUT the llama.cpp package.
-// When the package is NOT resolved, all calls go through GGUFModelStub and
-// immediately throw AIServiceError.localModelUnavailable — the app stays
-// green and routes fall back to Apple Intelligence.
-//
-// To enable real on-device Gemma inference:
-//   1. Open "Writers Block/Writers Block.xcodeproj" in Xcode.
-//   2. File > Add Package Dependencies…
-//   3. Paste: https://github.com/ggml-org/llama.cpp
-//   4. Pin to a release tag (e.g. b5100 or the latest stable tag).
-//   5. Add the "llama" product to the "Writers Block" target.
-//   6. The #if canImport(llama) block below compiles in and GGUFModelService
-//      becomes the live implementation automatically.
-
 // MARK: - Protocol
 
 /// Minimal interface both the llama.cpp-backed implementation and the
 /// compile-time stub must satisfy.
 protocol LocalGGUFRunner: AnyObject {
-    /// True after a successful loadModel call.
-    var isLoaded: Bool { get }
-
     /// Load a GGUF file at the given absolute path.
     func loadModel(filePath: String) async throws
 
     /// Generate a response for the given prompt. Cancellation-safe.
     func generate(prompt: String) async throws -> String
-
-    /// Release native resources. Safe to call when not loaded.
-    func unload()
 }
 
 // MARK: - Factory
 
-/// Returns the best available runner: llama.cpp when the package is resolved,
+/// Returns the best available runner: llama.cpp when the framework is linked,
 /// otherwise a stub that throws localModelUnavailable immediately.
 func makeLocalGGUFRunner() -> LocalGGUFRunner {
 #if canImport(llama)
@@ -46,20 +24,20 @@ func makeLocalGGUFRunner() -> LocalGGUFRunner {
 #endif
 }
 
-// MARK: - Stub (always compiled, used when llama.cpp SPM package is absent)
+// MARK: - Stub (always compiled, used when llama.cpp is unavailable)
 
 final class GGUFModelStub: LocalGGUFRunner {
     var isLoaded: Bool { false }
 
     func loadModel(filePath: String) async throws {
         throw AIServiceError.localModelUnavailable(
-            reason: "Gemma on-device engine is not compiled in. See GGUFModelService.swift for setup instructions."
+            reason: "Gemma on-device engine is not compiled into this build."
         )
     }
 
     func generate(prompt: String) async throws -> String {
         throw AIServiceError.localModelUnavailable(
-            reason: "Gemma on-device engine is not compiled in. See GGUFModelService.swift for setup instructions."
+            reason: "Gemma on-device engine is not compiled into this build."
         )
     }
 
@@ -73,7 +51,7 @@ final class GGUFModelStub: LocalGGUFRunner {
 /// requiring the llama.cpp SPM package to be resolved.
 enum GGUFModelService {
     /// True only when the llama.cpp engine is linked into this target.
-    static var isEngineAvailable: Bool {
+    nonisolated static var isEngineAvailable: Bool {
 #if canImport(llama)
         true
 #else
@@ -83,13 +61,13 @@ enum GGUFModelService {
 
     /// Wraps a user prompt in the Gemma instruction chat template.
     /// Mirrors Android's AIService.gemmaInstructionPrompt().
-    static func gemmaPrompt(_ userPrompt: String) -> String {
+    nonisolated static func gemmaPrompt(_ userPrompt: String) -> String {
         "<start_of_turn>user\n\(userPrompt)\n<end_of_turn>\n<start_of_turn>model\n"
     }
 
     /// Strip Gemma turn markers and bare `>` lines from raw model output.
     /// Mirrors Android's markerOnlyPattern filter.
-    static func stripMarkers(_ raw: String) -> String {
+    nonisolated static func stripMarkers(_ raw: String) -> String {
         raw.components(separatedBy: .newlines)
             .filter { line in
                 let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,6 +87,25 @@ enum GGUFModelService {
 #if canImport(llama)
 import llama
 
+nonisolated private func llamaBatchClear(_ batch: inout llama_batch) {
+    batch.n_tokens = 0
+}
+
+nonisolated private func llamaBatchAdd(
+    _ batch: inout llama_batch,
+    token: llama_token,
+    position: llama_pos,
+    logits: Bool
+) {
+    let index = Int(batch.n_tokens)
+    batch.token[index] = token
+    batch.pos[index] = position
+    batch.n_seq_id[index] = 1
+    batch.seq_id[index]?[0] = 0
+    batch.logits[index] = logits ? 1 : 0
+    batch.n_tokens += 1
+}
+
 /// On-device Gemma runner backed by llama.cpp.
 ///
 /// Thread-safety: all calls are serialized through an actor so the underlying
@@ -116,26 +113,34 @@ import llama
 actor GGUFLlamaService: LocalGGUFRunner {
 
     // Match Android's constants (LocalModelService.kt).
-    private static let contextLength: Int32 = 2048
-    private static let generationTimeoutSeconds: Double = 120
-    private static let maxResponseChars = 4096
+    nonisolated private static let contextLength: Int32 = 2048
+    nonisolated private static let generationTimeoutSeconds: Double = 120
+    nonisolated private static let maxResponseBytes = 4096
+    nonisolated private static let backendInitialization: Void = {
+        llama_backend_init()
+    }()
 
     private var model: OpaquePointer?
     private var context: OpaquePointer?
     private var loadedPath: String?
 
-    nonisolated var isLoaded: Bool {
-        // nonisolated advisory read — races are benign (UI-only flag).
-        false
-    }
-
-    private var _isLoaded: Bool { loadedPath != nil }
-
     func loadModel(filePath: String) async throws {
-        releaseNative()
+        if loadedPath == filePath, model != nil, context != nil {
+            return
+        }
 
-        let params = llama_model_default_params()
-        guard let loadedModel = llama_model_load_from_file(filePath, params) else {
+        releaseNative()
+        _ = Self.backendInitialization
+
+        var modelParams = llama_model_default_params()
+#if targetEnvironment(simulator)
+        // The official llama.cpp Swift example disables GPU offload in the
+        // simulator because Simulator Metal does not mirror an iPhone GPU.
+        modelParams.n_gpu_layers = 0
+#else
+        modelParams.n_gpu_layers = -1
+#endif
+        guard let loadedModel = llama_model_load_from_file(filePath, modelParams) else {
             throw AIServiceError.localModelUnavailable(
                 reason: "Failed to load GGUF model at \(filePath). File may be corrupt or incompatible."
             )
@@ -143,9 +148,11 @@ actor GGUFLlamaService: LocalGGUFRunner {
 
         var ctxParams = llama_context_default_params()
         ctxParams.n_ctx = UInt32(Self.contextLength)
-        ctxParams.n_threads = Int32(max(1, ProcessInfo.processInfo.processorCount / 2))
+        let threadCount = Int32(max(1, min(8, ProcessInfo.processInfo.processorCount - 2)))
+        ctxParams.n_threads = threadCount
+        ctxParams.n_threads_batch = threadCount
 
-        guard let ctx = llama_new_context_with_model(loadedModel, ctxParams) else {
+        guard let ctx = llama_init_from_model(loadedModel, ctxParams) else {
             llama_model_free(loadedModel)
             throw AIServiceError.localModelUnavailable(reason: "Failed to create llama context.")
         }
@@ -156,29 +163,59 @@ actor GGUFLlamaService: LocalGGUFRunner {
     }
 
     func generate(prompt: String) async throws -> String {
-        guard _isLoaded, let ctx = context, let model = model else {
+        guard let ctx = context, let model = model else {
             throw AIServiceError.localModelUnavailable(
                 reason: "No GGUF model loaded. Download a Gemma model in Settings."
             )
+        }
+        guard let vocab = llama_model_get_vocab(model) else {
+            throw AIServiceError.localModelUnavailable(reason: "The downloaded model has no compatible vocabulary.")
         }
 
         let fullPrompt = GGUFModelService.gemmaPrompt(prompt)
         guard let cStr = fullPrompt.cString(using: .utf8) else {
             throw AIServiceError.localModelUnavailable(reason: "Failed to encode prompt for the local model.")
         }
-        let estimatedTokenCount = Int32(fullPrompt.count / 3 + 64)
+        let estimatedTokenCount = Int32(max(64, fullPrompt.utf8.count / 3 + 64))
         var tokens = [llama_token](repeating: 0, count: Int(estimatedTokenCount))
-        let nTokens = llama_tokenize(model, cStr, Int32(fullPrompt.utf8.count), &tokens, estimatedTokenCount, true, false)
+        var nTokens = llama_tokenize(
+            vocab,
+            cStr,
+            Int32(fullPrompt.utf8.count),
+            &tokens,
+            Int32(tokens.count),
+            true,
+            false
+        )
+        if nTokens < 0 {
+            tokens = [llama_token](repeating: 0, count: Int(-nTokens))
+            nTokens = llama_tokenize(
+                vocab,
+                cStr,
+                Int32(fullPrompt.utf8.count),
+                &tokens,
+                Int32(tokens.count),
+                true,
+                false
+            )
+        }
         guard nTokens > 0 else {
             throw AIServiceError.localModelUnavailable(reason: "Tokenization produced no tokens.")
         }
+        guard nTokens < Self.contextLength else {
+            throw AIServiceError.localModelUnavailable(
+                reason: "The lyric context is too long for the downloaded model. Shorten the context and try again."
+            )
+        }
         tokens = Array(tokens.prefix(Int(nTokens)))
 
-        var batch = llama_batch_init(512, 0, 1)
+        llama_memory_clear(llama_get_memory(ctx), true)
+
+        var batch = llama_batch_init(Self.contextLength, 0, 1)
         defer { llama_batch_free(batch) }
 
         for (i, token) in tokens.enumerated() {
-            llama_batch_add(&batch, token, llama_pos(i), [0], false)
+            llamaBatchAdd(&batch, token: token, position: llama_pos(i), logits: false)
         }
         if batch.n_tokens > 0 {
             batch.logits[Int(batch.n_tokens) - 1] = 1
@@ -187,12 +224,14 @@ actor GGUFLlamaService: LocalGGUFRunner {
             throw AIServiceError.localModelUnavailable(reason: "Failed to evaluate prompt tokens.")
         }
 
-        var result = ""
+        let sampler = try makeSampler()
+        defer { llama_sampler_free(sampler) }
+
+        var outputBytes: [UInt8] = []
         var nCur = Int32(nTokens)
-        let eosToken = llama_token_eos(model)
         let deadline = Date().addingTimeInterval(Self.generationTimeoutSeconds)
 
-        while nCur < Self.contextLength && result.count < Self.maxResponseChars {
+        while nCur < Self.contextLength && outputBytes.count < Self.maxResponseBytes {
             guard !Task.isCancelled else { break }
             guard Date() < deadline else {
                 throw AIServiceError.localModelUnavailable(
@@ -200,23 +239,19 @@ actor GGUFLlamaService: LocalGGUFRunner {
                 )
             }
 
-            let sampler = try makeSampler()
-            defer { llama_sampler_free(sampler) }
-            let nextToken = llama_sampler_sample(sampler, ctx, -1)
-            if nextToken == eosToken { break }
+            let nextToken = llama_sampler_sample(sampler, ctx, batch.n_tokens - 1)
+            if llama_vocab_is_eog(vocab, nextToken) { break }
+            outputBytes.append(contentsOf: tokenPiece(nextToken, vocab: vocab).map { UInt8(bitPattern: $0) })
 
-            var piece = [CChar](repeating: 0, count: 64)
-            let n = llama_token_to_piece(model, nextToken, &piece, 64, 0, false)
-            if n > 0 {
-                result += String(bytes: piece.prefix(Int(n)).map { UInt8(bitPattern: $0) }, encoding: .utf8) ?? ""
-            }
-
-            llama_batch_clear(&batch)
-            llama_batch_add(&batch, nextToken, llama_pos(nCur), [0], true)
+            llamaBatchClear(&batch)
+            llamaBatchAdd(&batch, token: nextToken, position: llama_pos(nCur), logits: true)
             nCur += 1
-            llama_decode(ctx, batch)
+            guard llama_decode(ctx, batch) == 0 else {
+                throw AIServiceError.localModelUnavailable(reason: "Failed while generating the local response.")
+            }
         }
 
+        let result = String(decoding: outputBytes, as: UTF8.self)
         return GGUFModelService.stripMarkers(result)
     }
 
@@ -232,7 +267,7 @@ actor GGUFLlamaService: LocalGGUFRunner {
         loadedPath = nil
     }
 
-    private func makeSampler() throws -> OpaquePointer {
+    private func makeSampler() throws -> UnsafeMutablePointer<llama_sampler> {
         guard let chain = llama_sampler_chain_init(llama_sampler_chain_default_params()) else {
             throw AIServiceError.localModelUnavailable(reason: "Failed to create llama sampler.")
         }
@@ -241,6 +276,17 @@ actor GGUFLlamaService: LocalGGUFRunner {
         llama_sampler_chain_add(chain, llama_sampler_init_temp(0.8))
         llama_sampler_chain_add(chain, llama_sampler_init_dist(UInt32.random(in: 0..<UInt32.max)))
         return chain
+    }
+
+    private func tokenPiece(_ token: llama_token, vocab: OpaquePointer) -> [CChar] {
+        var piece = [CChar](repeating: 0, count: 16)
+        var count = llama_token_to_piece(vocab, token, &piece, Int32(piece.count), 0, false)
+        if count < 0 {
+            piece = [CChar](repeating: 0, count: Int(-count))
+            count = llama_token_to_piece(vocab, token, &piece, Int32(piece.count), 0, false)
+        }
+        guard count > 0 else { return [] }
+        return Array(piece.prefix(Int(count)))
     }
 }
 

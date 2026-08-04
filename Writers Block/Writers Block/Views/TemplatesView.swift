@@ -3,6 +3,7 @@ import SwiftUI
 struct TemplatesView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appAppearanceStyle) private var appearance
 
     var body: some View {
         NavigationStack {
@@ -16,7 +17,7 @@ struct TemplatesView: View {
                             HStack(spacing: RhymeAITokens.Spacing.lg) {
                                 Image(systemName: template.icon)
                                     .font(.title2)
-                                    .foregroundStyle(.indigo)
+                                    .foregroundStyle(appearance.palette.action)
                                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                                     .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .indigo.opacity(0.16), fallbackOpacity: 0.10)
 
@@ -47,7 +48,9 @@ struct TemplatesView: View {
                 .padding(RhymeAITokens.Spacing.md)
                 .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
             }
-            .background(Color(UIColor.systemBackground))
+            .background {
+                AppWritingBackground()
+            }
             .navigationTitle("Choose a Template")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
