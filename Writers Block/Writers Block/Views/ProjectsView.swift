@@ -33,8 +33,14 @@ struct ProjectsView: View {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
 
-                    TextField("Search songs", text: $searchText)
+                    TextField(
+                        "",
+                        text: $searchText,
+                        prompt: Text("Search songs")
+                            .foregroundStyle(appearance.palette.placeholder)
+                    )
                         .textInputAutocapitalization(.never)
+                        .foregroundStyle(appearance.palette.primaryInk)
 
                     if !searchText.isEmpty {
                         Button {
@@ -62,11 +68,11 @@ struct ProjectsView: View {
                         Image(systemName: "plus")
                             .foregroundStyle(appearance.palette.action)
                         Text("Create New Song")
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(appearance.palette.onAction)
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .frame(height: RhymeAITokens.Touch.minimum)
-                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.10), interactive: true)
+                    .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
                 }
                 .listRowBackground(Color.clear)
 

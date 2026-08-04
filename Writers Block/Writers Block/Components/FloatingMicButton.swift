@@ -35,6 +35,12 @@ struct FloatingMicButton: View {
         count: FloatingMicButton.barCount
     )
 
+    init(service: VoiceMemoService, ensureProjectId: @escaping () -> String) {
+        self.service = service
+        self.ensureProjectId = ensureProjectId
+        _progress = State(initialValue: service.isRecording ? 1 : 0)
+    }
+
     // MARK: - Layout constants
 
     // Idle circle diameter — matches Touch.comfortable token.

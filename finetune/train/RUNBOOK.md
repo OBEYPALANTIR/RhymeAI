@@ -185,6 +185,56 @@ format-pass rate and rhyme-compliance tiers per task are the headline
 numbers. Ship only if the tuned model beats baseline on format-pass without
 regressing rhyme misses.
 
+## Base-model bake-off variant (Qwen3.5-4B)
+
+The same pipeline trains `Qwen/Qwen3.5-4B` (Apache 2.0, ~2.9 GB UD-Q4_K_XL)
+as a candidate replacement base. Every step takes a template/size flag; the
+turn template (ChatML with the official empty-think prefill) lives in
+`eval/prompts.py TEMPLATES["qwen"]` and was verified against the model's
+tokenizer_config chat template.
+
+```sh
+# 0. dataset (note the separate out dir; *-qwen.jsonl copies are for Colab)
+python3 finetune/train/prepare_dataset.py \
+  --in finetune/data/out/train-v2.jsonl \
+  --out-dir finetune/train/out/qwen --template qwen
+
+# 4. train (GPU box; or use the notebook's "6b" section on Colab)
+python3 train_lora.py --base Qwen/Qwen3.5-4B --template qwen \
+  --data train.jsonl --val val.jsonl --out out/qwen4b-lora-v1
+
+# 6. export — export_gguf.sh does NOT work here: llama.cpp's
+# convert_lora_to_gguf.py can't apply the qwen3_5 V-head reorder to LoRA
+# factors (NotImplementedError). Merge in PyTorch, convert, then graft the
+# stock GGUF's metadata (transformers drops the MTP draft layer, so the
+# converted file declares block_count 33 with only 32 layers of tensors and
+# llama.cpp refuses to load it):
+python3 -m venv /tmp/merge-venv
+/tmp/merge-venv/bin/pip install torch transformers peft accelerate safetensors
+/tmp/merge-venv/bin/python finetune/train/merge_qwen_lora.py \
+  finetune/train/out/qwen4b-lora-v1-adapter /tmp/qwen4b-merged
+/tmp/merge-venv/bin/python ~/src/llama.cpp/convert_hf_to_gguf.py /tmp/qwen4b-merged \
+  --outfile finetune/train/out/gguf-qwen/qwen3.5-4B-rhymeai-merged-BF16.gguf \
+  --outtype bf16
+hf download unsloth/Qwen3.5-4B-GGUF Qwen3.5-4B-BF16.gguf --local-dir ~/models
+/tmp/merge-venv/bin/python finetune/train/graft_mtp.py \
+  ~/models/Qwen3.5-4B-BF16.gguf \
+  finetune/train/out/gguf-qwen/qwen3.5-4B-rhymeai-merged-BF16.gguf \
+  /tmp/qwen-grafted-BF16.gguf
+llama-quantize /tmp/qwen-grafted-BF16.gguf \
+  finetune/train/out/gguf-qwen/qwen3.5-4B-rhymeai-Q4_K_M.gguf Q4_K_M
+
+# 7. score (stock baselines: finetune/baseline-qwen4b*.json, 3 runs)
+python3 finetune/eval/run_eval.py --template qwen \
+  --model finetune/train/out/gguf-qwen/qwen3.5-4B-rhymeai-Q4_K_M.gguf \
+  --out finetune/tuned-qwen4b.json
+```
+
+Ship gate for the bake-off: tuned Qwen must match tuned E4B v2 on format
+pass and rhyme hit (3-run median), then win or tie the paired naturalness
+A/B, before it replaces the Gemma base — its memory (2.9 GB vs 5+ GB
+resident) and license (Apache 2.0) advantages only matter if quality holds.
+
 ## Cost estimate
 
 Worst-case on-demand math, both models:

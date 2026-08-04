@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -96,19 +97,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.R
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
@@ -118,6 +119,7 @@ import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.service.TrashedVoiceMemo
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.appWritingSurface
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -198,6 +200,10 @@ fun ProjectsDrawer(
         }
     }
 
+    BackHandler(enabled = !showTrashBin) {
+        closeDrawer()
+    }
+
     LaunchedEffect(Unit) {
         drawerVisible = true
     }
@@ -256,17 +262,7 @@ fun ProjectsDrawer(
         label = "trashRevealProgress"
     )
 
-    Dialog(
-        onDismissRequest = {
-            if (showTrashBin) closeTrashBin() else closeDrawer()
-        },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
-    ) {
-        EdgeToEdgeDialogEffect()
-        Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
                 visible = drawerVisible,
                 enter = fadeIn(animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing)),
@@ -302,16 +298,17 @@ fun ProjectsDrawer(
                     modifier = Modifier
                         .graphicsLayer { translationX = -screenWidthPx * 0.3f * trashRevealProgress }
                         .fillMaxSize()
+                        .appWritingSurface()
                         .imePadding()
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = {}
-                        ),
+                    ),
                     shape = RoundedCornerShape(0.dp),
-                    color = colorScheme.surfaceContainerLow,
+                    color = Color.Transparent,
                     contentColor = colorScheme.onSurface,
-                    tonalElevation = 8.dp
+                    tonalElevation = 0.dp
                 ) {
                     val bottomActionClearance = maxOf(
                         navigationBarBottomPadding(),
@@ -335,46 +332,65 @@ fun ProjectsDrawer(
                                         DesignTokens.Spacing.lg
                                 )
                         ) {
-                            // Full-bleed search: one trailing X inside the field — clears the
-                            // query while typing, closes the drawer when the field is empty.
-                            OutlinedTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                singleLine = true,
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.Search,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                },
-                                trailingIcon = {
-                                    val isClearing = searchQuery.isNotEmpty()
-                                    IconButton(onClick = {
-                                        if (isClearing) searchQuery = "" else closeDrawer()
-                                    }) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = searchQuery,
+                                    onValueChange = { searchQuery = it },
+                                    singleLine = true,
+                                    leadingIcon = {
                                         Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = if (isClearing) "Clear search" else "Close drawer",
-                                            tint = colorScheme.onSurfaceVariant,
+                                            Icons.Default.Search,
+                                            contentDescription = null,
                                             modifier = Modifier.size(18.dp)
                                         )
-                                    }
-                                },
-                                placeholder = {
-                                    Text(
-                                        text = if (selectedTab == 0) {
-                                            "Search songs"
-                                        } else {
-                                            "Search recordings"
-                                        },
-                                        fontSize = 14.sp
+                                    },
+                                    trailingIcon = if (searchQuery.isNotEmpty()) {
+                                        {
+                                            IconButton(onClick = { searchQuery = "" }) {
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    contentDescription = "Clear search",
+                                                    tint = colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        null
+                                    },
+                                    placeholder = {
+                                        Text(
+                                            text = if (selectedTab == 0) {
+                                                "Search songs"
+                                            } else {
+                                                "Search recordings"
+                                            },
+                                            fontSize = 14.sp
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = textFieldColors,
+                                    shape = RoundedCornerShape(DesignTokens.Radius.xl)
+                                )
+
+                                OutlinedIconButton(
+                                    onClick = { closeDrawer() },
+                                    modifier = Modifier.size(56.dp),
+                                    shape = RoundedCornerShape(DesignTokens.Radius.xl),
+                                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close drawer",
+                                        tint = colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
                                     )
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = textFieldColors,
-                                shape = RoundedCornerShape(DesignTokens.Radius.xl)
-                            )
+                                }
+                            }
 
                             OutlinedButton(
                                 onClick = { closeDrawer(afterClose = onNewProject) },
@@ -514,7 +530,7 @@ fun ProjectsDrawer(
                                 ) {
                                     Icon(
                                         Icons.Default.Delete,
-                                        contentDescription = "Open Trash Bin",
+                                        contentDescription = null,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
@@ -559,7 +575,6 @@ fun ProjectsDrawer(
                     .padding(bottom = navigationBarBottomPadding())
                     .padding(DesignTokens.Spacing.lg)
             )
-        }
     }
 
 }
@@ -1204,7 +1219,7 @@ private fun ProjectDrawerRow(
                 modifier = Modifier.size(DesignTokens.Touch.minTarget)
             ) {
                 Icon(
-                    Icons.Default.Close,
+                    Icons.Default.Delete,
                     contentDescription = "Delete ${project.title.ifEmpty { "Untitled Song" }}",
                     tint = colorScheme.error.copy(alpha = 0.75f),
                     modifier = Modifier.size(18.dp)
@@ -1324,8 +1339,10 @@ private fun TrashBinPage(
     }
 
     Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = colorScheme.surfaceContainerLow,
+        modifier = Modifier
+            .fillMaxSize()
+            .appWritingSurface(),
+        color = Color.Transparent,
         contentColor = colorScheme.onSurface
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -1520,7 +1537,12 @@ private fun TrashRecordingSelectableRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
-            .clickable(onClick = onToggle)
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
+            .semantics { contentDescription = displayName }
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
@@ -1558,7 +1580,7 @@ private fun TrashRecordingSelectableRow(
             )
         }
 
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
@@ -1593,7 +1615,12 @@ private fun TrashSelectionHeaderRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(DesignTokens.Touch.minTarget)
-            .clickable(onClick = onToggle),
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
+            .semantics { contentDescription = "All items" },
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -1603,7 +1630,7 @@ private fun TrashSelectionHeaderRow(
             color = colorScheme.onSurface,
             modifier = Modifier.weight(1f)
         )
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
@@ -1621,7 +1648,14 @@ private fun TrashProjectSelectableRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
-            .clickable(onClick = onToggle)
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
+            .semantics {
+                contentDescription = project.title.ifEmpty { "Untitled Song" }
+            }
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
@@ -1659,12 +1693,12 @@ private fun TrashProjectSelectableRow(
             )
         }
 
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
 @Composable
-private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
+private fun SelectionCircle(selected: Boolean) {
     val colorScheme = MaterialTheme.colorScheme
     val fillColor by animateColorAsState(
         targetValue = if (selected) colorScheme.primary else colorScheme.surfaceContainerLow,
@@ -1675,9 +1709,7 @@ private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
         animationSpec = tween(DesignTokens.Motion.feedbackMillis)
     )
     Box(
-        modifier = Modifier
-            .size(DesignTokens.Touch.minTarget)
-            .clickable(onClick = onToggle),
+        modifier = Modifier.size(DesignTokens.Touch.minTarget),
         contentAlignment = Alignment.Center
     ) {
         Box(

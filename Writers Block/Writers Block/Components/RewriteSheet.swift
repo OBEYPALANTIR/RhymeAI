@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct RewriteSheet: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let action: RewriteAction
     let original: String
     let preview: String?
@@ -21,11 +23,11 @@ struct RewriteSheet: View {
                         .foregroundStyle(.primary.opacity(0.8))
                         .padding(RhymeAITokens.Spacing.sm)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
+                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm)
 
                     Text("Rewrite")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.indigo)
+                        .foregroundStyle(appearance.palette.action)
 
                     Group {
                         if loading {
@@ -36,7 +38,7 @@ struct RewriteSheet: View {
                         } else if let error {
                             Text(error)
                                 .font(.callout)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(appearance.palette.error)
                         } else if let preview {
                             Text(preview)
                                 .font(.system(.body, design: .serif))
@@ -48,7 +50,7 @@ struct RewriteSheet: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(RhymeAITokens.Spacing.sm)
-                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm, tint: .indigo.opacity(0.10), fallbackOpacity: 0.08)
+                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm)
                 }
                 .padding(RhymeAITokens.Spacing.md)
                 .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)

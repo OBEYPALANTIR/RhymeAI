@@ -4,15 +4,23 @@ import android.content.ContentValues
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -24,17 +32,22 @@ import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.TextRange
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.lifecycle.ViewModelProvider
+import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
+import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.util.PronunciationDictionary
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.After
 import org.junit.Before
 import org.junit.Assume.assumeTrue
@@ -48,6 +61,7 @@ class NewFeatureUiTest {
     val composeRule = createEmptyComposeRule()
 
     private var scenario: ActivityScenario<MainActivity>? = null
+    private var previousFontScale: String? = null
 
     @Before
     fun setUp() {
@@ -60,8 +74,12 @@ class NewFeatureUiTest {
 
     @After
     fun tearDown() {
-        scenario?.close()
-        scenario = null
+        try {
+            scenario?.close()
+        } finally {
+            scenario = null
+            restoreFontScale()
+        }
     }
 
     @Test
@@ -75,12 +93,196 @@ class NewFeatureUiTest {
     }
 
     @Test
+    fun longEditorTitleKeepsActionsReachable() {
+        // Given
+        val title = "A Very Long Song Title That Still Needs Useful Context"
+        val nonEmptyLyrics = "A line that keeps Share enabled"
+
+        // When
+        composeRule.onNodeWithText("New Song").performClick()
+        scenario?.onActivity { activity ->
+            ViewModelProvider(activity)[MainViewModel::class.java]
+                .seedEditorForTesting(title, nonEmptyLyrics)
+        }
+        composeRule.waitForIdle()
+        composeRule.mainClock.advanceTimeBy(1_500)
+        composeRule.waitForIdle()
+
+        // Then
+        val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
+        val titleBounds = composeRule.onNodeWithTag("editorTopBarTitle")
+            .getUnclippedBoundsInRoot()
+        val titleWidth = titleBounds.right.value - titleBounds.left.value
+        assertTrue("Title needs at least 100dp", titleWidth >= 100f)
+        val savedBounds = composeRule.onNodeWithContentDescription("Saved")
+            .assertIsDisplayed()
+            .getUnclippedBoundsInRoot()
+        assertTrue(
+            "Saved status must have positive geometry",
+            savedBounds.right.value > savedBounds.left.value &&
+                savedBounds.bottom.value > savedBounds.top.value
+        )
+        assertTrue(
+            "Saved status must remain inside the root",
+            savedBounds.left.value >= rootBounds.left.value &&
+                savedBounds.top.value >= rootBounds.top.value &&
+                savedBounds.right.value <= rootBounds.right.value &&
+                savedBounds.bottom.value <= rootBounds.bottom.value
+        )
+        composeRule.onNodeWithContentDescription("Share")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+        composeRule.onNodeWithContentDescription("Settings")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .performClick()
+        composeRule.onNode(hasText("Ink Marks") and isSelected()).assertExists()
+        composeRule.onNodeWithText("Editor").performClick()
+        composeRule.onNodeWithText("Syllable Guide").assertIsOn()
+        composeRule.onNodeWithText("Rhyme Families").assertIsOn()
+        composeRule.onNodeWithContentDescription("Rhyme Families help").performClick()
+        composeRule.onNodeWithText(
+            "Underlines matching rhyme sounds throughout the current lyric. " +
+                "Solid, dashed, dotted, and dash-dot lines identify rhyme families; " +
+                "this does not change generated suggestions."
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun welcomeCardsRemainHittableAtLargeFontScale() {
+        // Given
+        setFontScale(2.0f)
+
+        // When
+        relaunchActivity()
+
+        // Then
+        listOf("New Song", "Load Song", "Song Templates").forEach { title ->
+            composeRule.onNodeWithText(title)
+                .assertIsDisplayed()
+                .assertHasClickAction()
+        }
+        listOf(
+            "Start with a blank canvas",
+            "Continue where you left off",
+            "Start with a structured layout"
+        ).forEach { subtitle ->
+            composeRule.onNodeWithText(subtitle).assertIsDisplayed()
+        }
+
+        val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
+        val textContainers = composeRule.onAllNodesWithTag(
+            "welcomeCardText",
+            useUnmergedTree = true
+        )
+            .assertCountEquals(3)
+        val textContainerBounds = List(3) { index ->
+            textContainers[index].getUnclippedBoundsInRoot()
+        }
+        textContainerBounds.forEachIndexed { index, bounds ->
+            assertTrue(
+                "Welcome card text container $index must have positive geometry",
+                bounds.right.value > bounds.left.value && bounds.bottom.value > bounds.top.value
+            )
+            assertTrue(
+                "Welcome card text container $index must stay inside the root",
+                bounds.left.value >= rootBounds.left.value &&
+                    bounds.top.value >= rootBounds.top.value &&
+                    bounds.right.value <= rootBounds.right.value &&
+                    bounds.bottom.value <= rootBounds.bottom.value
+            )
+        }
+        val trailingEdge = textContainerBounds.first().right.value
+        textContainerBounds.drop(1).forEachIndexed { index, bounds ->
+            assertTrue(
+                "Welcome card text container ${index + 1} must fill the available card width",
+                kotlin.math.abs(bounds.right.value - trailingEdge) <= 1f
+            )
+        }
+    }
+
+    @Test
+    fun undoRedoButtonsRestoreLyrics() {
+        // Given
+        composeRule.onNodeWithText("New Song").performClick()
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        val undoButton = composeRule.onNodeWithTag("undoLyricsButton")
+        val redoButton = composeRule.onNodeWithTag("redoLyricsButton")
+        undoButton.assertIsNotEnabled()
+        redoButton.assertIsNotEnabled()
+
+        // When
+        editor.performClick().performTextInput("first line")
+        undoButton.assertIsEnabled().performClick()
+
+        // Then
+        assertEquals(
+            "",
+            editor.fetchSemanticsNode().config[SemanticsProperties.EditableText].text
+        )
+        redoButton.assertIsEnabled()
+
+        // When
+        redoButton.performClick()
+
+        // Then
+        editor.assertTextEquals("first line")
+        captureRootScreenshot("undo-redo-phone.png")
+    }
+
+    @Test
+    fun editorActionsStayGroupedAtTheRightEdge() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
+        val unBlockBounds = composeRule.onNodeWithTag("unBlockAction")
+            .assertIsDisplayed()
+            .getUnclippedBoundsInRoot()
+        val micBounds = composeRule.onNodeWithContentDescription("Voice memos")
+            .assertIsDisplayed()
+            .getUnclippedBoundsInRoot()
+        val rightInset = rootBounds.right.value - micBounds.right.value
+        val unBlockCenter = (unBlockBounds.left.value + unBlockBounds.right.value) / 2f
+        val rootCenter = (rootBounds.left.value + rootBounds.right.value) / 2f
+
+        assertTrue(
+            "The mic should keep the editor's 21dp right-edge inset",
+            kotlin.math.abs(rightInset - DesignTokens.Rhythm.standard.value) <= 1f
+        )
+        assertTrue("UnBlock should sit on the right half of the editor", unBlockCenter > rootCenter)
+    }
+
+    @Test
+    fun lyricStatsSitBelowTheEditableTitle() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val topBarTitle = composeRule.onNodeWithTag("editorTopBarTitle")
+            .assertIsDisplayed()
+            .getUnclippedBoundsInRoot()
+        val title = composeRule.onNodeWithTag("songTitleEditor")
+            .assertIsDisplayed()
+            .getUnclippedBoundsInRoot()
+        val stats = composeRule.onNodeWithTag("editorStats")
+            .assertTextEquals("0w · 0s")
+            .getUnclippedBoundsInRoot()
+
+        assertTrue(
+            "Stats must leave the top-bar action cluster",
+            stats.top.value > topBarTitle.bottom.value
+        )
+        assertTrue(
+            "Stats must follow the editable title",
+            stats.top.value >= title.bottom.value
+        )
+    }
+
+    @Test
     fun movingSongToTrashShowsFullPageTrashBinAndRestoreActions() {
         createSavedSong(title = "UI Trash Song")
 
         composeRule.onNodeWithContentDescription("Open songs drawer").performClick()
         composeRule.onNodeWithContentDescription("Delete UI Trash Song").performClick()
-        composeRule.onNodeWithText("Move to Trash").performClick()
+        composeRule.onNodeWithText("\"UI Trash Song\" moved to Trash").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Open Trash Bin").performClick()
 
         composeRule.onNodeWithText("Trash").assertIsDisplayed()
@@ -93,6 +295,88 @@ class NewFeatureUiTest {
     }
 
     @Test
+    fun editorSettingsSwitchesExposeAccessibleNames() {
+        composeRule.onNodeWithText("New Song").performClick()
+        scenario?.onActivity { activity ->
+            ViewModelProvider(activity)[MainViewModel::class.java]
+                .setAnalysisPresentation(AnalysisPresentation.COLOR)
+        }
+        composeRule.onNodeWithContentDescription("Settings").performClick()
+        composeRule.onNodeWithText("Editor").performClick()
+
+        listOf(
+            "Syllable Guide",
+            "Rhyme Families",
+            "Whole Song Context",
+            "Stress + IPA",
+            "Highlight Suggestion Rhymes",
+            "Beat Grid"
+        ).forEach { label ->
+            composeRule.onNodeWithText(label).assertExists()
+        }
+        composeRule.onNodeWithContentDescription("Rhyme Families help").performClick()
+        composeRule.onNodeWithText(
+            "Colors matching rhyme sounds throughout the current lyric. " +
+                "Each color represents one rhyme family; this does not change generated suggestions."
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun trashSelectorsExposeCheckboxSemanticsAndSingleEntryNode() {
+        val title = "UI Semantics ${System.currentTimeMillis()}"
+        createSavedSong(title)
+
+        composeRule.onNodeWithContentDescription("Open songs drawer").performClick()
+        assertEquals(
+            1,
+            composeRule.onAllNodesWithContentDescription(
+                "Open Trash Bin",
+                useUnmergedTree = true
+            ).fetchSemanticsNodes().size
+        )
+        composeRule.onNodeWithContentDescription("Delete $title").performClick()
+        composeRule.onNodeWithText("\"$title\" moved to Trash").assertIsDisplayed()
+        composeRule.waitUntil(timeoutMillis = 6_000) {
+            composeRule.onAllNodesWithText("Undo").fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onNodeWithContentDescription("Open Trash Bin").performClick()
+        composeRule.waitUntil(timeoutMillis = 3_000) {
+            composeRule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()
+        }
+
+        val selector = composeRule.onNodeWithContentDescription(title)
+        val before = selector.fetchSemanticsNode().config
+        assertEquals(Role.Checkbox, before[SemanticsProperties.Role])
+        assertEquals(ToggleableState.Off, before[SemanticsProperties.ToggleableState])
+        selector.assertIsOff().performClick().assertIsOn()
+    }
+
+    @Test
+    fun drawerExposesSeparateClearAndCloseActions() {
+        composeRule.onNodeWithText("New Song").performClick()
+        composeRule.onNodeWithContentDescription("Open songs drawer").performClick()
+
+        composeRule.onNodeWithContentDescription("Close drawer").assertExists()
+        composeRule.onNodeWithText("Search songs").performTextInput("UI")
+        composeRule.onNodeWithContentDescription("Clear search").assertExists()
+        composeRule.onNodeWithContentDescription("Close drawer").assertExists()
+
+        composeRule.onNodeWithContentDescription("Clear search").performClick()
+        composeRule.onNodeWithText("Create New Song").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Close drawer").performClick()
+        composeRule.onNodeWithContentDescription("Open songs drawer").assertIsDisplayed()
+    }
+
+    @Test
+    fun assistantExposesExplicitCloseAction() {
+        composeRule.onNodeWithText("New Song").performClick()
+        composeRule.onNodeWithText("UnBlock").performClick()
+
+        composeRule.onNodeWithContentDescription("Close assistant").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("unBlockAction").assertIsDisplayed()
+    }
+
+    @Test
     fun stressAndIpaToggleRendersProsodyPreviewInAssistant() {
         // Stress + IPA was moved from the assistant panel to Settings → Editor tab.
         // Enable it there first, then open the assistant panel to verify prosody renders.
@@ -102,10 +386,10 @@ class NewFeatureUiTest {
 
         // Open Settings and navigate to the Editor tab.
         composeRule.onNodeWithContentDescription("Settings").performClick()
-        composeRule.onNodeWithText("Editor").performScrollTo().performClick()
+        composeRule.onNodeWithText("Editor").performClick()
 
         // Enable Stress + IPA in the Editor tab.
-        composeRule.onNodeWithContentDescription("Toggle Stress + IPA").performScrollTo().performClick()
+        composeRule.onNodeWithContentDescription("Stress + IPA").performScrollTo().performClick()
 
         // Dismiss Settings.
         composeRule.onNodeWithContentDescription("Close").performClick()
@@ -287,8 +571,7 @@ class NewFeatureUiTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test
-    fun rewriteLoadingShowsShimmerOverSelection() {
-        composeRule.mainClock.autoAdvance = false
+    fun rewriteLoadingShowsMotionOverSelection() {
         composeRule.onNodeWithText("New Song").performClick()
 
         val lyrics = """
@@ -303,6 +586,7 @@ class NewFeatureUiTest {
         composeRule.onNodeWithTag("lyricsEditor").performClick()
         composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
         composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
+        composeRule.mainClock.autoAdvance = false
 
         scenario?.onActivity { activity ->
             ViewModelProvider(activity)[MainViewModel::class.java]
@@ -316,7 +600,15 @@ class NewFeatureUiTest {
         composeRule.mainClock.advanceTimeBy(600)
         composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
         composeRule.onNodeWithTag("lyricsEditor").assertIsDisplayed()
-        captureRootScreenshot("rewrite-loading-shimmer.png")
+        val editorBounds = composeRule.onNodeWithTag("lyricsEditor").getUnclippedBoundsInRoot()
+        captureRootScreenshot("rewrite-loading-${BuildConfig.REWRITE_MOTION_STYLE}-start.png")
+
+        composeRule.mainClock.advanceTimeBy(300)
+        captureRootScreenshot("rewrite-loading-${BuildConfig.REWRITE_MOTION_STYLE}.png")
+
+        composeRule.mainClock.advanceTimeBy(300)
+        assertEquals(editorBounds, composeRule.onNodeWithTag("lyricsEditor").getUnclippedBoundsInRoot())
+        captureRootScreenshot("rewrite-loading-${BuildConfig.REWRITE_MOTION_STYLE}-loop-end.png")
     }
 
     @OptIn(ExperimentalTestApi::class)
@@ -448,7 +740,7 @@ class NewFeatureUiTest {
         composeRule.onNodeWithText("New Song").performClick()
         composeRule.onNodeWithTag("songTitleEditor").performTextInput(title)
         composeRule.waitUntil(timeoutMillis = 3_000) {
-            composeRule.onAllNodesWithText("Saved").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithContentDescription("Saved").fetchSemanticsNodes().isNotEmpty()
         }
     }
 
@@ -464,10 +756,32 @@ class NewFeatureUiTest {
         }
     }
 
-    private fun shell(command: String) {
+    private fun setFontScale(scale: Float) {
+        check(previousFontScale == null) { "Font scale was already changed by this test" }
+        previousFontScale = shell("settings get system font_scale").trim()
+        shell("settings put system font_scale $scale")
+    }
+
+    private fun restoreFontScale() {
+        val previous = previousFontScale ?: return
+        if (previous == "null") {
+            shell("settings delete system font_scale")
+        } else {
+            shell("settings put system font_scale $previous")
+        }
+        previousFontScale = null
+    }
+
+    private fun relaunchActivity() {
+        scenario?.close()
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+        composeRule.waitForIdle()
+    }
+
+    private fun shell(command: String): String {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use {
-            it.readBytes()
+        return ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use {
+            it.readBytes().toString(Charsets.UTF_8)
         }
     }
 }

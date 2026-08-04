@@ -4,8 +4,24 @@ import UniformTypeIdentifiers
 
 private let projectDrawerDismissDuration: TimeInterval = RhymeAITokens.Motion.feedbackDuration
 
+enum ProjectsDrawerPresentation {
+    case overlay
+    case persistentSidebar
+    case transientSidebar
+
+    var isSidebar: Bool {
+        self != .overlay
+    }
+
+    var dismissesAfterNavigation: Bool {
+        self != .persistentSidebar
+    }
+}
+
 struct ProjectsDrawerView: View {
     @Binding var isPresented: Bool
+    let presentation: ProjectsDrawerPresentation
+    let onOpenTrash: (() -> Void)?
     @EnvironmentObject private var viewModel: EditorViewModel
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
@@ -86,7 +102,7 @@ struct ProjectsDrawerView: View {
                 }
             }
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.indigo)
+            .foregroundStyle(appearance.palette.action)
             .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.lg)
@@ -136,6 +152,23 @@ struct ProjectsDrawerView: View {
     }
 
     var body: some View {
+        Group {
+            if presentation.isSidebar {
+                sidebarSurface
+            } else {
+                overlaySurface
+            }
+        }
+        .fileImporter(
+            isPresented: $fileImporterPresented,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
+        ) { result in
+            handleImport(result)
+        }
+    }
+
+    private var overlaySurface: some View {
         ZStack {
             GeometryReader { proxy in
                 // Full-page drawer: cover the entire width instead of the 3/4 panel.
@@ -185,22 +218,51 @@ struct ProjectsDrawerView: View {
                 }
             }
         }
-        .fileImporter(
-            isPresented: $fileImporterPresented,
-            allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            handleImport(result)
+    }
+
+    private var sidebarSurface: some View {
+        GeometryReader { proxy in
+            ZStack {
+                drawerContent(
+                    topInset: proxy.safeAreaInsets.top,
+                    bottomInset: proxy.safeAreaInsets.bottom
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if let toast = undoToast {
+                    undoToastView(toast)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .padding(.horizontal, RhymeAITokens.Spacing.md)
+                        .padding(
+                            .bottom,
+                            RhymeAITokens.Touch.minimum + RhymeAITokens.Spacing.xl
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
         }
+        .background(AppWritingBackground())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ipadProjectsSidebar")
     }
 
     private func drawerContent(topInset: CGFloat, bottomInset: CGFloat) -> some View {
         let resolvedTopInset = topInset > 0 ? topInset : 45
 
         return VStack(alignment: .leading, spacing: 0) {
-            // Full-width search; the trailing X inside the field clears the query
-            // while typing and closes the drawer when the field is empty.
-            searchField
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                searchField
+
+                Button(action: closeDrawer) {
+                    Image(systemName: "xmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.rhymePress)
+                .accessibilityLabel("Close drawer")
+            }
                 .padding(.top, RhymeAITokens.Spacing.lg)
 
             // Tab picker — spans Songs and Recordings
@@ -234,7 +296,7 @@ struct ProjectsDrawerView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 viewModel.newProject()
-                closeDrawer()
+                dismissAfterNavigation()
             } label: {
                 HStack(spacing: RhymeAITokens.Spacing.sm) {
                     Image(systemName: "plus")
@@ -242,10 +304,10 @@ struct ProjectsDrawerView: View {
                     Text("Create New Song")
                         .font(.body.weight(.semibold))
                 }
-                .foregroundStyle(.primary)
+                .foregroundStyle(appearance.palette.onAction)
                 .frame(maxWidth: .infinity)
                 .frame(height: RhymeAITokens.Spacing.xxl)
-                .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.10), interactive: true)
+                .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
             }
             .buttonStyle(.rhymePress)
             .padding(.top, RhymeAITokens.Spacing.md)
@@ -290,8 +352,13 @@ struct ProjectsDrawerView: View {
 
                 Button {
                     viewModel.purgeExpiredTrashedProjects()
-                    withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
-                        trashBinPresented = true
+                    undoToast = nil
+                    if let onOpenTrash {
+                        onOpenTrash()
+                    } else {
+                        withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
+                            trashBinPresented = true
+                        }
                     }
                 } label: {
                     trashBinButtonLabel
@@ -304,7 +371,7 @@ struct ProjectsDrawerView: View {
             if let importError {
                 Text(importError)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(appearance.palette.error)
                     .padding(.top, RhymeAITokens.Spacing.xs)
             }
         }
@@ -490,7 +557,7 @@ struct ProjectsDrawerView: View {
                 } label: {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
-                        .foregroundStyle(isSelected ? .red : .secondary)
+                        .foregroundStyle(isSelected ? appearance.palette.action : Color.secondary)
                         .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                 }
                 .buttonStyle(.rhymePress)
@@ -620,24 +687,27 @@ struct ProjectsDrawerView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
 
-            TextField(activeTab == .songs ? "Search songs" : "Search recordings", text: $searchText)
+            TextField(
+                "",
+                text: $searchText,
+                prompt: Text(activeTab == .songs ? "Search songs" : "Search recordings")
+                    .foregroundStyle(appearance.palette.placeholder)
+            )
                 .textInputAutocapitalization(.never)
-                .foregroundStyle(.primary)
+                .foregroundStyle(appearance.palette.primaryInk)
 
-            Button {
-                if searchText.isEmpty {
-                    closeDrawer()
-                } else {
+            if !searchText.isEmpty {
+                Button {
                     searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                        .contentShape(Rectangle())
                 }
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                    .contentShape(Rectangle())
+                .buttonStyle(.rhymePress)
+                .accessibilityLabel("Clear search")
             }
-            .buttonStyle(.rhymePress)
-            .accessibilityLabel(searchText.isEmpty ? "Close drawer" : "Clear search")
         }
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
         .frame(height: RhymeAITokens.Touch.minimum)
@@ -650,7 +720,7 @@ struct ProjectsDrawerView: View {
         return HStack(spacing: RhymeAITokens.Spacing.xs) {
             Button {
                 viewModel.loadProject(project)
-                closeDrawer()
+                dismissAfterNavigation()
             } label: {
                 HStack(spacing: RhymeAITokens.Spacing.sm) {
                     VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
@@ -672,7 +742,7 @@ struct ProjectsDrawerView: View {
 
                     if isActive {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.indigo)
+                            .foregroundStyle(appearance.palette.action)
                     }
                 }
                 .contentShape(Rectangle())
@@ -689,14 +759,14 @@ struct ProjectsDrawerView: View {
                     }
                 }
             } label: {
-                Image(systemName: "xmark")
+                Image(systemName: "trash")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.red.opacity(0.85))
+                    .foregroundStyle(appearance.palette.error.opacity(0.85))
                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.rhymePress)
-            .accessibilityLabel("Delete \(project.title.isEmpty ? "Untitled Song" : project.title)")
+            .accessibilityLabel("Move \(project.title.isEmpty ? "Untitled Song" : project.title) to Trash")
         }
         .frame(minHeight: 76)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
@@ -718,6 +788,11 @@ struct ProjectsDrawerView: View {
     }
 
     private func closeDrawer() {
+        if presentation.isSidebar {
+            isPresented = false
+            return
+        }
+
         guard !isClosing else { return }
         isClosing = true
         withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
@@ -727,6 +802,11 @@ struct ProjectsDrawerView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + removalDelay) {
             isPresented = false
         }
+    }
+
+    private func dismissAfterNavigation() {
+        guard presentation.dismissesAfterNavigation else { return }
+        closeDrawer()
     }
 
     private func handleImport(_ result: Result<[URL], Error>) {
@@ -739,7 +819,7 @@ struct ProjectsDrawerView: View {
                 let data = try Data(contentsOf: url)
                 let exported = try LyricsExporter.decodeJsonExport(data)
                 viewModel.importProject(exported)
-                closeDrawer()
+                dismissAfterNavigation()
             } catch {
                 importError = "Could not import this file. Pick a RhymeAI project JSON."
             }
@@ -755,6 +835,8 @@ struct ProjectsDrawerView: View {
 // The service serialises playback — tapping a second row stops the first — so the
 // worst case is one extra render cycle where both rows show "playing".
 private struct PlayPauseButton: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let url: URL
     let service: VoiceMemoService
 
@@ -767,7 +849,7 @@ private struct PlayPauseButton: View {
         } label: {
             Image(systemName: rowIsPlaying ? "pause.circle.fill" : "play.circle.fill")
                 .font(.title2)
-                .foregroundStyle(rowIsPlaying ? .red : .accentColor)
+                .foregroundStyle(rowIsPlaying ? appearance.palette.recording : appearance.palette.action)
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
         }
         .accessibilityLabel(rowIsPlaying ? "Pause recording" : "Play recording")

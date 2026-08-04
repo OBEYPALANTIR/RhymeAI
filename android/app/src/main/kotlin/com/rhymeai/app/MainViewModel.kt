@@ -8,7 +8,10 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.rhymeai.app.data.model.AnalysisPresentation
+import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.RewriteAction
+import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
@@ -28,6 +31,7 @@ import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.ProsodyAnalyzer
+import com.rhymeai.app.util.EditHistory
 import com.rhymeai.app.util.RhymeMatches
 import com.rhymeai.app.util.SectionRef
 import com.rhymeai.app.util.WordProsody
@@ -165,6 +169,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var showExportSheet by mutableStateOf(false)
 
     // Settings
+    private var _appAppearance by mutableStateOf(AppAppearance.INK)
+    val appAppearance: AppAppearance
+        get() = _appAppearance
+    private var _analysisPresentation by mutableStateOf(AnalysisPresentation.COLOR)
+    val analysisPresentation: AnalysisPresentation
+        get() = _analysisPresentation
+    var appearanceLoaded by mutableStateOf(false)
+        private set
     var selectedProvider by mutableStateOf(AIProvider.GEMINI)
     var selectedModel by mutableStateOf(AIModel.DEFAULT)
     var showSettingsDialog by mutableStateOf(false)
@@ -357,6 +369,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var localModelLoading by mutableStateOf(false)
     var localModelLoaded by mutableStateOf(false)
     var localModelError by mutableStateOf<String?>(null)
+    var savedLocalModels by mutableStateOf<List<SavedLocalModel>>(emptyList())
+        private set
+    var selectedLocalModelId by mutableStateOf<String?>(null)
+        private set
 
     // Error state
     var errorMessage by mutableStateOf<String?>(null)
@@ -432,6 +448,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var autoSaveJob: Job? = null
     private var trashSchedulerJob: Job? = null
+    private val lyricsHistory = EditHistory<TextFieldValue>()
+    var canUndoLyrics by mutableStateOf(false)
+        private set
+    var canRedoLyrics by mutableStateOf(false)
+        private set
 
     val activeRhymeScheme: String
         get() = if (rhymeScheme == RhymeScheme.CUSTOM)
@@ -443,6 +464,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         syncPassphraseStored = driveSyncService.hasPassphrase()
 
         viewModelScope.launch {
+            _appAppearance = runCatching { repo.appearanceFlow.first() }
+                .getOrDefault(AppAppearance.INK)
+            _analysisPresentation = runCatching { repo.analysisPresentationFlow.first() }
+                .getOrDefault(AnalysisPresentation.COLOR)
+            appearanceLoaded = true
+
             // Load projects
             projects = repo.projectsFlow.first()
             trashedProjects = repo.trashedProjectsFlow.first()
@@ -459,6 +486,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             selectedProvider = AIProvider.fromName(savedProvider)
             val savedModelId = repo.modelIdFlow.first()
             if (savedModelId.isNotEmpty()) selectedModel = AIModel.fromId(savedModelId)
+            restoreSavedLocalModels()
 
             // Load editor state
             val (savedTitle, savedLyrics, savedTheme) = repo.editorStateFlow().first()
@@ -556,6 +584,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setAppAppearance(appearance: AppAppearance) {
+        _appAppearance = appearance
+        viewModelScope.launch {
+            try {
+                repo.saveAppearance(appearance)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                errorMessage = e.message ?: "Failed to save appearance"
+            }
+        }
+    }
+
+    fun setAnalysisPresentation(value: AnalysisPresentation) {
+        _analysisPresentation = value
+        viewModelScope.launch {
+            try {
+                repo.saveAnalysisPresentation(value)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                errorMessage = error.message ?: "Failed to save analysis style"
+            }
+        }
+    }
+
     fun requestRewrite(action: RewriteAction) {
         val selection = pendingRewriteRange ?: lyricsFieldValue.selection
         val start = selection.min.coerceIn(0, lyrics.length)
@@ -632,6 +686,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun seedEditorForTesting(title: String, lyrics: String, selection: TextRange = TextRange.Zero) {
+        check(BuildConfig.DEBUG) { "Editor test seeding is only available in debug builds." }
+        autoSaveJob?.cancel()
+        dismissRewrite()
+        this.title = title
+        lyricsFieldValue = TextFieldValue(lyrics, selection)
+        theme = ""
+        currentProjectId = null
+        suggestions = emptyList()
+        _analysisPresentation = AnalysisPresentation.INK_MARKS
+        isSyllableColoringEnabled = true
+        isRhymeHighlightEnabled = true
+        saveStatus = SaveStatus.SAVED
+        showStartMenu = false
+        resetLyricsHistory()
+    }
+
     fun seedRewriteErrorForTesting(action: RewriteAction, range: TextRange, original: String, error: String) {
         seedRewriteStateForTesting(
             action = action,
@@ -694,7 +765,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val after = text.substring(range.max)
         val newText = before + preview + after
         val newCursor = (range.min + preview.length).coerceAtMost(newText.length)
-        lyricsFieldValue = TextFieldValue(newText, TextRange(newCursor))
+        applyAtomicLyricsEdit(TextFieldValue(newText, TextRange(newCursor)))
         dismissRewrite()
         triggerAutoSave()
     }
@@ -795,7 +866,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val newText = text.replaceRange(range.min, range.max, replacement)
         val newCursor = (range.min + replacement.length).coerceAtMost(newText.length)
-        lyricsFieldValue = TextFieldValue(newText, TextRange(newCursor))
+        applyAtomicLyricsEdit(TextFieldValue(newText, TextRange(newCursor)))
         dismissInspector()
         triggerAutoSave()
     }
@@ -822,14 +893,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val insertText = (if (needsNewline) "\n" else "") + suggestion + "\n"
         val newText = before + insertText + after
         val newPos = pos + insertText.length
-        lyricsFieldValue = TextFieldValue(newText, TextRange(newPos))
+        applyAtomicLyricsEdit(TextFieldValue(newText, TextRange(newPos)))
         suggestions = emptyList()
         triggerAutoSave()
     }
 
     fun newProject() {
         autoSaveJob?.cancel()
-        pendingRewriteRange = null
+        dismissRewrite()
         title = ""
         lyricsFieldValue = TextFieldValue("")
         theme = ""
@@ -837,6 +908,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         suggestions = emptyList()
         showProjectsDialog = false
         showStartMenu = false
+        resetLyricsHistory()
         viewModelScope.launch {
             repo.setCurrentProjectId(null)
             repo.saveEditorState("", "", "")
@@ -845,7 +917,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadProject(project: SongProject) {
         autoSaveJob?.cancel()
-        pendingRewriteRange = null
+        dismissRewrite()
         title = project.title
         lyricsFieldValue = TextFieldValue(project.lyrics)
         theme = project.theme
@@ -853,6 +925,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         suggestions = emptyList()
         showProjectsDialog = false
         showStartMenu = false
+        resetLyricsHistory()
         viewModelScope.launch {
             repo.setCurrentProjectId(project.id)
             repo.saveEditorState(project.title, project.lyrics, project.theme)
@@ -957,7 +1030,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun clearEditorAfterProjectDelete() {
         autoSaveJob?.cancel()
-        pendingRewriteRange = null
+        dismissRewrite()
         title = ""
         lyricsFieldValue = TextFieldValue("")
         theme = ""
@@ -965,10 +1038,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         suggestions = emptyList()
         errorMessage = null
         saveStatus = SaveStatus.IDLE
+        resetLyricsHistory()
     }
 
     fun importProject(imported: SongProject) {
-        pendingRewriteRange = null
+        dismissRewrite()
         val newId = java.util.UUID.randomUUID().toString()
         val project = imported.copy(
             id = newId,
@@ -983,6 +1057,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         suggestions = emptyList()
         showProjectsDialog = false
         showStartMenu = false
+        resetLyricsHistory()
         viewModelScope.launch {
             persistActiveProjectSnapshot(
                 projectId = project.id,
@@ -1041,13 +1116,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String) {
-        pendingRewriteRange = null
+        dismissRewrite()
         title = "Untitled $name"
         theme = templateTheme
         lyricsFieldValue = TextFieldValue(templateLyrics)
         currentProjectId = null
         showTemplatesDialog = false
         showStartMenu = false
+        resetLyricsHistory()
         triggerAutoSave()
     }
 
@@ -1140,13 +1216,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         triggerAutoSave()
     }
 
-    fun onLyricsChanged(newValue: TextFieldValue) {
+    fun onLyricsChanged(
+        newValue: TextFieldValue,
+        timestampMilliseconds: Long = android.os.SystemClock.uptimeMillis()
+    ) {
         if (hasActiveRewrite) return
         val previousText = lyricsFieldValue.text
         val nextValue = newValue.withValidRanges()
         if (nextValue.text != previousText) {
             pendingRewriteRange = null
+            lyricsHistory.recordUserEdit(
+                previous = lyricsFieldValue,
+                current = nextValue,
+                timestampMilliseconds = timestampMilliseconds
+            )
             lyricsFieldValue = nextValue
+            updateLyricsHistoryAvailability()
             triggerAutoSave()
             return
         }
@@ -1171,6 +1256,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         lyricsFieldValue = nextValue
+    }
+
+    fun undoLyrics() {
+        val previous = lyricsHistory.undo(lyricsFieldValue) ?: return
+        applyHistoryState(previous)
+    }
+
+    fun redoLyrics() {
+        val next = lyricsHistory.redo(lyricsFieldValue) ?: return
+        applyHistoryState(next)
+    }
+
+    private fun applyAtomicLyricsEdit(nextValue: TextFieldValue) {
+        val safeValue = nextValue.withValidRanges()
+        lyricsHistory.recordAtomicEdit(previous = lyricsFieldValue, current = safeValue)
+        lyricsFieldValue = safeValue
+        updateLyricsHistoryAvailability()
+    }
+
+    private fun applyHistoryState(state: TextFieldValue) {
+        dismissRewrite()
+        dismissInspector()
+        lyricsFieldValue = state.withValidRanges()
+        suggestions = emptyList()
+        updateLyricsHistoryAvailability()
+        triggerAutoSave()
+    }
+
+    private fun resetLyricsHistory() {
+        lyricsHistory.reset()
+        updateLyricsHistoryAvailability()
+    }
+
+    private fun updateLyricsHistoryAvailability() {
+        canUndoLyrics = lyricsHistory.canUndo
+        canRedoLyrics = lyricsHistory.canRedo
     }
 
     fun clearPendingRewriteSelection() {
@@ -1241,6 +1362,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun restoreSavedLocalModels() {
+        val filesDir = getApplication<Application>().filesDir
+        val storedModels = repo.localModelsFlow.first()
+        val persisted = storedModels.filter { model ->
+            java.io.File(filesDir, model.fileName).isFile
+        }.toMutableList()
+        val legacyFile = java.io.File(filesDir, "local_model.gguf")
+        if (legacyFile.isFile && persisted.none { it.fileName == legacyFile.name }) {
+            persisted += SavedLocalModel(
+                id = legacyFile.name,
+                displayName = "Custom Model",
+                fileName = legacyFile.name,
+                isCustom = true
+            )
+        }
+        savedLocalModels = persisted
+        if (persisted != storedModels) {
+            repo.saveLocalModels(persisted)
+        }
+        selectedLocalModelId = repo.selectedLocalModelIdFlow.first()
+            ?.takeIf { selectedId -> persisted.any { it.id == selectedId } }
+            ?: persisted.firstOrNull()?.id
+        repo.saveSelectedLocalModelId(selectedLocalModelId)
+        if (selectedProvider == AIProvider.LOCAL) {
+            selectedSavedLocalModel()?.let { model ->
+                loadLocalModel(java.io.File(filesDir, model.fileName).absolutePath)
+            }
+        }
+    }
+
+    fun registerAndSelectLocalModel(
+        path: String,
+        displayName: String,
+        isCustom: Boolean
+    ) {
+        val file = java.io.File(path)
+        val model = SavedLocalModel(
+            id = file.name,
+            displayName = displayName.ifBlank { file.nameWithoutExtension },
+            fileName = file.name,
+            isCustom = isCustom
+        )
+        savedLocalModels = (savedLocalModels.filterNot { it.id == model.id } + model)
+            .sortedBy { it.displayName.lowercase() }
+        selectedLocalModelId = model.id
+        viewModelScope.launch {
+            repo.saveLocalModels(savedLocalModels)
+            repo.saveSelectedLocalModelId(model.id)
+        }
+        saveProvider(AIProvider.LOCAL)
+        saveModel(AIModel.LOCAL_MODEL)
+        loadLocalModel(file.absolutePath)
+    }
+
+    fun selectSavedLocalModel(modelId: String) {
+        val model = savedLocalModels.firstOrNull { it.id == modelId } ?: return
+        val file = java.io.File(getApplication<Application>().filesDir, model.fileName)
+        if (!file.isFile) {
+            localModelError = "Saved model file is missing. Import it again."
+            return
+        }
+        selectedLocalModelId = model.id
+        viewModelScope.launch { repo.saveSelectedLocalModelId(model.id) }
+        saveProvider(AIProvider.LOCAL)
+        saveModel(AIModel.LOCAL_MODEL)
+        loadLocalModel(file.absolutePath)
+    }
+
+    private fun selectedSavedLocalModel(): SavedLocalModel? =
+        savedLocalModels.firstOrNull { it.id == selectedLocalModelId }
+
     // ── Gemma download — lives here (not in Settings' composable scope) so a
     // multi-gigabyte download survives leaving the screen. Resume support in
     // downloadGemmaToTemp means an app restart continues where it stopped. ──
@@ -1261,9 +1453,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             gemmaDownloadError = validationError
             return false
         }
-        saveProvider(AIProvider.LOCAL)
-        saveModel(AIModel.LOCAL_MODEL)
-        loadLocalModel(destFile.absolutePath)
+        registerAndSelectLocalModel(
+            path = destFile.absolutePath,
+            displayName = model.label,
+            isCustom = false
+        )
         return true
     }
 

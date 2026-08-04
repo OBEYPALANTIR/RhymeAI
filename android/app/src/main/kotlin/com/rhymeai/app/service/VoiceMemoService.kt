@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.rhymeai.app.BuildConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -101,6 +102,12 @@ class VoiceMemoService(private val context: Context) {
         val amplitude = raw / 32767f
         val db = 20.0 * log10(amplitude.toDouble())
         return (((db + 60.0) / 60.0).toFloat()).coerceIn(0f, 1f)
+    }
+
+    internal fun seedRecordingForTesting() {
+        check(BuildConfig.DEBUG) { "Recording test seeding requires a debug build" }
+        recordingElapsedMs = 3_000L
+        isRecording = true
     }
 
     // ---------------------------------------------------------------------------

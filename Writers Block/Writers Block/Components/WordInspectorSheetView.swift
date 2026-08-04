@@ -2,6 +2,8 @@ import SwiftUI
 import UIKit
 
 struct WordInspectorSheetView: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let word: String
     let prosody: WordProsody?
     let matches: RhymeMatches?
@@ -48,6 +50,7 @@ struct WordInspectorSheetView: View {
         }
         .padding(RhymeAITokens.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppWritingBackground())
         .accessibilityIdentifier("wordInspectorSheet")
     }
 
@@ -56,7 +59,7 @@ struct WordInspectorSheetView: View {
         HStack {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.indigo)
+                    .foregroundStyle(appearance.palette.action)
                 Text("Word inspector")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(Color.primary.opacity(0.7))
@@ -120,7 +123,7 @@ struct WordInspectorSheetView: View {
             if let error = synonymsError {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(appearance.palette.error)
             } else if synonyms.isEmpty, !synonymsLoading {
                 Text("No synonyms yet.")
                     .font(.caption)
@@ -167,6 +170,8 @@ private struct FlowChips: View {
 }
 
 private struct ChipButton: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let label: String
     let onTap: () -> Void
     @State private var copyFlash = false
@@ -182,7 +187,10 @@ private struct ChipButton: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: RhymeAITokens.Radius.pill, style: .continuous)
-                    .stroke(copyFlash ? Color.green.opacity(0.6) : Color.indigo.opacity(0.24), lineWidth: 1)
+                    .stroke(
+                        copyFlash ? appearance.palette.success.opacity(0.6) : appearance.palette.outlineStrong,
+                        lineWidth: 1
+                    )
             )
             .contentShape(Rectangle())
             .onTapGesture { onTap() }
@@ -198,6 +206,8 @@ private struct ChipButton: View {
 }
 
 private struct StressDots: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let pattern: [Int]
 
     var body: some View {
@@ -211,7 +221,7 @@ private struct StressDots: View {
                     }
                 }()
                 Circle()
-                    .fill(Color.indigo.opacity(alpha))
+                    .fill(appearance.palette.action.opacity(alpha))
                     .frame(width: size, height: size)
             }
         }

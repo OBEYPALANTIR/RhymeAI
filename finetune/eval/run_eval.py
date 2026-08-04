@@ -44,7 +44,7 @@ TEMPERATURE = 0.8
 TOP_K = 40
 TOP_P = 0.95
 N_PREDICT = 256
-STOP = ["<end_of_turn>"]
+STOP = ["<end_of_turn>"]  # reassigned in main() from the active template
 
 HEALTH_TIMEOUT_S = 300
 REQUEST_TIMEOUT_S = 600
@@ -338,11 +338,18 @@ def main():
                     "via llama-server and score the outputs.",
     )
     parser.add_argument("--model", required=True, help="Path to the .gguf model file")
+    parser.add_argument("--template", choices=sorted(prompts.TEMPLATES), default="gemma",
+                        help="Turn template to wrap the app prompts in "
+                             "(default gemma; use qwen for Qwen3.5 GGUFs)")
     parser.add_argument("--cases", type=int, default=None,
                         help="Only run the first N cases (default: all)")
     parser.add_argument("--out", default="report.json",
                         help="Path for the JSON report (default: report.json)")
     args = parser.parse_args()
+
+    prompts.set_template(args.template)
+    global STOP
+    STOP = list(prompts.active_template().stop)
 
     all_cases = cases_mod.CASES
     selected = all_cases[: args.cases] if args.cases else all_cases
@@ -385,6 +392,7 @@ def main():
 
     report = {
         "model": args.model,
+        "template": args.template,
         "sampler": {
             "ctx_size": CTX_SIZE,
             "temperature": TEMPERATURE,

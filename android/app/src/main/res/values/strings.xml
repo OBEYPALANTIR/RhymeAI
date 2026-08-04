@@ -7,7 +7,10 @@
     <string name="editor_saved">Saved</string>
     <string name="editor_open_songs_drawer">Open songs drawer</string>
     <string name="editor_export">Export</string>
+    <string name="editor_share">Share</string>
     <string name="editor_settings">Settings</string>
+    <string name="editor_undo">Undo last edit</string>
+    <string name="editor_redo">Redo last edit</string>
     <string name="editor_untitled">Untitled</string>
     <string name="editor_placeholder">Start writing your lyrics here…</string>
 

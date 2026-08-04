@@ -5,7 +5,7 @@ Runs LOCALLY (stdlib only). Takes the Phase 2 output
 (finetune/data/out/train-v1.jsonl, records of
 {"task", "case_params", "user_prompt", "completion", ...}) and emits
 train/val JSONL where each record carries a "text" field holding the FULL
-Gemma-turn-templated training example:
+turn-templated training example, e.g. for --template gemma (the default):
 
     <start_of_turn>user
     {user_prompt}
@@ -13,14 +13,13 @@ Gemma-turn-templated training example:
     <start_of_turn>model
     {completion}<end_of_turn>
 
-The prompt half is produced by `eval.prompts.gemma_instruction_prompt` — the
-same byte-for-byte port of the app's AIService template used by the eval
-harness and the data generator — so the text the LoRA trains on is EXACTLY
-the text the app will feed the model at inference time. (That function ends
-with "<start_of_turn>model" and no trailing newline; the model turn therefore
-starts with the "\n" we insert before the completion, and closes with
-"<end_of_turn>" immediately after the completion, matching the canonical
-Gemma format and the app/llama.cpp stop marker.)
+The full example is produced by `eval.prompts.training_example` — the same
+byte-for-byte port of the app's AIService template used by the eval harness
+and the data generator — so the text the LoRA trains on is EXACTLY the text
+the app will feed the model at inference time. `--template qwen` emits the
+Qwen3.5 ChatML form (empty-think prefill, `<|im_end|>` close) instead; the
+loss-mask markers for each template live in `eval.prompts.TEMPLATES` and are
+selected in train_lora.py with the same `--template` flag.
 
 Also:
   - shuffles deterministically (--seed),
@@ -56,19 +55,7 @@ _FINETUNE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _FINETUNE_DIR not in sys.path:
     sys.path.insert(0, _FINETUNE_DIR)
 
-from eval.prompts import gemma_instruction_prompt  # noqa: E402  (parity source of truth)
-
-END_OF_TURN = "<end_of_turn>"
-
-# train_lora.py masks the prompt from the loss by string-matching these
-# markers; keep them in sync with eval.prompts.gemma_instruction_prompt.
-INSTRUCTION_PART = "<start_of_turn>user\n"
-RESPONSE_PART = "<start_of_turn>model\n"
-
-
-def build_text(user_prompt: str, completion: str) -> str:
-    """Full training example: templated prompt + model turn + completion + EOT."""
-    return "%s\n%s%s" % (gemma_instruction_prompt(user_prompt), completion, END_OF_TURN)
+from eval import prompts  # noqa: E402  (parity source of truth)
 
 
 def load_records(path: str):
@@ -101,7 +88,7 @@ def percentile(sorted_values, fraction):
 def main():
     parser = argparse.ArgumentParser(
         description="Convert verified (prompt -> completion) records into "
-                    "Gemma-templated SFT JSONL with a train/val split.")
+                    "turn-templated SFT JSONL with a train/val split.")
     parser.add_argument("--in", dest="input", default="finetune/data/out/train-v1.jsonl",
                         help="Phase 2 JSONL (default finetune/data/out/train-v1.jsonl)")
     parser.add_argument("--out-dir", default="finetune/train/out",
@@ -115,8 +102,13 @@ def main():
                              "(default 6000; chars are a proxy for tokens)")
     parser.add_argument("--drop-over-max", action="store_true",
                         help="Drop over-length examples instead of only warning")
+    parser.add_argument("--template", choices=sorted(prompts.TEMPLATES),
+                        default="gemma",
+                        help="Turn template for the training text "
+                             "(default gemma; must match train_lora.py)")
     args = parser.parse_args()
 
+    prompts.set_template(args.template)
     records = load_records(args.input)
 
     # Build texts, dedup exact (task, text) repeats defensively (generate.py
@@ -126,7 +118,7 @@ def main():
     over_limit = []
     duplicates = 0
     for record in records:
-        text = build_text(record["user_prompt"], record["completion"])
+        text = prompts.training_example(record["user_prompt"], record["completion"])
         key = (record["task"], text)
         if key in seen:
             duplicates += 1

@@ -145,6 +145,7 @@
 			);
 			name = "Writers Block";
 			packageProductDependencies = (
+				78A34B022F837D260033E904 /* llama */,
 			);
 			productName = "Writers Block";
 			productReference = 78A34A542F837D250033E904 /* Writers Block.app */;
@@ -232,6 +233,9 @@
 			productRefGroup = 78A34A552F837D250033E904 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				78A34B012F837D260033E904 /* XCLocalSwiftPackageReference "LlamaFramework" */,
+			);
 			targets = (
 				78A34A532F837D250033E904 /* Writers Block */,
 				78A34A622F837D260033E904 /* Writers BlockTests */,
@@ -300,6 +304,20 @@
 			targetProxy = 78A34A6E2F837D260033E904 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		78A34B012F837D260033E904 /* XCLocalSwiftPackageReference "LlamaFramework" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = LlamaFramework;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		78A34B022F837D260033E904 /* llama */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = llama;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		78A34A752F837D260033E904 /* Debug */ = {

@@ -7,24 +7,30 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.platform.LocalDensity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
 import com.rhymeai.app.ui.components.LocalImeBottom
 import com.rhymeai.app.ui.components.LocalNavBottom
@@ -41,8 +47,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private val mainViewModel: MainViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+        installSplashScreen().setKeepOnScreenCondition { !mainViewModel.appearanceLoaded }
         super.onCreate(savedInstanceState)
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
@@ -62,9 +70,18 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
         setContent {
-            RhymeAITheme {
+            val viewModel = mainViewModel
+            RhymeAITheme(
+                appearance = viewModel.appAppearance,
+                analysisPresentation = viewModel.analysisPresentation
+            ) {
+                SideEffect {
+                    WindowInsetsControllerCompat(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !viewModel.appAppearance.isDark
+                        isAppearanceLightNavigationBars = !viewModel.appAppearance.isDark
+                    }
+                }
                 val density = LocalDensity.current
-                val viewModel: MainViewModel = viewModel()
                 val lifecycleOwner = LocalLifecycleOwner.current
 
                 DisposableEffect(lifecycleOwner, viewModel) {
@@ -125,11 +142,24 @@ class MainActivity : ComponentActivity() {
 
                     // Determine start destination
                     val startDest = if (viewModel.showStartMenu) Routes.WELCOME else Routes.EDITOR
+                    val navModifier =
+                        if (
+                            viewModel.showProjectsDialog ||
+                            viewModel.showTemplatesDialog ||
+                            viewModel.showSettingsDialog
+                        ) {
+                            Modifier.clearAndSetSemantics {}
+                        } else {
+                            Modifier
+                        }
+
+                    Box(modifier = Modifier.fillMaxSize()) {
 
                     RhymeNavGraph(
                         navController = navController,
                         viewModel = viewModel,
-                        startDestination = startDest
+                        startDestination = startDest,
+                        modifier = navModifier
                     )
 
                     // Handle dialog navigation to the editor without rebuilding it unnecessarily.
@@ -199,6 +229,10 @@ class MainActivity : ComponentActivity() {
 
                     if (viewModel.showSettingsDialog) {
                         SettingsDialog(
+                            currentAppearance = viewModel.appAppearance,
+                            onAppearanceChange = viewModel::setAppAppearance,
+                            currentAnalysisPresentation = viewModel.analysisPresentation,
+                            onAnalysisPresentationChange = viewModel::setAnalysisPresentation,
                             apiKeyPresence = viewModel.apiKeyPresence,
                             currentProvider = viewModel.selectedProvider,
                             currentModel = viewModel.selectedModel,
@@ -206,10 +240,15 @@ class MainActivity : ComponentActivity() {
                             localModelLoaded = viewModel.localModelLoaded,
                             localModelPath = viewModel.localModelPath,
                             localModelError = viewModel.localModelError,
+                            savedLocalModels = viewModel.savedLocalModels,
+                            selectedLocalModelId = viewModel.selectedLocalModelId,
                             onSaveApiKey = { provider, key -> viewModel.saveApiKey(provider, key) },
                             onSaveProvider = { viewModel.saveProvider(it) },
                             onSaveModel = { viewModel.saveModel(it) },
-                            onLoadLocalModel = { viewModel.loadLocalModel(it) },
+                            onRegisterLocalModel = { path, name ->
+                                viewModel.registerAndSelectLocalModel(path, name, isCustom = true)
+                            },
+                            onSelectSavedLocalModel = viewModel::selectSavedLocalModel,
                             onUnloadLocalModel = { viewModel.unloadLocalModel() },
                             gemmaDownloadingModel = viewModel.gemmaDownloadingModel,
                             gemmaDownloadProgress = viewModel.gemmaDownloadProgress,
@@ -240,6 +279,7 @@ class MainActivity : ComponentActivity() {
                             onBeatGridChange = { viewModel.isBeatGridEnabled = it; viewModel.persistEditorToggles() },
                             onDismiss = { viewModel.showSettingsDialog = false }
                         )
+                    }
                     }
                 }
             }

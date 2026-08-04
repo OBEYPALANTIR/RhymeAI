@@ -15,6 +15,20 @@ val localProperties = Properties().apply {
     }
 }
 val geminiTestKey = localProperties.getProperty("geminiTestKey", "")
+val includeGeminiTestKey = providers.gradleProperty("includeGeminiTestKey")
+    .orNull
+    ?.toBooleanStrictOrNull()
+    ?: false
+val embeddedGeminiTestKey = if (includeGeminiTestKey) geminiTestKey else ""
+val rewriteMotionStyleProperty = providers.gradleProperty("rewriteMotionStyle")
+val rewriteMotionStyle = rewriteMotionStyleProperty
+    .getOrElse("ripple")
+val rewriteMotionStyles = setOf("pencil", "ripple", "paper")
+if (rewriteMotionStyle !in rewriteMotionStyles) {
+    throw GradleException(
+        "rewriteMotionStyle must be one of ${rewriteMotionStyles.sorted().joinToString()}, got '$rewriteMotionStyle'"
+    )
+}
 // Optional OAuth web client id for the Drive appData integration. If absent, the
 // Android installed-app flow proceeds without a server client id (which is fine for
 // device-only sync). Set in android/local.properties as: driveOauthClientId=<value>
@@ -71,6 +85,12 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "REWRITE_MOTION_STYLE", buildConfigString(rewriteMotionStyle))
+        buildConfigField(
+            "boolean",
+            "REWRITE_MOTION_STYLE_IS_OVERRIDE",
+            rewriteMotionStyleProperty.isPresent.toString()
+        )
     }
 
     buildFeatures {
@@ -93,11 +113,15 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(geminiTestKey))
+            versionNameSuffix = "-$rewriteMotionStyle"
+            buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(embeddedGeminiTestKey))
             buildConfigField("String", "DRIVE_OAUTH_CLIENT_ID", buildConfigString(driveOauthClientId))
         }
         release {
             isMinifyEnabled = true
+            if (rewriteMotionStyleProperty.isPresent) {
+                versionNameSuffix = "-$rewriteMotionStyle-eval"
+            }
             signingConfig = if (hasReleaseSigningConfig) {
                 signingConfigs.getByName("release")
             } else {

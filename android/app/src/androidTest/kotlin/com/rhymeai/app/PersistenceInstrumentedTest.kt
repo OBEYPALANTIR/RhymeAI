@@ -7,7 +7,10 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.model.SongProject
+import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.repository.ProjectRepository
+import com.rhymeai.app.service.AIProvider
+import com.rhymeai.app.service.AIModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -16,6 +19,8 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class PersistenceInstrumentedTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -121,12 +126,64 @@ class PersistenceInstrumentedTest {
         }
     }
 
+    @Test
+    fun customLocalModelRegistrationAndSelectionSurviveRepositoryRecreation() = runBlocking {
+        val model = SavedLocalModel(
+            id = "custom-night-drive",
+            displayName = "Night Drive",
+            fileName = "custom-night-drive.gguf",
+            isCustom = true
+        )
+
+        repo.saveLocalModels(listOf(model))
+        repo.saveSelectedLocalModelId(model.id)
+
+        val restoredRepository = ProjectRepository(app)
+        assertEquals(listOf(model), restoredRepository.localModelsFlow.first())
+        assertEquals(model.id, restoredRepository.selectedLocalModelIdFlow.first())
+    }
+
+    @Test
+    fun selectedLocalModelIsRestoredWhenLocalProviderStarts() {
+        val modelFile = app.filesDir.resolve("startup-custom.gguf")
+        modelFile.writeBytes(
+            ByteBuffer.allocate(24)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .put("GGUF".toByteArray())
+                .putInt(3)
+                .putLong(1)
+                .putLong(1)
+                .array()
+        )
+        val model = SavedLocalModel(
+            id = "startup-custom",
+            displayName = "Startup Custom",
+            fileName = modelFile.name,
+            isCustom = true
+        )
+        runBlocking {
+            repo.saveSelectedProvider(AIProvider.LOCAL.name)
+            repo.saveModelId(AIModel.LOCAL_MODEL.id)
+            repo.saveLocalModels(listOf(model))
+            repo.saveSelectedLocalModelId(model.id)
+        }
+
+        val restoredViewModel = MainViewModel(app)
+
+        waitUntil { restoredViewModel.localModelPath == modelFile.absolutePath }
+        modelFile.delete()
+    }
+
     private fun resetRepository() {
         runBlocking {
             repo.saveProjects(emptyList())
             repo.saveTrashedProjects(emptyList())
             repo.setCurrentProjectId(null)
             repo.saveEditorState("", "", "")
+            repo.saveSelectedProvider(AIProvider.GEMINI.name)
+            repo.saveModelId(AIModel.DEFAULT.id)
+            repo.saveLocalModels(emptyList())
+            repo.saveSelectedLocalModelId(null)
         }
     }
 

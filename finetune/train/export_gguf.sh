@@ -12,9 +12,14 @@
 #   3. llama-quantize            merged BF16 -> Q4_K_M
 #
 # Base GGUF: download the full-precision file from unsloth's GGUF repos —
-#   huggingface-cli download unsloth/gemma-4-E2B-it-GGUF gemma-4-E2B-it-BF16.gguf
-#   huggingface-cli download unsloth/gemma-4-E4B-it-GGUF gemma-4-E4B-it-BF16.gguf
+#   hf download unsloth/gemma-4-E2B-it-GGUF gemma-4-E2B-it-BF16.gguf
+#   hf download unsloth/gemma-4-E4B-it-GGUF gemma-4-E4B-it-BF16.gguf
 # (the repos ship BF16, not F16; E2B BF16 is ~9.3 GB).
+#
+# NOTE: this script is Gemma-only. For the Qwen3.5-4B bake-off adapter use
+# finetune/train/merge_qwen_lora.py + graft_mtp.py instead — llama.cpp's
+# convert_lora_to_gguf.py cannot convert LoRA factors for the qwen3_5 arch
+# (see RUNBOOK.md "Base-model bake-off variant").
 #
 # Quantization note: the app currently ships unsloth's UD-Q4_K_XL ("Unsloth
 # Dynamic" per-layer mixed quant, e.g. gemma-4-E2B-it-UD-Q4_K_XL.gguf,
@@ -38,11 +43,13 @@
 #       --out artifacts/gemma-local-models
 #
 #   Same for E4B: --size E4B --base-gguf .../gemma-4-E4B-it-BF16.gguf
+#   12B Studio tier: --size 12B --base-gguf .../gemma-4-12b-it-BF16.gguf
+#     (hf download unsloth/gemma-4-12b-it-GGUF gemma-4-12b-it-BF16.gguf)
 set -euo pipefail
 
 ADAPTER_DIR=""
-SIZE=""                     # E2B | E4B (names outputs + picks default base id)
-BASE_GGUF=""                # path to gemma-4-<SIZE>-it-BF16.gguf
+SIZE=""                     # E2B | E4B | 12B (names outputs + picks default base id)
+BASE_GGUF=""                # path to the base model's BF16 .gguf
 LLAMA_CPP_DIR=""            # llama.cpp checkout (for convert_lora_to_gguf.py)
 OUT_DIR="finetune/train/out/gguf"
 BIN_DIR="$(dirname "$(command -v llama-quantize || echo /opt/homebrew/bin/llama-quantize)")"
@@ -64,7 +71,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$ADAPTER_DIR" && -n "$SIZE" && -n "$BASE_GGUF" && -n "$LLAMA_CPP_DIR" ]] || usage
-[[ "$SIZE" == "E2B" || "$SIZE" == "E4B" ]] || { echo "--size must be E2B or E4B" >&2; exit 1; }
+[[ "$SIZE" == "E2B" || "$SIZE" == "E4B" || "$SIZE" == "12B" ]] || { echo "--size must be E2B, E4B, or 12B" >&2; exit 1; }
 [[ -d "$ADAPTER_DIR" ]] || { echo "adapter dir not found: $ADAPTER_DIR" >&2; exit 1; }
 [[ -f "$BASE_GGUF" ]]   || { echo "base GGUF not found: $BASE_GGUF" >&2; exit 1; }
 
@@ -77,11 +84,14 @@ for tool in "$EXPORT_LORA" "$QUANTIZE"; do
     [[ -x "$tool" ]] || { echo "missing $tool (brew install llama.cpp)" >&2; exit 1; }
 done
 
-BASE_MODEL_ID="unsloth/gemma-4-${SIZE}-it"
+# unsloth's 12B repos use lowercase "12b" in the model id and filenames.
+MODEL_SEG="$SIZE"
+[[ "$SIZE" == "12B" ]] && MODEL_SEG="12b"
+BASE_MODEL_ID="unsloth/gemma-4-${MODEL_SEG}-it"
 mkdir -p "$OUT_DIR"
-ADAPTER_GGUF="$OUT_DIR/gemma-4-${SIZE}-it-rhymeai-lora-adapter-F16.gguf"
-MERGED_GGUF="$OUT_DIR/gemma-4-${SIZE}-it-rhymeai-merged-BF16.gguf"
-FINAL_GGUF="$OUT_DIR/gemma-4-${SIZE}-it-rhymeai-${QUANT}.gguf"
+ADAPTER_GGUF="$OUT_DIR/gemma-4-${MODEL_SEG}-it-rhymeai-lora-adapter-F16.gguf"
+MERGED_GGUF="$OUT_DIR/gemma-4-${MODEL_SEG}-it-rhymeai-merged-BF16.gguf"
+FINAL_GGUF="$OUT_DIR/gemma-4-${MODEL_SEG}-it-rhymeai-${QUANT}.gguf"
 
 echo "== 1/3 convert LoRA adapter -> GGUF (F16) =="
 # --base-model-id fetches only the base config from HF (no weights needed);

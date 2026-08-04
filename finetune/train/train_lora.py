@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Phase 3 step 2 — Unsloth LoRA fine-tune of Gemma 4 E2B/E4B (GPU box only).
+"""Phase 3 step 2 — Unsloth LoRA fine-tune of the on-device models (GPU box only).
 
 DO NOT run on the Mac. This script targets a rented CUDA box (RunPod/Lambda,
 A100 or RTX 4090) with `unsloth` installed — see finetune/train/RUNBOOK.md.
 
 Input is the output of prepare_dataset.py: JSONL rows whose "text" field is
-the FULL app-templated example
+the FULL app-templated example, e.g. for --template gemma (the default)
 
     <start_of_turn>user\n{prompt}\n<end_of_turn>\n<start_of_turn>model\n{completion}<end_of_turn>
 
 We deliberately do NOT apply the tokenizer's own chat template
 (unsloth.chat_templates.get_chat_template): the deployed app builds raw
-<start_of_turn> prompts itself (AIService gemmaInstructionPrompt) and posts
-them to llama.cpp /completion with no template, so training must see exactly
-that surface form. Prompt tokens are masked from the loss via
-train_on_responses_only with the same markers.
+turn-templated prompts itself (AIService) and posts them to llama.cpp
+/completion with no template, so training must see exactly that surface
+form. Pass the SAME --template here as to prepare_dataset.py; prompt tokens
+are masked from the loss via train_on_responses_only with the template's
+markers (TEMPLATE_MARKERS below, kept in sync with eval/prompts.py TEMPLATES).
 
 Text-only LoRA: `finetune_vision_layers=False` (and no audio modules are
 selected) keeps the adapter strictly on the language tower — required both
@@ -22,13 +23,17 @@ for app behavior (text-only) and for the GGUF export detour in
 export_gguf.sh, which sidesteps unsloth GGUF-export bug #6808 ("Can not map
 tensor 'audio_tower...'" when converting the merged multimodal checkpoint).
 
-Usage (E2B, plain LoRA on bf16 weights):
+Usage (Gemma E2B, plain LoRA on bf16 weights):
   python3 train_lora.py --base unsloth/gemma-4-E2B-it \
       --data train.jsonl --val val.jsonl --out out/e2b-lora-v1
 
-Usage (E4B, QLoRA to fit 24 GB cards):
+Usage (Gemma E4B, QLoRA to fit 24 GB cards):
   python3 train_lora.py --base unsloth/gemma-4-E4B-it --load-in-4bit \
       --data train.jsonl --val val.jsonl --out out/e4b-qlora-v1
+
+Usage (Qwen3.5-4B, plain LoRA; dataset prepared with --template qwen):
+  python3 train_lora.py --base Qwen/Qwen3.5-4B --template qwen \
+      --data train-qwen.jsonl --val val-qwen.jsonl --out out/qwen4b-lora-v1
 """
 
 from __future__ import annotations
@@ -45,15 +50,34 @@ import torch  # noqa: E402
 from datasets import load_dataset  # noqa: E402
 from trl import SFTConfig, SFTTrainer  # noqa: E402
 
-# Must match prepare_dataset.py / eval.prompts.gemma_instruction_prompt.
-INSTRUCTION_PART = "<start_of_turn>user\n"
-RESPONSE_PART = "<start_of_turn>model\n"
+# Loss-mask split markers and tokenizer sanity probes per template. Must match
+# prepare_dataset.py --template / eval/prompts.py TEMPLATES.
+TEMPLATE_MARKERS = {
+    "gemma": {
+        "instruction": "<start_of_turn>user\n",
+        "response": "<start_of_turn>model\n",
+        "sanity": ("<start_of_turn>", "<end_of_turn>"),
+    },
+    # The qwen response marker is the tail of the empty-think prefill emitted
+    # by eval.prompts.TEMPLATES["qwen"].wrap — everything after it (completion
+    # + <|im_end|>) is supervised.
+    "qwen": {
+        "instruction": "<|im_start|>user\n",
+        "response": "</think>\n\n",
+        "sanity": ("<|im_start|>", "<|im_end|>"),
+    },
+}
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="LoRA fine-tune Gemma 4 E2B/E4B with Unsloth.")
+    parser = argparse.ArgumentParser(description="LoRA fine-tune RhymeAI's on-device models with Unsloth.")
     parser.add_argument("--base", default="unsloth/gemma-4-E2B-it",
-                        help="Base model (unsloth/gemma-4-E2B-it or unsloth/gemma-4-E4B-it)")
+                        help="Base model (unsloth/gemma-4-E2B-it, unsloth/gemma-4-E4B-it, "
+                             "or Qwen/Qwen3.5-4B with --template qwen)")
+    parser.add_argument("--template", choices=sorted(TEMPLATE_MARKERS),
+                        default="gemma",
+                        help="Turn template the dataset was prepared with "
+                             "(prepare_dataset.py --template)")
     parser.add_argument("--data", required=True, help="train.jsonl from prepare_dataset.py")
     parser.add_argument("--val", required=True, help="val.jsonl from prepare_dataset.py")
     parser.add_argument("--out", required=True, help="Output dir (adapter saved to <out>/adapter)")
@@ -90,6 +114,7 @@ def parse_args():
 def main():
     args = parse_args()
     os.makedirs(args.out, exist_ok=True)
+    markers = TEMPLATE_MARKERS[args.template]
 
     model, tokenizer = FastModel.from_pretrained(
         model_name=args.base,
@@ -102,20 +127,17 @@ def main():
         full_finetuning=False,
     )
 
-    # Sanity: the app's turn markers must be real tokens in this tokenizer,
-    # otherwise the deployed prompt format and the training format diverge.
-    for marker in ("<start_of_turn>", "<end_of_turn>"):
-        # FastModel returns a multimodal Processor for gemma-4; positional text
-        # lands in its `images` arg. Use the inner tokenizer directly.
+    # Sanity: the deployed turn markers must tokenize consistently in this
+    # tokenizer, otherwise the deployed prompt format and the training format
+    # diverge. gemma-4 treats them as PLAIN TEXT (7 tokens each) while Qwen's
+    # <|im_start|>/<|im_end|> are single special tokens — both are fine: the
+    # app sends the raw-string template and stops on the eot STRING, and SFT
+    # teaches the model this exact deployed surface form.
+    for marker in markers["sanity"]:
+        # FastModel may return a multimodal Processor; positional text lands in
+        # its `images` arg. Use the inner tokenizer directly.
         ids = getattr(tokenizer, "tokenizer", tokenizer)(marker, add_special_tokens=False)["input_ids"]
-        # gemma-4 tokenizers treat these markers as PLAIN TEXT (7 tokens each),
-        # unlike gemma-3 where they were single special tokens. That is fine:
-        # the app sends the raw-string template and stops on the <end_of_turn>
-        # STRING, and SFT teaches the model this exact deployed format.
-        if len(ids) != 1:
-            print("WARNING: %r tokenizes to %d tokens in %s "
-                  "(plain-text template — expected for gemma-4)"
-                  % (marker, len(ids), args.base))
+        print("turn marker %r -> %d token(s) in %s" % (marker, len(ids), args.base))
 
     # Text-only LoRA on attention + MLP of the language tower. Vision stays
     # frozen; audio modules are never selected because we only opt into
@@ -179,8 +201,8 @@ def main():
         # never applied get_chat_template; see module docstring).
         trainer = train_on_responses_only(
             trainer,
-            instruction_part=INSTRUCTION_PART,
-            response_part=RESPONSE_PART,
+            instruction_part=markers["instruction"],
+            response_part=markers["response"],
         )
         # Show what the loss actually sees for row 0 — should be the
         # completion plus <end_of_turn>, nothing from the prompt.

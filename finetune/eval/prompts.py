@@ -347,12 +347,77 @@ def local_lyrics_context(lyrics: str, use_whole_song_context: bool) -> str:
     )
 
 
-def gemma_instruction_prompt(user_prompt: str) -> str:
-    """AIService.gemmaInstructionPrompt — the <start_of_turn> template.
+@dataclass(frozen=True)
+class TurnTemplate:
+    """One deployable turn format: how the app wraps the inner user prompt,
+    how training examples close the model turn, and how the trainer splits
+    prompt from completion for loss masking."""
+    name: str
+    wrap: str                # % user_prompt -> inference prompt (generation starts at its end)
+    completion_prefix: str   # inserted between wrap and the completion in training text
+    eot: str                 # closes the model turn in training text
+    stop: tuple              # llama.cpp stop strings
+    instruction_part: str    # loss-mask split markers (unsloth train_on_responses_only)
+    response_part: str
 
-    NOTE: Kotlin trimIndent() drops the trailing newline, so the prompt ends
-    exactly with "<start_of_turn>model" (no trailing newline)."""
-    return "<start_of_turn>user\n%s\n<end_of_turn>\n<start_of_turn>model" % user_prompt
+
+TEMPLATES = {
+    # AIService.gemmaInstructionPrompt — Kotlin trimIndent() drops the trailing
+    # newline, so the prompt ends exactly with "<start_of_turn>model" (no "\n");
+    # the model turn therefore starts with the "\n" inserted before the
+    # completion in the training text.
+    "gemma": TurnTemplate(
+        name="gemma",
+        wrap="<start_of_turn>user\n%s\n<end_of_turn>\n<start_of_turn>model",
+        completion_prefix="\n",
+        eot="<end_of_turn>",
+        stop=("<end_of_turn>",),
+        instruction_part="<start_of_turn>user\n",
+        response_part="<start_of_turn>model\n",
+    ),
+    # Qwen3.5 ChatML with thinking disabled: the official chat template with
+    # enable_thinking=False prefills an empty think block after the assistant
+    # header, so the model answers directly. Generation starts right after the
+    # prefill; response_part anchors the loss mask on the prefill tail so only
+    # the completion + eot are supervised.
+    "qwen": TurnTemplate(
+        name="qwen",
+        wrap="<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+        completion_prefix="",
+        eot="<|im_end|>",
+        stop=("<|im_end|>",),
+        instruction_part="<|im_start|>user\n",
+        response_part="</think>\n\n",
+    ),
+}
+
+_active_template = TEMPLATES["gemma"]
+
+
+def set_template(name: str) -> None:
+    """Select the turn template for all prompt builders (default: gemma)."""
+    global _active_template
+    _active_template = TEMPLATES[name]
+
+
+def active_template() -> TurnTemplate:
+    return _active_template
+
+
+def instruction_prompt(user_prompt: str) -> str:
+    """Wrap the inner user prompt in the active turn template."""
+    return _active_template.wrap % user_prompt
+
+
+def training_example(user_prompt: str, completion: str) -> str:
+    """Full SFT example: templated prompt + model turn + completion + EOT."""
+    template = _active_template
+    return "%s%s%s%s" % (
+        template.wrap % user_prompt,
+        template.completion_prefix,
+        completion,
+        template.eot,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +436,7 @@ def build_suggestions_prompt(
     use_whole_song_context: bool = False,
     constraint: Optional[SuggestionRhymeConstraint] = None,
 ) -> str:
-    """AIService.buildLocalPrompt, wrapped in the Gemma turn template."""
+    """AIService.buildLocalPrompt, wrapped in the active turn template."""
     rhyme_type_display = RHYME_TYPES[rhyme_type]
     section_display, section_hint = SONG_SECTIONS[current_section]
     complexity_label, complexity_hint = RHYME_COMPLEXITIES[complexity]
@@ -446,7 +511,7 @@ def build_suggestions_prompt(
         lyric_context,
         request_count,
     )
-    return gemma_instruction_prompt(user_prompt)
+    return instruction_prompt(user_prompt)
 
 
 def _rewrite_reject_keys(selection: str, rejected_candidates: Sequence[str]) -> List[str]:
@@ -555,7 +620,7 @@ def build_rewrite_prompt(
         selection,
         output_rules,
     )
-    return gemma_instruction_prompt(user_prompt)
+    return instruction_prompt(user_prompt)
 
 
 def build_synonyms_prompt(word: str, line_context: str, limit: int = SYNONYM_LIMIT_DEFAULT) -> str:
@@ -575,7 +640,7 @@ def build_synonyms_prompt(word: str, line_context: str, limit: int = SYNONYM_LIM
         '- Do not include "%s".\n'
         "- Prefer words with similar tone and syllable count."
     ) % (limit, word, context_block, word)
-    return gemma_instruction_prompt(user_prompt)
+    return instruction_prompt(user_prompt)
 
 
 # ---------------------------------------------------------------------------

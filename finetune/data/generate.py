@@ -59,19 +59,32 @@ MIN_SYNONYMS = 3  # reject degenerate 1-2 word synonym lists
 MARKER_PREFIX_RE = re.compile(
     r"^\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|"
     r"model_response>|assistant:|model:|user:|"
+    # Bare underscore-led marker with no ">" (e.g. "_response", "_output") —
+    # the v1/v2 E2B stray-prefix regression traced back to these surviving.
+    r"_(?:response|output|model_response)\b|"
     r"<?/?(?:start_of_turn|end_of_turn)>?\w*)\s*",
     re.IGNORECASE,
 )
 MARKER_ONLY_RE = re.compile(
     r"^\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|"
-    r"model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>]+>|>+|"
+    r"model_response>|_(?:response|output|model_response)\b|"
+    r"<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>]+>|>+|"
     r"[<>/]+|user|model|assistant)\s*$",
     re.IGNORECASE,
 )
 
+# Gemma 4 thinking-channel markers. The 12B/26B/31B models ALWAYS emit
+# "<|channel>thought\n...<channel|>" before the answer (documented Gemma 4
+# behavior; E2B/E4B don't) — and sometimes sprinkle EXTRA bare closers
+# ("<channel|>line") through multi-line output. A block regex leaves those
+# behind (root cause of the v3 seed3 pollution: 75 lines shipped with
+# "<channel|>" prefixes and broke the tuned model's short-output behavior),
+# so strip BOTH tag forms globally, wherever they appear.
+CHANNEL_TAG_RE = re.compile(r"<\|channel>\w*\n?|<channel\|>\s*")
+
 
 def clean_teacher_output(raw: str) -> str:
-    text = scoring.strip_model_output(raw)
+    text = scoring.strip_model_output(CHANNEL_TAG_RE.sub("", raw))
     cleaned_lines = []
     for line in text.split("\n"):
         if MARKER_ONLY_RE.match(line):

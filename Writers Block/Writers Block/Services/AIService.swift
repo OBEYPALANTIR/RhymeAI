@@ -931,13 +931,15 @@ struct AIService {
     /// Returns true when calls should be routed through the Gemma GGUF runner.
     /// Conditions: llama.cpp engine is compiled in, engine choice is .gemma,
     /// and at least one GGUF file exists in the models directory.
-    static func shouldUseGemma() -> Bool {
+    static func shouldUseGemma(
+        engineChoice: GGUFEngineChoice = GGUFEngineChoice.current,
+        ggufPath: String? = firstGGUFPath()
+    ) -> Bool {
         guard GGUFModelService.isEngineAvailable else { return false }
         guard GGUFEngineChoice.current == .gemma else { return false }
         return firstGGUFPath() != nil
     }
 
-    /// Returns the path to the first available GGUF model file, or nil.
     static func firstGGUFPath() -> String? {
         let installed = GGUFModelStorage.installedModelFileNames()
         guard let fileName = GGUFModelSelection.preferredFileName(in: installed),

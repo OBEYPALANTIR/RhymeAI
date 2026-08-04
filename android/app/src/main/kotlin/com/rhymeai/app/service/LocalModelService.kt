@@ -153,9 +153,17 @@ class LocalModelService {
 }
 
 internal fun File.isGgufFile(): Boolean {
-    if (length() < 4L) return false
+    if (length() < 24L) return false
     return inputStream().use { input ->
-        val header = ByteArray(4)
-        input.read(header) == header.size && header.contentEquals(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+        val header = ByteArray(8)
+        if (input.read(header) != header.size) return@use false
+        val hasMagic = header.copyOfRange(0, 4).contentEquals(
+            byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte())
+        )
+        val version = (header[4].toInt() and 0xff) or
+            ((header[5].toInt() and 0xff) shl 8) or
+            ((header[6].toInt() and 0xff) shl 16) or
+            ((header[7].toInt() and 0xff) shl 24)
+        hasMagic && version in 2..3
     }
 }

@@ -2,7 +2,6 @@ package com.rhymeai.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -34,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.rhymeai.app.R
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.appWritingSurface
 
 @Composable
 fun WelcomeScreen(
@@ -53,7 +54,7 @@ fun WelcomeScreen(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(colorScheme.background)
+            .appWritingSurface()
             .statusBarsPadding()
             .bottomSafeActionPadding(extra = DesignTokens.Spacing.xl)
     ) {
@@ -182,7 +183,12 @@ private fun WelcomeCard(
                 modifier = Modifier.size(28.dp)
             )
             Spacer(Modifier.width(DesignTokens.Spacing.lg))
-            Column {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("welcomeCardText"),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+            ) {
                 Text(
                     title,
                     fontWeight = FontWeight.Medium,
