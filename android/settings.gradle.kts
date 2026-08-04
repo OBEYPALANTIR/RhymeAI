@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "RhymeAI"
 include(":app")
+include(":benchmark")

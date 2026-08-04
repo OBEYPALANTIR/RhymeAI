@@ -105,7 +105,9 @@ class VoiceMemoService(private val context: Context) {
     }
 
     internal fun seedRecordingForTesting() {
-        check(BuildConfig.DEBUG) { "Recording test seeding requires a debug build" }
+        check(BuildConfig.DEBUG || BuildConfig.BENCHMARK) {
+            "Recording test seeding requires a debug or benchmark build"
+        }
         recordingElapsedMs = 3_000L
         isRecording = true
     }

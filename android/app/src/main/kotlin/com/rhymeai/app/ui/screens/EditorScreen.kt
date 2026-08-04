@@ -491,7 +491,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         val fabRowBottomOriginOffsetPx = with(density) { DesignTokens.Rhythm.section.roundToPx() }
         LaunchedEffect(memoService) {
             val activity = context as? android.app.Activity
-            if (BuildConfig.DEBUG &&
+            if ((BuildConfig.DEBUG || BuildConfig.BENCHMARK) &&
                 activity?.intent?.getBooleanExtra(FAKE_RECORDING_EXTRA, false) == true
             ) {
                 memoService.seedRecordingForTesting()
@@ -1153,6 +1153,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val micPressScale = rememberPressScale(micPillInteractionSource)
                     Box(
                         modifier = Modifier
+                            .testTag("micButton")
                             .animatedWidth(pillWidth)
                             .height(DesignTokens.EditorChrome.fabSize)
                             .graphicsLayer {

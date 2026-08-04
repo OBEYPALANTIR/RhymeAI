@@ -823,9 +823,54 @@ final class Writers_BlockUITests: XCTestCase {
 
     @MainActor
     func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
-        measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
+        let options = XCTMeasureOptions()
+        options.iterationCount = 10
+        measure(metrics: [XCTApplicationLaunchMetric()], options: options) {
+            isolatedUITestApp().launch()
+        }
+    }
+
+    @MainActor
+    func testEditorInteractionPerformance() throws {
+        try requirePhone()
+
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song",
+            "--ui-test-fake-voice-recording",
+        ])
+        app.launch()
+
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        let unblockButton = app.buttons["unblockButton"]
+        let micButton = app.buttons["micButton"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(micButton.waitForExistence(timeout: 5))
+
+        let options = XCTMeasureOptions()
+        options.iterationCount = 5
+        measure(
+            metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric()],
+            options: options
+        ) {
+            lyricsEditor.tap()
+            lyricsEditor.typeText("\nA measured line keeps time inside the light")
+            app.swipeUp()
+            app.swipeDown()
+            let hideKeyboard = app.keyboards.buttons["Hide keyboard"]
+            if hideKeyboard.exists {
+                hideKeyboard.tap()
+            }
+
+            unblockButton.tap()
+            XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+            app.buttons["Close Assistant"].tap()
+            XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+
+            micButton.tap()
+            XCTAssertTrue(app.buttons["Stop recording"].waitForExistence(timeout: 3))
+            app.buttons["Stop recording"].tap()
+            XCTAssertTrue(micButton.waitForExistence(timeout: 3))
         }
     }
 
