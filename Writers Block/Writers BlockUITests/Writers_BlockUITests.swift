@@ -106,6 +106,7 @@ final class Writers_BlockUITests: XCTestCase {
         settingsButton.tap()
 
         for name in ["Ink", "Paper", "Graphite"] {
+            XCTAssertFalse(app.otherElements["\(name) preview"].exists)
             let option = app.buttons[name]
             XCTAssertTrue(option.waitForExistence(timeout: 5))
             option.tap()

@@ -1,5 +1,5 @@
 ---
-version: "2026-07-11"
+version: "2026-08-04"
 name: "Writers Block"
 description: "A lyric-first, ink-and-paper mobile design system with three authored monochrome appearances."
 default-appearance: "ink"
@@ -230,12 +230,9 @@ rounded:
   full: 9999px
 texture:
   authored-static-only: true
-  paper-rule-spacing: "28dp Android / 28pt iOS"
-  paper-rule-width: "1dp Android / 1pt iOS"
-  paper-rule-opacity: 0.055
-  paper-fiber-opacity-max: 0.035
+  paper: "Flat warm-ivory color with no rules, fibers, grain, or other texture."
   graphite-grain-opacity-max: 0.025
-  redraw-rule: "Compose once per resolved size and appearance from cached deterministic drawing primitives or low-opacity gradients only; never use raster paper or graphite texture, or any texture bitmap, at runtime or as an asset; typing must not regenerate texture."
+  redraw-rule: "Compose Graphite grain once per resolved size from cached deterministic drawing primitives or low-opacity gradients only; never use raster texture, or any texture bitmap, at runtime or as an asset; typing must not regenerate texture."
   adaptive-rule: "Remove texture under reduced transparency or increased contrast."
 motion:
   fast: "160ms"
@@ -247,7 +244,7 @@ motion:
   reduced-motion: "Use immediate state changes or a short opacity change; remove spring travel and all nonessential crossfades."
 components:
   shared-writing-surface:
-    appearances: "Ink is crisp; Paper uses static rules/fibers; Graphite uses static grain."
+    appearances: "Ink is crisp; Paper is flat warm ivory; Graphite uses static grain."
     states: "default, reduced-transparency, increased-contrast"
   opaque-bordered-surface:
     fill: "appearance.surface or appearance.surface-container"
@@ -288,7 +285,7 @@ Ink Editorial uses paper white (#FCFCF8), near-black ink (#050505), grayscale co
 
 ### Paper Notebook
 
-Paper Notebook uses warm ivory (#F3EEDF), graphite text (#302E2A), opaque warm surfaces, faint authored static fibers, and optional lyric-area rules. Controls remain native and precisely drawn. Texture stays behind content and may never lower glyph, caret, selection, outline, or icon contrast.
+Paper Notebook uses a flat warm ivory (#F3EEDF), graphite text (#302E2A), and opaque warm surfaces. It has no rules, fibers, grain, or other texture. Controls remain native and precisely drawn.
 
 ### Graphite Night
 
@@ -322,9 +319,9 @@ Android dp and iOS pt values may differ where native feel requires it. Shipped p
 
 App-owned content surfaces are opaque. Large panels, cards, sheets, drawers, and settings groups use the active surface fill plus a one-unit neutral border. Depth comes from tonal separation, the border, and at most one restrained neutral shadow. Do not use decorative blur, translucent tint, accent glow, or stacked elevation on content.
 
-Paper Notebook and Graphite Night may use authored static procedural texture only. Generate deterministic rules, fibers, or grain exclusively from cached drawing primitives or low-opacity gradients. Cache by resolved size and appearance. Do not use raster paper or graphite texture, or any texture bitmap, at runtime or as an asset. Do not use random values, timers, animated grain, or per-frame noise. Typing and caret movement must not invalidate texture generation.
+Graphite Night may use authored static procedural grain only. Generate it exclusively from cached drawing primitives or low-opacity gradients, cached by resolved size and appearance. Do not use raster texture, or any texture bitmap, at runtime or as an asset. Do not use random values, timers, animated grain, or per-frame noise. Typing and caret movement must not invalidate texture generation.
 
-Ink Editorial remains crisp and untextured. Paper rules use the 28-unit spacing and 5.5% maximum opacity token. Fibers stay at or below 3.5%. Graphite grain stays at or below 2.5%. Texture is a background layer, clipped to its surface, and never overlays text or interactive content.
+Ink Editorial and Paper Notebook remain flat and untextured. Graphite grain stays at or below 2.5%. Texture is a background layer, clipped to its surface, and never overlays text or interactive content.
 
 Motion explains cause, state, or spatial origin. Use the fast tier for press feedback and dismissals, standard for ordinary state changes and panel presentation, and settle for drag release. Drawers move from the left; sheets rise from the bottom. Appearance selection applies immediately and must not wait on a Save action.
 
@@ -338,9 +335,9 @@ These shared primitives are the required styling seams. Product screens must con
 
 Use the shared writing surface for the editor, Welcome, Settings, assistant full-screen surfaces, Projects and Trash, Templates, and other large sheets.
 
-- Default: fill the entire surface with appearance.background and place every texture draw behind content.
+- Default: fill the entire surface with appearance.background and place any Graphite texture draw behind content.
 - Ink Editorial: render only the crisp base.
-- Paper Notebook: render cached fibers and, where useful for lyrics, cached 28-unit horizontal rules.
+- Paper Notebook: render only the flat warm-ivory base color.
 - Graphite Night: render cached, nonrandom low-opacity grain.
 - Reduced Transparency or Increased Contrast: remove texture and retain the solid base.
 - Text-size changes, typing, selection, caret movement, and scrolling must not regenerate the texture.
@@ -355,18 +352,17 @@ This primitive is the single seam for cards, grouped settings, suggestion surfac
 - Pressed: use the native pressed treatment or a neutral 8% to 12% state overlay; do not introduce a semantic hue.
 - Disabled: retain structure, reduce emphasis using platform-native disabled opacity, and keep text readable.
 
-System-owned chrome may keep its native neutral material behavior when legibility requires it. App-owned content never layers translucent material over a paper texture.
+System-owned chrome may keep its native neutral material behavior when legibility requires it. App-owned content never layers translucent material over an authored writing surface.
 
 ### Appearance selector
 
-The Appearance selector is a native or already-established three-option segmented control labeled Ink, Paper, and Graphite, followed by compact labeled preview swatches. It appears at the top of General settings on Android and near the top of Settings on iOS.
+The Appearance selector is a native or already-established three-option segmented control labeled Ink, Paper, and Graphite. It is the sole appearance chooser and appears at the top of General settings on Android and near the top of Settings on iOS.
 
 - Unselected: neutral transparent or low-container background with readable secondary ink.
 - Selected: appearance.action fill with appearance.on-action text, or the platform's equivalent high-contrast selected segment.
 - Pressed: native pressed feedback without delayed persistence.
 - Focused: visible platform focus treatment; keyboard and switch-control navigation must identify the option.
 - Disabled: use native disabled semantics and retain the selected-value announcement.
-- Preview swatches: use the canonical background, surface, ink, and action tokens; decorative color is forbidden.
 
 Selection updates the presented Settings surface and the editor behind it in the same transaction. It does not depend on provider credentials or the existing Save Settings action.
 

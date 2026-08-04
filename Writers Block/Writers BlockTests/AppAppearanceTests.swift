@@ -44,22 +44,20 @@ struct AppAppearanceTests {
     }
 
     @Test
-    func textureGeometryIsCachedByAppearanceLayerAndResolvedSize() {
+    func graphiteTextureGeometryIsCachedByResolvedSize() {
         let cache = AppearanceTexturePathCache()
         let phoneSize = CGRect(x: 0, y: 0, width: 393, height: 852)
 
-        _ = cache.path(for: .paper, layer: .paperRules, in: phoneSize)
-        _ = cache.path(for: .paper, layer: .paperRules, in: phoneSize)
+        _ = cache.path(for: .graphite, layer: .graphiteGrain, in: phoneSize)
+        _ = cache.path(for: .graphite, layer: .graphiteGrain, in: phoneSize)
         #expect(cache.generatedPathCount == 1)
 
-        _ = cache.path(for: .paper, layer: .paperFibers, in: phoneSize)
-        _ = cache.path(for: .graphite, layer: .graphiteGrain, in: phoneSize)
         _ = cache.path(
-            for: .paper,
-            layer: .paperRules,
+            for: .graphite,
+            layer: .graphiteGrain,
             in: CGRect(x: 0, y: 0, width: 852, height: 393)
         )
-        #expect(cache.generatedPathCount == 4)
+        #expect(cache.generatedPathCount == 2)
     }
 
     @Test

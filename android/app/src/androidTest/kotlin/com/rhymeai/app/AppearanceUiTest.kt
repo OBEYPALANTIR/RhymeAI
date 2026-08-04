@@ -82,7 +82,7 @@ class AppearanceUiTest {
         )
         composeRule.onNode(hasText("Ink") and isSelected()).assertExists()
         AppAppearance.entries.forEach { appearance ->
-            composeRule.onNodeWithTag("appearancePreview${appearance.displayName}").assertExists()
+            composeRule.onNodeWithTag("appearancePreview${appearance.displayName}").assertDoesNotExist()
         }
         captureRootScreenshot("appearance-ink-settings.png")
         closeSettings()

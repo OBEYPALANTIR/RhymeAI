@@ -48,74 +48,32 @@ fun Modifier.appWritingSurface(): Modifier {
     val textureEnabled = !highTextContrastEnabled
 
     val baseModifier = background(baseColor)
-    if (!textureEnabled || appearance == AppAppearance.INK) return baseModifier
+    if (!textureEnabled || appearance != AppAppearance.GRAPHITE) return baseModifier
 
     return baseModifier.drawWithCache {
-        when (appearance) {
-            AppAppearance.PAPER -> {
-                val ruleStroke = 1.dp.toPx()
-                val ruleSpacing = 28.dp.toPx()
-                val rules = Path().apply {
-                    var y = ruleSpacing
-                    while (y < size.height) {
-                        moveTo(0f, y)
-                        lineTo(size.width, y)
-                        y += ruleSpacing
-                    }
+        val grain = Path().apply {
+            val rowSpacing = 16.dp.toPx()
+            val columnSpacing = 22.dp.toPx()
+            val markLength = 0.8.dp.toPx()
+            var row = 0
+            var y = 8.dp.toPx()
+            while (y < size.height) {
+                var x = (6 + (row % 3) * 5).dp.toPx()
+                while (x < size.width) {
+                    moveTo(x, y)
+                    lineTo(x + markLength, y + markLength * 0.35f)
+                    x += columnSpacing
                 }
-                val fiberStroke = 0.5.dp.toPx()
-                val fiberColumnSpacing = 54.dp.toPx()
-                val fiberRowSpacing = 38.dp.toPx()
-                val fiberLength = 5.dp.toPx()
-                val fiberDrift = 0.7.dp.toPx()
-                val fibers = Path().apply {
-                    var row = 0
-                    var y = 13.dp.toPx()
-                    while (y < size.height) {
-                        var x = (11 + (row % 4) * 13).dp.toPx()
-                        while (x < size.width) {
-                            moveTo(x, y)
-                            lineTo(x + fiberDrift, y + fiberLength)
-                            x += fiberColumnSpacing
-                        }
-                        row += 1
-                        y += fiberRowSpacing
-                    }
-                }
-                onDrawBehind {
-                    drawPath(rules, Pencil.copy(alpha = 0.055f), style = Stroke(ruleStroke))
-                    drawPath(fibers, Pencil.copy(alpha = 0.024f), style = Stroke(fiberStroke))
-                }
+                row += 1
+                y += rowSpacing
             }
-
-            AppAppearance.GRAPHITE -> {
-                val grain = Path().apply {
-                    val rowSpacing = 16.dp.toPx()
-                    val columnSpacing = 22.dp.toPx()
-                    val markLength = 0.8.dp.toPx()
-                    var row = 0
-                    var y = 8.dp.toPx()
-                    while (y < size.height) {
-                        var x = (6 + (row % 3) * 5).dp.toPx()
-                        while (x < size.width) {
-                            moveTo(x, y)
-                            lineTo(x + markLength, y + markLength * 0.35f)
-                            x += columnSpacing
-                        }
-                        row += 1
-                        y += rowSpacing
-                    }
-                }
-                onDrawBehind {
-                    drawPath(
-                        path = grain,
-                        color = GraphiteWarmWhite.copy(alpha = 0.018f),
-                        style = Stroke(width = 0.75.dp.toPx())
-                    )
-                }
-            }
-
-            AppAppearance.INK -> onDrawBehind { }
+        }
+        onDrawBehind {
+            drawPath(
+                path = grain,
+                color = GraphiteWarmWhite.copy(alpha = 0.018f),
+                style = Stroke(width = 0.75.dp.toPx())
+            )
         }
     }
 }
