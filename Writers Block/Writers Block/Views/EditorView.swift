@@ -619,6 +619,7 @@ struct EditorView: View {
                 // Title Field
                 TextField("Song Title...", text: $viewModel.title)
                     .font(.system(.largeTitle, design: .serif, weight: .bold))
+                    .textFieldStyle(.plain)
                     .padding(.horizontal, RhymeAITokens.Spacing.md)
                     .padding(.top, RhymeAITokens.Spacing.md)
                     .padding(.bottom, RhymeAITokens.Spacing.sm)
@@ -626,6 +627,25 @@ struct EditorView: View {
                     .onChange(of: viewModel.title) {
                         viewModel.triggerAutoSave()
                     }
+
+                HStack {
+                    Spacer()
+                    Menu {
+                        ForEach(SectionMap.standardLabels, id: \.self) { label in
+                            Button(label) {
+                                viewModel.insertSection(label)
+                            }
+                            .accessibilityIdentifier("sectionMenu\(label.filter(\.isLetter))")
+                        }
+                    } label: {
+                        Label("Section", systemImage: "plus")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .disabled(viewModel.hasActiveRewrite)
+                    .accessibilityIdentifier("sectionMenuButton")
+                }
+                .padding(.horizontal, RhymeAITokens.Spacing.md)
+                .padding(.bottom, RhymeAITokens.Spacing.sm)
 
                 // Lyrics Editor
                 ZStack(alignment: .topLeading) {
@@ -647,6 +667,7 @@ struct EditorView: View {
                             get: { viewModel.lyrics },
                             set: { viewModel.onLyricsChanged($0) }
                         ),
+                        selection: viewModel.selectedRange,
                         displayText: viewModel.hasActiveRewrite ? viewModel.inlineRewriteText : nil,
                         rewriteHighlight: inlineRewriteHighlight,
                         onCursorChange: { pos in

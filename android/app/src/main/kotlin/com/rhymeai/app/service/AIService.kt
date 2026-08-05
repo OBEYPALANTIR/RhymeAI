@@ -261,6 +261,7 @@ class AIService {
         val lines = lyrics.split('\n')
         return firstChorus.lineRange
             .mapNotNull { idx -> lines.getOrNull(idx) }
+            .filter { SectionMap.headerTitle(it) == null }
             .map { RhymeConstraint.lineEndWord(it) }
             .filter { it.isNotEmpty() }
             .toSet()
@@ -279,11 +280,12 @@ class AIService {
      */
     private fun buildSectionDirective(ref: SectionRef?, lyrics: String): String {
         if (ref == null) return ""
-        return when (ref.type) {
+        val labelDirective = sectionLabelDirective(explicitSectionLabel(ref, lyrics))
+        val instanceDirective = when (ref.type) {
             SongSection.VERSE -> "This is Verse ${ref.ordinal}.\n"
             SongSection.BRIDGE -> "This is the bridge — introduce a contrasting rhyme sound and cadence; avoid the chorus's ending words.\n"
             SongSection.CHORUS -> {
-                if (ref.ordinal < 2) return ""
+                if (ref.ordinal < 2) return labelDirective
                 // Collect the first chorus's lines to anchor hook language.
                 val firstChorusLines = firstChorusLines(lyrics)
                 val chorusBlock = if (firstChorusLines.isNotEmpty()) {
@@ -295,6 +297,7 @@ class AIService {
             }
             SongSection.UNKNOWN -> ""
         }
+        return labelDirective + instanceDirective
     }
 
     /** Lines of lyrics content (non-header, non-blank) within the first chorus section. */
@@ -303,10 +306,46 @@ class AIService {
         val firstChorus = map.allSections.firstOrNull { it.type == SongSection.CHORUS }
             ?: return emptyList()
         val lines = lyrics.split('\n')
-        val headerPattern = Regex("""^\s*\[.+]\s*$""")
         return firstChorus.lineRange
             .mapNotNull { idx -> lines.getOrNull(idx) }
-            .filter { it.isNotBlank() && !headerPattern.matches(it) }
+            .filter { it.isNotBlank() && SectionMap.headerTitle(it) == null }
+    }
+
+    private fun explicitSectionLabel(ref: SectionRef, lyrics: String): String? {
+        val headerLine = lyrics.split('\n').getOrNull(ref.lineRange.first) ?: return null
+        return SectionMap.headerTitle(headerLine)
+    }
+
+    private fun sectionRefAt(lyrics: String, cursor: Int?): SectionRef? {
+        val safeCursor = cursor?.coerceIn(0, lyrics.length) ?: return null
+        val lineIndex = lyrics.substring(0, safeCursor).count { it == '\n' }
+        return SectionMap.parse(lyrics).sectionAt(lineIndex)
+    }
+
+    private fun sectionLabelDirective(label: String?): String {
+        val safeLabel = label
+            ?.trim()
+            ?.replace('"', '\'')
+            ?.takeIf(String::isNotEmpty)
+            ?: return ""
+        val squashed = safeLabel.lowercase().replace("-", "").replace(" ", "")
+        val role = when {
+            "prechorus" in squashed ->
+                "Build momentum and tension toward the chorus without resolving the hook early."
+            squashed.startsWith("intro") ->
+                "Establish the song's mood, world, or central image while leaving room for the song to open up."
+            squashed.startsWith("hook") ->
+                "Center the shortest, most memorable, repeatable phrase in the song."
+            squashed.startsWith("refrain") ->
+                "Craft a returning line or compact phrase that can recur without becoming a full chorus."
+            squashed.startsWith("interlude") ->
+                "Use this as a sparse transition; keep any lyric minimal and textural."
+            squashed.startsWith("outro") ->
+                "Resolve or echo the song's core idea and create a clear sense of closure."
+            else -> "Follow the named section's structural role when shaping the next line."
+        }
+        return "Current section label: \"$safeLabel\". Treat this label as song structure, not lyric content.\n" +
+            "Section-specific direction: $role\n"
     }
 
     internal fun buildPrompt(
@@ -319,7 +358,8 @@ class AIService {
         currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
         useWholeSongContext: Boolean,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        sectionRef: SectionRef? = constraint?.sectionRef
     ): String {
         val rhymeInstruction = if (targetRhymeLine != null) {
             "Crucially, the new line MUST end with a **${rhymeType.displayName}** to this specific line: \"$targetRhymeLine\"."
@@ -340,7 +380,7 @@ class AIService {
             theme.ifEmpty { "No specific theme provided" }
         }
 
-        val sectionDirective = buildSectionDirective(constraint?.sectionRef, lyrics)
+        val sectionDirective = buildSectionDirective(sectionRef, lyrics)
 
         return """
 You are an expert songwriter and lyricist.
@@ -404,11 +444,24 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 currentSection = currentSection,
                 complexity = complexity,
                 useWholeSongContext = useWholeSongContext,
-                constraint = constraint
+                constraint = constraint,
+                sectionRef = sectionRef
             )
             callLocal(localPrompt, lyrics, constraint)
         } else {
-            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
+            val prompt = buildPrompt(
+                theme,
+                lyrics,
+                targetRhymeLine,
+                rhymeType,
+                rhymeScheme,
+                currentLetter,
+                currentSection,
+                complexity,
+                useWholeSongContext,
+                constraint,
+                sectionRef
+            )
             when (provider) {
                 AIProvider.GEMINI -> callGemini(apiKey, modelId, prompt, constraint)
                 AIProvider.OPENAI -> callOpenAI(apiKey, modelId, prompt, constraint)
@@ -458,7 +511,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 currentSection = currentSection,
                 complexity = complexity,
                 useWholeSongContext = useWholeSongContext,
-                constraint = constraint
+                constraint = constraint,
+                sectionRef = sectionRef
             )
             val existingKeys = lyrics.lines()
                 .map(::normalizeSuggestionKey)
@@ -470,7 +524,19 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 excludedKeys = existingKeys
             )
         } else {
-            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
+            val prompt = buildPrompt(
+                theme,
+                lyrics,
+                targetRhymeLine,
+                rhymeType,
+                rhymeScheme,
+                currentLetter,
+                currentSection,
+                complexity,
+                useWholeSongContext,
+                constraint,
+                sectionRef
+            )
             when (provider) {
                 AIProvider.GEMINI -> streamGemini(apiKey, modelId, prompt, constraint).collect { emit(it) }
                 AIProvider.OPENAI -> streamOpenAI(apiKey, modelId, prompt, constraint).collect { emit(it) }
@@ -875,7 +941,15 @@ Rules:
                 rejectedCandidates = rejectedCandidates
             )
         } else {
-            val prompt = buildRewritePrompt(action, fullLyrics, selection, currentSection)
+            val sectionLabel = sectionRefAt(fullLyrics, selectionStart)
+                ?.let { explicitSectionLabel(it, fullLyrics) }
+            val prompt = buildRewritePrompt(
+                action,
+                fullLyrics,
+                selection,
+                currentSection,
+                sectionLabel
+            )
             val raw = callCloudRaw(provider, apiKey, modelId, prompt)
             extractRewriteField(raw)?.takeIf { it.isNotBlank() }
                 ?: throw RuntimeException("AI did not return a rewrite. Try again.")
@@ -886,7 +960,8 @@ Rules:
         action: RewriteAction,
         lyrics: String,
         selection: String,
-        currentSection: SongSection = SongSection.UNKNOWN
+        currentSection: SongSection = SongSection.UNKNOWN,
+        currentSectionLabel: String? = null
     ): String =
         """
 You are an expert songwriter helping the user rewrite a portion of their song.
@@ -903,6 +978,7 @@ ${"\"\"\""}
 
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
+${sectionLabelDirective(currentSectionLabel)}
 
 Action: ${action.label}
 Instruction: ${action.instruction}
@@ -924,6 +1000,8 @@ Respond ONLY with a JSON object of the form {"rewrite": "..."}. No code fences.
         rejectedCandidates: Set<String> = emptySet()
     ): String {
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext = false)
+        val sectionLabel = sectionRefAt(lyrics, selectionStart)
+            ?.let { explicitSectionLabel(it, lyrics) }
         val singleWord = isSingleWordSelection(selection)
         val selectedLine = selectionStart
             ?.let { lyricLineAt(lyrics, it) }
@@ -960,6 +1038,7 @@ You are RhymeAI's on-device songwriting assistant.
 $taskLine
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
+${sectionLabelDirective(sectionLabel)}
 Action: ${action.label}.
 Instruction: ${action.instruction}
 
@@ -1054,7 +1133,13 @@ $outputRules
         }
 
         if (!isSingleWordSelection(selection)) {
-            val prompt = buildLocalRewritePrompt(action, lyrics, selection, currentSection)
+            val prompt = buildLocalRewritePrompt(
+                action,
+                lyrics,
+                selection,
+                currentSection,
+                selectionStart
+            )
             val parsed = cleanLocalRewrite(service.generateResponse(prompt), selection)
             if (parsed.isBlank()) {
                 throw RuntimeException("Local model returned no rewrite. Try a different model or use a cloud provider.")
@@ -1415,7 +1500,8 @@ $outputRules
         currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
         useWholeSongContext: Boolean,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        sectionRef: SectionRef? = constraint?.sectionRef
     ): String {
         val rhymeHint = if (targetRhymeLine != null) {
             "End every suggestion with a ${rhymeType.displayName.lowercase()} for: \"$targetRhymeLine\"."
@@ -1438,7 +1524,7 @@ $outputRules
             "Infer from the lyrics."
         }
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext)
-        val sectionDirective = buildSectionDirective(constraint?.sectionRef, lyrics)
+        val sectionDirective = buildSectionDirective(sectionRef, lyrics)
         val userPrompt = """
 You are RhymeAI's on-device songwriting assistant.
 

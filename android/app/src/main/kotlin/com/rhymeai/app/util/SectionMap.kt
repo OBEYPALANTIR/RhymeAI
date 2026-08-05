@@ -20,6 +20,11 @@ data class SectionRef(
     val lineRange: IntRange
 )
 
+data class SectionInsertion(
+    val text: String,
+    val cursor: Int
+)
+
 class SectionMap private constructor(private val refs: List<SectionRef>) {
 
     /** All parsed sections in document order. */
@@ -34,12 +39,73 @@ class SectionMap private constructor(private val refs: List<SectionRef>) {
     }
 
     companion object {
+        val standardLabels = listOf(
+            "Intro",
+            "Verse",
+            "Pre-Chorus",
+            "Chorus",
+            "Hook",
+            "Bridge",
+            "Refrain",
+            "Interlude",
+            "Outro"
+        )
+
         // Matches both "[Verse 2]" and bare "verse 2" / "Chorus" / "hook"
         // The bare form requires the whole trimmed line to be keyword [+ number].
         private val bracketedHeader = Regex("""^\s*\[(.+)]\s*$""")
         private val bareHeader = Regex(
-            """^(?i)(verse|chorus|hook|bridge|pre[- ]?chorus|intro|outro)(\s+\d+)?$"""
+            """^(?i)(verse|chorus|hook|bridge|pre[- ]?chorus|intro|outro|refrain|interlude)(\s+\d+)?$"""
         )
+
+        fun headerTitle(line: String): String? {
+            val trimmed = line.trim()
+            val bracketed = bracketedHeader.matchEntire(trimmed)?.groupValues?.getOrNull(1)?.trim()
+            if (!bracketed.isNullOrEmpty()) return bracketed
+            return trimmed.takeIf { it.isNotEmpty() && bareHeader.matches(it) }
+        }
+
+        fun lyricContent(lyrics: String): String =
+            lyrics.lineSequence()
+                .filter { headerTitle(it) == null }
+                .joinToString("\n")
+
+        fun headerRanges(lyrics: String): List<IntRange> {
+            val ranges = mutableListOf<IntRange>()
+            var lineStart = 0
+            lyrics.split('\n').forEach { line ->
+                if (line.isNotEmpty() && headerTitle(line) != null) {
+                    ranges += lineStart until (lineStart + line.length)
+                }
+                lineStart += line.length + 1
+            }
+            return ranges
+        }
+
+        fun insertHeader(lyrics: String, cursor: Int, label: String): SectionInsertion {
+            val safeCursor = cursor.coerceIn(0, lyrics.length)
+            val cleanLabel = label.trim().removePrefix("[").removeSuffix("]").trim()
+            require(cleanLabel.isNotEmpty()) { "Section label cannot be blank." }
+
+            val before = lyrics.substring(0, safeCursor)
+            val after = lyrics.substring(safeCursor)
+            val leading = when {
+                before.isEmpty() || before.endsWith("\n\n") -> ""
+                before.endsWith("\n") -> "\n"
+                else -> "\n\n"
+            }
+            val trailing = when {
+                after.isEmpty() -> "\n"
+                after.startsWith("\n\n") -> ""
+                after.startsWith("\n") -> "\n"
+                else -> "\n\n"
+            }
+            val inserted = "$leading[$cleanLabel]$trailing"
+            return SectionInsertion(
+                text = before + inserted + after,
+                cursor = safeCursor + inserted.length
+            )
+        }
 
         fun parse(lyrics: String): SectionMap {
             val lines = lyrics.split('\n')
@@ -48,14 +114,8 @@ class SectionMap private constructor(private val refs: List<SectionRef>) {
             data class RawHeader(val lineIndex: Int, val label: String)
             val headers = mutableListOf<RawHeader>()
             lines.forEachIndexed { idx, line ->
-                val trimmed = line.trim()
-                val bracketed = bracketedHeader.matchEntire(line)?.groupValues?.get(1)?.trim()
-                if (bracketed != null) {
-                    headers += RawHeader(idx, bracketed)
-                    return@forEachIndexed
-                }
-                if (bareHeader.matches(trimmed) && trimmed.isNotEmpty()) {
-                    headers += RawHeader(idx, trimmed)
+                headerTitle(line)?.let { title ->
+                    headers += RawHeader(idx, title)
                 }
             }
 

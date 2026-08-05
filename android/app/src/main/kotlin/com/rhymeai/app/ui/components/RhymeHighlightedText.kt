@@ -30,6 +30,7 @@ import com.rhymeai.app.ui.theme.rhymePalette
 import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.RhymePhonetics
+import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -173,7 +174,13 @@ internal fun buildAnalysisText(
     rhymeEnabled: Boolean,
     syllablesEnabled: Boolean
 ): AnalysisTextResult {
+    val headerRanges = SectionMap.headerRanges(text)
     val tokens = wordPattern.findAll(text)
+        .filterNot { match ->
+            headerRanges.any { header ->
+                match.range.first <= header.last && match.range.last >= header.first
+            }
+        }
         .map { Token(it.value, it.range.first, it.range.last + 1) }
         .toList()
     val analyses = tokens.map { WordAnalysisCache.analysisFor(it.text) }

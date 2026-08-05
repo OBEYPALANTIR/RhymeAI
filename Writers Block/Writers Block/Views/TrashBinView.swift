@@ -207,7 +207,7 @@ struct TrashBinView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
-                    Text("\(SyllableCounter.wordCount(project.lyrics)) words · \(trashRemainingText(deleteAfter: project.deleteAfter))")
+                    Text("\(SyllableCounter.lyricWordCount(project.lyrics)) words · \(trashRemainingText(deleteAfter: project.deleteAfter))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

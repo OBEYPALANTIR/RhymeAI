@@ -11,6 +11,7 @@ struct LyricsTextView: UIViewRepresentable {
     @Environment(\.appAppearanceStyle) private var appearance
 
     @Binding var text: String
+    var selection: NSRange? = nil
     var displayText: String? = nil
     var rewriteHighlight: LyricsRewriteHighlight? = nil
     var onCursorChange: (Int) -> Void
@@ -44,7 +45,7 @@ struct LyricsTextView: UIViewRepresentable {
         let currentRenderedText = renderedText
         if textView.text != currentRenderedText {
             context.coordinator.isApplyingProgrammaticUpdate = true
-            let selectedRange = textView.selectedRange
+            let selectedRange = selection ?? textView.selectedRange
             textView.text = currentRenderedText
             // Restore selection if still valid — the whole range must fit, not just
             // its start, or restoring after the text shrank raises NSRangeException.

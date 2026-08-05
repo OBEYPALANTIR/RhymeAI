@@ -482,6 +482,76 @@ struct AIService {
 
     // MARK: - Prompt Builder
 
+    private static func explicitSectionLabelForSection(
+        in lyrics: String,
+        section: SongSection,
+        ordinal: Int
+    ) -> String? {
+        let rawLines = lyrics.components(separatedBy: "\n")
+        guard let ref = SectionMap(lyrics: lyrics).sections.first(where: {
+            $0.type == section && $0.ordinal == ordinal
+        }),
+        rawLines.indices.contains(ref.lineRange.lowerBound) else {
+            return nil
+        }
+        return SectionMap.headerTitle(
+            rawLines[ref.lineRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    private static func explicitSectionLabelAtOffset(
+        in lyrics: String,
+        characterOffset: Int?
+    ) -> String? {
+        guard let characterOffset else { return nil }
+        let safeOffset = min(max(characterOffset, 0), lyrics.count)
+        let lineIndex = lyrics.prefix(safeOffset).reduce(into: 0) { count, character in
+            if character == "\n" { count += 1 }
+        }
+        let rawLines = lyrics.components(separatedBy: "\n")
+        guard let ref = SectionMap(lyrics: lyrics).sectionAt(lineIndex: lineIndex),
+              rawLines.indices.contains(ref.lineRange.lowerBound) else {
+            return nil
+        }
+        return SectionMap.headerTitle(
+            rawLines[ref.lineRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    private static func sectionLabelDirective(_ label: String?) -> String? {
+        guard let label else { return nil }
+        let safeLabel = label
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\"", with: "'")
+        guard !safeLabel.isEmpty else { return nil }
+
+        let squashed = safeLabel.lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        let role: String
+        if squashed.contains("prechorus") {
+            role = "Build momentum and tension toward the chorus without resolving the hook early."
+        } else if squashed.hasPrefix("intro") {
+            role = "Establish the song's mood, world, or central image while leaving room for the song to open up."
+        } else if squashed.hasPrefix("hook") {
+            role = "Center the shortest, most memorable, repeatable phrase in the song."
+        } else if squashed.hasPrefix("refrain") {
+            role = "Craft a returning line or compact phrase that can recur without becoming a full chorus."
+        } else if squashed.hasPrefix("interlude") {
+            role = "Use this as a sparse transition; keep any lyric minimal and textural."
+        } else if squashed.hasPrefix("outro") {
+            role = "Resolve or echo the song's core idea and create a clear sense of closure."
+        } else {
+            role = "Follow the named section's structural role when shaping the next line."
+        }
+        return """
+        Current section label: "\(safeLabel)". Treat this label as song structure, not lyric content.
+        Section-specific direction: \(role)
+        """
+    }
+
     func buildPrompt(
         theme: String,
         lyrics: String,
@@ -529,6 +599,13 @@ struct AIService {
             ordinal: sectionOrdinal,
             firstChorusLines: firstChorusLines
         )
+        let sectionLabelHint = Self.sectionLabelDirective(
+            Self.explicitSectionLabelForSection(
+                in: lyrics,
+                section: currentSection,
+                ordinal: sectionOrdinal
+            )
+        )
 
         let rhymeAdherence = targetRhymeLine != nil
             ? ", and strictly adhere to the requested rhyme type (\(rhymeType.displayName))"
@@ -550,6 +627,9 @@ struct AIService {
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
         """
+        if let sectionLabelHint {
+            prompt += "\n" + sectionLabelHint
+        }
         if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
             prompt += "\n" + sectionInstanceHint
         }
@@ -901,6 +981,13 @@ struct AIService {
             ordinal: sectionOrdinal,
             firstChorusLines: firstChorusLines
         )
+        let sectionLabelHint = Self.sectionLabelDirective(
+            Self.explicitSectionLabelForSection(
+                in: lyrics,
+                section: currentSection,
+                ordinal: sectionOrdinal
+            )
+        )
 
         let songContextInstruction = useWholeSongContext
             ? "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
@@ -912,6 +999,9 @@ struct AIService {
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
         """
+        if let sectionLabelHint {
+            prompt += "\n" + sectionLabelHint
+        }
         if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
             prompt += "\n" + sectionInstanceHint
         }
@@ -1106,6 +1196,12 @@ struct AIService {
         selectionStart: Int? = nil,
         rejectedCandidates: Set<String> = []
     ) -> String {
+        let sectionLabelHint = Self.sectionLabelDirective(
+            Self.explicitSectionLabelAtOffset(
+                in: lyrics,
+                characterOffset: selectionStart
+            )
+        ) ?? ""
         let singleWord = isSingleWordSelection(selection)
         let selectedLine = selectionStart.flatMap { lyricLine(at: $0, in: lyrics) }
         let rejectedKeys = rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates)
@@ -1133,6 +1229,7 @@ struct AIService {
         \(taskLine)
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
+        \(sectionLabelHint)
         Action: \(action.label).
         Instruction: \(action.instruction)
 
@@ -1340,7 +1437,17 @@ struct AIService {
             throw AIServiceError.noApiKey(provider: provider.displayName)
         }
 
-        let prompt = buildRewritePrompt(action: action, lyrics: fullLyrics, selection: selection, currentSection: currentSection)
+        let sectionLabel = Self.explicitSectionLabelAtOffset(
+            in: fullLyrics,
+            characterOffset: selectionStart
+        )
+        let prompt = buildRewritePrompt(
+            action: action,
+            lyrics: fullLyrics,
+            selection: selection,
+            currentSection: currentSection,
+            currentSectionLabel: sectionLabel
+        )
         let raw = try await callCloudText(
             provider: provider,
             apiKey: apiKey,
@@ -1360,8 +1467,10 @@ struct AIService {
         action: RewriteAction,
         lyrics: String,
         selection: String,
-        currentSection: SongSection = .unknown
+        currentSection: SongSection = .unknown,
+        currentSectionLabel: String? = nil
     ) -> String {
+        let sectionLabelHint = Self.sectionLabelDirective(currentSectionLabel) ?? ""
         return """
         You are an expert songwriter helping the user rewrite a portion of their song.
 
@@ -1377,6 +1486,7 @@ struct AIService {
 
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
+        \(sectionLabelHint)
 
         Action: \(action.label)
         Instruction: \(action.instruction)
@@ -1398,6 +1508,12 @@ struct AIService {
         selectionStart: Int? = nil,
         rejectedCandidates: Set<String> = []
     ) -> String {
+        let sectionLabelHint = Self.sectionLabelDirective(
+            Self.explicitSectionLabelAtOffset(
+                in: lyrics,
+                characterOffset: selectionStart
+            )
+        ) ?? ""
         let singleWord = isSingleWordSelection(selection)
         let selectedLine = selectionStart.flatMap { lyricLine(at: $0, in: lyrics) }
         let rejectedKeys = rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates)
@@ -1424,6 +1540,7 @@ struct AIService {
         \(taskLine)
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
+        \(sectionLabelHint)
         Action: \(action.label).
         Instruction: \(Self.localRewriteInstruction(for: action))
 
@@ -1492,7 +1609,13 @@ struct AIService {
         )
 
         if !isSingleWordSelection(selection) {
-            let prompt = buildLocalRewritePrompt(action: action, lyrics: lyrics, selection: selection, currentSection: currentSection)
+            let prompt = buildLocalRewritePrompt(
+                action: action,
+                lyrics: lyrics,
+                selection: selection,
+                currentSection: currentSection,
+                selectionStart: selectionStart
+            )
             let content: String
             do {
                 content = try await session.respond(to: prompt, options: Self.localGenerationOptions(maxTokens: 256)).content

@@ -358,6 +358,49 @@ class AIServicePromptTest {
     }
 
     @Test
+    fun buildPromptNamesStructuralSectionEvenWithoutRhymeConstraint() {
+        val service = AIService()
+        val ref = com.rhymeai.app.util.SectionRef(
+            type = SongSection.UNKNOWN,
+            ordinal = 1,
+            label = "Pre-Chorus",
+            lineRange = 0 until 2
+        )
+        val prompt = service.buildPrompt(
+            theme = "late-night resolve",
+            lyrics = "[Pre-Chorus]\nBuild it higher",
+            targetRhymeLine = null,
+            rhymeType = RhymeType.PERFECT,
+            rhymeScheme = "AABB",
+            currentLetter = "A",
+            currentSection = SongSection.UNKNOWN,
+            complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = false,
+            sectionRef = ref
+        )
+
+        assertContains(
+            prompt,
+            "Current section label: \"Pre-Chorus\". Treat this label as song structure, not lyric content."
+        )
+        assertContains(prompt, "Build momentum and tension toward the chorus")
+    }
+
+    @Test
+    fun rewritePromptNamesCustomStructuralSection() {
+        val prompt = AIService().buildRewritePrompt(
+            action = RewriteAction.REPHRASE,
+            lyrics = "[Post-Chorus]\nLet it ring",
+            selection = "Let it ring",
+            currentSection = SongSection.UNKNOWN,
+            currentSectionLabel = "Post-Chorus"
+        )
+
+        assertContains(prompt, "Current section label: \"Post-Chorus\"")
+        assertContains(prompt, "Treat this label as song structure, not lyric content.")
+    }
+
+    @Test
     fun verseConstraintExcludesChorusEndWords() {
         val service = AIService()
         // Build a lyrics string where "glowed" is a chorus end-word

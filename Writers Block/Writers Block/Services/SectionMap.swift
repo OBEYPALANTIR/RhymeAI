@@ -12,6 +12,11 @@ struct SectionRef {
     let lineRange: Range<Int>
 }
 
+struct SectionInsertion {
+    let text: String
+    let cursor: Int
+}
+
 /// Parses the full lyrics string into an ordered list of sections, then lets
 /// callers look up which section owns any given line index.
 ///
@@ -22,6 +27,18 @@ struct SectionRef {
 ///
 /// Lines before the first header become an implicit unknown section (ordinal 1).
 nonisolated struct SectionMap {
+
+    static let standardLabels = [
+        "Intro",
+        "Verse",
+        "Pre-Chorus",
+        "Chorus",
+        "Hook",
+        "Bridge",
+        "Refrain",
+        "Interlude",
+        "Outro"
+    ]
 
     let sections: [SectionRef]
 
@@ -84,17 +101,18 @@ nonisolated struct SectionMap {
 
             let sectionType: SongSection
             let label: String
+            let ordinal: Int
             if let title = boundary.title {
                 sectionType = SongSection.fromHeader(title)
                 label = title
+                ordinalsPerType[sectionType, default: 0] += 1
+                ordinal = ordinalsPerType[sectionType, default: 0]
             } else {
                 // Implicit leading block before any header.
                 sectionType = .unknown
                 label = "Intro"
+                ordinal = 1
             }
-
-            ordinalsPerType[sectionType, default: 0] += 1
-            let ordinal = ordinalsPerType[sectionType, default: 0]
 
             results.append(SectionRef(type: sectionType, ordinal: ordinal, label: label, lineRange: range))
         }
@@ -116,5 +134,63 @@ nonisolated struct SectionMap {
             return trimmed
         }
         return nil
+    }
+
+    static func lyricContent(_ lyrics: String) -> String {
+        lyrics.components(separatedBy: "\n")
+            .filter { headerTitle($0.trimmingCharacters(in: .whitespacesAndNewlines)) == nil }
+            .joined(separator: "\n")
+    }
+
+    static func headerRanges(_ lyrics: String) -> [NSRange] {
+        var ranges: [NSRange] = []
+        var lineStart = 0
+        for line in lyrics.components(separatedBy: "\n") {
+            let lineLength = line.utf16.count
+            if lineLength > 0,
+               headerTitle(line.trimmingCharacters(in: .whitespacesAndNewlines)) != nil {
+                ranges.append(NSRange(location: lineStart, length: lineLength))
+            }
+            lineStart += lineLength + 1
+        }
+        return ranges
+    }
+
+    static func insertHeader(_ label: String, in lyrics: String, cursor: Int) -> SectionInsertion {
+        let nsLyrics = lyrics as NSString
+        let safeCursor = min(max(cursor, 0), nsLyrics.length)
+        let cleanLabel = label
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        precondition(!cleanLabel.isEmpty, "Section label cannot be blank.")
+
+        let before = nsLyrics.substring(to: safeCursor)
+        let after = nsLyrics.substring(from: safeCursor)
+        let leading: String
+        if before.isEmpty || before.hasSuffix("\n\n") {
+            leading = ""
+        } else if before.hasSuffix("\n") {
+            leading = "\n"
+        } else {
+            leading = "\n\n"
+        }
+
+        let trailing: String
+        if after.isEmpty {
+            trailing = "\n"
+        } else if after.hasPrefix("\n\n") {
+            trailing = ""
+        } else if after.hasPrefix("\n") {
+            trailing = "\n"
+        } else {
+            trailing = "\n\n"
+        }
+
+        let inserted = "\(leading)[\(cleanLabel)]\(trailing)"
+        return SectionInsertion(
+            text: before + inserted + after,
+            cursor: safeCursor + inserted.utf16.count
+        )
     }
 }

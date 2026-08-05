@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -56,6 +57,7 @@ import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -73,11 +75,14 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.SnackbarHost
@@ -100,7 +105,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -166,6 +170,7 @@ import com.rhymeai.app.ui.motion.RewriteHighlightState
 import com.rhymeai.app.ui.motion.RewriteMotionStyle
 import com.rhymeai.app.ui.motion.rewriteLoadingHighlight
 import com.rhymeai.app.util.LyricsExporter
+import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -203,12 +208,13 @@ private fun rememberExportDocumentLauncher(
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     var showBottomSheet by remember { mutableStateOf(false) }
-    var titleFocused by remember { mutableStateOf(false) }
     var lyricsFocused by remember { mutableStateOf(false) }
     var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var titleHeightPx by remember { mutableIntStateOf(0) }
+    var metadataHeightPx by remember { mutableIntStateOf(0) }
     var analyzedLyrics by remember { mutableStateOf(viewModel.lyrics) }
     var lyricStats by remember { mutableStateOf(LyricStats(0, 0)) }
+    var sectionMenuExpanded by remember { mutableStateOf(false) }
 
     val colorScheme = MaterialTheme.colorScheme
     val animationsEnabled = LocalAnimationsEnabled.current
@@ -233,8 +239,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         delay(180)
         val stats = withContext(Dispatchers.Default) {
             LyricStats(
-                wordCount = SyllableCounter.wordCount(lyricsSnapshot),
-                syllableCount = SyllableCounter.countText(lyricsSnapshot)
+                wordCount = SyllableCounter.lyricWordCount(lyricsSnapshot),
+                syllableCount = SyllableCounter.lyricSyllableCount(lyricsSnapshot)
             )
         }
         analyzedLyrics = lyricsSnapshot
@@ -652,14 +658,15 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         charsPerLine = estimatedCharsPerLine
                     )
                 }
+                val resolvedMetadataHeightPx = metadataHeightPx.takeIf { it > 0 }
+                    ?: with(density) { DesignTokens.Editor.metadataLineHeight.roundToPx() }
                 val lyricsTopPx = with(density) {
                     (
                         DesignTokens.Rhythm.standard +
-                            5.dp +
-                            3.dp +
+                            DesignTokens.Spacing.xs +
                             DesignTokens.Rhythm.standard
-                        ).roundToPx() + DesignTokens.Editor.metadataLineHeight.roundToPx()
-                } + titleHeightPx
+                        ).roundToPx()
+                } + resolvedMetadataHeightPx + titleHeightPx
                 val lineHeightPx = with(density) { DesignTokens.Editor.lyricMeasureLineHeight.roundToPx() }
                 val activeRangeInLyricsPx = selectedTextVerticalRange(
                     textLayoutResult = lyricsTextLayout,
@@ -756,7 +763,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("songTitleEditor")
-                            .onFocusChanged { titleFocused = it.isFocused }
                             .onSizeChanged { titleHeightPx = it.height },
                         decorationBox = { innerTextField ->
                             Box {
@@ -772,23 +778,58 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
                     )
 
-                    TitleFocusMark(
-                        focused = titleFocused,
+                    Spacer(Modifier.height(DesignTokens.Spacing.xs))
+                    Row(
                         modifier = Modifier
-                            .width(89.dp)
-                            .height(5.dp)
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        text = compactEditorStats(
-                            wordCount = lyricStats.wordCount,
-                            syllableCount = lyricStats.syllableCount
-                        ),
-                        color = colorScheme.onSurfaceVariant,
-                        fontSize = DesignTokens.Editor.metadataFontSize,
-                        lineHeight = DesignTokens.Editor.metadataLineHeight,
-                        modifier = Modifier.testTag("editorStats")
-                    )
+                            .fillMaxWidth()
+                            .onSizeChanged { metadataHeightPx = it.height },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = compactEditorStats(
+                                wordCount = lyricStats.wordCount,
+                                syllableCount = lyricStats.syllableCount
+                            ),
+                            color = colorScheme.onSurfaceVariant,
+                            fontSize = DesignTokens.Editor.metadataFontSize,
+                            lineHeight = DesignTokens.Editor.metadataLineHeight,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("editorStats")
+                        )
+                        Box {
+                            TextButton(
+                                onClick = { sectionMenuExpanded = true },
+                                enabled = !viewModel.hasActiveRewrite,
+                                contentPadding = PaddingValues(horizontal = DesignTokens.Spacing.sm),
+                                modifier = Modifier.testTag("sectionMenuButton")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = null
+                                )
+                                Spacer(Modifier.width(DesignTokens.Spacing.xs))
+                                Text("Section")
+                            }
+                            DropdownMenu(
+                                expanded = sectionMenuExpanded,
+                                onDismissRequest = { sectionMenuExpanded = false }
+                            ) {
+                                SectionMap.standardLabels.forEach { label ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        onClick = {
+                                            sectionMenuExpanded = false
+                                            viewModel.insertSection(label)
+                                        },
+                                        modifier = Modifier.testTag(
+                                            "sectionMenu${label.filter(Char::isLetter)}"
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
                     // Expensive lyric analysis waits until typing pauses so editor redraws stay stable.
@@ -1660,54 +1701,6 @@ private fun inlineRewriteStatusText(
     if (loading) return "${action.label}..."
     if (preview != null) return "Previewing ${action.label}"
     return action.label
-}
-
-@Composable
-private fun TitleFocusMark(
-    focused: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val animationsEnabled = LocalAnimationsEnabled.current
-    val progress by animateFloatAsState(
-        targetValue = if (focused) 1f else 0f,
-        animationSpec = if (animationsEnabled) {
-            tween(
-                durationMillis = DesignTokens.Motion.standardMillis,
-                easing = DesignTokens.Motion.standardEasing
-            )
-        } else {
-            snap()
-        },
-        label = "titleFocusMark"
-    )
-    val color = MaterialTheme.colorScheme.onSurfaceVariant
-
-    Canvas(modifier = modifier) {
-        clipRect(right = size.width * progress) {
-            val strokeWidth = 1.5.dp.toPx()
-            drawLine(
-                color = color,
-                start = Offset(0f, size.height * 0.58f),
-                end = Offset(size.width * 0.30f, size.height * 0.25f),
-                strokeWidth = strokeWidth,
-                cap = StrokeCap.Round
-            )
-            drawLine(
-                color = color,
-                start = Offset(size.width * 0.30f, size.height * 0.25f),
-                end = Offset(size.width * 0.66f, size.height * 0.72f),
-                strokeWidth = strokeWidth,
-                cap = StrokeCap.Round
-            )
-            drawLine(
-                color = color,
-                start = Offset(size.width * 0.66f, size.height * 0.72f),
-                end = Offset(size.width, size.height * 0.36f),
-                strokeWidth = strokeWidth,
-                cap = StrokeCap.Round
-            )
-        }
-    }
 }
 
 @Composable

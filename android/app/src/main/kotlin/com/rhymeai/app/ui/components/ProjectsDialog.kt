@@ -1168,7 +1168,7 @@ private fun ProjectDrawerRow(
     val dateStr = remember(project.updatedAt) {
         SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(project.updatedAt))
     }
-    val wordCount = remember(project.lyrics) { SyllableCounter.wordCount(project.lyrics) }
+    val wordCount = remember(project.lyrics) { SyllableCounter.lyricWordCount(project.lyrics) }
 
     OutlinedCard(
         onClick = { onLoadProject(project) },
@@ -1645,7 +1645,7 @@ private fun TrashProjectSelectableRow(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val project = trashedProject.project
-    val wordCount = remember(project.lyrics) { SyllableCounter.wordCount(project.lyrics) }
+    val wordCount = remember(project.lyrics) { SyllableCounter.lyricWordCount(project.lyrics) }
 
     Row(
         modifier = Modifier

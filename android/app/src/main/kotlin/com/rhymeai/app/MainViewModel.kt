@@ -33,6 +33,7 @@ import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.EditHistory
 import com.rhymeai.app.util.RhymeMatches
+import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SectionRef
 import com.rhymeai.app.util.WordProsody
 import kotlinx.coroutines.CancellationException
@@ -894,6 +895,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val newText = before + insertText + after
         val newPos = pos + insertText.length
         applyAtomicLyricsEdit(TextFieldValue(newText, TextRange(newPos)))
+        suggestions = emptyList()
+        triggerAutoSave()
+    }
+
+    fun insertSection(label: String) {
+        val insertion = SectionMap.insertHeader(lyrics, cursorPosition, label)
+        pendingRewriteRange = null
+        applyAtomicLyricsEdit(
+            TextFieldValue(
+                text = insertion.text,
+                selection = TextRange(insertion.cursor)
+            )
+        )
         suggestions = emptyList()
         triggerAutoSave()
     }

@@ -364,8 +364,8 @@ final class EditorViewModel: ObservableObject {
             let rhymeScheme = self.activeRhymeScheme
             let derived = await Task.detached(priority: .userInitiated) {
                 LyricsDerivedState(
-                    wordCount: SyllableCounter.wordCount(lyrics),
-                    syllableCount: SyllableCounter.countText(lyrics),
+                    wordCount: SyllableCounter.lyricWordCount(lyrics),
+                    syllableCount: SyllableCounter.lyricSyllableCount(lyrics),
                     rhymeContext: Self.computeRhymeContext(
                         lyrics: lyrics,
                         cursorPosition: cursorPosition,
@@ -899,6 +899,13 @@ final class EditorViewModel: ObservableObject {
             // cursorPosition is a UTF-16 offset (UITextView units).
             cursorPosition: before.utf16.count + insertText.utf16.count
         )
+        suggestions = []
+        triggerAutoSave()
+    }
+
+    func insertSection(_ label: String) {
+        let insertion = SectionMap.insertHeader(label, in: lyrics, cursor: cursorPosition)
+        applyAtomicLyricsEdit(text: insertion.text, cursorPosition: insertion.cursor)
         suggestions = []
         triggerAutoSave()
     }

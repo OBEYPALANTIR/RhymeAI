@@ -193,6 +193,40 @@ struct RhymeConstraintTests {
         #expect(unknownTarget.contains("Respond with exactly 6 lines"))
     }
 
+    @Test func suggestionPromptNamesStructuralSectionWithoutRhymeConstraint() {
+        let prompt = AIService().buildPrompt(
+            theme: "late-night resolve",
+            lyrics: "[Pre-Chorus]\nBuild it higher",
+            targetRhymeLine: nil,
+            rhymeType: .perfect,
+            rhymeScheme: "AABB",
+            currentLetter: "A",
+            currentSection: .unknown,
+            complexity: .moderate,
+            useWholeSongContext: false
+        )
+
+        #expect(
+            prompt.contains(
+                "Current section label: \"Pre-Chorus\". Treat this label as song structure, not lyric content."
+            )
+        )
+        #expect(prompt.contains("Build momentum and tension toward the chorus"))
+    }
+
+    @Test func rewritePromptNamesCustomStructuralSection() {
+        let prompt = AIService().buildRewritePrompt(
+            action: .rephrase,
+            lyrics: "[Post-Chorus]\nLet it ring",
+            selection: "Let it ring",
+            currentSection: .unknown,
+            currentSectionLabel: "Post-Chorus"
+        )
+
+        #expect(prompt.contains("Current section label: \"Post-Chorus\""))
+        #expect(prompt.contains("Treat this label as song structure, not lyric content."))
+    }
+
     @Test func rhymeLineFilterMirrorsThePromptGate() {
         #expect(RhymeLineFilter(targetLine: "We own the night", rhymeType: .perfect) != nil)
         #expect(RhymeLineFilter(targetLine: nil, rhymeType: .perfect) == nil)

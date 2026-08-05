@@ -156,10 +156,15 @@ struct RhymeHighlightedText: View, Equatable {
         rhymeEnabled: Bool
     ) -> HighlightAnalysis {
         let nsText = text as NSString
+        let headerRanges = SectionMap.headerRanges(text)
         let matches = LyricRegex.word.matches(
             in: text,
             range: NSRange(location: 0, length: nsText.length)
-        )
+        ).filter { match in
+            !headerRanges.contains { headerRange in
+                NSIntersectionRange(match.range, headerRange).length > 0
+            }
+        }
         let analyses = matches.map { match in
             WordAnalysisCache.shared.analysis(for: nsText.substring(with: match.range))
         }

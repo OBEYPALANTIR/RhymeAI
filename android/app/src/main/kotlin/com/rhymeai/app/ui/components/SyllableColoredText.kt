@@ -31,6 +31,7 @@ import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.analysisFontWeight
 import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.LyricTokenizer
+import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
 
 private val wordPattern = LyricTokenizer.alphanumericWordPattern
@@ -52,8 +53,13 @@ fun buildSyllableWordAnnotatedString(
     isDark: Boolean,
     presentation: AnalysisPresentation
 ): AnnotatedString = buildAnnotatedString {
+    val headerRanges = SectionMap.headerRanges(text)
     var cursor = 0
-    for (match in wordPattern.findAll(text)) {
+    for (match in wordPattern.findAll(text).filterNot { word ->
+        headerRanges.any { header ->
+            word.range.first <= header.last && word.range.last >= header.first
+        }
+    }) {
         val start = match.range.first
         val end = match.range.last + 1
         if (start > cursor) {
@@ -119,7 +125,13 @@ data class SyllableUnderlineSpan(
 fun buildSyllableUnderlineSpans(text: String, enabled: Boolean, isDark: Boolean): List<SyllableUnderlineSpan> {
     if (!enabled || text.isEmpty()) return emptyList()
 
+    val headerRanges = SectionMap.headerRanges(text)
     return wordPattern.findAll(text)
+        .filterNot { match ->
+            headerRanges.any { header ->
+                match.range.first <= header.last && match.range.last >= header.first
+            }
+        }
         .map { match ->
             SyllableUnderlineSpan(
                 start = match.range.first,

@@ -662,7 +662,7 @@ struct ProjectsDrawerView: View {
                         HStack(spacing: RhymeAITokens.Spacing.xs) {
                             Text(project.updatedAt, style: .date)
                             Text("·")
-                            Text("\(SyllableCounter.wordCount(project.lyrics)) words")
+                            Text("\(SyllableCounter.lyricWordCount(project.lyrics)) words")
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)

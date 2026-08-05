@@ -800,12 +800,13 @@ struct Writers_BlockTests {
     }
 
     @Test func sectionMapParsesBareSectionHeaders() {
-        let lyrics = "verse\nLine A\nLine B\n\nchorus\nHook line"
+        let lyrics = "verse\nLine A\nLine B\n\nchorus\nHook line\nrefrain\nAgain\ninterlude\nBreathe"
         let map = SectionMap(lyrics: lyrics)
 
-        #expect(map.sections.count == 2)
         #expect(map.sections[0].type == .verse)
         #expect(map.sections[1].type == .chorus)
+        #expect(map.sections.contains(where: { $0.label == "refrain" }))
+        #expect(map.sections.contains(where: { $0.label == "interlude" }))
     }
 
     @Test func sectionMapOrdinalCountsPerType() {
@@ -851,6 +852,49 @@ struct Writers_BlockTests {
 
         let lines = map.lines(forFirstOf: .chorus, in: rawLines)
         #expect(lines == ["Hook one", "Hook two"])
+    }
+
+    @Test func sectionHeadersDoNotAffectLyricMetrics() {
+        let lyrics = "[Verse]\nHold the line\nPre-Chorus\nBuild it up\n[Post-Chorus]\nLet it ring"
+
+        #expect(SectionMap.lyricContent(lyrics) == "Hold the line\nBuild it up\nLet it ring")
+        #expect(
+            SectionMap.headerRanges(lyrics)
+                == [
+                    NSRange(location: 0, length: 7),
+                    NSRange(location: 22, length: 10),
+                    NSRange(location: 45, length: 13)
+                ]
+        )
+        #expect(SyllableCounter.lyricWordCount(lyrics) == 9)
+        #expect(
+            SyllableCounter.lyricSyllableCount(lyrics)
+                == SyllableCounter.countText("Hold the line\nBuild it up\nLet it ring")
+        )
+    }
+
+    @Test func sectionInsertionCreatesAnUndoableStructuralBlock() {
+        let viewModel = EditorViewModel()
+        viewModel.lyrics = "First line"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+
+        viewModel.insertSection("Chorus")
+
+        #expect(viewModel.lyrics == "First line\n\n[Chorus]\n")
+        #expect(viewModel.cursorPosition == viewModel.lyrics.utf16.count)
+        #expect(viewModel.canUndoLyrics)
+    }
+
+    @Test func bareSectionHeaderDoesNotConsumeRhymeSchemePosition() {
+        let viewModel = EditorViewModel()
+        viewModel.rhymeScheme = .abab
+        viewModel.lyrics = "verse\nfirst light\nsecond night\npre-chorus\nbuild higher"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+
+        let context = viewModel.computeRhymeContext()
+
+        #expect(context.currentLetter == "A")
+        #expect(context.currentSection == .unknown)
     }
 
     // MARK: - Chorus candidate injection tests
