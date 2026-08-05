@@ -43,7 +43,8 @@ struct LyricsTextView: UIViewRepresentable {
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.parent = self
         let currentRenderedText = renderedText
-        if textView.text != currentRenderedText {
+        let textChanged = textView.text != currentRenderedText
+        if textChanged {
             context.coordinator.isApplyingProgrammaticUpdate = true
             let selectedRange = selection ?? textView.selectedRange
             textView.text = currentRenderedText
@@ -54,12 +55,39 @@ struct LyricsTextView: UIViewRepresentable {
             }
             context.coordinator.isApplyingProgrammaticUpdate = false
         }
-        textView.isEditable = isEditable
-        textView.isSelectable = isEditable
-        applyAppearance(to: textView)
-        context.coordinator.updatePlaceholder(textView, text: currentRenderedText)
-        context.coordinator.updateRewriteHighlight(textView, highlight: rewriteHighlight)
-        context.coordinator.scheduleKeepCursorVisible()
+        if textView.isEditable != isEditable {
+            textView.isEditable = isEditable
+        }
+        if textView.isSelectable != isEditable {
+            textView.isSelectable = isEditable
+        }
+        if context.coordinator.shouldApplyAppearance(
+            appearance: appearance,
+            isTransparentText: isTransparentText,
+            isEditable: isEditable
+        ) {
+            applyAppearance(to: textView)
+        }
+        if context.coordinator.shouldUpdatePlaceholder(
+            text: currentRenderedText,
+            appearance: appearance,
+            placeholder: placeholder
+        ) {
+            context.coordinator.updatePlaceholder(textView, text: currentRenderedText)
+        }
+        if context.coordinator.shouldUpdateRewriteHighlight(
+            textChanged: textChanged,
+            highlight: rewriteHighlight
+        ) {
+            context.coordinator.updateRewriteHighlight(textView, highlight: rewriteHighlight)
+        }
+        if context.coordinator.shouldKeepCursorVisible(
+            textChanged: textChanged,
+            selection: selection,
+            bottomOverlayHeight: bottomOverlayHeight
+        ) {
+            context.coordinator.scheduleKeepCursorVisible()
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -86,6 +114,15 @@ struct LyricsTextView: UIViewRepresentable {
         private var isObservingKeyboard = false
         private var keyboardFrameInScreen: CGRect = .zero
         private var isKeyboardVisible = false
+        private var lastAppearance: AppAppearanceStyle?
+        private var lastIsTransparentText: Bool?
+        private var lastIsEditable: Bool?
+        private var lastPlaceholderText: String?
+        private var lastPlaceholderAppearance: AppAppearanceStyle?
+        private var lastPlaceholder: String?
+        private var lastRewriteHighlight: LyricsRewriteHighlight?
+        private var lastSelection: NSRange?
+        private var lastBottomOverlayHeight: CGFloat?
         var isApplyingProgrammaticUpdate = false
 
         init(_ parent: LyricsTextView) {
@@ -129,6 +166,56 @@ struct LyricsTextView: UIViewRepresentable {
             )
         }
 
+        func shouldApplyAppearance(
+            appearance: AppAppearanceStyle,
+            isTransparentText: Bool,
+            isEditable: Bool
+        ) -> Bool {
+            let changed = lastAppearance != appearance
+                || lastIsTransparentText != isTransparentText
+                || lastIsEditable != isEditable
+            lastAppearance = appearance
+            lastIsTransparentText = isTransparentText
+            lastIsEditable = isEditable
+            return changed
+        }
+
+        func shouldUpdatePlaceholder(
+            text: String,
+            appearance: AppAppearanceStyle,
+            placeholder: String
+        ) -> Bool {
+            let changed = lastPlaceholderText != text
+                || lastPlaceholderAppearance != appearance
+                || lastPlaceholder != placeholder
+            lastPlaceholderText = text
+            lastPlaceholderAppearance = appearance
+            lastPlaceholder = placeholder
+            return changed
+        }
+
+        func shouldUpdateRewriteHighlight(
+            textChanged: Bool,
+            highlight: LyricsRewriteHighlight?
+        ) -> Bool {
+            let changed = textChanged || lastRewriteHighlight != highlight
+            lastRewriteHighlight = highlight
+            return changed
+        }
+
+        func shouldKeepCursorVisible(
+            textChanged: Bool,
+            selection: NSRange?,
+            bottomOverlayHeight: CGFloat
+        ) -> Bool {
+            let changed = textChanged
+                || lastSelection != selection
+                || lastBottomOverlayHeight != bottomOverlayHeight
+            lastSelection = selection
+            lastBottomOverlayHeight = bottomOverlayHeight
+            return changed
+        }
+
         func updatePlaceholder(_ textView: UITextView, text: String) {
             if placeholderLabel == nil {
                 let label = UILabel()
@@ -142,6 +229,7 @@ struct LyricsTextView: UIViewRepresentable {
                 ])
                 placeholderLabel = label
             }
+            placeholderLabel?.text = parent.placeholder
             placeholderLabel?.textColor = UIColor(parent.appearance.palette.placeholder)
             placeholderLabel?.isHidden = !text.isEmpty
         }

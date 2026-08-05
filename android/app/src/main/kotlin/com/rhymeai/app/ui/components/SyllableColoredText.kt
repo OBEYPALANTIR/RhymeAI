@@ -56,9 +56,7 @@ fun buildSyllableWordAnnotatedString(
     val headerRanges = SectionMap.headerRanges(text)
     var cursor = 0
     for (match in wordPattern.findAll(text).filterNot { word ->
-        headerRanges.any { header ->
-            word.range.first <= header.last && word.range.last >= header.first
-        }
+        SectionMap.intersectsHeader(word.range, headerRanges)
     }) {
         val start = match.range.first
         val end = match.range.last + 1
@@ -122,25 +120,48 @@ data class SyllableUnderlineSpan(
     val color: Color
 )
 
-fun buildSyllableUnderlineSpans(text: String, enabled: Boolean, isDark: Boolean): List<SyllableUnderlineSpan> {
+@Immutable
+data class SyllableUnderlineAnalysis(
+    val start: Int,
+    val endExclusive: Int,
+    val syllableCount: Int
+)
+
+fun analyzeSyllableUnderlines(text: String, enabled: Boolean): List<SyllableUnderlineAnalysis> {
     if (!enabled || text.isEmpty()) return emptyList()
 
     val headerRanges = SectionMap.headerRanges(text)
     return wordPattern.findAll(text)
         .filterNot { match ->
-            headerRanges.any { header ->
-                match.range.first <= header.last && match.range.last >= header.first
-            }
+            SectionMap.intersectsHeader(match.range, headerRanges)
         }
         .map { match ->
-            SyllableUnderlineSpan(
+            SyllableUnderlineAnalysis(
                 start = match.range.first,
                 endExclusive = match.range.last + 1,
-                color = syllableColor(SyllableCounter.count(match.value), isDark)
+                syllableCount = SyllableCounter.count(match.value)
             )
         }
         .toList()
 }
+
+fun colorSyllableUnderlines(
+    analysis: List<SyllableUnderlineAnalysis>,
+    isDark: Boolean
+): List<SyllableUnderlineSpan> = analysis.map { token ->
+    SyllableUnderlineSpan(
+        start = token.start,
+        endExclusive = token.endExclusive,
+        color = syllableColor(token.syllableCount, isDark)
+    )
+}
+
+fun buildSyllableUnderlineSpans(
+    text: String,
+    enabled: Boolean,
+    isDark: Boolean
+): List<SyllableUnderlineSpan> =
+    colorSyllableUnderlines(analyzeSyllableUnderlines(text, enabled), isDark)
 
 @Composable
 fun SyllableColoredText(
@@ -155,7 +176,8 @@ fun SyllableColoredText(
     val density = LocalDensity.current
     val strokeWidth = with(density) { 3.dp.toPx() }
     val underlineGap = with(density) { 2.dp.toPx() }
-    val spans = remember(text, enabled, isDark) { buildSyllableUnderlineSpans(text, enabled, isDark) }
+    val analysis = remember(text, enabled) { analyzeSyllableUnderlines(text, enabled) }
+    val spans = remember(analysis, isDark) { colorSyllableUnderlines(analysis, isDark) }
 
     Text(
         text = text,

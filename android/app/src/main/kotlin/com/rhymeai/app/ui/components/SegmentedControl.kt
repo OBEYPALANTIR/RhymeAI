@@ -1,8 +1,6 @@
 package com.rhymeai.app.ui.components
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -27,7 +25,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -139,15 +136,7 @@ fun SlidingSegmentedControl(
         Row(Modifier.fillMaxSize().selectableGroup()) {
             labels.forEachIndexed { index, label ->
                 val selected = index == selectedIndex
-                val textColor by animateColorAsState(
-                    targetValue = if (selected) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
-                    animationSpec = if (animationsEnabled) {
-                        tween<Color>(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing)
-                    } else {
-                        snap()
-                    },
-                    label = "segmentedTextColor"
-                )
+                val textColor = if (selected) colorScheme.onPrimary else colorScheme.onSurfaceVariant
                 Box(
                     modifier = Modifier
                         .weight(1f)

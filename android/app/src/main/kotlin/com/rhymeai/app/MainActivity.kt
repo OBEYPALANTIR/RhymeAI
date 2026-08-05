@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -79,11 +78,13 @@ class MainActivity : ComponentActivity() {
                 appearance = viewModel.appAppearance,
                 analysisPresentation = viewModel.analysisPresentation
             ) {
-                SideEffect {
+                val darkSystemBars = viewModel.appAppearance.isDark
+                DisposableEffect(window, darkSystemBars) {
                     WindowInsetsControllerCompat(window, window.decorView).apply {
-                        isAppearanceLightStatusBars = !viewModel.appAppearance.isDark
-                        isAppearanceLightNavigationBars = !viewModel.appAppearance.isDark
+                        isAppearanceLightStatusBars = !darkSystemBars
+                        isAppearanceLightNavigationBars = !darkSystemBars
                     }
+                    onDispose {}
                 }
                 val density = LocalDensity.current
                 val lifecycleOwner = LocalLifecycleOwner.current

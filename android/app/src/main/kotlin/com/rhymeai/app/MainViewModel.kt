@@ -586,6 +586,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setAppAppearance(appearance: AppAppearance) {
+        if (_appAppearance == appearance) return
         _appAppearance = appearance
         viewModelScope.launch {
             try {

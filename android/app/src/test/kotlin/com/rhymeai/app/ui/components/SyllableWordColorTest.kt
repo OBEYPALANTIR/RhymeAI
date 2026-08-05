@@ -41,4 +41,20 @@ class SyllableWordColorTest {
         assertEquals(syllableColor(SyllableCounter.count("sunshine"), true), sunSpan.item.color)
         assertEquals(FontWeight.SemiBold, sunSpan.item.fontWeight)
     }
+
+    @Test
+    fun themeChangesReuseThemeIndependentSyllableAnalysis() {
+        val text = "[Verse]\nhello sunshine"
+        val analysis = analyzeSyllableUnderlines(text, enabled = true)
+
+        assertEquals(listOf("hello", "sunshine"), analysis.map { text.substring(it.start, it.endExclusive) })
+        assertEquals(
+            analysis.map { it.start to it.endExclusive },
+            colorSyllableUnderlines(analysis, isDark = false).map { it.start to it.endExclusive }
+        )
+        assertEquals(
+            analysis.map { it.start to it.endExclusive },
+            colorSyllableUnderlines(analysis, isDark = true).map { it.start to it.endExclusive }
+        )
+    }
 }

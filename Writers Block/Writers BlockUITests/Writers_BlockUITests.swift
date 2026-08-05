@@ -927,6 +927,33 @@ final class Writers_BlockUITests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testAppearanceSwitchPerformance() throws {
+        try requirePhone()
+
+        let app = isolatedUITestApp(arguments: ["--ui-test-seed-prosody-song"])
+        app.launch()
+
+        let settingsButton = app.buttons["gearshape"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+        XCTAssertTrue(app.staticTexts["APPEARANCE"].waitForExistence(timeout: 5))
+
+        let options = XCTMeasureOptions()
+        options.iterationCount = 5
+        measure(
+            metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric()],
+            options: options
+        ) {
+            for name in ["Paper", "Graphite", "Ink"] {
+                let appearance = app.buttons[name]
+                XCTAssertTrue(appearance.isHittable)
+                appearance.tap()
+                XCTAssertEqual(appearance.value as? String, "Selected")
+            }
+        }
+    }
+
     private func isolatedUITestApp(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-in-memory-store"] + arguments

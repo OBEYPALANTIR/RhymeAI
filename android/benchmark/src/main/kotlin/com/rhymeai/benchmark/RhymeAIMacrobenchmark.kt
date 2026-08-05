@@ -72,6 +72,31 @@ class RhymeAIMacrobenchmark {
     }
 
     @Test
+    fun appearanceSwitching() = benchmarkRule.measureRepeated(
+        packageName = PACKAGE_NAME,
+        metrics = listOf(FrameTimingMetric()),
+        compilationMode = CompilationMode.Partial(),
+        iterations = 5,
+        setupBlock = {
+            pressHome()
+            startPerformanceEditor()
+            val settings = device.findObject(By.desc("Settings"))
+            checkNotNull(settings) { "Settings action was not exposed to UI Automator" }
+            settings.click()
+            check(device.wait(Until.hasObject(By.text("Appearance")), UI_TIMEOUT_MILLIS)) {
+                "Appearance settings were not visible"
+            }
+        }
+    ) {
+        listOf("Paper", "Graphite", "Ink").forEach { appearance ->
+            val option = device.findObject(By.text(appearance))
+            checkNotNull(option) { "$appearance appearance option was not visible" }
+            option.click()
+            device.waitForIdle()
+        }
+    }
+
+    @Test
     fun recordingAnimation() = benchmarkRule.measureRepeated(
         packageName = PACKAGE_NAME,
         metrics = listOf(FrameTimingMetric()),

@@ -873,6 +873,20 @@ struct Writers_BlockTests {
         )
     }
 
+    @Test func sectionHeaderIntersectionSearchRespectsRangeBoundaries() {
+        let headerRanges = [
+            NSRange(location: 0, length: 7),
+            NSRange(location: 22, length: 10),
+            NSRange(location: 45, length: 13),
+        ]
+
+        #expect(SectionMap.intersectsHeader(NSRange(location: 1, length: 4), headerRanges: headerRanges))
+        #expect(SectionMap.intersectsHeader(NSRange(location: 20, length: 3), headerRanges: headerRanges))
+        #expect(!SectionMap.intersectsHeader(NSRange(location: 7, length: 15), headerRanges: headerRanges))
+        #expect(!SectionMap.intersectsHeader(NSRange(location: 32, length: 13), headerRanges: headerRanges))
+        #expect(!SectionMap.intersectsHeader(NSRange(location: 58, length: 3), headerRanges: headerRanges))
+    }
+
     @Test func sectionInsertionCreatesAnUndoableStructuralBlock() {
         let viewModel = EditorViewModel()
         viewModel.lyrics = "First line"

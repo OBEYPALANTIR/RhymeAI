@@ -158,7 +158,8 @@ import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.RhymeHighlightedText
 import com.rhymeai.app.ui.components.WordInspectorSheet
-import com.rhymeai.app.ui.components.buildSyllableUnderlineSpans
+import com.rhymeai.app.ui.components.analyzeSyllableUnderlines
+import com.rhymeai.app.ui.components.colorSyllableUnderlines
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.components.keyboardAwareBottomPadding
 import com.rhymeai.app.ui.components.syllableUnderlines
@@ -871,12 +872,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val syllableUnderlineGap = with(density) { DesignTokens.Editor.syllableUnderlineGap.toPx() }
                     val syllableUnderlineWidth = with(density) { DesignTokens.Editor.syllableUnderlineWidth.toPx() }
                     val syllableIsDark = LocalAppAppearance.current.isDark
-                    val syllableUnderlineSpans = remember(analyzedLyrics, syllableUnderlineActive, syllableIsDark) {
-                        buildSyllableUnderlineSpans(
+                    val syllableUnderlineAnalysis = remember(analyzedLyrics, syllableUnderlineActive) {
+                        analyzeSyllableUnderlines(
                             text = analyzedLyrics,
-                            enabled = syllableUnderlineActive,
-                            isDark = syllableIsDark
+                            enabled = syllableUnderlineActive
                         )
+                    }
+                    val syllableUnderlineSpans = remember(syllableUnderlineAnalysis, syllableIsDark) {
+                        colorSyllableUnderlines(syllableUnderlineAnalysis, syllableIsDark)
                     }
                     val inlineRewriteRange = viewModel.inlineRewriteRange
                     val rewriteHighlightRange = if (viewModel.hasActiveRewrite) {

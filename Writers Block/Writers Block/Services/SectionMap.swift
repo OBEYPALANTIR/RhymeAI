@@ -129,9 +129,26 @@ nonisolated struct SectionMap {
         }
         // Bare form: line must be ONLY a known keyword + optional number/ordinal.
         // Reject lines with extra content so "Verse is king" stays a lyric line.
-        let barePattern = #"^(?:verse|chorus|hook|bridge|pre[\- ]?chorus|intro|outro|refrain|interlude)\s*(?:\d+)?$"#
-        if trimmed.range(of: barePattern, options: [.regularExpression, .caseInsensitive]) != nil {
-            return trimmed
+        let lowercased = trimmed.lowercased()
+        let labels = [
+            "pre-chorus",
+            "pre chorus",
+            "prechorus",
+            "interlude",
+            "refrain",
+            "chorus",
+            "bridge",
+            "verse",
+            "intro",
+            "outro",
+            "hook",
+        ]
+        for label in labels where lowercased.hasPrefix(label) {
+            let suffix = String(lowercased.dropFirst(label.count))
+                .trimmingCharacters(in: .whitespaces)
+            if suffix.isEmpty || suffix.allSatisfy(\.isNumber) {
+                return trimmed
+            }
         }
         return nil
     }
@@ -154,6 +171,23 @@ nonisolated struct SectionMap {
             lineStart += lineLength + 1
         }
         return ranges
+    }
+
+    static func intersectsHeader(_ range: NSRange, headerRanges: [NSRange]) -> Bool {
+        var lower = 0
+        var upper = headerRanges.count - 1
+        while lower <= upper {
+            let middle = (lower + upper) / 2
+            let header = headerRanges[middle]
+            if NSMaxRange(range) <= header.location {
+                upper = middle - 1
+            } else if range.location >= NSMaxRange(header) {
+                lower = middle + 1
+            } else {
+                return true
+            }
+        }
+        return false
     }
 
     static func insertHeader(_ label: String, in lyrics: String, cursor: Int) -> SectionInsertion {

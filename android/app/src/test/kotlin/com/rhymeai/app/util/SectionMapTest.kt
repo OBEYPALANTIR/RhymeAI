@@ -3,6 +3,7 @@ package com.rhymeai.app.util
 import com.rhymeai.app.data.model.SongSection
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SectionMapTest {
@@ -166,6 +167,17 @@ class SectionMapTest {
             SyllableCounter.countText("Hold the line\nBuild it up\nLet it ring"),
             SyllableCounter.lyricSyllableCount(lyrics)
         )
+    }
+
+    @Test
+    fun header_intersection_search_respects_range_boundaries() {
+        val headerRanges = listOf(0 until 7, 22 until 32, 45 until 58)
+
+        assertTrue(SectionMap.intersectsHeader(1..4, headerRanges))
+        assertTrue(SectionMap.intersectsHeader(20..22, headerRanges))
+        assertFalse(SectionMap.intersectsHeader(7..21, headerRanges))
+        assertFalse(SectionMap.intersectsHeader(32..44, headerRanges))
+        assertFalse(SectionMap.intersectsHeader(58..60, headerRanges))
     }
 
     @Test

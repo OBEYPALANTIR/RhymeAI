@@ -99,7 +99,10 @@ struct Writers_BlockApp: App {
     private var appearanceBinding: Binding<AppAppearanceStyle> {
         Binding(
             get: { appearance },
-            set: { appearanceRawValue = $0.rawValue }
+            set: { newAppearance in
+                guard newAppearance != appearance else { return }
+                appearanceRawValue = newAppearance.rawValue
+            }
         )
     }
 
@@ -141,7 +144,6 @@ struct Writers_BlockApp: App {
             .environmentObject(ggufDownloadManager)
             .environment(\.appAppearanceStyle, appearance)
             .environment(\.appAppearanceBinding, appearanceBinding)
-            .environment(\.colorScheme, appearance.preferredColorScheme)
             .preferredColorScheme(appearance.preferredColorScheme)
             .tint(appearance.palette.action)
             .safeAreaInset(edge: .top) {

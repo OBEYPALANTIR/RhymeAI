@@ -82,6 +82,21 @@ class SectionMap private constructor(private val refs: List<SectionRef>) {
             return ranges
         }
 
+        fun intersectsHeader(range: IntRange, headerRanges: List<IntRange>): Boolean {
+            var lower = 0
+            var upper = headerRanges.lastIndex
+            while (lower <= upper) {
+                val middle = (lower + upper).ushr(1)
+                val header = headerRanges[middle]
+                when {
+                    range.last < header.first -> upper = middle - 1
+                    range.first > header.last -> lower = middle + 1
+                    else -> return true
+                }
+            }
+            return false
+        }
+
         fun insertHeader(lyrics: String, cursor: Int, label: String): SectionInsertion {
             val safeCursor = cursor.coerceIn(0, lyrics.length)
             val cleanLabel = label.trim().removePrefix("[").removeSuffix("]").trim()

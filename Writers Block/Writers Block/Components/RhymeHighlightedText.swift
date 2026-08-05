@@ -46,16 +46,51 @@ private struct HighlightAnalysis: Sendable {
     let tokens: [HighlightToken]
 }
 
-private struct HighlightRequest: Hashable {
+private struct HighlightAnalysisRequest: Hashable, Sendable {
+    let source: String
+    let rhymeEnabled: Bool
+}
+
+private struct HighlightRequest: Hashable, Sendable {
     let source: String
     let rhymeEnabled: Bool
     let syllablesEnabled: Bool
     let isDark: Bool
 }
 
-private struct RenderedHighlight {
-    let source: String
+private struct RenderedHighlight: Sendable {
+    let request: HighlightRequest
     let attributed: AttributedString
+}
+
+nonisolated private final class HighlightAnalysisCache: @unchecked Sendable {
+    static let shared = HighlightAnalysisCache()
+
+    private let lock = NSLock()
+    private var latestRequest: HighlightAnalysisRequest?
+    private var latestAnalysis: HighlightAnalysis?
+
+    func analysis(
+        for request: HighlightAnalysisRequest,
+        build: () -> HighlightAnalysis
+    ) -> HighlightAnalysis {
+        lock.lock()
+        if latestRequest == request, let latestAnalysis {
+            lock.unlock()
+            return latestAnalysis
+        }
+        lock.unlock()
+
+        let computed = build()
+        lock.lock()
+        defer { lock.unlock() }
+        if latestRequest == request, let latestAnalysis {
+            return latestAnalysis
+        }
+        latestRequest = request
+        latestAnalysis = computed
+        return computed
+    }
 }
 
 struct RhymeHighlightedText: View, Equatable {
@@ -79,7 +114,7 @@ struct RhymeHighlightedText: View, Equatable {
             && lhs.syllablesEnabled == rhs.syllablesEnabled
     }
 
-    private static let palettePastel: [Color] = [
+    nonisolated private static let palettePastel: [Color] = [
         Color(red: 252/255, green: 165/255, blue: 165/255), // rose
         Color(red: 252/255, green: 211/255, blue: 77/255),  // amber
         Color(red: 134/255, green: 239/255, blue: 172/255), // green
@@ -94,7 +129,7 @@ struct RhymeHighlightedText: View, Equatable {
         Color(red: 190/255, green: 242/255, blue: 100/255)  // lime
     ]
 
-    private static let paletteDark: [Color] = [
+    nonisolated private static let paletteDark: [Color] = [
         Color(red: 185/255, green:  28/255, blue:  28/255), // rose-700
         Color(red: 180/255, green:  83/255, blue:   9/255), // amber-700
         Color(red:  21/255, green: 128/255, blue:  61/255), // green-700
@@ -109,31 +144,34 @@ struct RhymeHighlightedText: View, Equatable {
         Color(red:  77/255, green: 124/255, blue:  15/255)  // lime-700
     ]
 
-    private var palette: [Color] {
-        colorScheme == .dark ? Self.palettePastel : Self.paletteDark
-    }
-
     var body: some View {
         if (enabled || syllablesEnabled) && !text.isEmpty {
-            Text(renderedHighlight?.source == text ? renderedHighlight!.attributed : AttributedString(text))
+            let request = highlightRequest
+            Text(renderedHighlight?.request == request ? renderedHighlight!.attributed : AttributedString(text))
                 .font(.system(size: 16))
                 .foregroundStyle(.primary)
-                .task(id: highlightRequest) {
-                    let request = highlightRequest
-                    let analysis = await Task.detached(priority: .userInitiated) {
-                        Self.analyze(
-                            text: request.source,
+                .task(id: request) {
+                    let rendered = await Task.detached(priority: .userInitiated) {
+                        let analysisRequest = HighlightAnalysisRequest(
+                            source: request.source,
                             rhymeEnabled: request.rhymeEnabled
+                        )
+                        let analysis = HighlightAnalysisCache.shared.analysis(for: analysisRequest) {
+                            Self.analyze(
+                                text: analysisRequest.source,
+                                rhymeEnabled: analysisRequest.rhymeEnabled
+                            )
+                        }
+                        return RenderedHighlight(
+                            request: request,
+                            attributed: Self.highlightedAttributedString(
+                                analysis: analysis,
+                                request: request
+                            )
                         )
                     }.value
                     guard !Task.isCancelled else { return }
-                    renderedHighlight = RenderedHighlight(
-                        source: request.source,
-                        attributed: highlightedAttributedString(
-                            analysis: analysis,
-                            request: request
-                        )
-                    )
+                    renderedHighlight = rendered
                 }
         } else {
             Text(text)
@@ -161,9 +199,7 @@ struct RhymeHighlightedText: View, Equatable {
             in: text,
             range: NSRange(location: 0, length: nsText.length)
         ).filter { match in
-            !headerRanges.contains { headerRange in
-                NSIntersectionRange(match.range, headerRange).length > 0
-            }
+            !SectionMap.intersectsHeader(match.range, headerRanges: headerRanges)
         }
         let analyses = matches.map { match in
             WordAnalysisCache.shared.analysis(for: nsText.substring(with: match.range))
@@ -192,7 +228,7 @@ struct RhymeHighlightedText: View, Equatable {
         return HighlightAnalysis(source: text, tokens: tokens)
     }
 
-    private func highlightedAttributedString(
+    nonisolated private static func highlightedAttributedString(
         analysis: HighlightAnalysis,
         request: HighlightRequest
     ) -> AttributedString {
@@ -210,23 +246,23 @@ struct RhymeHighlightedText: View, Equatable {
             }
             var seg = AttributedString(token.value)
             if request.rhymeEnabled, let familyKey = token.familyKey {
-                seg.foregroundColor = colorFor(key: familyKey)
+                seg.foregroundColor = colorFor(key: familyKey, isDark: request.isDark)
                 seg.font = .system(size: 16, weight: .semibold)
                 if request.syllablesEnabled {
                     seg.underlineStyle = Text.LineStyle(
                         pattern: .solid,
-                        color: syllableColor(for: token.syllableCount)
+                        color: syllableColor(for: token.syllableCount, isDark: request.isDark)
                     )
                 }
             } else if !request.rhymeEnabled && request.syllablesEnabled {
-                seg.foregroundColor = syllableColor(for: token.syllableCount)
+                seg.foregroundColor = syllableColor(for: token.syllableCount, isDark: request.isDark)
                 seg.font = .system(size: 16, weight: .semibold)
             } else {
                 seg.foregroundColor = .primary
                 if request.syllablesEnabled {
                     seg.underlineStyle = Text.LineStyle(
                         pattern: .solid,
-                        color: syllableColor(for: token.syllableCount)
+                        color: syllableColor(for: token.syllableCount, isDark: request.isDark)
                     )
                 }
             }
@@ -245,8 +281,8 @@ struct RhymeHighlightedText: View, Equatable {
         return result
     }
 
-    private func colorFor(key: String) -> Color {
-        let p = palette
+    nonisolated private static func colorFor(key: String, isDark: Bool) -> Color {
+        let palette = isDark ? palettePastel : paletteDark
         // Stable across launches: Swift's `hashValue` is per-process seeded, so a
         // rhyme family would recolor every launch. FNV-1a over the key's UTF-8
         // bytes is deterministic. `&*`/`&+` wrap on overflow instead of trapping.
@@ -255,12 +291,12 @@ struct RhymeHighlightedText: View, Equatable {
             hash ^= UInt64(byte)
             hash = hash &* 0x0000_0100_0000_01b3
         }
-        let index = Int(hash % UInt64(p.count))
-        return p[index]
+        let index = Int(hash % UInt64(palette.count))
+        return palette[index]
     }
 
-    private func syllableColor(for count: Int) -> Color {
-        if colorScheme == .dark {
+    nonisolated private static func syllableColor(for count: Int, isDark: Bool) -> Color {
+        if isDark {
             switch count {
             case 1: return Color(red: 110.0 / 255, green: 231.0 / 255, blue: 183.0 / 255)
             case 2: return Color(red: 147.0 / 255, green: 197.0 / 255, blue: 253.0 / 255)

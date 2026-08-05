@@ -44,6 +44,17 @@ private data class WordAnalysis(
     val syllableCount: Int
 )
 
+private data class DocumentAnalysisRequest(
+    val text: String,
+    val rhymeEnabled: Boolean
+)
+
+private data class DocumentAnalysis(
+    val tokens: List<Token>,
+    val words: List<WordAnalysis>,
+    val familyKeys: List<String?>
+)
+
 private object WordAnalysisCache {
     private const val CAPACITY = 4096
     private val entries = LinkedHashMap<String, WordAnalysis>()
@@ -64,6 +75,33 @@ private object WordAnalysisCache {
                 entries.clear()
             }
             entries[key] = computed
+        }
+        return computed
+    }
+}
+
+private object DocumentAnalysisCache {
+    private val lock = Any()
+    private var latestRequest: DocumentAnalysisRequest? = null
+    private var latestAnalysis: DocumentAnalysis? = null
+
+    fun analysisFor(
+        request: DocumentAnalysisRequest,
+        build: () -> DocumentAnalysis
+    ): DocumentAnalysis {
+        synchronized(lock) {
+            if (latestRequest == request) {
+                latestAnalysis?.let { return it }
+            }
+        }
+
+        val computed = build()
+        synchronized(lock) {
+            if (latestRequest == request) {
+                latestAnalysis?.let { return it }
+            }
+            latestRequest = request
+            latestAnalysis = computed
         }
         return computed
     }
@@ -174,24 +212,35 @@ internal fun buildAnalysisText(
     rhymeEnabled: Boolean,
     syllablesEnabled: Boolean
 ): AnalysisTextResult {
-    val headerRanges = SectionMap.headerRanges(text)
-    val tokens = wordPattern.findAll(text)
-        .filterNot { match ->
-            headerRanges.any { header ->
-                match.range.first <= header.last && match.range.last >= header.first
+    val documentAnalysis = DocumentAnalysisCache.analysisFor(
+        DocumentAnalysisRequest(text = text, rhymeEnabled = rhymeEnabled)
+    ) {
+        val headerRanges = SectionMap.headerRanges(text)
+        val tokens = wordPattern.findAll(text)
+            .filterNot { match ->
+                SectionMap.intersectsHeader(match.range, headerRanges)
             }
+            .map { Token(it.value, it.range.first, it.range.last + 1) }
+            .toList()
+        val analyses = tokens.map { WordAnalysisCache.analysisFor(it.text) }
+        val keysPerToken = if (rhymeEnabled) {
+            analyses.map(WordAnalysis::rhymeKeys)
+        } else {
+            List(tokens.size) { emptyList() }
         }
-        .map { Token(it.value, it.range.first, it.range.last + 1) }
-        .toList()
-    val analyses = tokens.map { WordAnalysisCache.analysisFor(it.text) }
-    val keysPerToken = if (rhymeEnabled) {
-        analyses.map(WordAnalysis::rhymeKeys)
-    } else {
-        List(tokens.size) { emptyList() }
+        val occurrences = mutableMapOf<String, Int>()
+        keysPerToken.flatten().forEach { key -> occurrences[key] = (occurrences[key] ?: 0) + 1 }
+        DocumentAnalysis(
+            tokens = tokens,
+            words = analyses,
+            familyKeys = keysPerToken.map { keys ->
+                keys.lastOrNull { (occurrences[it] ?: 0) >= 2 }
+            }
+        )
     }
-    val occurrences = mutableMapOf<String, Int>()
-    keysPerToken.flatten().forEach { key -> occurrences[key] = (occurrences[key] ?: 0) + 1 }
-    val familyKeys = keysPerToken.map { keys -> keys.lastOrNull { (occurrences[it] ?: 0) >= 2 } }
+    val tokens = documentAnalysis.tokens
+    val analyses = documentAnalysis.words
+    val familyKeys = documentAnalysis.familyKeys
     val familyColors = assignRhymeFamilyColors(familyKeys, rhymePalette)
     val rhymeSpans = mutableListOf<RhymeUnderlineSpan>()
     val weights = mutableListOf<AnalysisWordWeight>()
