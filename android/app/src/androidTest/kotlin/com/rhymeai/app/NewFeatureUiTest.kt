@@ -83,17 +83,25 @@ class NewFeatureUiTest {
     }
 
     @Test
-    fun editorTopBarShowsCurrentSongTitle() {
+    fun editorTopBarProvidesSectionMenu() {
         composeRule.onNodeWithText("New Song").performClick()
 
-        composeRule.onNodeWithTag("editorTopBarTitle").assertTextEquals("Untitled Song")
-        composeRule.onNodeWithTag("songTitleEditor").performClick()
-        composeRule.onNodeWithTag("songTitleEditor").performTextInput("Golden Hour")
-        composeRule.onNodeWithTag("editorTopBarTitle").assertTextEquals("Golden Hour")
+        composeRule.onNodeWithTag("sectionMenuButton")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .performClick()
+        composeRule.onNodeWithTag("sectionMenuVerse").assertIsDisplayed().performClick()
+        assertEquals(
+            "[Verse]\n",
+            composeRule.onNodeWithTag("lyricsEditor")
+                .fetchSemanticsNode()
+                .config[SemanticsProperties.EditableText]
+                .text
+        )
     }
 
     @Test
-    fun longEditorTitleKeepsActionsReachable() {
+    fun longEditorTitleKeepsTopBarActionsReachable() {
         // Given
         val title = "A Very Long Song Title That Still Needs Useful Context"
         val nonEmptyLyrics = "A line that keeps Share enabled"
@@ -110,10 +118,14 @@ class NewFeatureUiTest {
 
         // Then
         val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
-        val titleBounds = composeRule.onNodeWithTag("editorTopBarTitle")
+        val sectionBounds = composeRule.onNodeWithTag("sectionMenuButton")
+            .assertIsDisplayed()
             .getUnclippedBoundsInRoot()
-        val titleWidth = titleBounds.right.value - titleBounds.left.value
-        assertTrue("Title needs at least 100dp", titleWidth >= 100f)
+        assertTrue(
+            "Section menu needs positive geometry",
+            sectionBounds.right.value > sectionBounds.left.value &&
+                sectionBounds.bottom.value > sectionBounds.top.value
+        )
         val savedBounds = composeRule.onNodeWithContentDescription("Saved")
             .assertIsDisplayed()
             .getUnclippedBoundsInRoot()
@@ -146,6 +158,25 @@ class NewFeatureUiTest {
                 "Solid, dashed, dotted, and dash-dot lines identify rhyme families; " +
                 "this does not change generated suggestions."
         ).assertIsDisplayed()
+    }
+
+    @Test
+    fun sectionMenuRemainsReachableAfterEditorScroll() {
+        composeRule.onNodeWithText("New Song").performClick()
+        val longLyrics = (1..60).joinToString("\n") { line -> "Lyric line $line" }
+        scenario?.onActivity { activity ->
+            ViewModelProvider(activity)[MainViewModel::class.java]
+                .seedEditorForTesting("Long Song", longLyrics)
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("editorScrollContainer").performTouchInput { swipeUp() }
+
+        composeRule.onNodeWithTag("sectionMenuButton")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .performClick()
+        composeRule.onNodeWithTag("sectionMenuBridge").assertIsDisplayed()
     }
 
     @Test
@@ -256,7 +287,7 @@ class NewFeatureUiTest {
     fun lyricStatsSitBelowTheEditableTitle() {
         composeRule.onNodeWithText("New Song").performClick()
 
-        val topBarTitle = composeRule.onNodeWithTag("editorTopBarTitle")
+        val topBarSection = composeRule.onNodeWithTag("sectionMenuButton")
             .assertIsDisplayed()
             .getUnclippedBoundsInRoot()
         val title = composeRule.onNodeWithTag("songTitleEditor")
@@ -268,7 +299,7 @@ class NewFeatureUiTest {
 
         assertTrue(
             "Stats must leave the top-bar action cluster",
-            stats.top.value > topBarTitle.bottom.value
+            stats.top.value > topBarSection.bottom.value
         )
         assertTrue(
             "Stats must follow the editable title",

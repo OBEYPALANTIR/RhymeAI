@@ -43,7 +43,6 @@ private enum EditorViewConstants {
 
     enum TopBar {
         static let saveProgressScale: CGFloat = 0.6
-        static let counterSpacing: CGFloat = 2
         static let savedStatusOpacity: Double = 0.8
         static let disabledExportOpacity: Double = 0.4
         static let enabledExportOpacity: Double = 1.0
@@ -622,30 +621,26 @@ struct EditorView: View {
                     .textFieldStyle(.plain)
                     .padding(.horizontal, RhymeAITokens.Spacing.md)
                     .padding(.top, RhymeAITokens.Spacing.md)
-                    .padding(.bottom, RhymeAITokens.Spacing.sm)
+                    .padding(.bottom, RhymeAITokens.Spacing.xxs)
                     .accessibilityIdentifier("songTitleEditor")
                     .onChange(of: viewModel.title) {
                         viewModel.triggerAutoSave()
                     }
 
-                HStack {
-                    Spacer()
-                    Menu {
-                        ForEach(SectionMap.standardLabels, id: \.self) { label in
-                            Button(label) {
-                                viewModel.insertSection(label)
-                            }
-                            .accessibilityIdentifier("sectionMenu\(label.filter(\.isLetter))")
-                        }
-                    } label: {
-                        Label("Section", systemImage: "plus")
-                            .font(.subheadline.weight(.medium))
-                    }
-                    .disabled(viewModel.hasActiveRewrite)
-                    .accessibilityIdentifier("sectionMenuButton")
-                }
-                .padding(.horizontal, RhymeAITokens.Spacing.md)
-                .padding(.bottom, RhymeAITokens.Spacing.sm)
+                (
+                    Text("\(viewModel.wordCount)w")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(Color(hex: appearance.editorWordCountHexValue))
+                    + Text(" · ")
+                        .font(.caption)
+                        .foregroundColor(appearance.palette.secondaryInk)
+                    + Text("\(viewModel.syllableCount)s")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(Color(hex: appearance.editorSyllableCountHexValue))
+                )
+                    .padding(.horizontal, RhymeAITokens.Spacing.md)
+                    .padding(.bottom, RhymeAITokens.Spacing.md)
+                    .accessibilityIdentifier("editorStats")
 
                 // Lyrics Editor
                 ZStack(alignment: .topLeading) {
@@ -760,12 +755,6 @@ struct EditorView: View {
             .accessibilityLabel("Open songs drawer")
 
             HStack(spacing: RhymeAITokens.Spacing.xs) {
-                Text(viewModel.title.isEmpty ? "Untitled Song" : viewModel.title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .accessibilityIdentifier("editorTopBarTitle")
                 if viewModel.saveStatus == .saving {
                     ProgressView()
                         .scaleEffect(EditorViewConstants.TopBar.saveProgressScale)
@@ -781,14 +770,20 @@ struct EditorView: View {
 
             Spacer()
 
-            // Word & Syllable counts
-            VStack(alignment: .trailing, spacing: EditorViewConstants.TopBar.counterSpacing) {
-                Text("\(viewModel.wordCount) words")
-                    .font(.caption)
-                Text("\(viewModel.syllableCount) syllables")
-                    .font(.caption)
+            Menu {
+                ForEach(SectionMap.standardLabels, id: \.self) { label in
+                    Button(label) {
+                        viewModel.insertSection(label)
+                    }
+                    .accessibilityIdentifier("sectionMenu\(label.filter(\.isLetter))")
+                }
+            } label: {
+                Label("Section", systemImage: "plus")
+                    .font(.subheadline.weight(.medium))
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            .foregroundStyle(.secondary)
+            .disabled(viewModel.hasActiveRewrite)
+            .accessibilityIdentifier("sectionMenuButton")
 
             // Export
             Button {

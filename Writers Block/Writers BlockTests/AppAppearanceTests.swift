@@ -80,6 +80,29 @@ struct AppAppearanceTests {
     }
 
     @Test
+    func syllablePaletteMatchesApprovedContrastSafeTokens() {
+        #expect(AppAppearanceStyle.ink.analysisSyllableHexValues == [
+            0x047857,
+            0x0369A1,
+            0x7E22CE,
+            0xB91C1C,
+        ])
+        #expect(AppAppearanceStyle.paper.analysisSyllableHexValues == AppAppearanceStyle.ink.analysisSyllableHexValues)
+        #expect(AppAppearanceStyle.graphite.analysisSyllableHexValues == [
+            0x6EE7B7,
+            0x93C5FD,
+            0xD8B4FE,
+            0xFDA4AF,
+        ])
+        #expect(AppAppearanceStyle.ink.editorWordCountHexValue == 0x047857)
+        #expect(AppAppearanceStyle.paper.editorWordCountHexValue == 0x047857)
+        #expect(AppAppearanceStyle.graphite.editorWordCountHexValue == 0x6EE7B7)
+        #expect(AppAppearanceStyle.ink.editorSyllableCountHexValue == 0xB91C1C)
+        #expect(AppAppearanceStyle.paper.editorSyllableCountHexValue == 0xB91C1C)
+        #expect(AppAppearanceStyle.graphite.editorSyllableCountHexValue == 0xFDA4AF)
+    }
+
+    @Test
     func statusColorsAdaptToTheResolvedAppearance() {
         #expect(AppAppearanceStyle.ink.statusWarningHexValue == 0x92400E)
         #expect(AppAppearanceStyle.paper.statusWarningHexValue == 0x92400E)

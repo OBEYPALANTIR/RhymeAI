@@ -129,14 +129,17 @@ import androidx.compose.ui.semantics.semantics
 import com.rhymeai.app.R
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -165,6 +168,8 @@ import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.appWritingSurface
 import com.rhymeai.app.ui.theme.selectionColorFor
+import com.rhymeai.app.ui.theme.editorSyllableCountColor
+import com.rhymeai.app.ui.theme.editorWordCountColor
 import com.rhymeai.app.ui.motion.RewriteHighlightColors
 import com.rhymeai.app.ui.motion.RewriteHighlightState
 import com.rhymeai.app.ui.motion.RewriteMotionStyle
@@ -531,16 +536,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
                     ) {
-                        Text(
-                            text = viewModel.title.ifBlank { "Untitled Song" },
-                            style = MaterialTheme.typography.titleSmall,
-                            color = colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .testTag("editorTopBarTitle")
-                        )
                         when (viewModel.saveStatus) {
                             SaveStatus.SAVING -> CircularProgressIndicator(
                                 modifier = Modifier
@@ -567,6 +562,38 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     }
                 },
                 actions = {
+                    Box {
+                        TextButton(
+                            onClick = { sectionMenuExpanded = true },
+                            enabled = !viewModel.hasActiveRewrite,
+                            contentPadding = PaddingValues(horizontal = DesignTokens.Spacing.sm),
+                            modifier = Modifier.testTag("sectionMenuButton")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null
+                            )
+                            Spacer(Modifier.width(DesignTokens.Spacing.xs))
+                            Text("Section")
+                        }
+                        DropdownMenu(
+                            expanded = sectionMenuExpanded,
+                            onDismissRequest = { sectionMenuExpanded = false }
+                        ) {
+                            SectionMap.standardLabels.forEach { label ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        sectionMenuExpanded = false
+                                        viewModel.insertSection(label)
+                                    },
+                                    modifier = Modifier.testTag(
+                                        "sectionMenu${label.filter(Char::isLetter)}"
+                                    )
+                                )
+                            }
+                        }
+                    }
                     IconButton(
                         onClick = { viewModel.showExportSheet = true },
                         enabled = viewModel.lyrics.isNotBlank()
@@ -779,57 +806,36 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     )
 
                     Spacer(Modifier.height(DesignTokens.Spacing.xs))
-                    Row(
+                    val statsUseDarkPalette = LocalAppAppearance.current.isDark
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(
+                                SpanStyle(
+                                    color = editorWordCountColor(statsUseDarkPalette),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            ) {
+                                append("${lyricStats.wordCount}w")
+                            }
+                            withStyle(SpanStyle(color = colorScheme.onSurfaceVariant)) {
+                                append(" · ")
+                            }
+                            withStyle(
+                                SpanStyle(
+                                    color = editorSyllableCountColor(statsUseDarkPalette),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            ) {
+                                append("${lyricStats.syllableCount}s")
+                            }
+                        },
+                        fontSize = DesignTokens.Editor.metadataFontSize,
+                        lineHeight = DesignTokens.Editor.metadataLineHeight,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .onSizeChanged { metadataHeightPx = it.height },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = compactEditorStats(
-                                wordCount = lyricStats.wordCount,
-                                syllableCount = lyricStats.syllableCount
-                            ),
-                            color = colorScheme.onSurfaceVariant,
-                            fontSize = DesignTokens.Editor.metadataFontSize,
-                            lineHeight = DesignTokens.Editor.metadataLineHeight,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("editorStats")
-                        )
-                        Box {
-                            TextButton(
-                                onClick = { sectionMenuExpanded = true },
-                                enabled = !viewModel.hasActiveRewrite,
-                                contentPadding = PaddingValues(horizontal = DesignTokens.Spacing.sm),
-                                modifier = Modifier.testTag("sectionMenuButton")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = null
-                                )
-                                Spacer(Modifier.width(DesignTokens.Spacing.xs))
-                                Text("Section")
-                            }
-                            DropdownMenu(
-                                expanded = sectionMenuExpanded,
-                                onDismissRequest = { sectionMenuExpanded = false }
-                            ) {
-                                SectionMap.standardLabels.forEach { label ->
-                                    DropdownMenuItem(
-                                        text = { Text(label) },
-                                        onClick = {
-                                            sectionMenuExpanded = false
-                                            viewModel.insertSection(label)
-                                        },
-                                        modifier = Modifier.testTag(
-                                            "sectionMenu${label.filter(Char::isLetter)}"
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
+                            .onSizeChanged { metadataHeightPx = it.height }
+                            .testTag("editorStats")
+                    )
                     Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
                     // Expensive lyric analysis waits until typing pauses so editor redraws stay stable.

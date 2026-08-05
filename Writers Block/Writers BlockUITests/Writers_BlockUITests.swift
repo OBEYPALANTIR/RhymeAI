@@ -66,6 +66,44 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testSectionMenuStaysPinnedAfterEditorScroll() throws {
+        let app = isolatedUITestApp()
+        app.launch()
+        createNewSong(in: app)
+
+        let sectionMenu = app.buttons["sectionMenuButton"]
+        let songTitle = app.textFields["songTitleEditor"]
+        let editorStats = app.staticTexts["editorStats"]
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(sectionMenu.waitForExistence(timeout: 5))
+        XCTAssertTrue(songTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(editorStats.waitForExistence(timeout: 5))
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        XCTAssertEqual(editorStats.label, "0w · 0s")
+        XCTAssertGreaterThanOrEqual(editorStats.frame.minY, songTitle.frame.maxY)
+        XCTAssertLessThan(editorStats.frame.maxY, lyricsEditor.frame.minY)
+
+        lyricsEditor.tap()
+        let longLyrics = (1...36)
+            .map { "Lyric line \($0)" }
+            .joined(separator: "\n")
+        lyricsEditor.typeText(longLyrics)
+        app.swipeUp()
+        app.swipeUp()
+
+        XCTAssertTrue(sectionMenu.exists)
+        XCTAssertTrue(sectionMenu.isHittable)
+        XCTAssertFalse(songTitle.isHittable)
+
+        sectionMenu.tap()
+        let bridgeSection = app.buttons["sectionMenuBridge"]
+        XCTAssertTrue(bridgeSection.waitForExistence(timeout: 3))
+        bridgeSection.tap()
+
+        XCTAssertTrue((lyricsEditor.value as? String)?.contains("[Bridge]") == true)
+    }
+
+    @MainActor
     func testSettingsKeepsTabsAndSaveBarPinned() throws {
         try requirePhone()
 

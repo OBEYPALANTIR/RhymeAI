@@ -117,6 +117,10 @@ fun statusWarningColor(isDark: Boolean): Color = if (isDark) WarningDark else Wa
 
 fun statusErrorColor(isDark: Boolean): Color = if (isDark) ErrorDark else ErrorLight
 
+fun editorWordCountColor(isDark: Boolean): Color = syllableColor(1, isDark)
+
+fun editorSyllableCountColor(isDark: Boolean): Color = syllableColor(4, isDark)
+
 fun syllableColor(count: Int, isDark: Boolean): Color =
     if (isDark) {
         when (count) {
