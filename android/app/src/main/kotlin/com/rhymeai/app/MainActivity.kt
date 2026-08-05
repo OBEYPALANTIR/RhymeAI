@@ -262,6 +262,7 @@ class MainActivity : ComponentActivity() {
                             onUnloadLocalModel = { viewModel.unloadLocalModel() },
                             gemmaDownloadingModel = viewModel.gemmaDownloadingModel,
                             gemmaDownloadProgress = viewModel.gemmaDownloadProgress,
+                            gemmaDownloadVerifying = viewModel.gemmaDownloadVerifying,
                             gemmaDownloadError = viewModel.gemmaDownloadError,
                             gemmaLastDownloadAttempt = viewModel.gemmaLastDownloadAttempt,
                             gemmaDownloadRevision = viewModel.gemmaDownloadRevision,

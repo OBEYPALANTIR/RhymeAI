@@ -58,6 +58,37 @@ enum GGUFDownloadCatalog {
     }
 }
 
+struct GGUFDownloadSegment: Equatable, Sendable {
+    let start: Int64
+    let endInclusive: Int64
+
+    nonisolated var length: Int64 {
+        endInclusive - start + 1
+    }
+}
+
+private struct GGUFSegmentTask: Sendable {
+    let optionID: String
+    let index: Int
+    let segment: GGUFDownloadSegment
+}
+
+nonisolated func ggufDownloadSegments(
+    expectedBytes: Int64,
+    connectionCount: Int = 4
+) -> [GGUFDownloadSegment] {
+    precondition(expectedBytes > 0)
+    let count = min(max(connectionCount, 1), Int(expectedBytes))
+    let segmentBytes = (expectedBytes + Int64(count) - 1) / Int64(count)
+    return (0..<count).map { index in
+        let start = Int64(index) * segmentBytes
+        return GGUFDownloadSegment(
+            start: start,
+            endInclusive: min(expectedBytes - 1, start + segmentBytes - 1)
+        )
+    }
+}
+
 enum GGUFModelStorage {
     nonisolated static func modelsDirectory(create: Bool) throws -> URL {
         let baseURL = try FileManager.default.url(
@@ -125,6 +156,7 @@ enum GGUFModelSelection {
 
 @MainActor
 final class GGUFDownloadManager: NSObject, ObservableObject {
+    nonisolated private static let downloadConnectionCount = 4
     nonisolated private static let progressUpdateBytes: Int64 = 8 * 1024 * 1024
     nonisolated private static let verificationBufferBytes = 8 * 1024 * 1024
 
@@ -139,6 +171,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     private var session: URLSession!
     private var activeTask: URLSessionDownloadTask?
+    private var activeSegmentTasks: [Int: URLSessionDownloadTask] = [:]
+    private var segmentProgress: [Int: Int64] = [:]
+    private var completedSegmentBytes: Int64 = 0
 
     override init() {
         super.init()
@@ -146,6 +181,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         configuration.waitsForConnectivity = true
         configuration.allowsCellularAccess = true
         configuration.allowsExpensiveNetworkAccess = true
+        configuration.httpMaximumConnectionsPerHost = Self.downloadConnectionCount
         configuration.timeoutIntervalForResource = 60 * 60 * 6
         let delegateQueue = OperationQueue()
         delegateQueue.maxConcurrentOperationCount = 1
@@ -163,7 +199,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     func start(_ option: GGUFDownloadOption) {
-        guard activeTask == nil else { return }
+        guard activeDownloadID == nil, activeTask == nil, activeSegmentTasks.isEmpty else { return }
         refreshInstalledModels()
         if installedModelFiles.contains(option.fileName) {
             select(option)
@@ -173,42 +209,62 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
         do {
             let directory = try GGUFModelStorage.modelsDirectory(create: true)
-            try verifyFreeSpace(for: option, in: directory)
             let resumeURL = resumeDataURL(for: option, directory: directory)
-            let task: URLSessionDownloadTask
             if let resumeData = try? Data(contentsOf: resumeURL), !resumeData.isEmpty {
-                task = session.downloadTask(withResumeData: resumeData)
+                try verifyFreeSpace(for: option, in: directory)
+                let task = session.downloadTask(withResumeData: resumeData)
+                task.taskDescription = option.id
+                activeTask = task
+                beginDownload(option: option, receivedBytes: 0)
+                task.resume()
             } else {
-                var request = URLRequest(url: option.url)
-                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-                task = session.downloadTask(with: request)
+                try startSegmentedDownload(option, directory: directory)
             }
-            task.taskDescription = option.id
-            activeTask = task
-            activeDownloadID = option.id
-            progress = 0
-            receivedBytes = 0
-            statusMessage = "Downloading \(option.title)…"
-            errorMessage = nil
-            task.resume()
         } catch {
             errorMessage = "Could not start \(option.title): \(error.localizedDescription)"
         }
     }
 
     func pauseDownload() {
-        guard let task = activeTask,
-              let option = GGUFDownloadCatalog.option(id: task.taskDescription),
-              let directory = try? GGUFModelStorage.modelsDirectory(create: true) else {
+        guard let directory = try? GGUFModelStorage.modelsDirectory(create: true) else {
             return
         }
-        activeTask = nil
+
+        if let task = activeTask,
+           let option = GGUFDownloadCatalog.option(id: task.taskDescription) {
+            activeTask = nil
+            activeDownloadID = nil
+            statusMessage = "Download paused. Tap Download to resume."
+            let resumeURL = resumeDataURL(for: option, directory: directory)
+            task.cancel { resumeData in
+                guard let resumeData else { return }
+                try? resumeData.write(to: resumeURL, options: .atomic)
+            }
+            return
+        }
+
+        guard !activeSegmentTasks.isEmpty else { return }
+        let tasks = Array(activeSegmentTasks.values)
+        activeSegmentTasks.removeAll()
+        segmentProgress.removeAll()
         activeDownloadID = nil
         statusMessage = "Download paused. Tap Download to resume."
-        let resumeURL = resumeDataURL(for: option, directory: directory)
-        task.cancel { resumeData in
-            guard let resumeData else { return }
-            try? resumeData.write(to: resumeURL, options: .atomic)
+        tasks.forEach { task in
+            guard let segmentTask = Self.segmentTask(from: task.taskDescription) else {
+                task.cancel()
+                return
+            }
+            task.cancel { resumeData in
+                guard let resumeData else { return }
+                try? resumeData.write(
+                    to: Self.segmentResumeURL(
+                        optionID: segmentTask.optionID,
+                        segmentIndex: segmentTask.index,
+                        directory: directory
+                    ),
+                    options: .atomic
+                )
+            }
         }
     }
 
@@ -227,12 +283,99 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         engineChoice = choice
     }
 
-    private func verifyFreeSpace(for option: GGUFDownloadOption, in directory: URL) throws {
+    private func startSegmentedDownload(
+        _ option: GGUFDownloadOption,
+        directory: URL
+    ) throws {
+        try? FileManager.default.removeItem(
+            at: directory.appendingPathComponent("\(option.fileName).download")
+        )
+        let segments = ggufDownloadSegments(
+            expectedBytes: option.expectedBytes,
+            connectionCount: Self.downloadConnectionCount
+        )
+        var completedBytes: Int64 = 0
+        var pending: [(Int, GGUFDownloadSegment)] = []
+
+        for (index, segment) in segments.enumerated() {
+            let partURL = Self.segmentPartURL(
+                optionID: option.id,
+                segmentIndex: index,
+                directory: directory
+            )
+            if Self.fileSize(at: partURL) == segment.length {
+                completedBytes += segment.length
+            } else {
+                try? FileManager.default.removeItem(at: partURL)
+                pending.append((index, segment))
+            }
+        }
+
+        try verifyFreeSpace(
+            for: option,
+            in: directory,
+            completedBytes: completedBytes,
+            largestSegmentBytes: segments.map(\.length).max() ?? 0
+        )
+        beginDownload(option: option, receivedBytes: completedBytes)
+        completedSegmentBytes = completedBytes
+        segmentProgress.removeAll()
+
+        for (index, segment) in pending {
+            let resumeURL = Self.segmentResumeURL(
+                optionID: option.id,
+                segmentIndex: index,
+                directory: directory
+            )
+            let task: URLSessionDownloadTask
+            if let resumeData = try? Data(contentsOf: resumeURL), !resumeData.isEmpty {
+                task = session.downloadTask(withResumeData: resumeData)
+            } else {
+                var request = URLRequest(url: option.url)
+                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                request.setValue(
+                    "bytes=\(segment.start)-\(segment.endInclusive)",
+                    forHTTPHeaderField: "Range"
+                )
+                request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+                task = session.downloadTask(with: request)
+            }
+            task.taskDescription = Self.segmentTaskDescription(
+                optionID: option.id,
+                index: index,
+                segment: segment
+            )
+            activeSegmentTasks[task.taskIdentifier] = task
+            segmentProgress[task.taskIdentifier] = 0
+        }
+
+        if activeSegmentTasks.isEmpty {
+            beginSegmentFinalization(option: option, directory: directory)
+        } else {
+            activeSegmentTasks.values.forEach { $0.resume() }
+        }
+    }
+
+    private func beginDownload(option: GGUFDownloadOption, receivedBytes: Int64) {
+        activeDownloadID = option.id
+        self.receivedBytes = receivedBytes
+        progress = min(1, Double(receivedBytes) / Double(option.expectedBytes))
+        statusMessage = "Downloading \(option.title)… \(Int(progress * 100))%"
+        errorMessage = nil
+    }
+
+    private func verifyFreeSpace(
+        for option: GGUFDownloadOption,
+        in directory: URL,
+        completedBytes: Int64 = 0,
+        largestSegmentBytes: Int64 = 0
+    ) throws {
         let values = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         guard let available = values.volumeAvailableCapacityForImportantUsage else { return }
         let reserve: Int64 = 512 * 1024 * 1024
-        guard available >= option.expectedBytes + reserve else {
-            throw GGUFDownloadError.insufficientSpace(required: option.expectedBytes + reserve, available: available)
+        let required = option.expectedBytes - completedBytes + largestSegmentBytes + reserve
+        guard available >= required else {
+            throw GGUFDownloadError.insufficientSpace(required: required, available: available)
         }
     }
 
@@ -257,8 +400,69 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         statusMessage = "Downloading \(option.title)… \(Int(progress * 100))%"
     }
 
+    private func receiveSegmentProgress(
+        taskIdentifier: Int,
+        segmentTask: GGUFSegmentTask,
+        bytes: Int64
+    ) {
+        guard activeDownloadID == segmentTask.optionID,
+              activeSegmentTasks[taskIdentifier] != nil else {
+            return
+        }
+        segmentProgress[taskIdentifier] = min(bytes, segmentTask.segment.length)
+        receiveProgress(
+            optionID: segmentTask.optionID,
+            bytes: completedSegmentBytes + segmentProgress.values.reduce(0, +)
+        )
+    }
+
+    private func segmentFinished(
+        taskIdentifier: Int,
+        segmentTask: GGUFSegmentTask,
+        option: GGUFDownloadOption,
+        directory: URL
+    ) {
+        guard activeDownloadID == option.id,
+              activeSegmentTasks.removeValue(forKey: taskIdentifier) != nil else {
+            return
+        }
+        segmentProgress.removeValue(forKey: taskIdentifier)
+        completedSegmentBytes += segmentTask.segment.length
+        try? FileManager.default.removeItem(
+            at: Self.segmentResumeURL(
+                optionID: option.id,
+                segmentIndex: segmentTask.index,
+                directory: directory
+            )
+        )
+        receiveProgress(optionID: option.id, bytes: completedSegmentBytes)
+        if activeSegmentTasks.isEmpty {
+            beginSegmentFinalization(option: option, directory: directory)
+        }
+    }
+
+    private func beginSegmentFinalization(option: GGUFDownloadOption, directory: URL) {
+        setVerifying(optionID: option.id)
+        Task.detached(priority: .utility) { [weak self] in
+            do {
+                try Self.assembleSegments(option: option, directory: directory)
+                await self?.finishSegmented(option: option)
+            } catch {
+                await self?.failSegmented(option: option, error: error)
+            }
+        }
+    }
+
+    private func finishSegmented(option: GGUFDownloadOption) {
+        guard activeDownloadID == option.id else { return }
+        finish(option: option)
+    }
+
     private func finish(option: GGUFDownloadOption) {
         activeTask = nil
+        activeSegmentTasks.removeAll()
+        segmentProgress.removeAll()
+        completedSegmentBytes = 0
         activeDownloadID = nil
         progress = 1
         receivedBytes = option.expectedBytes
@@ -275,6 +479,39 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         errorMessage = "Download failed\(option.map { " for \($0.title)" } ?? ""): \(error.localizedDescription)"
     }
 
+    private func failSegmented(option: GGUFDownloadOption?, error: Error) {
+        guard activeDownloadID == option?.id else { return }
+        let tasks = Array(activeSegmentTasks.values)
+        activeSegmentTasks.removeAll()
+        segmentProgress.removeAll()
+        completedSegmentBytes = 0
+        activeDownloadID = nil
+        statusMessage = nil
+        errorMessage = "Download failed\(option.map { " for \($0.title)" } ?? ""): \(error.localizedDescription)"
+
+        guard let directory = try? GGUFModelStorage.modelsDirectory(create: true) else {
+            tasks.forEach { $0.cancel() }
+            return
+        }
+        tasks.forEach { task in
+            guard let segmentTask = Self.segmentTask(from: task.taskDescription) else {
+                task.cancel()
+                return
+            }
+            task.cancel { resumeData in
+                guard let resumeData else { return }
+                try? resumeData.write(
+                    to: Self.segmentResumeURL(
+                        optionID: segmentTask.optionID,
+                        segmentIndex: segmentTask.index,
+                        directory: directory
+                    ),
+                    options: .atomic
+                )
+            }
+        }
+    }
+
     private func setVerifying(optionID: String?) {
         guard activeDownloadID == optionID,
               let option = GGUFDownloadCatalog.option(id: optionID) else {
@@ -282,6 +519,54 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         }
         progress = 1
         statusMessage = "Verifying \(option.title)…"
+    }
+
+    nonisolated private static func segmentTaskDescription(
+        optionID: String,
+        index: Int,
+        segment: GGUFDownloadSegment
+    ) -> String {
+        "segment|\(optionID)|\(index)|\(segment.start)|\(segment.endInclusive)"
+    }
+
+    nonisolated private static func segmentTask(from description: String?) -> GGUFSegmentTask? {
+        guard let description else { return nil }
+        let fields = description.split(separator: "|", omittingEmptySubsequences: false)
+        guard fields.count == 5,
+              fields[0] == "segment",
+              let index = Int(fields[2]),
+              let start = Int64(fields[3]),
+              let endInclusive = Int64(fields[4]) else {
+            return nil
+        }
+        return GGUFSegmentTask(
+            optionID: String(fields[1]),
+            index: index,
+            segment: GGUFDownloadSegment(start: start, endInclusive: endInclusive)
+        )
+    }
+
+    nonisolated private static func segmentPartURL(
+        optionID: String,
+        segmentIndex: Int,
+        directory: URL
+    ) -> URL {
+        directory.appendingPathComponent("\(optionID).segment-\(segmentIndex).part")
+    }
+
+    nonisolated private static func segmentResumeURL(
+        optionID: String,
+        segmentIndex: Int,
+        directory: URL
+    ) -> URL {
+        directory.appendingPathComponent("\(optionID).segment-\(segmentIndex).resume")
+    }
+
+    nonisolated private static func fileSize(at url: URL) -> Int64? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return nil
+        }
+        return (attributes[.size] as? NSNumber)?.int64Value
     }
 }
 
@@ -293,6 +578,16 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
+        if let segmentTask = Self.segmentTask(from: downloadTask.taskDescription) {
+            Task { @MainActor [weak self] in
+                self?.receiveSegmentProgress(
+                    taskIdentifier: downloadTask.taskIdentifier,
+                    segmentTask: segmentTask,
+                    bytes: totalBytesWritten
+                )
+            }
+            return
+        }
         Task { @MainActor [weak self] in
             self?.receiveProgress(optionID: downloadTask.taskDescription, bytes: totalBytesWritten)
         }
@@ -303,6 +598,54 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
+        if let segmentTask = Self.segmentTask(from: downloadTask.taskDescription) {
+            guard let option = GGUFDownloadCatalog.option(id: segmentTask.optionID) else { return }
+            do {
+                guard let response = downloadTask.response as? HTTPURLResponse else {
+                    throw GGUFDownloadError.invalidResponse
+                }
+                guard (200...299).contains(response.statusCode) else {
+                    throw GGUFDownloadError.httpStatus(response.statusCode)
+                }
+                guard response.statusCode == 206 else {
+                    throw GGUFDownloadError.rangeUnsupported(response.statusCode)
+                }
+                let expectedRangePrefix = "bytes \(segmentTask.segment.start)-"
+                guard response.value(forHTTPHeaderField: "Content-Range")?.hasPrefix(expectedRangePrefix) == true else {
+                    throw GGUFDownloadError.unexpectedRange
+                }
+
+                let directory = try GGUFModelStorage.modelsDirectory(create: true)
+                let partURL = Self.segmentPartURL(
+                    optionID: option.id,
+                    segmentIndex: segmentTask.index,
+                    directory: directory
+                )
+                try? FileManager.default.removeItem(at: partURL)
+                try FileManager.default.moveItem(at: location, to: partURL)
+                let actualBytes = Self.fileSize(at: partURL) ?? 0
+                guard actualBytes == segmentTask.segment.length else {
+                    throw GGUFDownloadError.incomplete(
+                        expected: segmentTask.segment.length,
+                        actual: actualBytes
+                    )
+                }
+                Task { @MainActor [weak self] in
+                    self?.segmentFinished(
+                        taskIdentifier: downloadTask.taskIdentifier,
+                        segmentTask: segmentTask,
+                        option: option,
+                        directory: directory
+                    )
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.failSegmented(option: option, error: error)
+                }
+            }
+            return
+        }
+
         let optionID = downloadTask.taskDescription
         guard let option = GGUFDownloadCatalog.option(id: optionID) else { return }
         Task { @MainActor [weak self] in
@@ -343,6 +686,25 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         didCompleteWithError error: Error?
     ) {
         guard let error else { return }
+        if let segmentTask = Self.segmentTask(from: task.taskDescription) {
+            let option = GGUFDownloadCatalog.option(id: segmentTask.optionID)
+            if let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data,
+               let directory = try? GGUFModelStorage.modelsDirectory(create: true) {
+                try? resumeData.write(
+                    to: Self.segmentResumeURL(
+                        optionID: segmentTask.optionID,
+                        segmentIndex: segmentTask.index,
+                        directory: directory
+                    ),
+                    options: .atomic
+                )
+            }
+            Task { @MainActor [weak self] in
+                self?.failSegmented(option: option, error: error)
+            }
+            return
+        }
+
         let option = GGUFDownloadCatalog.option(id: task.taskDescription)
         if let option,
            let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data,
@@ -354,6 +716,77 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         }
         Task { @MainActor [weak self] in
             self?.fail(taskIdentifier: task.taskIdentifier, option: option, error: error)
+        }
+    }
+
+    nonisolated private static func assembleSegments(
+        option: GGUFDownloadOption,
+        directory: URL
+    ) throws {
+        let segments = ggufDownloadSegments(
+            expectedBytes: option.expectedBytes,
+            connectionCount: downloadConnectionCount
+        )
+        let stagingURL = directory.appendingPathComponent("\(option.fileName).download")
+        let destinationURL = directory.appendingPathComponent(option.fileName)
+        try? FileManager.default.removeItem(at: stagingURL)
+        guard FileManager.default.createFile(atPath: stagingURL.path, contents: nil) else {
+            throw GGUFDownloadError.couldNotCreateStagingFile
+        }
+
+        var output: FileHandle?
+        do {
+            let outputHandle = try FileHandle(forWritingTo: stagingURL)
+            output = outputHandle
+            for (index, segment) in segments.enumerated() {
+                let partURL = segmentPartURL(
+                    optionID: option.id,
+                    segmentIndex: index,
+                    directory: directory
+                )
+                guard fileSize(at: partURL) == segment.length else {
+                    throw GGUFDownloadError.incomplete(
+                        expected: segment.length,
+                        actual: fileSize(at: partURL) ?? 0
+                    )
+                }
+                let input = try FileHandle(forReadingFrom: partURL)
+                do {
+                    while let chunk = try input.read(upToCount: verificationBufferBytes), !chunk.isEmpty {
+                        try outputHandle.write(contentsOf: chunk)
+                    }
+                    try input.close()
+                } catch {
+                    try? input.close()
+                    throw error
+                }
+                try FileManager.default.removeItem(at: partURL)
+            }
+            try outputHandle.synchronize()
+            try outputHandle.close()
+            output = nil
+        } catch {
+            try? output?.close()
+            try? FileManager.default.removeItem(at: stagingURL)
+            throw error
+        }
+
+        try validateDownload(at: stagingURL, option: option)
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.moveItem(at: stagingURL, to: destinationURL)
+        try? FileManager.default.removeItem(
+            at: directory.appendingPathComponent("\(option.fileName).resume")
+        )
+        for index in segments.indices {
+            try? FileManager.default.removeItem(
+                at: segmentResumeURL(
+                    optionID: option.id,
+                    segmentIndex: index,
+                    directory: directory
+                )
+            )
         }
     }
 
@@ -383,18 +816,30 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
 }
 
 private enum GGUFDownloadError: LocalizedError {
+    case invalidResponse
     case httpStatus(Int)
+    case rangeUnsupported(Int)
+    case unexpectedRange
     case incomplete(expected: Int64, actual: Int64)
+    case couldNotCreateStagingFile
     case invalidFormat
     case checksumMismatch
     case insufficientSpace(required: Int64, available: Int64)
 
     var errorDescription: String? {
         switch self {
+        case .invalidResponse:
+            return "the server returned an invalid response"
         case .httpStatus(let status):
             return "the server returned HTTP \(status)"
+        case .rangeUnsupported(let status):
+            return "the server did not honor a ranged download request (HTTP \(status))"
+        case .unexpectedRange:
+            return "the server returned an unexpected byte range"
         case .incomplete(let expected, let actual):
             return "the file was incomplete: \(Self.format(actual)) of \(Self.format(expected))"
+        case .couldNotCreateStagingFile:
+            return "the model staging file could not be created"
         case .invalidFormat:
             return "the downloaded file is not a GGUF model"
         case .checksumMismatch:

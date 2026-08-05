@@ -140,6 +140,7 @@ internal fun SettingsDialog(
     // screen; the dialog only renders it and forwards intents.
     gemmaDownloadingModel: GemmaDownload? = null,
     gemmaDownloadProgress: Float? = null,
+    gemmaDownloadVerifying: Boolean = false,
     gemmaDownloadError: String? = null,
     gemmaLastDownloadAttempt: GemmaDownload? = null,
     gemmaDownloadRevision: Int = 0,
@@ -605,7 +606,11 @@ internal fun SettingsDialog(
                                                 strokeWidth = 2.dp
                                             )
                                             Text(
-                                                "  ${model.label} ${formatDownloadProgress(gemmaDownloadProgress)}",
+                                                if (gemmaDownloadVerifying) {
+                                                    "  ${model.label} verifying..."
+                                                } else {
+                                                    "  ${model.label} ${formatDownloadProgress(gemmaDownloadProgress)}"
+                                                },
                                                 fontWeight = FontWeight.Medium
                                             )
                                         } else {

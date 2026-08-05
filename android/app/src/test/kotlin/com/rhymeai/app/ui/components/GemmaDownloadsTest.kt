@@ -106,24 +106,34 @@ class GemmaDownloadsTest {
     fun downloadGemmaToTempResumesPartialFileAndReportsProgress() = runBlocking {
         val dir = tempDir()
         val tempFile = File(dir, "tiny.gguf.download")
-        tempFile.writeBytes(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+        val expected = validTinyGguf()
+        val prefix = expected.copyOfRange(0, 8)
+        val suffix = expected.copyOfRange(8, expected.size)
+        tempFile.writeBytes(prefix)
 
         var sawRangeHeader = false
         val url = startServer { request, output ->
-            sawRangeHeader = request.contains("Range: bytes=4-")
-            output.writeResponse(206, byteArrayOf(1, 2, 3, 4))
+            sawRangeHeader = request.contains("Range: bytes=8-23")
+            output.writeResponse(206, suffix, contentRange = "bytes 8-23/24")
         }
-        val model = tinyGemma(url = url, expectedBytes = 8)
+        val model = tinyGemma(
+            url = url,
+            expectedBytes = expected.size.toLong(),
+            sha256 = sha256(expected)
+        )
         val progress = mutableListOf<Float>()
 
-        downloadGemmaToTemp(model, tempFile) { progress += it }
+        downloadGemmaToTemp(
+            model = model,
+            tempFile = tempFile,
+            onProgress = { progress += it },
+            connectionCount = 1
+        )
 
         assertTrue(sawRangeHeader)
-        assertEquals(listOf(0.5f, 1.0f), progress)
-        assertEquals(
-            byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte(), 1, 2, 3, 4).toList(),
-            tempFile.readBytes().toList()
-        )
+        assertEquals(listOf(1f / 3f, 1.0f), progress)
+        assertEquals(expected.toList(), tempFile.readBytes().toList())
+        assertFalse(gemmaDownloadStateFile(tempFile).exists())
     }
 
     @Test
@@ -136,11 +146,30 @@ class GemmaDownloadsTest {
         val model = tinyGemma(url = url, expectedBytes = 8)
 
         val error = runCatching {
-            downloadGemmaToTemp(model, tempFile) {}
+            downloadGemmaToTemp(
+                model = model,
+                tempFile = tempFile,
+                onProgress = {},
+                connectionCount = 1
+            )
         }.exceptionOrNull()
 
         assertNotNull(error)
         assertTrue(error!!.message!!.contains("Hugging Face returned HTTP 503"))
+        assertTrue(gemmaDownloadStateFile(tempFile).isFile)
+    }
+
+    @Test
+    fun gemmaDownloadSegmentsCoverTheModelWithFourNonOverlappingRanges() {
+        assertEquals(
+            listOf(
+                GemmaDownloadSegment(0, 4),
+                GemmaDownloadSegment(5, 9),
+                GemmaDownloadSegment(10, 14),
+                GemmaDownloadSegment(15, 16)
+            ),
+            gemmaDownloadSegments(expectedBytes = 17, connectionCount = 4)
+        )
     }
 
     @Test
@@ -283,11 +312,16 @@ class GemmaDownloadsTest {
         }
     }
 
-    private fun OutputStream.writeResponse(statusCode: Int, body: ByteArray) {
+    private fun OutputStream.writeResponse(
+        statusCode: Int,
+        body: ByteArray,
+        contentRange: String? = null
+    ) {
         write(
             buildString {
                 append("HTTP/1.1 $statusCode Test\r\n")
                 append("Content-Length: ${body.size}\r\n")
+                contentRange?.let { append("Content-Range: $it\r\n") }
                 append("Connection: close\r\n")
                 append("\r\n")
             }.toByteArray(Charsets.UTF_8)

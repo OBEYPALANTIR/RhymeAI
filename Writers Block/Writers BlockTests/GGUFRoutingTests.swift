@@ -90,6 +90,15 @@ struct GGUFDownloadCatalogTests {
 
         #expect(preferred == options[0].fileName)
     }
+
+    @Test func modelDownloadUsesFourNonOverlappingRanges() {
+        #expect(ggufDownloadSegments(expectedBytes: 17) == [
+            GGUFDownloadSegment(start: 0, endInclusive: 4),
+            GGUFDownloadSegment(start: 5, endInclusive: 9),
+            GGUFDownloadSegment(start: 10, endInclusive: 14),
+            GGUFDownloadSegment(start: 15, endInclusive: 16),
+        ])
+    }
 }
 
 struct GGUFSuggestionParsingTests {

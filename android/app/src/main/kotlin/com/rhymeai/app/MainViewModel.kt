@@ -1455,6 +1455,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var gemmaDownloadProgress by mutableStateOf<Float?>(null)
         private set
+    var gemmaDownloadVerifying by mutableStateOf(false)
+        private set
     var gemmaDownloadError by mutableStateOf<String?>(null)
     internal var gemmaLastDownloadAttempt by mutableStateOf<com.rhymeai.app.ui.components.GemmaDownload?>(null)
         private set
@@ -1480,6 +1482,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (gemmaDownloadingModel != null) return
         gemmaDownloadingModel = model
         gemmaDownloadProgress = 0f
+        gemmaDownloadVerifying = false
         gemmaDownloadError = null
         gemmaLastDownloadAttempt = model
         val app = getApplication<android.app.Application>()
@@ -1492,6 +1495,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     withContext(Dispatchers.Main) {
                         gemmaDownloadingModel = null
                         gemmaDownloadProgress = null
+                        gemmaDownloadVerifying = false
                         useDownloadedGemma(model)
                     }
                     return@launch
@@ -1500,16 +1504,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 com.rhymeai.app.ui.components.ensureEnoughSpaceForGemma(model, destFile, tempFile)
                 if (destFile.exists()) destFile.delete()
 
-                if (com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, tempFile) != null) {
-                    com.rhymeai.app.ui.components.downloadGemmaToTemp(model, tempFile) { progress ->
-                        withContext(Dispatchers.Main) {
-                            gemmaDownloadProgress = progress
+                if (com.rhymeai.app.ui.components.hasGemmaDownloadState(tempFile) ||
+                    com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, tempFile) != null
+                ) {
+                    com.rhymeai.app.ui.components.downloadGemmaToTemp(
+                        model = model,
+                        tempFile = tempFile,
+                        onProgress = { progress ->
+                            withContext(Dispatchers.Main) {
+                                gemmaDownloadProgress = progress
+                            }
+                        },
+                        onVerifying = {
+                            withContext(Dispatchers.Main) {
+                                gemmaDownloadVerifying = true
+                            }
                         }
-                    }
-
-                    com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, tempFile)?.let {
-                        throw IllegalStateException(it)
-                    }
+                    )
                 }
 
                 if (!tempFile.renameTo(destFile)) {
@@ -1520,18 +1531,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.Main) {
                     gemmaDownloadingModel = null
                     gemmaDownloadProgress = null
+                    gemmaDownloadVerifying = false
                     gemmaDownloadRevision++
                     useDownloadedGemma(model)
                 }
             } catch (e: Exception) {
                 android.util.Log.w("RhymeAI", "Gemma download failed", e)
-                // Keep a PARTIAL temp file so the next attempt resumes with a
-                // Range request; delete it if it reached full size but failed
-                // validation (corrupt download would otherwise stick forever).
-                if (tempFile.length() >= model.expectedBytes) tempFile.delete()
                 withContext(Dispatchers.Main) {
                     gemmaDownloadingModel = null
                     gemmaDownloadProgress = null
+                    gemmaDownloadVerifying = false
                     gemmaDownloadError = "Failed to download ${model.label}: ${e.message}"
                 }
             }
