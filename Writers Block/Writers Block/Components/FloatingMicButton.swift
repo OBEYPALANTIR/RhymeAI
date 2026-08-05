@@ -124,11 +124,11 @@ struct FloatingMicButton: View {
                     )
                 }
                 .accessibilityLabel(service.isRecording ? "Stop recording" : "Record voice memo")
+                .accessibilityIdentifier("micButton")
                 .padding(.trailing, RhymeAITokens.Spacing.xs)
             }
             .frame(width: interpolatedWidth, height: pillHeight)
         }
-        // Accessibility identifiers are set by EditorView on the parent container.
         .frame(width: interpolatedWidth, height: pillHeight)
         // React to service state changes with a spring animation.
         .onChange(of: service.isRecording) { _, isRecording in

@@ -383,7 +383,6 @@ struct EditorView: View {
                         service: viewModel.voiceMemoService,
                         ensureProjectId: { viewModel.ensureProjectForRecording() }
                     )
-                    .accessibilityIdentifier("micButton")
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.horizontal, RhymeAITokens.Spacing.md)

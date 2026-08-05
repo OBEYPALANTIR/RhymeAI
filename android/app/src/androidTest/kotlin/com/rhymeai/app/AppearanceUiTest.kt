@@ -186,6 +186,11 @@ class AppearanceUiTest {
 
     private fun openEditor() {
         composeRule.onNodeWithText("New Song").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription("Settings")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
     }
 
     private fun openAppearanceSettings() {
@@ -204,19 +209,22 @@ class AppearanceUiTest {
 
     private fun captureRootScreenshot(name: String) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val uniqueName = name.substringBeforeLast('.') +
+            "-${System.currentTimeMillis()}." +
+            name.substringAfterLast('.')
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.DISPLAY_NAME, uniqueName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/png")
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/RhymeAI-Test")
         }
         val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            ?: error("Could not create screenshot media row for $name")
+            ?: error("Could not create screenshot media row for $uniqueName")
         context.contentResolver.openOutputStream(uri).use { output ->
-            requireNotNull(output) { "Could not open screenshot output stream for $name" }
+            requireNotNull(output) { "Could not open screenshot output stream for $uniqueName" }
             composeRule.onRoot().captureToImage().asAndroidBitmap()
                 .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
         }
-        println("SCREENSHOT_PATH /sdcard/Pictures/RhymeAI-Test/$name")
+        println("SCREENSHOT_PATH /sdcard/Pictures/RhymeAI-Test/$uniqueName")
     }
 
     private fun assertInkWordmarkUsesLightForeground() {

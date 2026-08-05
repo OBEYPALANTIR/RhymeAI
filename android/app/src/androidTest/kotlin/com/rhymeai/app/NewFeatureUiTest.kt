@@ -336,12 +336,9 @@ class NewFeatureUiTest {
         )
         composeRule.onNodeWithContentDescription("Delete $title").performClick()
         composeRule.onNodeWithText("\"$title\" moved to Trash").assertIsDisplayed()
-        composeRule.waitUntil(timeoutMillis = 6_000) {
-            composeRule.onAllNodesWithText("Undo").fetchSemanticsNodes().isEmpty()
-        }
         composeRule.onNodeWithContentDescription("Open Trash Bin").performClick()
         composeRule.waitUntil(timeoutMillis = 3_000) {
-            composeRule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithContentDescription(title).fetchSemanticsNodes().isNotEmpty()
         }
 
         val selector = composeRule.onNodeWithContentDescription(title)
@@ -380,7 +377,7 @@ class NewFeatureUiTest {
     fun stressAndIpaToggleRendersProsodyPreviewInAssistant() {
         // Stress + IPA was moved from the assistant panel to Settings → Editor tab.
         // Enable it there first, then open the assistant panel to verify prosody renders.
-        composeRule.onNodeWithText("New Song").performClick()
+        openNewSong()
         composeRule.onNodeWithTag("lyricsEditor").performClick()
         composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music\nfollow music")
 
@@ -389,7 +386,7 @@ class NewFeatureUiTest {
         composeRule.onNodeWithText("Editor").performClick()
 
         // Enable Stress + IPA in the Editor tab.
-        composeRule.onNodeWithContentDescription("Stress + IPA").performScrollTo().performClick()
+        composeRule.onNodeWithText("Stress + IPA").performScrollTo().performClick()
 
         // Dismiss Settings.
         composeRule.onNodeWithContentDescription("Close").performClick()
@@ -402,7 +399,11 @@ class NewFeatureUiTest {
 
     @Test
     fun assistantStopCancelsSuggestionRequest() {
-        composeRule.onNodeWithText("New Song").performClick()
+        assumeTrue(
+            "Skipping assistant cancellation gate: android/local.properties has no geminiTestKey.",
+            BuildConfig.GEMINI_TEST_KEY.isNotBlank()
+        )
+        openNewSong()
         composeRule.onNodeWithTag("lyricsEditor").performClick()
         composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music\nfollow music")
 
@@ -419,9 +420,13 @@ class NewFeatureUiTest {
 
     @Test
     fun assistantOfflineFailureShowsConnectionMessage() {
+        assumeTrue(
+            "Skipping offline provider gate: android/local.properties has no geminiTestKey.",
+            BuildConfig.GEMINI_TEST_KEY.isNotBlank()
+        )
         setEmulatorNetworkEnabled(false)
         try {
-            composeRule.onNodeWithText("New Song").performClick()
+            openNewSong()
             composeRule.onNodeWithTag("lyricsEditor").performClick()
             composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music\nfollow music")
 
@@ -711,19 +716,22 @@ class NewFeatureUiTest {
 
     private fun captureRootScreenshot(name: String) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val uniqueName = name.substringBeforeLast('.') +
+            "-${System.currentTimeMillis()}." +
+            name.substringAfterLast('.')
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.DISPLAY_NAME, uniqueName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/png")
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/RhymeAI-Test")
         }
         val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            ?: error("Could not create screenshot media row for $name")
+            ?: error("Could not create screenshot media row for $uniqueName")
         context.contentResolver.openOutputStream(uri).use { output ->
-            requireNotNull(output) { "Could not open screenshot output stream for $name" }
+            requireNotNull(output) { "Could not open screenshot output stream for $uniqueName" }
             composeRule.onRoot().captureToImage().asAndroidBitmap()
                 .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
         }
-        println("SCREENSHOT_PATH /sdcard/Pictures/RhymeAI-Test/$name")
+        println("SCREENSHOT_PATH /sdcard/Pictures/RhymeAI-Test/$uniqueName")
     }
 
     private fun AIModel.screenshotSlug(): String =
@@ -737,10 +745,17 @@ class NewFeatureUiTest {
     }
 
     private fun createSavedSong(title: String) {
-        composeRule.onNodeWithText("New Song").performClick()
+        openNewSong()
         composeRule.onNodeWithTag("songTitleEditor").performTextInput(title)
         composeRule.waitUntil(timeoutMillis = 3_000) {
             composeRule.onAllNodesWithContentDescription("Saved").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    private fun openNewSong() {
+        composeRule.onNodeWithText("New Song").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("lyricsEditor").fetchSemanticsNodes().isNotEmpty()
         }
     }
 
