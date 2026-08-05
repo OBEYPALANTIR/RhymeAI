@@ -220,9 +220,6 @@ struct EditorView: View {
                         .padding(.bottom, RhymeAITokens.Spacing.sm)
                 }
 
-                editorUndoRedoControls
-                    .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
-
                 iPadMicButton
                     .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
             }
@@ -261,9 +258,6 @@ struct EditorView: View {
                 .zIndex(EditorViewConstants.EditorLayout.accessoryZIndex)
 
             assistantFloatingButton
-                .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
-
-            editorUndoRedoControls
                 .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
 
             assistantSheetOverlay
@@ -331,30 +325,6 @@ struct EditorView: View {
 
     private var historyControlsVisible: Bool {
         editorActionsVisible && !viewModel.voiceMemoService.isRecording
-    }
-
-    @ViewBuilder
-    private var editorUndoRedoControls: some View {
-        if historyControlsVisible {
-            VStack {
-                Spacer()
-                HStack {
-                    EditorUndoRedoControls(
-                        canUndo: viewModel.canUndoLyrics,
-                        canRedo: viewModel.canRedoLyrics,
-                        floating: true,
-                        onUndo: viewModel.undoLyrics,
-                        onRedo: viewModel.redoLyrics
-                    )
-                    Spacer()
-                }
-                .padding(.leading, RhymeAITokens.Spacing.md)
-                .padding(.bottom, keyboardIsVisible
-                         ? keyboardHeight + RhymeAITokens.Spacing.sm
-                         : RhymeAITokens.Spacing.md)
-            }
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
     }
 
     @ViewBuilder
@@ -753,6 +723,15 @@ struct EditorView: View {
                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
             }
             .accessibilityLabel("Open songs drawer")
+
+            if historyControlsVisible {
+                EditorUndoRedoControls(
+                    canUndo: viewModel.canUndoLyrics,
+                    canRedo: viewModel.canRedoLyrics,
+                    onUndo: viewModel.undoLyrics,
+                    onRedo: viewModel.redoLyrics
+                )
+            }
 
             HStack(spacing: RhymeAITokens.Spacing.xs) {
                 if viewModel.saveStatus == .saving {

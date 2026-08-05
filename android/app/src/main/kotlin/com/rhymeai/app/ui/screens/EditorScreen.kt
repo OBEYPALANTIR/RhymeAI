@@ -523,12 +523,29 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             // Top bar — always visible
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.showProjectsDialog = true }) {
-                        Icon(
-                            Icons.Default.Menu,
-                            contentDescription = stringResource(R.string.editor_open_songs_drawer),
-                            tint = colorScheme.onSurfaceVariant
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { viewModel.showProjectsDialog = true }) {
+                            Icon(
+                                Icons.Default.Menu,
+                                contentDescription = stringResource(R.string.editor_open_songs_drawer),
+                                tint = colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (
+                            historyControlsVisible(
+                                editorActionsVisible = fabRowVisible,
+                                isRecording = memoService.isRecording
+                            )
+                        ) {
+                            EditorUndoRedoControls(
+                                canUndo = viewModel.canUndoLyrics,
+                                canRedo = viewModel.canRedoLyrics,
+                                undoContentDescription = stringResource(R.string.editor_undo),
+                                redoContentDescription = stringResource(R.string.editor_redo),
+                                onUndo = viewModel::undoLyrics,
+                                onRedo = viewModel::redoLyrics
+                            )
+                        }
                     }
                 },
                 title = {
@@ -1314,53 +1331,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
                     }
                 }
-            }
-        }
-
-        AnimatedVisibility(
-            visible = historyControlsVisible(
-                editorActionsVisible = fabRowVisible,
-                isRecording = memoService.isRecording
-            ),
-            enter = fadeIn(
-                animationSpec = tween(
-                    durationMillis = DesignTokens.Motion.standardMillis,
-                    easing = DesignTokens.Motion.emphasizedEasing
-                )
-            ) + slideInVertically(
-                animationSpec = tween(
-                    durationMillis = DesignTokens.Motion.standardMillis,
-                    easing = DesignTokens.Motion.emphasizedEasing
-                ),
-                initialOffsetY = { it }
-            ),
-            exit = fadeOut(
-                animationSpec = tween(
-                    durationMillis = DesignTokens.Motion.dismissMillis,
-                    easing = DesignTokens.Motion.exitEasing
-                )
-            ) + slideOutVertically(
-                animationSpec = tween(
-                    durationMillis = DesignTokens.Motion.dismissMillis,
-                    easing = DesignTokens.Motion.exitEasing
-                ),
-                targetOffsetY = { it }
-            ),
-            modifier = Modifier.align(Alignment.BottomStart)
-        ) {
-            KeyboardSafeActionArea(
-                modifier = Modifier.padding(start = DesignTokens.Rhythm.standard),
-                extra = DesignTokens.Rhythm.section,
-                horizontalAlignment = Alignment.Start
-            ) {
-                EditorUndoRedoControls(
-                    canUndo = viewModel.canUndoLyrics,
-                    canRedo = viewModel.canRedoLyrics,
-                    undoContentDescription = stringResource(R.string.editor_undo),
-                    redoContentDescription = stringResource(R.string.editor_redo),
-                    onUndo = viewModel::undoLyrics,
-                    onRedo = viewModel::redoLyrics
-                )
             }
         }
 
