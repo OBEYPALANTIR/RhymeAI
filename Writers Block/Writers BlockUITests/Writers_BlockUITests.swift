@@ -117,8 +117,6 @@ final class Writers_BlockUITests: XCTestCase {
 
     @MainActor
     func testLyricsUndoAndRedoControlsRestoreTyping() throws {
-        try requirePhone()
-
         let app = isolatedUITestApp()
         app.launch()
         createNewSong(in: app)
@@ -151,8 +149,6 @@ final class Writers_BlockUITests: XCTestCase {
 
     @MainActor
     func testUndoAndRedoControlsDismissWhileRecordingAndReturnAfterStopping() throws {
-        try requirePhone()
-
         let app = isolatedUITestApp(arguments: ["--ui-test-fake-voice-recording"])
         app.launch()
         createNewSong(in: app)
@@ -174,6 +170,25 @@ final class Writers_BlockUITests: XCTestCase {
 
         XCTAssertTrue(undoButton.waitForExistence(timeout: 3))
         XCTAssertTrue(redoButton.exists)
+    }
+
+    @MainActor
+    func testIPadEditorKeepsHistoryAndMicControlsAtBottom() throws {
+        try requireIPad()
+
+        let app = isolatedUITestApp()
+        app.launch()
+        createNewSong(in: app)
+
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        let undoButton = app.buttons["undoLyricsButton"]
+        let micButton = app.buttons["micButton"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(micButton.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(undoButton.frame.midY, lyricsEditor.frame.midY)
+        XCTAssertGreaterThan(micButton.frame.midY, lyricsEditor.frame.midY)
+        XCTAssertLessThan(undoButton.frame.maxX, micButton.frame.minX)
     }
 
     @MainActor

@@ -210,14 +210,22 @@ struct EditorView: View {
     private var iPadLayout: some View {
         HStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
             // Editor column
-            VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
-                topBar
-                editorScrollView
-            }
-            .safeAreaInset(edge: .bottom, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
-                rewriteAccessoryBar
-                    .padding(.horizontal, RhymeAITokens.Spacing.md)
-                    .padding(.bottom, RhymeAITokens.Spacing.sm)
+            ZStack(alignment: .bottom) {
+                VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
+                    topBar
+                    editorScrollView
+                }
+                .safeAreaInset(edge: .bottom, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
+                    rewriteAccessoryBar
+                        .padding(.horizontal, RhymeAITokens.Spacing.md)
+                        .padding(.bottom, RhymeAITokens.Spacing.sm)
+                }
+
+                editorUndoRedoControls
+                    .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
+
+                iPadMicButton
+                    .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
             }
             .frame(maxWidth: .infinity)
 
@@ -227,6 +235,12 @@ struct EditorView: View {
             AssistantPanelView(isInline: true)
                 .frame(width: RhymeAITokens.Layout.assistantColumnWidth)
         }
+        .rhymeAnimation(
+            viewModel.voiceMemoService.isRecording
+                ? RhymeAITokens.Motion.dismiss
+                : RhymeAITokens.Motion.state,
+            value: viewModel.voiceMemoService.isRecording
+        )
     }
 
     // MARK: - iPhone Layout (FAB + sheet)
@@ -250,7 +264,7 @@ struct EditorView: View {
             assistantFloatingButton
                 .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
 
-            phoneUndoRedoControls
+            editorUndoRedoControls
                 .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
 
             assistantSheetOverlay
@@ -309,20 +323,20 @@ struct EditorView: View {
         viewModel.showAssistantSheet ? RhymeAITokens.Motion.presentation : RhymeAITokens.Motion.dismiss
     }
 
-    private var phoneEditorActionsVisible: Bool {
+    private var editorActionsVisible: Bool {
         !assistantSheetIsActive &&
             !assistantModalOpen &&
             !viewModel.hasActiveRewrite &&
             !shouldShowRewriteChipBar
     }
 
-    private var phoneHistoryControlsVisible: Bool {
-        phoneEditorActionsVisible && !viewModel.voiceMemoService.isRecording
+    private var historyControlsVisible: Bool {
+        editorActionsVisible && !viewModel.voiceMemoService.isRecording
     }
 
     @ViewBuilder
-    private var phoneUndoRedoControls: some View {
-        if phoneHistoryControlsVisible {
+    private var editorUndoRedoControls: some View {
+        if historyControlsVisible {
             VStack {
                 Spacer()
                 HStack {
@@ -345,6 +359,25 @@ struct EditorView: View {
     }
 
     @ViewBuilder
+    private var iPadMicButton: some View {
+        if editorActionsVisible {
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    FloatingMicButton(
+                        service: viewModel.voiceMemoService,
+                        ensureProjectId: { viewModel.ensureProjectForRecording() }
+                    )
+                }
+                .padding(.trailing, RhymeAITokens.Spacing.md)
+                .padding(.bottom, RhymeAITokens.Spacing.md)
+            }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    @ViewBuilder
     private var assistantFloatingButton: some View {
         // Hidden when the assistant sheet is up, a modal is up, or an inline
         // rewrite is being reviewed. It also yields to the selection rewrite
@@ -353,7 +386,7 @@ struct EditorView: View {
         // during selection because its bottom-end FAB and centered chip bar do
         // not overlap.) Keyboard does NOT hide the button — it rides above it.
         // The mic button shares this exact condition so both appear/disappear together.
-        if phoneEditorActionsVisible {
+        if editorActionsVisible {
             VStack {
                 Spacer()
                 HStack(spacing: RhymeAITokens.Spacing.sm) {
@@ -735,16 +768,6 @@ struct EditorView: View {
                     .font(.caption)
             }
             .foregroundStyle(.secondary)
-
-            if horizontalSizeClass == .regular {
-                EditorUndoRedoControls(
-                    canUndo: viewModel.canUndoLyrics && !viewModel.hasActiveRewrite,
-                    canRedo: viewModel.canRedoLyrics && !viewModel.hasActiveRewrite,
-                    floating: false,
-                    onUndo: viewModel.undoLyrics,
-                    onRedo: viewModel.redoLyrics
-                )
-            }
 
             // Export
             Button {

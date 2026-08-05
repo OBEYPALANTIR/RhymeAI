@@ -175,7 +175,7 @@ struct GGUFEngineChoiceTests {
 
 // MARK: - Routing decision: shouldUseGemma
 
-struct GGUFRoutingDecisionTests {
+extension GGUFEngineChoiceTests {
     // shouldUseGemma returns false when engine is Apple Intelligence regardless
     // of whether GGUF files are present.
     @Test func appleEngineNeverRoutesToGemma() {
