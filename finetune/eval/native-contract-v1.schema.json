@@ -249,7 +249,7 @@
         "target": "iPhone 17 Pro simulator",
         "osVersion": "26.5",
         "buildVariant": "Debug",
-        "evidenceKind": "controlledReplay",
+        "evidenceKind": "contractExport",
         "capturedAt": "2026-09-09T20:55:00Z"
       }
     }

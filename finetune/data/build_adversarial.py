@@ -140,6 +140,7 @@ def main():
 
     contracts = native_contract.load_contracts(args.contracts, exact=True)
     rows = build_rows(contracts, load_specs(args.cases), heldout.load(args.heldout))
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")

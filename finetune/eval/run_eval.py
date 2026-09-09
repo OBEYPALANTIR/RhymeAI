@@ -49,6 +49,14 @@ def replay_seed_argument(value):
         raise argparse.ArgumentTypeError(str(error)) from error
 
 
+def append_native_chunk(output, chunk, length_limit, length_unit):
+    previous_length = native_contract.response_length(output, length_unit)
+    output += chunk
+    current_length = native_contract.response_length(output, length_unit)
+    boundary_reached = length_limit is not None and current_length >= length_limit
+    return output, previous_length, current_length, boundary_reached
+
+
 # ---------------------------------------------------------------------------
 # Case preparation: turn a case dict into (prompt, scoring context)
 # ---------------------------------------------------------------------------
@@ -338,20 +346,13 @@ def completion(port, contract, replay_seed):
             chunk = event.get("content", "")
             if chunk:
                 content_chunks += 1
-                previous_length = native_contract.response_length(output, length_unit)
-                accepted_chunk = chunk
-                if length_limit is not None:
-                    accepted_chunk = native_contract.response_prefix(
-                        chunk, length_limit - previous_length, length_unit
-                    )
-                output += accepted_chunk
+                output, previous_length, current_length, crossed_boundary = append_native_chunk(
+                    output, chunk, length_limit, length_unit
+                )
                 reported_tokens = event.get("tokens_predicted")
                 if isinstance(reported_tokens, int) and not isinstance(reported_tokens, bool):
                     predicted_tokens = reported_tokens
-                current_length = native_contract.response_length(output, length_unit)
-                if length_limit is not None and (
-                    accepted_chunk != chunk or current_length >= length_limit
-                ):
+                if crossed_boundary:
                     boundary_reached = True
                     final_payload["stop_type"] = "maximumResponseLength"
                     break
@@ -449,6 +450,15 @@ def summarize(results):
                 fixture_col, human_col, rhyme_col, avg_latency, avg_tokens,
             ))
     print()
+
+
+def evaluation_passed(results):
+    return bool(results) and all(result["passed"] for result in results)
+
+
+def exit_on_evaluation_failure(passed):
+    if not passed:
+        raise SystemExit(1)
 
 
 def main():
@@ -595,6 +605,7 @@ def main():
             1 for result in results if "heldout" in result["score"]
         ),
         "case_count": len(results),
+        "passed": evaluation_passed(results),
         "results": results,
     }
     with open(args.out, "w", encoding="utf-8") as handle:
@@ -602,6 +613,7 @@ def main():
     print("report written to %s" % args.out)
 
     summarize(results)
+    exit_on_evaluation_failure(report["passed"])
 
 
 if __name__ == "__main__":

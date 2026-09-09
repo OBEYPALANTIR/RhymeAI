@@ -4,6 +4,8 @@ import copy
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -186,6 +188,42 @@ class NativeContractTests(unittest.TestCase):
         with self.assertRaisesRegex(native_contract.ContractError, "nativeRun requires"):
             native_contract.validate_contract(record)
 
+    def test_runtime_evidence_requires_matching_execution_provenance(self):
+        record = contract("android", "native prompt")
+        record["runtime"]["evidenceKind"] = "nativeRun"
+        record["generation"]["termination"]["reason"] = "eog"
+        record["generation"]["sampler"]["seed"] = {
+            "policy": "fixed", "value": 3407
+        }
+        native_contract.validate_contract(record)
+
+        not_run = copy.deepcopy(record)
+        not_run["generation"]["termination"]["reason"] = "notRun"
+        with self.assertRaisesRegex(native_contract.ContractError, "executed termination"):
+            native_contract.validate_contract(not_run)
+
+        unresolved_seed = copy.deepcopy(record)
+        unresolved_seed["generation"]["sampler"]["seed"] = {
+            "policy": "engineDefault", "value": -1
+        }
+        with self.assertRaisesRegex(native_contract.ContractError, "resolved non-negative"):
+            native_contract.validate_contract(unresolved_seed)
+
+        exported_run = contract("android", "exported prompt")
+        exported_run["generation"]["termination"]["reason"] = "eog"
+        with self.assertRaisesRegex(native_contract.ContractError, "contractExport requires"):
+            native_contract.validate_contract(exported_run)
+
+    def test_capture_timestamp_requires_full_timezone_aware_date_time(self):
+        record = contract("ios", "exported prompt")
+        for invalid in ("2026-09-09", "2026-09-09T23:00:00"):
+            invalid_record = copy.deepcopy(record)
+            invalid_record["runtime"]["capturedAt"] = invalid
+            with self.assertRaisesRegex(native_contract.ContractError, "with timezone"):
+                native_contract.validate_contract(invalid_record)
+        record["runtime"]["capturedAt"] = "2026-09-09T23:00:00Z"
+        native_contract.validate_contract(record)
+
     def test_completion_body_uses_separate_controlled_replay_seed(self):
         record = contract("ios", "exact prompt")
         native_seed = copy.deepcopy(record["generation"]["sampler"]["seed"])
@@ -202,8 +240,15 @@ class NativeContractTests(unittest.TestCase):
     def test_response_length_uses_native_units(self):
         self.assertEqual(native_contract.response_length("A😀", "utf8Bytes"), 5)
         self.assertEqual(native_contract.response_length("A😀", "utf16CodeUnits"), 3)
-        self.assertEqual(native_contract.response_prefix("A😀B", 3, "utf8Bytes"), "A")
-        self.assertEqual(native_contract.response_prefix("A😀B", 3, "utf16CodeUnits"), "A😀")
+
+    def test_streaming_replay_preserves_native_chunk_that_crosses_limit(self):
+        output, previous, current, reached = run_eval.append_native_chunk(
+            "abc", "de", 4, "utf8Bytes"
+        )
+        self.assertEqual(output, "abcde")
+        self.assertEqual(previous, 3)
+        self.assertEqual(current, 5)
+        self.assertTrue(reached)
 
     def test_targeted_rhyme_miss_fails_case(self):
         score = {
@@ -214,6 +259,15 @@ class NativeContractTests(unittest.TestCase):
         self.assertFalse(run_eval.score_passed(score))
         score["rhyme"]["miss"] = 0
         self.assertTrue(run_eval.score_passed(score))
+
+    def test_evaluation_gate_fails_when_any_case_fails(self):
+        self.assertTrue(run_eval.evaluation_passed([{"passed": True}]))
+        self.assertFalse(run_eval.evaluation_passed([{"passed": True}, {"passed": False}]))
+        self.assertFalse(run_eval.evaluation_passed([]))
+        run_eval.exit_on_evaluation_failure(True)
+        with self.assertRaises(SystemExit) as failure:
+            run_eval.exit_on_evaluation_failure(False)
+        self.assertEqual(failure.exception.code, 1)
 
 
 class LexicalFixtureTests(unittest.TestCase):
@@ -249,6 +303,37 @@ class LexicalFixtureTests(unittest.TestCase):
     def test_adversarial_training_completions_pass_boundary_scoring(self):
         for spec in self.training.values():
             build_adversarial.validate_completion(spec)
+
+    def test_adversarial_builder_creates_missing_output_directory(self):
+        records = []
+        for spec in self.training.values():
+            for platform in native_contract.PLATFORMS:
+                record = contract(platform, "native prompt for " + spec["caseId"], spec["request"])
+                record["caseId"] = spec["caseId"]
+                record["requestKind"] = spec["requestKind"]
+                records.append(record)
+
+        with tempfile.TemporaryDirectory() as directory:
+            contracts_path = os.path.join(directory, "contracts.jsonl")
+            output_path = os.path.join(directory, "missing", "adversarial-v1.jsonl")
+            with open(contracts_path, "w", encoding="utf-8") as handle:
+                for record in records:
+                    handle.write(json.dumps(record) + "\n")
+            subprocess.run(
+                [
+                    sys.executable,
+                    "finetune/data/build_adversarial.py",
+                    "--contracts",
+                    contracts_path,
+                    "--out",
+                    output_path,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            with open(output_path, "r", encoding="utf-8") as handle:
+                self.assertEqual(len(handle.readlines()), len(records))
 
     def test_raw_markers_are_rejected_before_cleanup(self):
         for marker in ("<start_of_turn>model\n", "<|turn>model\n", "<turn|>\n"):

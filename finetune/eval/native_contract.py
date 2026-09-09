@@ -29,6 +29,9 @@ TERMINATION_REASONS = {
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+DATE_TIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$"
+)
 
 TOP_KEYS = {
     "schemaVersion", "platform", "sourceSha", "modelSha256", "caseId",
@@ -243,22 +246,43 @@ def validate_contract(record, *, exact=True):
     evidence_kind = runtime["evidenceKind"]
     captured_at = _string(runtime["capturedAt"], "$.runtime.capturedAt")
     try:
-        dt.datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+        parsed_timestamp = dt.datetime.fromisoformat(
+            captured_at.replace("Z", "+00:00").replace("z", "+00:00")
+        )
     except ValueError:
-        _fail("$.runtime.capturedAt", "must be ISO-8601")
+        parsed_timestamp = None
+    if (
+        not DATE_TIME_RE.fullmatch(captured_at)
+        or parsed_timestamp is None
+        or parsed_timestamp.utcoffset() is None
+    ):
+        _fail("$.runtime.capturedAt", "must be an RFC 3339 date-time with timezone")
+
+    if evidence_kind == "contractExport" and termination["reason"] != "notRun":
+        _fail("$.generation.termination.reason", "contractExport requires notRun")
+    if evidence_kind != "contractExport" and termination["reason"] == "notRun":
+        _fail(
+            "$.generation.termination.reason",
+            "%s requires an executed termination reason" % evidence_kind,
+        )
 
     missing_random_export_seed = (
         evidence_kind == "contractExport"
         and seed["policy"] == "randomPerRequest"
         and seed["value"] is None
     )
-    if exact and seed["value"] is None and not missing_random_export_seed:
-        _fail(
-            "$.generation.sampler.seed.value",
-            "%s requires the actual native seed" % evidence_kind,
-        )
-
     if exact:
+        if seed["value"] is None and not missing_random_export_seed:
+            _fail(
+                "$.generation.sampler.seed.value",
+                "%s requires the actual native seed" % evidence_kind,
+            )
+        if evidence_kind != "contractExport" and seed["value"] < 0:
+            _fail(
+                "$.generation.sampler.seed.value",
+                "%s requires a resolved non-negative seed" % evidence_kind,
+            )
+
         if record["caseId"].startswith("schema_example_"):
             _fail("$.caseId", "illustrative schema examples cannot be replayed")
         if template_hash == "0" * 64:
@@ -378,17 +402,6 @@ def response_length(text, unit):
     if unit == "utf16CodeUnits":
         return len(text.encode("utf-16-le")) // 2
     raise ContractError("unknown response length unit %r" % unit)
-
-
-def response_prefix(text, limit, unit):
-    if limit <= 0:
-        return ""
-    end = 0
-    for index in range(1, len(text) + 1):
-        if response_length(text[:index], unit) > limit:
-            break
-        end = index
-    return text[:end]
 
 
 def validate_replay_seed(value):
