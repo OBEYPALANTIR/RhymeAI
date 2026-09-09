@@ -27,7 +27,7 @@ separately.
 
 ### Validation status
 
-Candidate evidence is recorded on the release pull request: exact source and
+Release approval requires SHA-bound evidence on the pull request: exact source and
 installed executable hashes, full native unit/UI results, phone/iPad captures,
 real local-model outputs, signing checks, and App Store Connect processing.
 Credential-dependent cloud tests require the corresponding provider keys.
