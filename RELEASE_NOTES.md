@@ -14,7 +14,8 @@ separately.
 - Choose Perfect, Near, or Slant rhymes. Suggestions must match the selected tier;
   an unmatched response shows a no-match message instead of unrelated filler.
 - Use a local GGUF model for writing and synonym suggestions. Saved custom model
-  selections persist across relaunches.
+  selections persist across relaunches. Gemma 4 and legacy Gemma models use the
+  matching chat format from model metadata; unsupported formats show an error.
 - Undo and redo edits, select text containing emoji, and switch songs while an
   autosave or rewrite is pending. These paths preserve the intended song and
   selection.
@@ -26,17 +27,15 @@ separately.
 
 ### Validation status
 
-The composed source passed 329 unit tests with 6 runtime skips and no failures.
-Four skips concern unavailable Apple Intelligence generation on the simulator;
-two require OpenAI or Claude credentials. Two additional live Gemini tests were
-explicitly excluded from selection. These results do not establish live cloud
-provider availability or local GGUF generation quality.
+Candidate evidence is recorded on the release pull request: exact source and
+installed executable hashes, full native unit/UI results, phone/iPad captures,
+real local-model outputs, signing checks, and App Store Connect processing.
+Credential-dependent cloud tests require the corresponding provider keys.
 
-Release simulator and signed device archives build successfully. Independent
-phone/iPad acceptance, actual local GGUF inference, final review, and processed
-TestFlight delivery must be checked against the candidate before distribution.
-Live two-device CloudKit sync with an
-iCloud account remains unverified in this candidate.
+Simulator inference uses the CPU backend after a controlled comparison found
+corrupted Gemma 4 output on the simulator Metal device. Physical devices retain
+Metal acceleration; physical-device model performance remains a separate check.
+Live two-device CloudKit sync requires signed-in devices and remains unverified.
 
 ## Historical Writers Block / RhymeAI 0.2 Readiness Draft
 
