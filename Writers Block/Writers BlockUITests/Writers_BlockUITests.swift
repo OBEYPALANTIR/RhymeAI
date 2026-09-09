@@ -498,7 +498,7 @@ final class Writers_BlockUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["ˈDA da | ˈDA da"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["ˈDA da ˈDA da"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "jɛloʊ")).firstMatch.waitForExistence(timeout: 3))
     }
 
@@ -512,6 +512,8 @@ final class Writers_BlockUITests: XCTestCase {
         }
 
         let app = isolatedUITestApp(arguments: [
+            "-selectedProvider",
+            "GEMINI",
             "--ui-test-seed-prosody-song",
             "--ui-test-open-assistant"
         ])
@@ -531,6 +533,8 @@ final class Writers_BlockUITests: XCTestCase {
     @MainActor
     func testAssistantOfflineFailureShowsConnectionMessage() throws {
         let app = isolatedUITestApp(arguments: [
+            "-selectedProvider",
+            "GEMINI",
             "--ui-test-seed-prosody-song",
             "--ui-test-open-assistant"
         ])
