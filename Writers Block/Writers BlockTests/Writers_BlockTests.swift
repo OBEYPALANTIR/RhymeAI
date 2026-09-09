@@ -64,6 +64,18 @@ struct Writers_BlockTests {
         #expect(context.currentSection == .unknown)
     }
 
+    @Test func insertSuggestionUsesUITextViewUTF16CursorUnits() {
+        let viewModel = EditorViewModel()
+        viewModel.lyrics = "🌙 glow"
+        viewModel.cursorPosition = ("🌙" as NSString).length
+
+        viewModel.insertSuggestion("new line")
+
+        let insertedPrefix = "🌙\nnew line\n"
+        #expect(viewModel.lyrics == insertedPrefix + " glow")
+        #expect(viewModel.cursorPosition == (insertedPrefix as NSString).length)
+    }
+
     @Test func openAIModelPickerStartsWithCurrentGPT5Models() {
         let modelIDs = AIModel.models(for: .openai).map(\.id)
 
@@ -99,6 +111,44 @@ struct Writers_BlockTests {
         #expect(models == [.localModel])
         #expect(models.first?.displayName == "On-Device Model")
         #expect(AIProvider.local.keyHint == "Runs on-device with Apple Foundation Models when available.")
+    }
+
+    @MainActor
+    @Test func freshAndInvalidProviderPreferencesRecoverToLocal() throws {
+        for storedProvider in [nil, "UNSUPPORTED_PROVIDER"] as [String?] {
+            let suiteName = "rhymeai.provider-default.\(UUID().uuidString)"
+            let defaults = try #require(UserDefaults(suiteName: suiteName))
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            if let storedProvider {
+                defaults.set(storedProvider, forKey: "selectedProvider")
+            }
+            defaults.set(AIModel.gpt4o.rawValue, forKey: "selectedModel")
+
+            let viewModel = EditorViewModel(
+                keychainStore: InMemoryKeychainStore(),
+                defaults: defaults
+            )
+
+            #expect(viewModel.selectedProvider == .local)
+            #expect(viewModel.selectedModel == .localModel)
+        }
+    }
+
+    @MainActor
+    @Test func validReturningProviderPreferenceIsPreserved() throws {
+        let suiteName = "rhymeai.provider-returning.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(AIProvider.claude.rawValue, forKey: "selectedProvider")
+        defaults.set(AIModel.claudeSonnet46.rawValue, forKey: "selectedModel")
+
+        let viewModel = EditorViewModel(
+            keychainStore: InMemoryKeychainStore(),
+            defaults: defaults
+        )
+
+        #expect(viewModel.selectedProvider == .claude)
+        #expect(viewModel.selectedModel == .claudeSonnet46)
     }
 
     @MainActor
@@ -142,7 +192,7 @@ struct Writers_BlockTests {
 
         #expect(prosody.syllableCount == 4)
         #expect(prosody.stressPattern == [1, 0, 1, 0])
-        #expect(prosody.feet == "ˈDA da | ˈDA da")
+        #expect(prosody.feet == "ˈDA da ˈDA da")
     }
 
     @Test func prosodyAnalyzerRendersIpaPreview() {
@@ -157,6 +207,7 @@ struct Writers_BlockTests {
 
         #expect(prosody.ipa == "ˈreɪdiˌoʊ")
         #expect(prosody.stressPattern == [1, 0, 2])
+        #expect(ProsodyAnalyzer.metricFeet(prosody.stressPattern) == "ˈDA da ˌDA")
         #expect(prosody.isFallback == false)
     }
 
@@ -166,6 +217,19 @@ struct Writers_BlockTests {
         #expect(prosody.syllableCount == 2)
         #expect(prosody.stressPattern == [1, 0])
         #expect(prosody.isFallback)
+    }
+
+    @Test func prosodyFallbackKeepsSyllabicLeWithoutDoubleDecrement() {
+        #expect(ProsodyAnalyzer.analyzeWord("obstacles", dictionary: Self.fixtureDictionary).syllableCount == 3)
+        #expect(ProsodyAnalyzer.analyzeWord("candles", dictionary: Self.fixtureDictionary).syllableCount == 2)
+        #expect(ProsodyAnalyzer.analyzeWord("tables", dictionary: Self.fixtureDictionary).syllableCount == 2)
+        #expect(ProsodyAnalyzer.analyzeWord("candle", dictionary: Self.fixtureDictionary).syllableCount == 2)
+    }
+
+    @Test func prosodyFallbackStillReducesSilentEAndPluralEs() {
+        #expect(ProsodyAnalyzer.analyzeWord("cake", dictionary: Self.fixtureDictionary).syllableCount == 1)
+        #expect(ProsodyAnalyzer.analyzeWord("mile", dictionary: Self.fixtureDictionary).syllableCount == 1)
+        #expect(ProsodyAnalyzer.analyzeWord("miles", dictionary: Self.fixtureDictionary).syllableCount == 1)
     }
 
     @Test func prosodyAnalyzerNormalizesPunctuationDigitsAndInternalApostrophes() {
@@ -241,6 +305,34 @@ struct Writers_BlockTests {
         #expect(store.getKey(provider: "GEMINI") == "already-in-secure")
         // Legacy entry still wiped even though we didn't overwrite the secure value.
         #expect(defaults.string(forKey: "apiKey_GEMINI") == nil)
+    }
+
+    @Test func migrationPreservesLegacyKeyWhenSecureWriteFails() {
+        let suiteName = "rhymeai.test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("still-needed", forKey: "apiKey_GEMINI")
+        let store = RejectingKeychainStore()
+
+        let migrated = ApiKeyMigration.apply(legacyDefaults: defaults, secure: store)
+
+        #expect(!migrated)
+        #expect(store.getKey(provider: "GEMINI").isEmpty)
+        #expect(defaults.string(forKey: "apiKey_GEMINI") == "still-needed")
+    }
+
+    @MainActor
+    @Test func failedSettingsKeychainDeletePreservesEditorErrorAndKnownKeyPresence() {
+        let store = RejectingKeychainStore(seed: [AIProvider.gemini.rawValue: "existing"])
+        let viewModel = EditorViewModel(keychainStore: store)
+        viewModel.errorMessage = "Existing editor error"
+
+        let removed = viewModel.saveApiKey(provider: .gemini, key: "")
+
+        #expect(!removed)
+        #expect(viewModel.hasApiKey(for: .gemini))
+        #expect(store.getKey(provider: AIProvider.gemini.rawValue) == "existing")
+        #expect(viewModel.errorMessage == "Existing editor error")
     }
 
     @Test func suggestionParserSanitizesProviderLineResponses() {
@@ -319,6 +411,92 @@ struct Writers_BlockTests {
         // No target line: no constraint block and no over-generation.
         #expect(!wholeSongPrompt.contains("End each line with"))
         #expect(wholeSongPrompt.contains("Respond with exactly 6 lines"))
+    }
+
+    @Test func suggestionPromptOmitsUnrelatedLyricsWhenWholeSongContextIsOff() {
+        let targetLine = "Keep only this target line"
+        let unrelatedSentinel = "PRIVATE_UNRELATED_STANZA_SENTINEL"
+        let prompt = AIService().buildPrompt(
+            theme: "quiet resolve",
+            lyrics: "[Verse]\n\(targetLine)\n\n[Bridge]\n\(unrelatedSentinel)",
+            targetRhymeLine: targetLine,
+            rhymeType: .perfect,
+            rhymeScheme: "AABB",
+            currentLetter: "A",
+            currentSection: .verse,
+            complexity: .moderate,
+            useWholeSongContext: false
+        )
+
+        #expect(prompt.contains("quiet resolve"))
+        #expect(prompt.contains(targetLine))
+        #expect(!prompt.contains(unrelatedSentinel))
+    }
+
+    @MainActor
+    @Test func firstCloudSuggestionRequestsConsentBeforeStarting() {
+        let suiteName = "rhymeai.consent.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), defaults: defaults)
+        viewModel.saveProvider(.gemini)
+        viewModel.lyrics = "private line"
+
+        viewModel.getSuggestions()
+
+        #expect(viewModel.cloudAISharingRequest?.provider == .gemini)
+        #expect(viewModel.cloudAISharingRequest?.purpose == "suggestions")
+        #expect(viewModel.cloudAISharingRequest?.scope == .selectedContext)
+        #expect(!viewModel.isLoading)
+    }
+
+    @MainActor
+    @Test func limitedCloudConsentDoesNotAuthorizeWholeSongRequests() {
+        let suiteName = "rhymeai.consent.scope.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), defaults: defaults)
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.saveUseWholeSongContext(true)
+        viewModel.lyrics = "private full lyric"
+
+        viewModel.getSuggestions()
+
+        #expect(viewModel.cloudAISharingRequest?.scope == .wholeSong)
+        #expect(!viewModel.isLoading)
+    }
+
+    @MainActor
+    @Test func consentRevocationCancelsPendingCloudRequest() {
+        let suiteName = "rhymeai.consent.revoke.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), defaults: defaults)
+        viewModel.saveProvider(.gemini)
+        viewModel.lyrics = "private line"
+        viewModel.getSuggestions()
+        #expect(viewModel.cloudAISharingRequest != nil)
+
+        viewModel.setCloudAISharingConsent(false, scope: .selectedContext)
+
+        #expect(viewModel.cloudAISharingRequest == nil)
+        #expect(!viewModel.isLoading)
+    }
+
+    @Test func rewritePromptOmitsSurroundingLyricsWhenWholeSongContextIsOff() {
+        let sentinel = "REWRITE_BEFORE_92ce"
+        let selected = "REWRITE_ALLOWED_81bd"
+        let prompt = AIService().buildRewritePrompt(
+            action: .punchUp,
+            lyrics: "\(sentinel)\n\(selected)",
+            selection: selected,
+            currentSection: .verse,
+            useWholeSongContext: false
+        )
+
+        #expect(prompt.contains(selected))
+        #expect(!prompt.contains(sentinel))
     }
 
     @Test func rewritePromptIncludesEveryActionContract() {
@@ -989,7 +1167,7 @@ struct Writers_BlockTests {
             sectionOrdinal: 2,
             firstChorusLines: firstLines,
             complexity: .moderate,
-            useWholeSongContext: false
+            useWholeSongContext: true
         )
         #expect(prompt.contains("This is the chorus (instance 2). Keep hook language and ending words consistent with the established chorus:"))
         #expect(prompt.contains("We rise together"))
@@ -1293,4 +1471,18 @@ struct Writers_BlockTests {
         #expect(displayTitle == "Untitled Song")
     }
 
+}
+
+private final class RejectingKeychainStore: KeychainStore {
+    private var storage: [String: String]
+
+    init(seed: [String: String] = [:]) {
+        storage = seed
+    }
+
+    func getKey(provider: String) -> String { storage[provider] ?? "" }
+    func setKey(provider: String, key: String) -> Bool { false }
+    func deleteKey(provider: String) -> Bool { false }
+    func allKeys() -> [String: String] { storage }
+    func clear() {}
 }

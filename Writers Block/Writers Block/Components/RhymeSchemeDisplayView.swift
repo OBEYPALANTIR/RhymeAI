@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct RhymeSchemeDisplayView: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let rhymeContext: RhymeContext
     let activeScheme: String
 
@@ -20,7 +22,7 @@ struct RhymeSchemeDisplayView: View {
                             Text(letter)
                                 .font(.system(.caption, design: .monospaced))
                                 .fontWeight(.bold)
-                                .foregroundColor(isCurrent ? .indigo : .secondary.opacity(0.6))
+                                .foregroundColor(isCurrent ? appearance.palette.action : appearance.palette.secondaryInk.opacity(0.75))
                                 .frame(width: RhymeAITokens.Spacing.md, alignment: .leading)
 
                             if line.trimmingCharacters(in: .whitespaces).isEmpty && isCurrent {
@@ -44,11 +46,11 @@ struct RhymeSchemeDisplayView: View {
                 .padding(RhymeAITokens.Spacing.sm)
             }
             .frame(maxHeight: 160)
-            .background(Color(UIColor.secondarySystemBackground).opacity(0.72))
+            .background(appearance.palette.raisedSurface)
             .clipShape(RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md))
             .overlay(
                 RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md)
-                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: RhymeAITokens.Spacing.hairline)
+                    .strokeBorder(appearance.palette.outline, lineWidth: RhymeAITokens.Spacing.hairline)
             )
         }
     }

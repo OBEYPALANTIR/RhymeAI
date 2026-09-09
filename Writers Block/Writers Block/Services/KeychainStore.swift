@@ -10,7 +10,8 @@ protocol KeychainStore: AnyObject {
     /// unavailable) so callers can tell the user instead of silently losing the key.
     @discardableResult
     func setKey(provider: String, key: String) -> Bool
-    func deleteKey(provider: String)
+    @discardableResult
+    func deleteKey(provider: String) -> Bool
     func allKeys() -> [String: String]
     func clear()
 }
@@ -60,9 +61,11 @@ final class SystemKeychainStore: KeychainStore {
         return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
     }
 
-    func deleteKey(provider: String) {
+    @discardableResult
+    func deleteKey(provider: String) -> Bool {
         let query = baseQuery(for: provider)
-        _ = SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     func allKeys() -> [String: String] {
@@ -71,7 +74,7 @@ final class SystemKeychainStore: KeychainStore {
 
     func clear() {
         for provider in Self.supportedProviders {
-            deleteKey(provider: provider)
+            _ = deleteKey(provider: provider)
         }
     }
 
@@ -95,7 +98,11 @@ final class InMemoryKeychainStore: KeychainStore {
         storage[provider] = key
         return true
     }
-    func deleteKey(provider: String) { storage.removeValue(forKey: provider) }
+    @discardableResult
+    func deleteKey(provider: String) -> Bool {
+        storage.removeValue(forKey: provider)
+        return true
+    }
     func allKeys() -> [String: String] {
         Dictionary(uniqueKeysWithValues: Self.supportedProviders.map { ($0, storage[$0] ?? "") })
     }
@@ -119,11 +126,13 @@ enum ApiKeyMigration {
                   !legacyValue.isEmpty else {
                 continue
             }
-            if secure.getKey(provider: provider).isEmpty {
-                secure.setKey(provider: provider, key: legacyValue)
-                migrated = true
+            if !secure.getKey(provider: provider).isEmpty {
+                defaults.removeObject(forKey: defaultsKey)
+                continue
             }
+            guard secure.setKey(provider: provider, key: legacyValue) else { continue }
             defaults.removeObject(forKey: defaultsKey)
+            migrated = true
         }
         return migrated
     }

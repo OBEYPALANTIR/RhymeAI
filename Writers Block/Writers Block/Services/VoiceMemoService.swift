@@ -91,9 +91,17 @@ final class VoiceMemoService {
     /// Remove a project's entire memo folder — live and trashed. Called on
     /// permanent delete and on trash-purge expiry so orphaned audio doesn't
     /// accumulate on disk.
-    nonisolated static func deleteMemosFolder(for projectId: String) {
-        try? FileManager.default.removeItem(at: memoFolder(for: projectId))
-        try? FileManager.default.removeItem(at: trashFolder(for: projectId))
+    @discardableResult
+    static func deleteMemosFolder(for projectId: String) -> Bool {
+        do {
+            let live = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: memosRoot())
+            let trash = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: memosTrashRoot())
+            try removeItemIfPresent(at: live, within: memosRoot())
+            try removeItemIfPresent(at: trash, within: memosTrashRoot())
+            return true
+        } catch {
+            return false
+        }
     }
 
     // MARK: - Recordings Trash
@@ -202,16 +210,38 @@ final class VoiceMemoService {
     }
 
     /// Permanently delete a trashed recording.
-    func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) {
+    @discardableResult
+    func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
         if activePlayURL == trashed.url { stopPlayback() }
-        try? FileManager.default.removeItem(at: trashed.url)
-        Self.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+        do {
+            try SyncIdentity.validateProjectId(trashed.projectId)
+            try SyncIdentity.validateFileName(trashed.originalName)
+            try Self.removeItemIfPresent(at: trashed.url, within: Self.memosTrashRoot())
+            Self.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+            return true
+        } catch {
+            lastError = "Couldn't remove the local recording file. Writers Block will retry cleanup."
+            return false
+        }
+    }
+
+    func deletePermanentRecordingFiles(projectId: String, fileName: String) {
+        do {
+            let live = try RecordingBackupManifest.localURL(projectId: projectId, fileName: fileName, memosRoot: Self.memosRoot())
+            _ = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: Self.memosTrashRoot())
+            try Self.removeItemIfPresent(at: live, within: Self.memosRoot())
+            for trashed in Self.trashedMemos() where trashed.projectId == projectId && trashed.originalName == fileName {
+                _ = permanentlyDeleteTrashedMemo(trashed)
+            }
+        } catch {
+            lastError = "Couldn't remove the local recording file. Writers Block will retry cleanup."
+        }
     }
 
     /// Delete every trashed recording whose retention window has passed.
     nonisolated static func purgeExpiredTrashedMemos(now: Date = Date()) {
         for trashed in trashedMemos() where trashed.deleteAfter <= now {
-            try? FileManager.default.removeItem(at: trashed.url)
+            try? removeItemIfPresent(at: trashed.url, within: memosTrashRoot())
             cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
         }
     }
@@ -228,8 +258,22 @@ final class VoiceMemoService {
             includingPropertiesForKeys: nil,
             options: .skipsHiddenFiles
         ), contents.isEmpty {
-            try? FileManager.default.removeItem(at: folder)
+            try? removeItemIfPresent(at: folder, within: memosTrashRoot())
         }
+    }
+
+    nonisolated private static func removeItemIfPresent(at url: URL, within root: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+
+        let standardizedURL = url.standardizedFileURL
+        let canonicalURL = standardizedURL.resolvingSymlinksInPath()
+        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+        let rootPrefix = canonicalRoot.path.hasSuffix("/") ? canonicalRoot.path : canonicalRoot.path + "/"
+        guard canonicalURL.path != canonicalRoot.path, canonicalURL.path.hasPrefix(rootPrefix) else {
+            throw SyncValidationError.pathOutsideMemoRoot
+        }
+
+        try FileManager.default.removeItem(at: standardizedURL)
     }
 
     // MARK: - Permission

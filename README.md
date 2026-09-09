@@ -192,11 +192,13 @@ To run the iOS Release gate from the repo root:
 ```
 
 The script builds a signed Release simulator app, scans the compiled binary for
-the Gemini key pattern, installs/launches it on the default iPhone 17 Pro OS 26.5
-simulator when available, then produces a signed generic iOS archive and scans
-the archive binary. Build and archive output defaults to a temporary directory
-outside the iCloud-synced repo; override with `IOS_RELEASE_WORK_DIR`,
-`IOS_ARCHIVE_PATH`, or `SKIP_ARCHIVE=1` for targeted checks.
+the Gemini key pattern, installs/launches it only on a booted disposable iPhone selected with
+`IOS_SIMULATOR_ID`, then produces a signed generic iOS archive and scans the
+archive binary. Existing Writers Block installations are refused. Use
+`SKIP_SIM_LAUNCH=1` for build-only work and `SKIP_ARCHIVE=1` to omit the archive.
+Build and archive outputs use a fresh temporary directory. Explicit
+`IOS_RELEASE_WORK_DIR`, `IOS_RELEASE_DERIVED_DATA`, and `IOS_ARCHIVE_PATH`
+outputs must not already exist; previous artifacts are preserved.
 
 To run the iOS Release walkthrough gate:
 
@@ -204,9 +206,10 @@ To run the iOS Release walkthrough gate:
 ./scripts/ios-release-walkthrough.sh
 ```
 
-The walkthrough builds and tests the app in Release configuration, then verifies
-song creation, save, export surface reachability, graceful no-key AI/rewrite
-handling, and relaunch persistence.
+The walkthrough requires a fresh, booted disposable iPhone selected by
+`IOS_SIMULATOR_ID`. It builds and tests in Release configuration, exercising song
+creation, save, export reachability, no-key AI/rewrite handling, and relaunch
+persistence. Configured output paths must be new; existing files are preserved.
 
 To capture the iOS Release visual walkthrough:
 
@@ -214,8 +217,8 @@ To capture the iOS Release visual walkthrough:
 ./scripts/ios-release-visual-walkthrough.sh
 ```
 
-The visual walkthrough builds and tests the app in Release configuration on the
-default iPhone 17 Pro OS 26.5 simulator, then exports kept XCTest screenshots for
+The visual walkthrough builds and tests in Release configuration on the fresh,
+booted disposable iPhone selected by `IOS_SIMULATOR_ID`, then exports kept XCTest screenshots for
 welcome, populated editor plus keyboard/UnBlock placement, export sheet,
 assistant panel, graceful no-key assistant error, and graceful no-key rewrite
 error states under `artifacts/ios-release-visual-walkthrough/`.
@@ -226,10 +229,12 @@ To capture the iOS Release light/dark phone/iPad screenshot audit:
 ./scripts/ios-release-visual-audit.sh
 ```
 
-The audit builds the signed Release simulator app from a temporary directory,
-installs it on iPhone 17 Pro and iPad Pro 13-inch OS 26.5 simulators in light
-and dark appearance, verifies the process stays alive, and writes screenshots
-under `artifacts/ios-release-visual-audit/` for human review.
+The audit requires `IOS_SIMULATOR_ID` and `IOS_IPAD_SIMULATOR_ID` to identify
+booted, disposable phone and iPad simulators with no Writers Block installation.
+It builds a Release simulator app, installs once per target, captures light and
+dark appearances, and writes screenshots under `artifacts/ios-release-visual-audit/`
+for human review. It does not erase, uninstall, or select an existing target by
+name. `SKIP_BUILD=1` requires an explicit `IOS_VISUAL_AUDIT_DERIVED_DATA` path.
 
 To verify CloudKit readiness before the live two-device sync matrix:
 
@@ -240,11 +245,13 @@ To verify CloudKit readiness before the live two-device sync matrix:
 Then use `/Users/tylermanring/Documents/RhymeAI/docs/CLOUDKIT_SYNC_CHECKLIST.md`
 for the iCloud-signed-in simulator/device matrix.
 
-To verify iOS Local provider behavior on a simulator/device:
+To check Apple Foundation Models availability on a booted disposable iPhone simulator:
 
 ```sh
-./scripts/ios-local-provider-smoke.sh
+IOS_SIMULATOR_ID='<empty-disposable-iphone-udid>' ./scripts/ios-local-provider-smoke.sh
 ```
 
 The smoke passes when Apple Foundation Models either return non-empty suggestions
-or report a user-facing on-device availability reason.
+or report a user-facing on-device availability reason. It preserves existing
+installations and build outputs. This is an availability check; it does not
+verify loading the accepted GGUF, local inference quality, or the in-app writing flow.

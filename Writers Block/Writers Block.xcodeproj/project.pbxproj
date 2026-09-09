@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		78A34B002F837D260033E904 /* llama in Frameworks */ = {isa = PBXBuildFile; productRef = 78A34B022F837D260033E904 /* llama */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		78A34A642F837D260033E904 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -53,6 +57,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				78A34B002F837D260033E904 /* llama in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -114,6 +119,7 @@
 			);
 			name = "Writers Block";
 			packageProductDependencies = (
+				78A34B022F837D260033E904 /* llama */,
 			);
 			productName = "Writers Block";
 			productReference = 78A34A542F837D250033E904 /* Writers Block.app */;
@@ -201,6 +207,9 @@
 			productRefGroup = 78A34A552F837D250033E904 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				78A34B012F837D260033E904 /* XCLocalSwiftPackageReference "LlamaFramework" */,
+			);
 			targets = (
 				78A34A532F837D250033E904 /* Writers Block */,
 				78A34A622F837D260033E904 /* Writers BlockTests */,
@@ -269,6 +278,20 @@
 			targetProxy = 78A34A6E2F837D260033E904 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		78A34B012F837D260033E904 /* XCLocalSwiftPackageReference "LlamaFramework" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = LlamaFramework;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		78A34B022F837D260033E904 /* llama */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = llama;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		78A34A752F837D260033E904 /* Debug */ = {
@@ -406,7 +429,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Writers Block/Writers Block.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -424,7 +447,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
-					"@executable_path/../Frameworks",
+					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-Block";
@@ -451,7 +474,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Writers Block/Writers Block.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -469,7 +492,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
-					"@executable_path/../Frameworks",
+					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-Block";
@@ -492,7 +515,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -518,7 +541,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -543,9 +566,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-BlockUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -562,9 +586,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-BlockUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";

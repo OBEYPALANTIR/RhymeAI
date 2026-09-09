@@ -8,14 +8,13 @@ import Testing
 /// Android's gemmaInstructionPrompt() — chat template must be stable across
 /// platforms so the model behaves identically.
 struct GemmaPromptTemplateTests {
-    @Test func gemmaPromptWrapsUserTurn() {
+    @Test func gemmaPromptMatchesCanonicalMachineWrapperExactly() {
         let input = "Write a verse about midnight roads."
-        let wrapped = GGUFModelService.gemmaPrompt(input)
+        let expected = "<start_of_turn>user\n\(input)\n<end_of_turn>\n<start_of_turn>model"
 
-        #expect(wrapped.hasPrefix("<start_of_turn>user\n"))
-        #expect(wrapped.contains(input))
-        #expect(wrapped.contains("<end_of_turn>"))
-        #expect(wrapped.hasSuffix("<start_of_turn>model\n"))
+        #expect(GGUFModelService.gemmaPrompt(input) == expected)
+        #expect(GGUFModelService.gemmaPrompt(expected) == expected)
+        #expect(GGUFModelService.gemmaPrompt("\(expected)\n") == expected)
     }
 
     @Test func gemmaPromptPreservesNewlinesInPrompt() {
@@ -40,8 +39,8 @@ struct GGUFMarkerStrippingTests {
         #expect(cleaned == "This is the output")
     }
 
-    @Test func stripsModelRoleLabel() {
-        let raw = "model\nActual output here"
+    @Test func stripsTaggedModelRoleLabel() {
+        let raw = "<model>\nActual output here\n</model>"
         let cleaned = GGUFModelService.stripMarkers(raw)
         #expect(cleaned == "Actual output here")
     }
@@ -116,41 +115,69 @@ struct GGUFRoutingDecisionTests {
     // shouldUseGemma returns false when engine is Apple Intelligence regardless
     // of whether GGUF files are present.
     @Test func appleEngineNeverRoutesToGemma() {
-        let defaults = UserDefaults.standard
-        let original = defaults.string(forKey: "ggufEngineChoice")
-        defer {
-            if let r = original { defaults.set(r, forKey: "ggufEngineChoice") }
-            else { defaults.removeObject(forKey: "ggufEngineChoice") }
-        }
-
-        GGUFEngineChoice.appleIntelligence.save()
-        // Even if a GGUF magically exists, Apple engine must short-circuit.
-        let result = AIService.shouldUseGemma()
+        let result = AIService.shouldUseGemma(
+            engineChoice: .appleIntelligence,
+            ggufPath: "/tmp/model.gguf"
+        )
         #expect(result == false)
     }
 
     // shouldUseGemma returns false when engine is Gemma but no GGUF exists
     // (the models directory is either absent or empty).
     @Test func gemmaEngineWithNoFileReturnsFalse() {
-        let defaults = UserDefaults.standard
-        let original = defaults.string(forKey: "ggufEngineChoice")
-        defer {
-            if let r = original { defaults.set(r, forKey: "ggufEngineChoice") }
-            else { defaults.removeObject(forKey: "ggufEngineChoice") }
-        }
+        let result = AIService.shouldUseGemma(engineChoice: .gemma, ggufPath: nil)
+        #expect(result == false)
+    }
+}
 
-        GGUFEngineChoice.gemma.save()
-        // In the test sandbox, no GGUF has been downloaded, so directory is
-        // either missing or has no .gguf files.
-        // We can't guarantee the models directory is empty in all CI configs,
-        // so only assert the general correctness: if the real device has no
-        // GGUF then false is returned. This test is a logic sanity check,
-        // not a file-system mutation test.
-        let result = AIService.shouldUseGemma()
-        // On CI / simulator without any model: must be false.
-        // On a device where user downloaded a GGUF: could be true, skip assertion.
-        if AIService.firstGGUFPath() == nil {
-            #expect(result == false)
+@Suite(.serialized)
+struct GGUFCustomModelRegistryTests {
+    @Test func customModelRegistrationAndSelectionSurviveReload() throws {
+        let suiteName = "GGUFCustomModelRegistryTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let modelURL = directory.appendingPathComponent("custom-night-drive.gguf")
+        let header = Data([
+            0x47, 0x47, 0x55, 0x46,
+            0x03, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        FileManager.default.createFile(atPath: modelURL.path, contents: header)
+        let model = GGUFCustomModel(
+            id: "custom-night-drive",
+            displayName: "Night Drive",
+            fileName: modelURL.lastPathComponent
+        )
+
+        GGUFCustomModelRegistry.save([model], defaults: defaults)
+        GGUFModelSelection.save(fileName: model.fileName, defaults: defaults)
+
+        #expect(GGUFCustomModelRegistry.models(defaults: defaults) == [model])
+        #expect(
+            GGUFModelSelection.resolvedModelURL(
+                defaults: defaults,
+                modelsDirectory: directory
+            ) == modelURL
+        )
+    }
+}
+
+struct GGUFCustomModelValidationTests {
+    @Test func rejectsTruncatedMagicOnlyFile() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).gguf")
+        try Data("GGUF".utf8).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        do {
+            try GGUFModelCatalog.validateCustomFile(at: fileURL)
+            Issue.record("Expected a truncated GGUF header to be rejected")
+        } catch AIServiceError.localModelUnavailable {
         }
     }
 }
@@ -191,6 +218,17 @@ struct GGUFModelStubTests {
     }
 }
 
+struct GGUFLlamaFrameworkEmbeddingTests {
+    @Test func appBundleContainsLinkedLlamaFramework() {
+        let frameworkURL = Bundle.main.privateFrameworksURL?
+            .appendingPathComponent("llama.framework/llama")
+
+        #expect(frameworkURL != nil)
+        #expect(FileManager.default.fileExists(atPath: frameworkURL?.path ?? ""))
+        #expect(GGUFModelService.isEngineAvailable)
+    }
+}
+
 // MARK: - Gemma rewrite prompt: punchUp uses raw instruction (no softening)
 
 struct GemmaRewritePromptTests {
@@ -222,5 +260,43 @@ struct GemmaRewritePromptTests {
             rejectedCandidates: []
         )
         #expect(prompt.contains(RewriteAction.rephrase.instruction))
+    }
+}
+
+// MARK: - Segmented download planning
+
+/// The download plan must stay byte-identical to Android's
+/// `planDownloadSegments`, so a model fetched on either platform is assembled
+/// from the same spans and hashes to the same digest.
+struct GGUFDownloadPlanTests {
+    @Test func segmentsCoverEveryByteContiguously() {
+        let total: Int64 = 24 * 1024 * 1024 + 5
+        let segments = GGUFDownloadPlan.segments(totalBytes: total)
+
+        #expect(segments.count == 3)
+        #expect(segments.first?.start == 0)
+        #expect(segments.last?.endInclusive == total - 1)
+        #expect(segments.reduce(0) { $0 + $1.size } == total)
+        for (left, right) in zip(segments, segments.dropFirst()) {
+            #expect(left.endInclusive + 1 == right.start)
+        }
+        let sizes = segments.map(\.size)
+        #expect((sizes.max() ?? 0) - (sizes.min() ?? 0) <= 1)
+    }
+
+    @Test func smallFilesCollapseToASingleConnection() {
+        let segments = GGUFDownloadPlan.segments(totalBytes: 64 * 1024)
+        #expect(segments.count == 1)
+        #expect(segments[0].start == 0)
+        #expect(segments[0].endInclusive == 64 * 1024 - 1)
+    }
+
+    @Test func shippedModelSizesSplitAcrossEveryConnection() {
+        for model in GGUFModelCatalog.models {
+            let segments = GGUFDownloadPlan.segments(totalBytes: model.expectedBytes)
+            #expect(segments.count == GGUFDownloadPlan.segmentCount)
+            #expect(segments.reduce(0) { $0 + $1.size } == model.expectedBytes)
+            #expect(segments.last?.endInclusive == model.expectedBytes - 1)
+        }
     }
 }

@@ -122,6 +122,20 @@ struct BackupCoreTests {
         }
     }
 
+    @Test func oauthCallbackRequiresMatchingState() throws {
+        let valid = try #require(URL(string: "com.example:/oauth2redirect/google?code=test-code&state=expected"))
+        let mismatched = try #require(URL(string: "com.example:/oauth2redirect/google?code=test-code&state=other"))
+        let missing = try #require(URL(string: "com.example:/oauth2redirect/google?code=test-code"))
+
+        #expect(try GoogleDriveOAuthService.authorizationCode(from: valid, expectedState: "expected") == "test-code")
+        #expect(throws: BackupError.invalidResponse) {
+            _ = try GoogleDriveOAuthService.authorizationCode(from: mismatched, expectedState: "expected")
+        }
+        #expect(throws: BackupError.invalidResponse) {
+            _ = try GoogleDriveOAuthService.authorizationCode(from: missing, expectedState: "expected")
+        }
+    }
+
     @MainActor
     @Test func shortCloudBackupPassphraseIsRejectedBeforeStorage() {
         let backupService = FakeCloudBackupService()
@@ -206,11 +220,10 @@ struct BackupCoreTests {
         try await harness.service.backupNow(modelContext: harness.context)
 
         let blobEnvelope = try #require(harness.drive.content(named: SyncBlob.driveFileName))
-        let blobPlaintext = try SyncBlobCrypto.open(blobEnvelope, passphrase: passphrase)
-        let blob = try SyncJSON.decoder.decode(SyncBlob.self, from: blobPlaintext)
+        let blob = try SyncBlobCrypto.openManifest(blobEnvelope, passphrase: passphrase)
         #expect(blob.projects.map(\.id) == ["project-1"])
         #expect(blob.recordings.map(\.driveName) == ["rec_project-1_take 1.m4a.enc"])
-        #expect(String(data: blobPlaintext, encoding: .utf8)?.contains("apiKey") == false)
+        #expect(String(data: try SyncJSON.encoder.encode(blob), encoding: .utf8)?.contains("apiKey") == false)
 
         let recordingEnvelope = try #require(harness.drive.content(named: "rec_project-1_take 1.m4a.enc"))
         let recordingPlaintext = try SyncBlobCrypto.open(recordingEnvelope, passphrase: passphrase)
@@ -245,15 +258,14 @@ struct BackupCoreTests {
         )
         harness.drive.seed(
             name: SyncBlob.driveFileName,
-            content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(remoteBlob), passphrase: passphrase)
+            content: try SyncBlobCrypto.sealManifest(remoteBlob, passphrase: passphrase)
         )
         try harness.service.updatePassphrase(passphrase)
 
         try await harness.service.backupNow(modelContext: harness.context)
 
         let uploadedEnvelope = try #require(harness.drive.content(named: SyncBlob.driveFileName))
-        let uploadedPlaintext = try SyncBlobCrypto.open(uploadedEnvelope, passphrase: passphrase)
-        let uploadedBlob = try SyncJSON.decoder.decode(SyncBlob.self, from: uploadedPlaintext)
+        let uploadedBlob = try SyncBlobCrypto.openManifest(uploadedEnvelope, passphrase: passphrase)
         #expect(Set(uploadedBlob.projects.map(\.id)) == Set(["local-project", "remote-project"]))
     }
 
@@ -298,7 +310,7 @@ struct BackupCoreTests {
             savedAt: Date(timeIntervalSince1970: 1_700_000_057),
             savedByClientId: "remote-client"
         )
-        let originalEnvelope = try SyncBlobCrypto.seal(SyncJSON.encoder.encode(remoteBlob), passphrase: passphrase)
+        let originalEnvelope = try SyncBlobCrypto.sealManifest(remoteBlob, passphrase: passphrase)
         harness.drive.seed(name: SyncBlob.driveFileName, content: originalEnvelope)
         try harness.service.updatePassphrase("wrong horse battery staple")
 
@@ -349,20 +361,19 @@ struct BackupCoreTests {
         )
         harness.drive.seed(
             name: SyncBlob.driveFileName,
-            content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(initialRemoteBlob), passphrase: passphrase)
+            content: try SyncBlobCrypto.sealManifest(initialRemoteBlob, passphrase: passphrase)
         )
         harness.drive.replace(
             name: SyncBlob.driveFileName,
             onFind: 2,
-            content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(lateRemoteBlob), passphrase: passphrase)
+            content: try SyncBlobCrypto.sealManifest(lateRemoteBlob, passphrase: passphrase)
         )
         try harness.service.updatePassphrase(passphrase)
 
         try await harness.service.backupNow(modelContext: harness.context)
 
         let uploadedEnvelope = try #require(harness.drive.content(named: SyncBlob.driveFileName))
-        let uploadedPlaintext = try SyncBlobCrypto.open(uploadedEnvelope, passphrase: passphrase)
-        let uploadedBlob = try SyncJSON.decoder.decode(SyncBlob.self, from: uploadedPlaintext)
+        let uploadedBlob = try SyncBlobCrypto.openManifest(uploadedEnvelope, passphrase: passphrase)
         #expect(Set(uploadedBlob.projects.map(\.id)) == Set(["local-project", "initial-remote-project", "late-remote-project"]))
     }
 
@@ -384,7 +395,7 @@ struct BackupCoreTests {
             savedAt: Date(timeIntervalSince1970: 1_700_000_021),
             savedByClientId: "remote"
         )
-        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(blob), passphrase: passphrase))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlobCrypto.sealManifest(blob, passphrase: passphrase))
         harness.drive.seed(name: recording.driveName, content: try SyncBlobCrypto.seal(remoteMemo, passphrase: passphrase))
         try harness.service.updatePassphrase(passphrase)
 
@@ -424,15 +435,14 @@ struct BackupCoreTests {
         )
         harness.drive.seed(
             name: SyncBlob.driveFileName,
-            content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(remoteBlob), passphrase: passphrase)
+            content: try SyncBlobCrypto.sealManifest(remoteBlob, passphrase: passphrase)
         )
         try harness.service.updatePassphrase(passphrase)
 
         try await harness.service.restoreNow(modelContext: harness.context)
 
         let pushedManifestEnvelope = try #require(harness.drive.content(named: SyncBlob.driveFileName))
-        let pushedManifestData = try SyncBlobCrypto.open(pushedManifestEnvelope, passphrase: passphrase)
-        let pushedManifest = try SyncJSON.decoder.decode(SyncBlob.self, from: pushedManifestData)
+        let pushedManifest = try SyncBlobCrypto.openManifest(pushedManifestEnvelope, passphrase: passphrase)
         #expect(Set(pushedManifest.projects.map(\.id)) == Set(["local-project"]))
         #expect(pushedManifest.recordings.map(\.driveName) == ["rec_local-project_restore-push.m4a.enc"])
 
@@ -467,7 +477,7 @@ struct BackupCoreTests {
             savedAt: timestamp,
             savedByClientId: "remote"
         )
-        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlobCrypto.seal(SyncJSON.encoder.encode(blob), passphrase: passphrase))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlobCrypto.sealManifest(blob, passphrase: passphrase))
         harness.drive.seed(name: recording.driveName, content: try SyncBlobCrypto.seal(remoteMemo, passphrase: passphrase))
         try harness.service.updatePassphrase(passphrase)
 
@@ -477,13 +487,153 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test func restorePublishesPermanentDeletionBeforeRemovingRemoteContent() async throws {
+        let harness = try makeHarness()
+        let remoteMemo = Data([7, 7, 7])
+        let recording = SyncRecordingManifestEntry(
+            projectId: "gone",
+            fileName: "take.m4a",
+            driveName: "rec_gone_take.m4a.enc",
+            sizeBytes: Int64(remoteMemo.count),
+            modifiedAt: Date(timeIntervalSince1970: 2_000_000_000),
+            sha256: SHA256.hash(data: remoteMemo).map { String(format: "%02x", $0) }.joined()
+        )
+        let staleRemote = SyncBlob(
+            projects: [SyncSongProject(id: "gone", title: "Stale", lyrics: "stale lyric", theme: "", updatedAt: Date(timeIntervalSince1970: 2_000_000_000))],
+            recordings: [recording],
+            savedAt: Date(timeIntervalSince1970: 2_000_000_000),
+            savedByClientId: "stale-peer"
+        )
+        harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 1))
+        try harness.context.save()
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlobCrypto.sealManifest(staleRemote, passphrase: passphrase))
+        harness.drive.seed(name: recording.driveName, content: try SyncBlobCrypto.seal(remoteMemo, passphrase: passphrase))
+        try harness.service.updatePassphrase(passphrase)
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        let manifestEnvelope = try #require(harness.drive.content(named: SyncBlob.driveFileName))
+        let manifest = try SyncBlobCrypto.openManifest(manifestEnvelope, passphrase: passphrase)
+        #expect(manifest.projects.isEmpty)
+        #expect(manifest.recordings.isEmpty)
+        #expect(manifest.deletions == [SyncDeletion(projectId: "gone", deletedAt: 1)])
+        #expect(harness.drive.content(named: recording.driveName) == nil)
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).count == 1)
+    }
+
+    @MainActor
+    @Test func backupCanonicalizesTombstonesWithoutAnExistingRemoteManifest() async throws {
+        let harness = try makeHarness()
+        harness.context.insert(SongProject(id: "gone", title: "Stale", lyrics: "must stay deleted"))
+        harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 1))
+        try harness.context.save()
+        try harness.service.updatePassphrase(passphrase)
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        let envelope = try #require(harness.drive.content(named: SyncBlob.driveFileName))
+        let manifest = try SyncBlobCrypto.openManifest(envelope, passphrase: passphrase)
+        #expect(manifest.projects.isEmpty)
+        #expect(manifest.trashed.isEmpty)
+        #expect(manifest.recordings.isEmpty)
+        #expect(manifest.deletions == [SyncDeletion(projectId: "gone", deletedAt: 1)])
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+    }
+
+    @MainActor
+    @Test func failedRemoteRecordingCleanupRetriesFromDurableProjectTombstone() async throws {
+        let harness = try makeHarness()
+        let recording = SyncRecordingManifestEntry(
+            projectId: "gone",
+            fileName: "take.m4a",
+            driveName: "rec_gone_take.m4a.enc",
+            sizeBytes: 3,
+            modifiedAt: Date(timeIntervalSince1970: 100),
+            sha256: SHA256.hash(data: Data([1, 2, 3])).map { String(format: "%02x", $0) }.joined()
+        )
+        let remote = SyncBlob(
+            projects: [SyncSongProject(id: "gone", title: "Stale", lyrics: "stale", theme: "", updatedAt: Date(timeIntervalSince1970: 100))],
+            recordings: [recording],
+            savedAt: Date(timeIntervalSince1970: 100),
+            savedByClientId: "stale-peer"
+        )
+        harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 1))
+        try harness.context.save()
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.seed(name: recording.driveName, content: try SyncBlobCrypto.seal(Data([1, 2, 3]), passphrase: passphrase))
+        harness.drive.failNextDelete(named: recording.driveName)
+        try harness.service.updatePassphrase(passphrase)
+
+        await #expect(throws: BackupError.self) {
+            try await harness.service.restoreNow(modelContext: harness.context)
+        }
+        #expect(harness.drive.content(named: recording.driveName) != nil)
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        #expect(harness.drive.content(named: recording.driveName) == nil)
+        let envelope = try #require(harness.drive.content(named: SyncBlob.driveFileName))
+        let manifest = try SyncBlobCrypto.openManifest(envelope, passphrase: passphrase)
+        #expect(manifest.deletions == [SyncDeletion(projectId: "gone", deletedAt: 1)])
+        #expect(manifest.recordings.isEmpty)
+    }
+
+    @MainActor
+    @Test func networkWaitCannotOverwriteNewerPersistedWritingAtApply() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(
+            id: "draft",
+            title: "Draft",
+            lyrics: "before network wait",
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        harness.context.insert(project)
+        try harness.context.save()
+        harness.drive.beforeManifestWrite = {
+            project.lyrics = "edited while upload waited"
+            project.updatedAt = Date(timeIntervalSince1970: 200)
+            try harness.context.save()
+        }
+        try harness.service.updatePassphrase(passphrase)
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        let stored = try #require(harness.context.fetch(FetchDescriptor<SongProject>()).first)
+        #expect(stored.lyrics == "edited while upload waited")
+        #expect(stored.updatedAt == Date(timeIntervalSince1970: 200))
+    }
+
+    @MainActor
+    @Test func networkWaitCannotResurrectAConcurrentPermanentDeletion() async throws {
+        let harness = try makeHarness()
+        harness.context.insert(SongProject(
+            id: "draft",
+            title: "Draft",
+            lyrics: "delete while upload waits",
+            updatedAt: Date(timeIntervalSince1970: 100)
+        ))
+        try harness.context.save()
+        harness.drive.beforeManifestWrite = {
+            harness.context.insert(SyncDeletionRecord(projectId: "draft", deletedAt: 200))
+            try harness.context.save()
+        }
+        try harness.service.updatePassphrase(passphrase)
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.projectId) == ["draft"])
+    }
+
+    @MainActor
     private func makeHarness() throws -> BackupHarness {
         try makeHarness(oauthProvider: FakeOAuthProvider())
     }
 
     @MainActor
     private func makeHarness(oauthProvider: OAuthAccessTokenProvider) throws -> BackupHarness {
-        let schema = Schema([SongProject.self, TrashedSongProject.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let memosRoot = FileManager.default.temporaryDirectory.appendingPathComponent("BackupCoreTests-\(UUID().uuidString)", isDirectory: true)
@@ -562,6 +712,8 @@ private final class FakeDriveClient: DriveAppDataClient {
     private var filesByName: [String: StoredFile] = [:]
     private var findCountsByName: [String: Int] = [:]
     private var replacementsByFindCount: [String: [Int: Data]] = [:]
+    private var deleteFailuresByName: [String: Int] = [:]
+    var beforeManifestWrite: (@MainActor () throws -> Void)?
 
     func seed(name: String, content: Data) {
         let file = DriveAppDataFile(id: UUID().uuidString, name: name, modifiedTime: "seed-\(UUID().uuidString)", version: UUID().uuidString)
@@ -574,6 +726,10 @@ private final class FakeDriveClient: DriveAppDataClient {
 
     func replace(name: String, onFind findCount: Int, content: Data) {
         replacementsByFindCount[name, default: [:]][findCount] = content
+    }
+
+    func failNextDelete(named name: String) {
+        deleteFailuresByName[name, default: 0] += 1
     }
 
     func findFile(named name: String, accessToken: String) async throws -> DriveAppDataFile? {
@@ -597,6 +753,7 @@ private final class FakeDriveClient: DriveAppDataClient {
     }
 
     func uploadNewFile(named name: String, mimeType: String, content: Data, accessToken: String) async throws -> DriveAppDataFile {
+        try await runManifestWriteHookIfNeeded(name: name)
         let file = DriveAppDataFile(id: UUID().uuidString, name: name, modifiedTime: "upload-\(UUID().uuidString)", version: UUID().uuidString)
         filesByName[name] = StoredFile(file: file, content: content)
         return file
@@ -604,6 +761,7 @@ private final class FakeDriveClient: DriveAppDataClient {
 
     func updateFile(id: String, mimeType: String, content: Data, accessToken: String) async throws {
         guard let name = filesByName.first(where: { $0.value.file.id == id })?.key else { return }
+        try await runManifestWriteHookIfNeeded(name: name)
         let existing = filesByName[name]?.file
         let file = DriveAppDataFile(
             id: existing?.id ?? id,
@@ -612,5 +770,20 @@ private final class FakeDriveClient: DriveAppDataClient {
             version: UUID().uuidString
         )
         filesByName[name] = StoredFile(file: file, content: content)
+    }
+
+    func deleteFile(id: String, accessToken: String) async throws {
+        guard let name = filesByName.first(where: { $0.value.file.id == id })?.key else { return }
+        if let failures = deleteFailuresByName[name], failures > 0 {
+            deleteFailuresByName[name] = failures - 1
+            throw BackupError.network("Synthetic recording cleanup failure")
+        }
+        filesByName.removeValue(forKey: name)
+    }
+
+    private func runManifestWriteHookIfNeeded(name: String) async throws {
+        guard name == SyncBlob.driveFileName, let hook = beforeManifestWrite else { return }
+        beforeManifestWrite = nil
+        try await MainActor.run { try hook() }
     }
 }

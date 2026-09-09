@@ -3,72 +3,80 @@ import SwiftUI
 struct WelcomeView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.appAppearanceStyle) private var appearance
 
     private var isRegular: Bool { horizontalSizeClass == .regular }
+    private var usesHorizontalCards: Bool { isRegular && !dynamicTypeSize.isAccessibilitySize }
 
     var body: some View {
         ZStack {
-            Color(UIColor.systemBackground).ignoresSafeArea()
+            AppWritingBackground()
 
-            // Background gradient
-            LinearGradient(
-                colors: [Color.indigo.opacity(0.1), Color.clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: dynamicTypeSize.isAccessibilitySize ? RhymeAITokens.Spacing.md : proxy.size.height * 0.08)
 
-            VStack(spacing: 0) {
-                Spacer()
-
-                // App Icon
-                Image("BrandIcon")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: RhymeAITokens.Touch.prominent, height: RhymeAITokens.Touch.prominent)
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-                    )
-                    .shadow(color: .indigo.opacity(0.32), radius: 22, y: 10)
-                    .padding(10)
-                    .liquidGlassSurface(cornerRadius: 30, tint: .indigo.opacity(0.06))
-                .padding(.bottom, RhymeAITokens.Spacing.xl)
-
-                // Title
-                Text("Writers Block")
-                    .font(.system(.largeTitle, design: .serif, weight: .bold))
-                    .foregroundStyle(Color.indigo)
-                    .padding(.bottom, 8)
-
-                // Subtitle
-                Text("Your intelligent songwriting companion.\nStart from scratch, load a project, or pick a template.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: RhymeAITokens.Layout.assistantReadableWidth)
-                    .padding(.horizontal, RhymeAITokens.Spacing.xl)
-                    .padding(.bottom, RhymeAITokens.Spacing.xxl)
-
-                // Action Cards — horizontal on iPad, vertical on iPhone
-                Group {
-                    if isRegular {
-                        HStack(spacing: RhymeAITokens.Spacing.lg) {
-                            cardContent
+                        if !dynamicTypeSize.isAccessibilitySize {
+                            // App Icon
+                            Image("BrandIcon")
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: RhymeAITokens.Touch.prominent, height: RhymeAITokens.Touch.prominent)
+                                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+                                )
+                                .shadow(color: appearance.palette.primaryInk.opacity(0.14), radius: 18, y: 8)
+                                .padding(10)
+                                .liquidGlassSurface(cornerRadius: 30)
+                                .padding(.bottom, RhymeAITokens.Spacing.xl)
                         }
-                    } else {
-                        VStack(spacing: RhymeAITokens.Spacing.lg) {
-                            cardContent
+
+                        // Title
+                        Text("Writers Block")
+                            .font(.system(.largeTitle, design: .serif, weight: .bold))
+                            .foregroundStyle(appearance.palette.primaryInk)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, RhymeAITokens.Spacing.xl)
+                            .padding(.bottom, RhymeAITokens.Spacing.xs)
+
+                        if !dynamicTypeSize.isAccessibilitySize {
+                            // Subtitle
+                            Text("Your intelligent songwriting companion.\nStart from scratch, load a project, or pick a template.")
+                                .font(.body)
+                                .foregroundStyle(appearance.palette.secondaryInk)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: RhymeAITokens.Layout.assistantReadableWidth)
+                                .padding(.horizontal, RhymeAITokens.Spacing.xl)
+                                .padding(.bottom, RhymeAITokens.Spacing.xxl)
                         }
+
+                        // Action Cards — horizontal on iPad, vertical at accessibility sizes.
+                        Group {
+                            if usesHorizontalCards {
+                                HStack(spacing: RhymeAITokens.Spacing.lg) {
+                                    cardContent
+                                }
+                            } else {
+                                VStack(spacing: RhymeAITokens.Spacing.lg) {
+                                    cardContent
+                                }
+                            }
+                        }
+                        .frame(maxWidth: RhymeAITokens.Layout.drawerMaxWidth + RhymeAITokens.Layout.drawerMinWidth)
+                        .padding(.horizontal, RhymeAITokens.Spacing.xl)
+                        .liquidGlassGroup(spacing: RhymeAITokens.Spacing.lg)
+
+                        Spacer(minLength: RhymeAITokens.Spacing.xxl)
                     }
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
                 }
-                .frame(maxWidth: RhymeAITokens.Layout.drawerMaxWidth + RhymeAITokens.Layout.drawerMinWidth)
-                .padding(.horizontal, RhymeAITokens.Spacing.xl)
-                .liquidGlassGroup(spacing: RhymeAITokens.Spacing.lg)
-
-                Spacer()
-                Spacer()
+                .scrollIndicators(.hidden)
             }
         }
     }
@@ -105,6 +113,8 @@ struct WelcomeView: View {
 }
 
 private struct WelcomeCard: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let icon: String
     let title: String
     let subtitle: String
@@ -118,18 +128,20 @@ private struct WelcomeCard: View {
                     // Vertical card layout for iPad horizontal arrangement
                     VStack(spacing: RhymeAITokens.Spacing.sm) {
                         Image(systemName: icon)
-                            .font(.title2)
-                            .foregroundStyle(.indigo)
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(appearance.palette.action)
                             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .indigo.opacity(0.16), fallbackOpacity: 0.10)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
 
                         VStack(spacing: RhymeAITokens.Spacing.xs) {
                             Text(title)
                                 .font(.headline)
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(appearance.palette.primaryInk)
+                                .fixedSize(horizontal: false, vertical: true)
                             Text(subtitle)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(appearance.palette.secondaryInk)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .multilineTextAlignment(.center)
                     }
@@ -139,31 +151,34 @@ private struct WelcomeCard: View {
                     // Horizontal card layout for iPhone
                     HStack(spacing: RhymeAITokens.Spacing.lg) {
                         Image(systemName: icon)
-                            .font(.title2)
-                            .foregroundStyle(.indigo)
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(appearance.palette.action)
                             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .indigo.opacity(0.16), fallbackOpacity: 0.10)
+                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
 
                         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                             Text(title)
                                 .font(.headline)
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(appearance.palette.primaryInk)
+                                .fixedSize(horizontal: false, vertical: true)
                             Text(subtitle)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(appearance.palette.secondaryInk)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-
-                        Spacer()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .layoutPriority(1)
 
                         Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundStyle(.secondary.opacity(0.5))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .frame(width: RhymeAITokens.Spacing.lg, height: RhymeAITokens.Spacing.lg)
                     }
                     .padding(RhymeAITokens.Spacing.lg)
                 }
             }
             .frame(minHeight: RhymeAITokens.Touch.minimum)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.08), interactive: true)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
         }
         .buttonStyle(.rhymePress)
     }
