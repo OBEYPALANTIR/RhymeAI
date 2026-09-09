@@ -231,12 +231,12 @@ struct SynonymTests {
             excluding: []
         )
 
-        let finalRunnerInput = GGUFModelService.gemmaPrompt(rawPrompt)
+        let finalRunnerInput = GGUFModelService.gemmaPrompt(rawPrompt, format: .gemmaLegacy)
         let expected = "<start_of_turn>user\n\(rawPrompt)\n<end_of_turn>\n<start_of_turn>model"
 
         #expect(!rawPrompt.contains("<start_of_turn>"))
         #expect(finalRunnerInput == expected)
-        #expect(GGUFModelService.gemmaPrompt(finalRunnerInput) == expected)
+        #expect(GGUFModelService.gemmaPrompt(finalRunnerInput, format: .gemmaLegacy) == expected)
     }
 
     @Test func localGGUFPromptUsesCanonicalSynonymContractStructure() {

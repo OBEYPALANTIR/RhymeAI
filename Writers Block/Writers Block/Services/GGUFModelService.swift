@@ -297,9 +297,24 @@ nonisolated final class GGUFModelStub: LocalGGUFRunner {
 
 // MARK: - Gemma helpers (always compiled — no llama dependency)
 
-/// Pure text utilities for Gemma chat format. These are factored out so that
-/// unit tests can exercise prompt template and marker-stripping logic without
-/// requiring the llama.cpp SPM package to be resolved.
+nonisolated enum GGUFPromptFormat: Equatable, Sendable {
+    case gemmaLegacy
+    case gemma4
+
+    static func resolve(architecture: String, chatTemplate: String) -> GGUFPromptFormat? {
+        let hasLegacyTurns = chatTemplate.contains("<start_of_turn>") && chatTemplate.contains("<end_of_turn>")
+        let hasGemma4Turns = chatTemplate.contains("<|turn>") && chatTemplate.contains("<turn|>")
+        switch architecture {
+        case "gemma4" where hasGemma4Turns && !hasLegacyTurns:
+            return .gemma4
+        case "gemma", "gemma2", "gemma3", "gemma3n":
+            return hasLegacyTurns && !hasGemma4Turns ? .gemmaLegacy : nil
+        default:
+            return nil
+        }
+    }
+}
+
 nonisolated enum GGUFModelService {
     /// True only when the llama.cpp engine is linked into this target.
     static var isEngineAvailable: Bool {
@@ -310,11 +325,17 @@ nonisolated enum GGUFModelService {
 #endif
     }
 
-    /// Wraps a user prompt in the Gemma instruction chat template.
-    /// Mirrors Android's AIService.gemmaInstructionPrompt().
-    static func gemmaPrompt(_ userPrompt: String) -> String {
-        let userMarker = "<start_of_turn>user\n"
-        let modelMarker = "\n<end_of_turn>\n<start_of_turn>model"
+    static func gemmaPrompt(_ userPrompt: String, format: GGUFPromptFormat) -> String {
+        let userMarker: String
+        let modelMarker: String
+        switch format {
+        case .gemmaLegacy:
+            userMarker = "<start_of_turn>user\n"
+            modelMarker = "\n<end_of_turn>\n<start_of_turn>model"
+        case .gemma4:
+            userMarker = "<|turn>user\n"
+            modelMarker = "<turn|>\n<|turn>model"
+        }
         var content = userPrompt
 
         while content.hasPrefix(userMarker) {
@@ -325,7 +346,7 @@ nonisolated enum GGUFModelService {
             content = String(normalized.dropFirst(userMarker.count).dropLast(modelMarker.count))
         }
 
-        return "\(userMarker)\(content)\(modelMarker)"
+        return "\(userMarker)\(content)\(modelMarker)" + (format == .gemma4 ? "\n" : "")
     }
 
     /// Strip tagged Gemma turn markers and bare `>` lines from raw model output.
@@ -368,6 +389,7 @@ actor GGUFLlamaService: LocalGGUFRunner {
     private var model: OpaquePointer?
     private var context: OpaquePointer?
     private var loadedPath: String?
+    private var promptFormat: GGUFPromptFormat?
     private var transactionIsActive = false
     private var transactionWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -399,11 +421,31 @@ actor GGUFLlamaService: LocalGGUFRunner {
             throw AIServiceError.localModelUnavailable(reason: "This GGUF model is not registered with RhymeAI.")
         }
 
-        let modelParams = llama_model_default_params()
+        var modelParams = llama_model_default_params()
+#if targetEnvironment(simulator)
+        // The simulator Metal device corrupts Gemma4 output; its CPU backend is verified.
+        modelParams.n_gpu_layers = 0
+#endif
         guard let loadedModel = llama_model_load_from_file(filePath, modelParams) else {
             throw AIServiceError.localModelUnavailable(
                 reason: "Failed to load GGUF model at \(filePath). File may be corrupt or incompatible."
             )
+        }
+
+        let architectureLength = llama_model_meta_val_str(loadedModel, "general.architecture", nil, 0)
+        guard architectureLength > 0,
+              let template = llama_model_chat_template(loadedModel, nil) else {
+            llama_model_free(loadedModel)
+            throw AIServiceError.localModelUnavailable(reason: "The selected GGUF does not declare a supported chat format.")
+        }
+        var architecture = [CChar](repeating: 0, count: Int(architectureLength) + 1)
+        llama_model_meta_val_str(loadedModel, "general.architecture", &architecture, architecture.count)
+        guard let format = GGUFPromptFormat.resolve(
+            architecture: String(cString: architecture),
+            chatTemplate: String(cString: template)
+        ) else {
+            llama_model_free(loadedModel)
+            throw AIServiceError.localModelUnavailable(reason: "The selected GGUF chat format is not supported. Choose a Gemma model with its original chat template.")
         }
 
         var ctxParams = llama_context_default_params()
@@ -421,11 +463,12 @@ actor GGUFLlamaService: LocalGGUFRunner {
         self.model = loadedModel
         self.context = ctx
         self.loadedPath = filePath
+        self.promptFormat = format
         loadedFlag.set(true)
     }
 
     func generate(prompt: String) async throws -> String {
-        guard let ctx = context, let model = model else {
+        guard let ctx = context, let model = model, let promptFormat else {
             throw AIServiceError.localModelUnavailable(
                 reason: "No GGUF model loaded. Download a Gemma model in Settings."
             )
@@ -435,7 +478,7 @@ actor GGUFLlamaService: LocalGGUFRunner {
         // Each request is a fresh single-turn conversation: drop KV state.
         llama_memory_clear(llama_get_memory(ctx), true)
 
-        let fullPrompt = GGUFModelService.gemmaPrompt(prompt)
+        let fullPrompt = GGUFModelService.gemmaPrompt(prompt, format: promptFormat)
         let utf8Length = Int32(fullPrompt.utf8.count)
         var tokens = [llama_token](repeating: 0, count: Int(utf8Length) + 64)
         // parse_special: the Gemma turn markers must map to their special tokens.
@@ -518,6 +561,7 @@ actor GGUFLlamaService: LocalGGUFRunner {
         context = nil
         model = nil
         loadedPath = nil
+        promptFormat = nil
         loadedFlag.set(false)
     }
 

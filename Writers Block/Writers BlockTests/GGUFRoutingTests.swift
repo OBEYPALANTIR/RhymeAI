@@ -4,22 +4,40 @@ import Testing
 
 // MARK: - Gemma prompt template
 
-/// Verify that GGUFModelService.gemmaPrompt produces the same shape as
-/// Android's gemmaInstructionPrompt() — chat template must be stable across
-/// platforms so the model behaves identically.
 struct GemmaPromptTemplateTests {
     @Test func gemmaPromptMatchesCanonicalMachineWrapperExactly() {
         let input = "Write a verse about midnight roads."
         let expected = "<start_of_turn>user\n\(input)\n<end_of_turn>\n<start_of_turn>model"
 
-        #expect(GGUFModelService.gemmaPrompt(input) == expected)
-        #expect(GGUFModelService.gemmaPrompt(expected) == expected)
-        #expect(GGUFModelService.gemmaPrompt("\(expected)\n") == expected)
+        #expect(GGUFModelService.gemmaPrompt(input, format: .gemmaLegacy) == expected)
+        #expect(GGUFModelService.gemmaPrompt(expected, format: .gemmaLegacy) == expected)
+        #expect(GGUFModelService.gemmaPrompt("\(expected)\n", format: .gemmaLegacy) == expected)
+    }
+
+    @Test func gemma4PromptUsesModelTurnTokensAndGenerationNewline() {
+        let input = "Write a verse about midnight roads."
+        let expected = "<|turn>user\n\(input)<turn|>\n<|turn>model\n"
+        #expect(GGUFModelService.gemmaPrompt(input, format: .gemma4) == expected)
+        #expect(GGUFModelService.gemmaPrompt(expected, format: .gemma4) == expected)
+    }
+
+    @Test func promptFormatRequiresMatchingModelMetadata() {
+        let legacy = "<start_of_turn>user <end_of_turn>"
+        let gemma4 = "<|turn>user <turn|>"
+        #expect(GGUFPromptFormat.resolve(architecture: "gemma4", chatTemplate: gemma4) == .gemma4)
+        for architecture in ["gemma", "gemma2", "gemma3", "gemma3n"] {
+            #expect(GGUFPromptFormat.resolve(architecture: architecture, chatTemplate: legacy) == .gemmaLegacy)
+            #expect(GGUFPromptFormat.resolve(architecture: architecture, chatTemplate: gemma4) == nil)
+        }
+        #expect(GGUFPromptFormat.resolve(architecture: "gemma4", chatTemplate: legacy) == nil)
+        #expect(GGUFPromptFormat.resolve(architecture: "gemma4", chatTemplate: gemma4 + legacy) == nil)
+        #expect(GGUFPromptFormat.resolve(architecture: "llama", chatTemplate: gemma4) == nil)
+        #expect(GGUFPromptFormat.resolve(architecture: "gemma4", chatTemplate: "") == nil)
     }
 
     @Test func gemmaPromptPreservesNewlinesInPrompt() {
         let input = "line one\nline two"
-        let wrapped = GGUFModelService.gemmaPrompt(input)
+        let wrapped = GGUFModelService.gemmaPrompt(input, format: .gemmaLegacy)
         #expect(wrapped.contains("line one\nline two"))
     }
 }
