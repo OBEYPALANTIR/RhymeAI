@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -30,7 +31,7 @@ data class LocalGenerationMetrics(
     val terminationReason: String
 )
 
-class LocalModelService {
+class LocalModelService : AutoCloseable {
     internal companion object {
         const val CONTEXT_LENGTH = 2048
         const val GENERATION_TIMEOUT_MS = 120_000L
@@ -220,6 +221,10 @@ class LocalModelService {
             _loadedModelPath = null
             loadedContext?.let { id -> llamaAndroid?.releaseContext(id) }
         }
+    }
+
+    override fun close() {
+        runBlocking { unload() }
     }
 }
 

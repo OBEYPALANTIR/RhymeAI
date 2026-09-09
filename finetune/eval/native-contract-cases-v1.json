@@ -1,0 +1,169 @@
+{
+  "manifestVersion": 1,
+  "contractSchema": "native-contract-v1.schema.json",
+  "baseSourceSha": "97e7cf0bb3920933a04262b123e609e0b769c923",
+  "sourceShaPolicy": "recordNativeProducerHeadAtCapture",
+  "modelSha256": "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+  "captureByPlatform": {
+    "ios": {
+      "evidenceKind": "contractExport",
+      "seed": {
+        "policy": "randomPerRequest",
+        "value": null,
+        "recordActualValueInExport": true
+      }
+    },
+    "android": {
+      "evidenceKind": "contractExport",
+      "seed": {
+        "policy": "engineDefault",
+        "value": -1,
+        "recordActualValueInExport": true
+      }
+    }
+  },
+  "cases": [
+    {
+      "caseId": "contract_suggestions_targeted_stanza",
+      "requestKind": "suggestions",
+      "request": {
+        "controls": {
+          "requestedCount": 6,
+          "theme": "city rain and returning home",
+          "targetRhymeLine": "The streetlights blur like stars against the rain",
+          "rhymeType": "PERFECT",
+          "rhymeScheme": "AABB",
+          "currentLetter": "B",
+          "currentSection": "VERSE",
+          "complexity": "MODERATE",
+          "useWholeSongContext": false
+        },
+        "localContext": {
+          "lyrics": "[Verse]\nThe last train hums beneath my feet\nOld names are fading from the street\nThe streetlights blur like stars against the rain",
+          "priorStanza": "The last train hums beneath my feet\nOld names are fading from the street\nThe streetlights blur like stars against the rain"
+        }
+      }
+    },
+    {
+      "caseId": "contract_suggestions_new_rhyme_context",
+      "requestKind": "suggestions",
+      "request": {
+        "controls": {
+          "requestedCount": 6,
+          "theme": "dawn over a quiet harbor",
+          "targetRhymeLine": null,
+          "rhymeType": "NEAR",
+          "rhymeScheme": "ABAB",
+          "currentLetter": "A",
+          "currentSection": "VERSE",
+          "complexity": "COMPLEX",
+          "useWholeSongContext": false
+        },
+        "localContext": {
+          "lyrics": "[Verse]\nRopes tap time against the mast\nBlue light gathers on the water",
+          "priorStanza": "Ropes tap time against the mast\nBlue light gathers on the water"
+        }
+      }
+    },
+    {
+      "caseId": "contract_rewrite_passage_structure",
+      "requestKind": "rewrite_passage",
+      "request": {
+        "controls": { "action": "REPHRASE" },
+        "localContext": {
+          "lyrics": "[Verse]\nI counted every mile\nYou watched the county line",
+          "selection": "I counted every mile\nYou watched the county line",
+          "currentSection": "VERSE"
+        }
+      }
+    },
+    {
+      "caseId": "contract_rewrite_passage_punch_up",
+      "requestKind": "rewrite_passage",
+      "request": {
+        "controls": { "action": "PUNCH_UP" },
+        "localContext": {
+          "lyrics": "[Chorus]\nWe held on through the night\nWe waited for the light",
+          "selection": "We held on through the night\nWe waited for the light",
+          "currentSection": "CHORUS"
+        }
+      }
+    },
+    {
+      "caseId": "heldout_rewrite_glow_reject_gleam",
+      "requestKind": "rewrite_word",
+      "request": {
+        "controls": { "action": "REPHRASE", "rejectedCandidates": ["gleam"] },
+        "localContext": {
+          "lyrics": "[Verse]\nThe dashboard lights glow above the wheel",
+          "selection": "glow",
+          "lineContext": "The dashboard lights glow above the wheel"
+        }
+      }
+    },
+    {
+      "caseId": "heldout_rewrite_crooked_reject_askew",
+      "requestKind": "rewrite_word",
+      "request": {
+        "controls": { "action": "REPHRASE", "rejectedCandidates": ["askew"] },
+        "localContext": {
+          "lyrics": "[Verse]\nTomatoes lean crooked on their stakes",
+          "selection": "crooked",
+          "lineContext": "Tomatoes lean crooked on their stakes"
+        }
+      }
+    },
+    {
+      "caseId": "heldout_synonyms_promise_noun",
+      "requestKind": "synonyms",
+      "request": {
+        "controls": { "limit": 5 },
+        "localContext": { "word": "promise", "lineContext": "I carried your promise through the storm" }
+      }
+    },
+    {
+      "caseId": "heldout_synonyms_promise_verb",
+      "requestKind": "synonyms",
+      "request": {
+        "controls": { "limit": 5 },
+        "localContext": { "word": "promise", "lineContext": "I promise to return before the dawn" }
+      }
+    },
+    {
+      "caseId": "heldout_synonyms_glow_noun",
+      "requestKind": "synonyms",
+      "request": {
+        "controls": { "limit": 5 },
+        "localContext": { "word": "glow", "lineContext": "The dashboard held a steady glow" }
+      }
+    },
+    {
+      "caseId": "heldout_synonyms_glow_verb",
+      "requestKind": "synonyms",
+      "request": {
+        "controls": { "limit": 5 },
+        "localContext": { "word": "glow", "lineContext": "The lanterns glow along the pier" }
+      }
+    },
+    {
+      "caseId": "heldout_synonyms_running_inflection",
+      "requestKind": "synonyms",
+      "request": {
+        "controls": { "limit": 5 },
+        "localContext": { "word": "running", "lineContext": "We followed running water through the pines" }
+      }
+    },
+    {
+      "caseId": "heldout_rewrite_walked_inflection",
+      "requestKind": "rewrite_word",
+      "request": {
+        "controls": { "action": "REPHRASE", "rejectedCandidates": ["marched"] },
+        "localContext": {
+          "lyrics": "[Verse]\nI walked the empty block at closing time",
+          "selection": "walked",
+          "lineContext": "I walked the empty block at closing time"
+        }
+      }
+    }
+  ]
+}

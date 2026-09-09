@@ -523,6 +523,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                suggestions = emptyList()
                 errorMessage = e.message ?: "Failed to get suggestions"
             } finally {
                 isLoading = false
@@ -1230,8 +1231,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        super.onCleared()
-        voiceMemoService.release()
+        try {
+            localModelService.close()
+        } finally {
+            voiceMemoService.release()
+            super.onCleared()
+        }
     }
 
     fun saveModel(model: AIModel) {

@@ -30,6 +30,7 @@ class NativePromptContractExportTest {
     private val json = Json { prettyPrint = true }
     private val compactJson = Json
     private val service = AIService()
+    private val sourceSha by lazy(::currentSourceSha)
 
     @Test
     fun exportsProductionPromptBuildersByteForByte() {
@@ -218,6 +219,23 @@ class NativePromptContractExportTest {
         println(json.encodeToString(records.first()))
     }
 
+    private fun currentSourceSha(): String {
+        val repoRoot = File("../../").canonicalFile
+        val process = ProcessBuilder("git", "rev-parse", "HEAD")
+            .directory(repoRoot)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        check(process.waitFor() == 0) { "Unable to resolve producer commit: $output" }
+        check(output.matches(Regex("[0-9a-f]{40}"))) { "Invalid producer commit: $output" }
+        System.getenv("RHYME_NATIVE_SOURCE_SHA")?.let { configured ->
+            check(configured == output) {
+                "RHYME_NATIVE_SOURCE_SHA $configured does not match checked-out producer commit $output"
+            }
+        }
+        return output
+    }
+
     private fun contract(
         caseId: String,
         requestKind: String,
@@ -227,8 +245,6 @@ class NativePromptContractExportTest {
         renderedText: String
     ): JsonObject {
         assertEquals(service.gemmaInstructionPrompt(userText), renderedText)
-        val sourceSha = System.getenv("RHYME_NATIVE_SOURCE_SHA")
-            ?: "97e7cf0bb3920933a04262b123e609e0b769c923"
         val modelSha = System.getenv("RHYME_NATIVE_MODEL_SHA256")
             ?: "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626"
         val capturedAt = System.getenv("RHYME_NATIVE_CAPTURED_AT") ?: Instant.now().toString()
