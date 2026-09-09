@@ -1,89 +1,120 @@
 # finetune/ — On-Device Model Evaluation Harness
 
-Desktop evaluation harness for the app's on-device Gemma models. It replays
-the Android app's **exact** local-model prompts against a GGUF via llama.cpp
-(`llama-server`) and scores the raw outputs programmatically. This is the
-before/after quality gate for LoRA fine-tunes: run it on the base model to get
-a baseline, run it again on the tuned model, and compare the reports.
+The desktop evaluator replays captured local-model requests exported by the iOS and
+Android production prompt builders. Each export carries the semantic request,
+rendered prompt bytes, model and source hashes, tokenizer flags, ordered
+sampler chain, seed provenance, termination policy, cache state, and runtime
+provenance. Python copies of native prompt strings are not accepted as parity
+evidence.
 
-Python 3 stdlib only — no pip dependencies.
+Python 3 stdlib only; model replay additionally requires `llama-server` at
+`/opt/homebrew/bin/llama-server`.
 
 ## Layout
 
-- `eval/prompts.py` — byte-identical ports of the Kotlin prompt builders
-  (`buildLocalPrompt`, `buildLocalRewritePrompt`, `buildLocalSynonymsPrompt`,
-  the Gemma `<start_of_turn>` template, section directives, and the
-  rhyme-constraint construction from `AIService.kt`).
-- `eval/scoring.py` — CMU-dictionary phonetics ported from
-  `ProsodyAnalyzer.kt` / `RhymeConstraint.kt` (rime extraction, perfect-rhyme
-  check, candidate end-words, syllable counting) plus output-format validators
-  mirroring the app's cleaning rules.
-- `eval/cases.py` — 43 eval cases across all four local-model tasks
-  (constrained/unconstrained suggestions across sections and complexities,
-  passage rewrites x3 actions, single-word rewrites x3 actions including
-  rejected-word retries, synonyms). All lyric contexts are original
-  placeholder lyrics.
-- `eval/run_eval.py` — the CLI runner.
+- `eval/native-contract-v1.schema.json` defines the single camelCase export
+  shared by both native platforms. Its embedded record is illustrative and is
+  rejected by exact replay.
+- `eval/native_contract.py` validates contracts, verifies prompt hashes,
+  rejects unknown sampler settings, and pairs platforms by `caseId` and the
+  semantic `request`. Native prompt wording may differ across platforms.
+- `eval/native-contract-cases-v1.json` is the shared case manifest consumed by
+  both native producer tests. It fixes case IDs and logical requests while each
+  platform preserves its own prompt bytes and seed policy. Unexecuted iOS
+  `contractExport` records truthfully leave a `randomPerRequest` seed null.
+- `eval/run_eval.py` streams each captured rendered prompt through
+  `llama-server`, applying the exported UTF-8-byte or UTF-16-code-unit response
+  boundary at desktop stream-chunk boundaries.
+- `eval/scoring.py` validates format, pronunciation/rhyme behavior, lexical
+  spelling, control-marker leakage, duplicates, unchanged rewrites, and
+  canonical rejected candidates.
+- `eval/heldout-cases-v1.json` is the unseen rejection, inflection, part of
+  speech, and contextual-substitution regression set. Human semantic ratings
+  remain reported as unverified until people rate the outputs.
+- `data/adversarial-training-cases-v1.json` contains separate training cases.
+  `data/build_adversarial.py` accepts only native-exported prompts and refuses
+  case IDs or semantic requests that overlap the held-out set.
+- `eval/prompts.py` and `eval/cases.py` remain available for legacy baselines
+  and synthetic data generation. Their generated prompts do not prove current
+  native production parity.
 
-## Running a baseline
+## Native export contract
 
-llama.cpp must be installed (`brew install llama.cpp`; the harness expects
-`/opt/homebrew/bin/llama-server`). The app's GGUFs live under
-`artifacts/gemma-local-models/`.
+Both platform test targets emit the same required fields as JSON, a JSON array,
+or one record per line in JSONL:
 
-```sh
-cd /Users/tylermanring/Desktop/RhymeAI
-
-# E2B baseline
-python3 finetune/eval/run_eval.py \
-  --model artifacts/gemma-local-models/gemma-4-E2B-it-UD-Q4_K_XL.gguf \
-  --out finetune/baseline-E2B.json
-
-# E4B baseline
-python3 finetune/eval/run_eval.py \
-  --model artifacts/gemma-local-models/gemma-4-E4B-it-UD-Q4_K_XL.gguf \
-  --out finetune/baseline-E4B.json
-
-# Smoke test on the first 5 cases only
-python3 finetune/eval/run_eval.py \
-  --model artifacts/gemma-local-models/gemma-4-E2B-it-UD-Q4_K_XL.gguf \
-  --cases 5 --out /tmp/smoke.json
+```text
+schemaVersion, platform, sourceSha, modelSha256, caseId, requestKind
+request.controls, request.localContext
+prompt.userText, prompt.renderedText, prompt hashes, tokenizer metadata/flags
+generation.engine, contextLength, sampler chain/seed, termination, cache
+runtime target/OS/build/evidence kind/captured time
 ```
 
-The runner starts `llama-server` itself (ctx 2048; temp 0.8, top-k 40,
-top-p 0.95 — the mobile sampler contract), POSTs each raw pre-templated
-prompt to `/completion` (which applies **no** chat template — exactly what we
-want, since the prompt already carries the Gemma turn markers), scores each
-response, writes the JSON report, and prints a per-task summary: format-pass
-rates, rhyme-compliance tiers (perfect end-word from the candidate list /
-rhymes-with-target / miss), average latency, and average output tokens. The
-server is killed on exit; its log is written next to the report.
+Task names are `suggestions`, `rewrite_passage`, `rewrite_word`, and
+`synonyms`. Exact replay rejects placeholder provenance, missing seeds from
+executed native runs, and sampler algorithms or fields it cannot reproduce.
+A native producer test
+must also prove that its exported prompt bytes equal the output of the builder
+used for inference.
 
-Sanity checks that don't need a model:
+The response-length unit is part of the contract. iOS currently uses UTF-8
+bytes and rejects a token that would cross its limit; Android uses UTF-16 code
+units and truncates a delivered chunk at a safe code-point boundary. The
+desktop evaluator caps each server content chunk in the exported unit and
+records the prior and final lengths. Its report labels the run
+`controlledReplay` because desktop stream chunks do not reproduce native token
+boundaries, engine behavior, or cache state.
+
+## Run a contract replay
 
 ```sh
-cd finetune
-python3 -m eval.prompts   # prints one fully templated prompt per task
-python3 -m eval.cases     # case counts + id uniqueness
-python3 finetune/eval/run_eval.py --help   # (from repo root)
+python3 finetune/eval/run_eval.py \
+  --model /path/to/accepted-model.gguf \
+  --contracts /path/to/ios-contracts.json /path/to/android-contracts.json \
+  --replay-seed 3407 \
+  --case-manifest finetune/eval/native-contract-cases-v1.json \
+  --out /path/to/report.json
 ```
 
-## ⚠️ Parity contract
+The runner verifies the GGUF SHA-256 against every selected record, requires
+paired iOS and Android case IDs with matching semantic requests, starts one
+bounded `llama-server`, and writes model output plus format, lexical,
+pronunciation, contextual-fixture, latency, and termination evidence. It stops
+the server on exit and writes the server log beside the report.
+The required replay seed controls only the desktop `controlledReplay`; reports
+preserve each native seed policy/value separately and never claim the desktop
+seed reproduces a native random draw.
 
-`eval/prompts.py` mirrors
-`android/app/src/main/kotlin/com/rhymeai/app/service/AIService.kt` (and the
-enum strings in `data/model/RewriteAction.kt`, `SongSection.kt`,
-`RhymeScheme.kt`) **byte for byte**. The whole point of this harness is that
-the model sees exactly what the app sends. If any prompt string, section
-directive, constraint sentence, or the Gemma turn template changes in the
-Android (or iOS-parity) code, `eval/prompts.py` must be updated in the same
-commit — otherwise baseline and post-finetune numbers measure the wrong thing.
-Do not "improve" the prompts here.
+## Build the adversarial training rows
 
-Scoring parity: `eval/scoring.py` ports only what scoring needs from
-`ProsodyAnalyzer.kt` / `RhymeConstraint.kt`, backed by the same shared assets
-(`shared/pronunciation/cmudict-rhymeai.tsv`,
-`shared/pronunciation/word-frequency.txt`). Frequency ties may order rhyme
-candidates slightly differently than Kotlin's hash-map iteration, which can
-affect the tail of the 12-word candidate list on rare ties — everything else
-is deterministic and identical.
+After both native test targets export the separate `train_adv_*` case IDs:
+
+```sh
+python3 finetune/data/build_adversarial.py \
+  --contracts /path/to/ios-contracts.json /path/to/android-contracts.json \
+  --out finetune/data/out/adversarial-v1.jsonl
+```
+
+The generated rows use each platform's own native `prompt.userText` and include
+source, model, and prompt hashes. The builder validates every positive
+completion and rechecks that training and held-out semantic requests remain
+disjoint.
+
+## Checks without a model
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/rhymeai-pycache \
+  python3 -m unittest finetune.eval.test_model_contract -v
+python3 finetune/eval/native_contract.py \
+  --manifest finetune/eval/native-contract-cases-v1.json \
+  --require-pairs /path/to/ios-contracts.json /path/to/android-contracts.jsonl
+python3 -m json.tool finetune/eval/native-contract-v1.schema.json >/dev/null
+python3 -m json.tool finetune/eval/heldout-cases-v1.json >/dev/null
+python3 -m json.tool finetune/data/adversarial-training-cases-v1.json >/dev/null
+```
+
+The pronunciation and lexical scorers consume the shared assets in
+`shared/pronunciation/`. Dictionary membership establishes spelling validity;
+it does not establish part-of-speech or semantic fit, which are scored
+separately.

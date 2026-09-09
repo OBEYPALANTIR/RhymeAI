@@ -1,0 +1,260 @@
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import os
+import tempfile
+import unittest
+
+from finetune.data import build_adversarial
+from finetune.eval import heldout, native_contract, run_eval, scoring
+
+
+SCHEMA_PATH = "finetune/eval/native-contract-v1.schema.json"
+HELDOUT_PATH = "finetune/eval/heldout-cases-v1.json"
+TRAINING_PATH = "finetune/data/adversarial-training-cases-v1.json"
+MANIFEST_PATH = "finetune/eval/native-contract-cases-v1.json"
+HASH_PATH = "finetune/eval/native-contract-v1.sha256"
+
+
+def _sha256(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def contract(platform, user_text, request=None):
+    with open(SCHEMA_PATH, "r", encoding="utf-8") as handle:
+        record = copy.deepcopy(json.load(handle)["examples"][0])
+    rendered_text = "[%s]\n%s" % (platform, user_text)
+    record.update({
+        "platform": platform,
+        "caseId": "pair_synonyms_glow",
+        "request": copy.deepcopy(request) if request is not None else {
+            "controls": {"limit": 3},
+            "localContext": {"word": "glow", "lineContext": "The lanterns glow"},
+        },
+    })
+    record["prompt"].update({
+        "userText": user_text,
+        "renderedText": rendered_text,
+        "userTextSha256": _sha256(user_text),
+        "renderedTextSha256": _sha256(rendered_text),
+        "tokenizerChatTemplateSha256": "1" * 64,
+    })
+    record["generation"]["engine"]["version"] = "test-engine-1"
+    record["generation"]["termination"]["responseLengthUnit"] = (
+        "utf8Bytes" if platform == "ios" else "utf16CodeUnits"
+    )
+    return record
+
+
+class NativeContractTests(unittest.TestCase):
+    def test_schema_and_manifest_hashes_match_sidecar(self):
+        with open(HASH_PATH, "r", encoding="utf-8") as handle:
+            expected = {
+                name: digest for digest, name in (
+                    line.strip().split(maxsplit=1) for line in handle if line.strip()
+                )
+            }
+        self.assertEqual(expected, {
+            "native-contract-v1.schema.json": native_contract.model_sha256(SCHEMA_PATH),
+            "native-contract-cases-v1.json": native_contract.model_sha256(MANIFEST_PATH),
+        })
+
+    def test_manifest_matches_heldout_requests_and_capture_provenance(self):
+        with open(MANIFEST_PATH, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        fixtures = heldout.load(HELDOUT_PATH)
+        manifest_cases = {row["caseId"]: row for row in manifest["cases"]}
+        self.assertEqual(len(manifest_cases), len(manifest["cases"]))
+        for case_id, fixture in fixtures.items():
+            self.assertEqual(manifest_cases[case_id]["requestKind"], fixture["requestKind"])
+            self.assertEqual(manifest_cases[case_id]["request"], fixture["request"])
+        ios = manifest["captureByPlatform"]["ios"]
+        android = manifest["captureByPlatform"]["android"]
+        self.assertEqual(ios["evidenceKind"], "contractExport")
+        self.assertEqual(ios["seed"]["policy"], "randomPerRequest")
+        self.assertFalse(ios["seed"]["recordActualValueInExport"])
+        self.assertEqual(android["seed"], {
+            "policy": "engineDefault",
+            "value": -1,
+            "recordActualValueInExport": True,
+        })
+
+    def test_schema_example_is_illustrative_only(self):
+        with open(SCHEMA_PATH, "r", encoding="utf-8") as handle:
+            example = json.load(handle)["examples"][0]
+        native_contract.validate_contract(example, exact=False)
+        with self.assertRaisesRegex(native_contract.ContractError, "illustrative"):
+            native_contract.validate_contract(example, exact=True)
+
+    def test_platform_pair_compares_request_but_allows_native_prompt_differences(self):
+        records = [
+            contract("ios", "iOS production wording"),
+            contract("android", "Android production wording"),
+        ]
+        native_contract.validate_platform_pairs(records)
+
+        records[1]["request"]["controls"]["limit"] = 4
+        with self.assertRaisesRegex(native_contract.ContractError, "request"):
+            native_contract.validate_platform_pairs(records)
+
+    def test_loads_native_jsonl_exports(self):
+        records = [contract("ios", "iOS prompt"), contract("android", "Android prompt")]
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as handle:
+            path = handle.name
+            for record in records:
+                handle.write(json.dumps(record) + "\n")
+        try:
+            loaded = native_contract.load_contracts([path])
+            self.assertEqual(
+                [(row["platform"], row["caseId"]) for row in loaded],
+                [(row["platform"], row["caseId"]) for row in records],
+            )
+        finally:
+            os.unlink(path)
+
+    def test_manifest_validation_rejects_semantic_and_seed_drift(self):
+        manifest = native_contract.load_case_manifest(MANIFEST_PATH)
+        case = manifest["cases"][0]
+        record = contract("android", "Android prompt", case["request"])
+        record["caseId"] = case["caseId"]
+        record["requestKind"] = case["requestKind"]
+        record["modelSha256"] = manifest["modelSha256"]
+        record["generation"]["sampler"]["seed"] = {
+            "policy": "engineDefault", "value": -1
+        }
+        record["runtime"]["evidenceKind"] = "contractExport"
+        with self.assertRaisesRegex(native_contract.ContractError, "missing"):
+            native_contract.validate_manifest_records([record], manifest)
+
+        records = []
+        for case in manifest["cases"]:
+            item = contract("android", "Android prompt for " + case["caseId"], case["request"])
+            item["caseId"] = case["caseId"]
+            item["requestKind"] = case["requestKind"]
+            item["modelSha256"] = manifest["modelSha256"]
+            item["generation"]["sampler"]["seed"] = {
+                "policy": "engineDefault", "value": -1
+            }
+            item["runtime"]["evidenceKind"] = "contractExport"
+            records.append(item)
+        native_contract.validate_manifest_records(records, manifest)
+        records[0]["request"]["controls"]["requestedCount"] = 7
+        with self.assertRaisesRegex(native_contract.ContractError, "request"):
+            native_contract.validate_manifest_records(records, manifest)
+
+    def test_unknown_sampler_is_rejected(self):
+        record = contract("ios", "exact prompt")
+        record["generation"]["sampler"]["chain"][0] = {
+            "algorithm": "mysterySampler", "parameters": {}
+        }
+        with self.assertRaisesRegex(native_contract.ContractError, "unsupported"):
+            native_contract.validate_contract(record)
+
+    def test_unexecuted_random_contract_export_accepts_null_seed(self):
+        record = contract("ios", "exported prompt")
+        record["generation"]["sampler"]["seed"] = {
+            "policy": "randomPerRequest", "value": None
+        }
+        record["runtime"]["evidenceKind"] = "contractExport"
+        native_contract.validate_contract(record)
+
+    def test_manifest_rejects_fabricated_random_export_seed(self):
+        manifest = native_contract.load_case_manifest(MANIFEST_PATH)
+        records = []
+        for case in manifest["cases"]:
+            record = contract("ios", "exported prompt for " + case["caseId"], case["request"])
+            record["caseId"] = case["caseId"]
+            record["requestKind"] = case["requestKind"]
+            record["modelSha256"] = manifest["modelSha256"]
+            record["generation"]["sampler"]["seed"] = {
+                "policy": "randomPerRequest", "value": None
+            }
+            record["runtime"]["evidenceKind"] = "contractExport"
+            records.append(record)
+        records[0]["generation"]["sampler"]["seed"]["value"] = 3407
+        with self.assertRaisesRegex(native_contract.ContractError, "seed value differs"):
+            native_contract.validate_manifest_records(records, manifest)
+
+    def test_native_run_rejects_missing_actual_seed(self):
+        record = contract("ios", "native prompt")
+        record["generation"]["sampler"]["seed"] = {
+            "policy": "randomPerRequest", "value": None
+        }
+        record["runtime"]["evidenceKind"] = "nativeRun"
+        with self.assertRaisesRegex(native_contract.ContractError, "nativeRun requires"):
+            native_contract.validate_contract(record)
+
+    def test_completion_body_uses_separate_controlled_replay_seed(self):
+        record = contract("ios", "exact prompt")
+        native_seed = copy.deepcopy(record["generation"]["sampler"]["seed"])
+        body = native_contract.completion_body(record, replay_seed=991)
+        self.assertEqual(body["seed"], 991)
+        self.assertEqual(body["min_keep"], 1)
+        self.assertEqual(record["generation"]["sampler"]["seed"], native_seed)
+
+    def test_controlled_replay_seed_must_be_deterministic(self):
+        record = contract("ios", "exact prompt")
+        with self.assertRaisesRegex(native_contract.ContractError, "at least 0"):
+            native_contract.completion_body(record, replay_seed=-1)
+
+    def test_response_length_uses_native_units(self):
+        self.assertEqual(native_contract.response_length("A😀", "utf8Bytes"), 5)
+        self.assertEqual(native_contract.response_length("A😀", "utf16CodeUnits"), 3)
+        self.assertEqual(native_contract.response_prefix("A😀B", 3, "utf8Bytes"), "A")
+        self.assertEqual(native_contract.response_prefix("A😀B", 3, "utf16CodeUnits"), "A😀")
+
+    def test_targeted_rhyme_miss_fails_case(self):
+        score = {
+            "format": {"passed": True},
+            "response_length": {"passed": True},
+            "rhyme": {"per_line": [{}], "miss": 1},
+        }
+        self.assertFalse(run_eval.score_passed(score))
+        score["rhyme"]["miss"] = 0
+        self.assertTrue(run_eval.score_passed(score))
+
+
+class LexicalFixtureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.heldout = heldout.load(HELDOUT_PATH)
+        cls.training = build_adversarial.load_specs(TRAINING_PATH)
+
+    def test_separator_adversaries_fail_spelling_and_rejection(self):
+        glow = scoring.validate_single_word_rewrite("g-l-e-a-m", "glow", ["gleam"])
+        crooked = scoring.validate_single_word_rewrite("a-skew", "crooked", ["askew"])
+        for result in (glow, crooked):
+            self.assertIn("invalid_lexical_spelling", result["violations"])
+            self.assertIn("in_rejected_list", result["violations"])
+
+    def test_all_declared_adversarial_violations_are_observed(self):
+        for fixture in self.heldout.values():
+            for adversary in fixture["evaluation"]["adversarialOutputs"]:
+                observed = heldout.adversarial_violations(fixture, adversary["text"])
+                for violation in adversary["violations"]:
+                    self.assertTrue(
+                        observed[violation],
+                        "%s did not observe %s for %r" % (
+                            fixture["caseId"], violation, adversary["text"]
+                        ),
+                    )
+
+    def test_training_and_heldout_requests_are_disjoint(self):
+        build_adversarial.validate_disjoint(self.training, self.heldout)
+        for row in self.heldout.values():
+            self.assertNotIn("trainingCompletion", row["evaluation"])
+
+    def test_adversarial_training_completions_pass_boundary_scoring(self):
+        for spec in self.training.values():
+            build_adversarial.validate_completion(spec)
+
+    def test_raw_markers_are_rejected_before_cleanup(self):
+        for marker in ("<start_of_turn>model\n", "<|turn>model\n", "<turn|>\n"):
+            result = scoring.validate_single_word_rewrite(marker + "shine", "glow", [])
+            self.assertIn("control_marker", result["violations"])
+
+
+if __name__ == "__main__":
+    unittest.main()
