@@ -1,9 +1,47 @@
 # Release Notes
 
-## Writers Block / RhymeAI 0.2 Readiness Draft
+## Writers Block for iOS 1.0 (6) — TestFlight candidate
 
-This draft tracks the current production-readiness branch. It is not final until
-the remaining known issues are closed.
+This candidate combines the current iOS repairs for TestFlight acceptance.
+App Store Connect processing and tester availability establish distribution
+status; a successful archive alone does not. Android release status is tracked
+separately.
+
+### Changes to try
+
+- Approve cloud AI sharing separately for selected context and the whole song.
+  Changing provider or expanding the shared scope requires the matching consent.
+- Choose Perfect, Near, or Slant rhymes. Suggestions must match the selected tier;
+  an unmatched response shows a no-match message instead of unrelated filler.
+- Use a local GGUF model for writing and synonym suggestions. Saved custom model
+  selections persist across relaunches.
+- Undo and redo edits, select text containing emoji, and switch songs while an
+  autosave or rewrite is pending. These paths preserve the intended song and
+  selection.
+- Try the appearance and analysis styles on iPhone and iPad, including large text,
+  the keyboard, rewrite controls, and the iPad projects sidebar.
+- Restore or remove trashed songs and recordings. Recording cleanup rejects paths
+  outside its storage directory; backup and sync validate restored metadata and
+  keep provider API keys in the Keychain.
+
+### Validation status
+
+The composed source passed 329 unit tests with 6 runtime skips and no failures.
+Four skips concern unavailable Apple Intelligence generation on the simulator;
+two require OpenAI or Claude credentials. Two additional live Gemini tests were
+explicitly excluded from selection. These results do not establish live cloud
+provider availability or local GGUF generation quality.
+
+Release simulator and signed device archives build successfully. Independent
+phone/iPad acceptance, actual local GGUF inference, final review, and processed
+TestFlight delivery must be checked against the candidate before distribution.
+Live two-device CloudKit sync with an
+iCloud account remains unverified in this candidate.
+
+## Historical Writers Block / RhymeAI 0.2 Readiness Draft
+
+The following historical draft predates the iOS 1.0 (6) candidate. Its command
+results and remaining-work list do not describe current candidate acceptance.
 
 ## Highlights
 
