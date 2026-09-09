@@ -1348,8 +1348,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun unloadLocalModel() {
-        localModelService.unload()
-        localModelLoaded = false
-        localModelPath = null
+        viewModelScope.launch {
+            localModelService.unload()
+            localModelLoaded = false
+            localModelPath = null
+        }
     }
 }

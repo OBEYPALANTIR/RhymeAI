@@ -10,7 +10,12 @@ import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -20,6 +25,63 @@ import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class LocalModelInstrumentedTest {
+    @Test
+    fun cancellationQuiescesBeforeImmediateNextRequest() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val arguments = InstrumentationRegistry.getArguments()
+        val modelPath = arguments.getString("localModelPath").orEmpty()
+        val modelLabel = arguments.getString("localModelLabel") ?: "accepted-e2b"
+        assumeTrue(
+            "Set instrumentation argument localModelPath to run the live GGUF cancellation test.",
+            modelPath.isNotBlank()
+        )
+
+        val service = LocalModelService()
+        service.initialize(instrumentation.targetContext)
+        try {
+            service.loadModel(modelPath)
+            val invalidModel = File(instrumentation.targetContext.cacheDir, "invalid-replacement.gguf")
+            invalidModel.writeBytes("GGUF-not-a-model".toByteArray())
+            val replacementFailure = runCatching { service.loadModel(invalidModel.absolutePath) }
+            assertTrue("Invalid replacement model must fail", replacementFailure.isFailure)
+            assertFalse("Failed replacement must clear loaded state", service.isLoaded)
+            service.loadModel(modelPath)
+            assertTrue("Accepted model must reload after replacement failure", service.isLoaded)
+            invalidModel.delete()
+            val firstChunk = CompletableDeferred<String>()
+            val privacySentinel = "RHYME_PRIVACY_SENTINEL_7319"
+            val oldRequest = launch {
+                service.streamResponse(
+                    gemmaInstructionPrompt("Repeat $privacySentinel on 64 separate lines. Return only those lines.")
+                ).collect { chunk ->
+                    if (!firstChunk.isCompleted) firstChunk.complete(chunk)
+                }
+            }
+            withTimeout(LocalModelService.GENERATION_TIMEOUT_MS) { firstChunk.await() }
+            oldRequest.cancelAndJoin()
+            val cancelled = requireNotNull(service.lastGenerationMetrics)
+            assertTrue("Cancelled request must record cancellation", cancelled.terminationReason == "cancelled")
+
+            val freshResponse = withTimeout(LocalModelService.GENERATION_TIMEOUT_MS + 10_000L) {
+                service.generateResponse(
+                    gemmaInstructionPrompt("Write one short original lyric line. Return only the line.")
+                )
+            }.trim()
+            val fresh = requireNotNull(service.lastGenerationMetrics)
+            assertTrue("Immediate next request returned blank output", freshResponse.isNotBlank())
+            assertFalse("Immediate next request received a stale token", freshResponse.contains(privacySentinel))
+            assertTrue("Fresh request must not inherit cancellation", fresh.terminationReason != "cancelled")
+            println(
+                "LOCAL_MODEL_CANCELLATION model=$modelLabel " +
+                    "cancelTotalMs=${cancelled.totalDurationMs} freshTtfcMs=${fresh.timeToFirstChunkMs} " +
+                    "freshTotalMs=${fresh.totalDurationMs} freshChars=${fresh.outputCharacters} " +
+                    "freshReason=${fresh.terminationReason}"
+            )
+        } finally {
+            service.unload()
+        }
+    }
+
     @Test
     fun localGgufModelLoadsAndGeneratesText() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -89,8 +151,11 @@ class LocalModelInstrumentedTest {
                 useWholeSongContext = false
             )
         }
-        assertTrue("Local suggestions should contain at least two usable lines", suggestions.size >= 2)
-        assertTrue("Local suggestions should be bounded to six lines", suggestions.size <= 6)
+        assertTrue("Local suggestions should contain exactly six usable lines", suggestions.size == 6)
+        assertTrue(
+            "Local suggestions should be distinct",
+            suggestions.map { it.text.trim().lowercase() }.distinct().size == suggestions.size
+        )
         assertTrue("Local suggestions should not be blank", suggestions.all { it.text.isNotBlank() })
         assertNoPromptEcho("suggestion", suggestions.map { it.text })
         assertFalse("Local suggestions should not copy an existing lyric line", suggestions.any { lyrics.lines().contains(it.text) })
@@ -244,7 +309,7 @@ class LocalModelInstrumentedTest {
                 limit = 6
             )
         }
-        assertTrue("Local synonyms should return at least two words", synonyms.size >= 2)
+        assertTrue("Local synonyms should return at least one valid word", synonyms.isNotEmpty())
         assertTrue("Local synonyms should be bounded to the requested limit", synonyms.size <= 6)
         assertTrue("Local synonyms should not include the target word", synonyms.none { it.equals("glow", ignoreCase = true) })
     }

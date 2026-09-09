@@ -152,7 +152,7 @@ dependencies {
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
 
     // On-device LLM inference (GGUF support via llama.cpp)
-    implementation("io.github.ljcamargo:llamacpp-kotlin:0.4.0")
+    implementation(project(":kotlinllamacpp"))
 
     // OAuth for Drive appData scope; Drive REST calls use HttpURLConnection (same
     // idiom as AIService) — no heavy Google API client library needed.
