@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct ProjectsView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appAppearanceStyle) private var appearance
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
     @State private var searchText = ""
@@ -32,8 +33,14 @@ struct ProjectsView: View {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
 
-                    TextField("Search songs", text: $searchText)
+                    TextField(
+                        "",
+                        text: $searchText,
+                        prompt: Text("Search songs")
+                            .foregroundStyle(appearance.palette.placeholder)
+                    )
                         .textInputAutocapitalization(.never)
+                        .foregroundStyle(appearance.palette.primaryInk)
 
                     if !searchText.isEmpty {
                         Button {
@@ -59,13 +66,13 @@ struct ProjectsView: View {
                 } label: {
                     HStack {
                         Image(systemName: "plus")
-                            .foregroundStyle(.indigo)
+                            .foregroundStyle(appearance.palette.onAction)
                         Text("Create New Song")
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(appearance.palette.onAction)
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .frame(height: RhymeAITokens.Touch.minimum)
-                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.10), interactive: true)
+                    .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
                 }
                 .listRowBackground(Color.clear)
 
@@ -88,7 +95,7 @@ struct ProjectsView: View {
                 if let importError {
                     Text(importError)
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(appearance.palette.error)
                         .listRowBackground(Color.clear)
                 }
 
@@ -131,14 +138,14 @@ struct ProjectsView: View {
 
                                 if viewModel.currentProjectId == project.id {
                                     Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.indigo)
+                                        .foregroundStyle(appearance.palette.action)
                                 }
                             }
                             .padding(.vertical, RhymeAITokens.Spacing.xxs)
                         }
                         .listRowBackground(
                             viewModel.currentProjectId == project.id
-                                ? Color.indigo.opacity(0.1)
+                                ? appearance.palette.raisedSurface
                                 : Color.clear
                         )
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -151,6 +158,8 @@ struct ProjectsView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(AppWritingBackground())
             .navigationTitle("Song Projects")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -208,8 +217,9 @@ struct ProjectsView: View {
                 defer { if didStart { url.stopAccessingSecurityScopedResource() } }
                 let data = try Data(contentsOf: url)
                 let exported = try LyricsExporter.decodeJsonExport(data)
-                viewModel.importProject(exported)
-                dismiss()
+                if viewModel.importProject(exported) {
+                    dismiss()
+                }
             } catch {
                 importError = "Could not import this file. Pick a RhymeAI project JSON."
             }

@@ -20,11 +20,22 @@ struct LineProsody: Equatable, Sendable {
 nonisolated struct RhymeMatches: Equatable, Sendable {
     let perfect: [String]
     let near: [String]
+    let slant: [String]
     let multi: [String]
 
-    var isEmpty: Bool { perfect.isEmpty && near.isEmpty && multi.isEmpty }
+    var isEmpty: Bool { perfect.isEmpty && near.isEmpty && slant.isEmpty && multi.isEmpty }
 
-    static let empty = RhymeMatches(perfect: [], near: [], multi: [])
+    static let empty = RhymeMatches(perfect: [], near: [], slant: [], multi: [])
+}
+
+nonisolated struct RhymeTail: Equatable, Hashable, Sendable {
+    let vowel: String
+    let coda: [String]
+}
+
+private struct RhymeTailEntry {
+    let word: String
+    let tail: RhymeTail
 }
 
 nonisolated final class RhymeIndex: @unchecked Sendable {
@@ -34,7 +45,8 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
     nonisolated(unsafe) private var builtForWordCount: Int = -1
     nonisolated(unsafe) private var perfectByKey: [String: [String]] = [:]
     nonisolated(unsafe) private var multiByKey: [String: [String]] = [:]
-    nonisolated(unsafe) private var nearByVowel: [String: [String]] = [:]
+    nonisolated(unsafe) private var nearByVowel: [String: [RhymeTailEntry]] = [:]
+    nonisolated(unsafe) private var slantByCoda: [String: [RhymeTailEntry]] = [:]
 
     nonisolated func find(
         word: String,
@@ -51,14 +63,16 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         let keys = ProsodyAnalyzer.rhymeKeys(for: word, maxDepth: 2, dictionary: dictionary)
         guard let k0 = keys.first else { return .empty }
         let k1 = keys.count > 1 ? keys[1] : nil
-        let vowel0 = k0.split(separator: " ").first.map(String.init) ?? ""
-        guard !vowel0.isEmpty else { return .empty }
+        guard let targetTail = ProsodyAnalyzer.rhymeTail(for: word, dictionary: dictionary) else {
+            return .empty
+        }
 
         ensureBuilt(dictionary: dictionary)
         lock.lock()
         let perfectMap = perfectByKey
         let multiMap = multiByKey
         let nearMap = nearByVowel
+        let slantMap = slantByCoda
         lock.unlock()
 
         let perfectAll = (perfectMap[k0] ?? []).filter { $0 != normalized }
@@ -70,7 +84,29 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
             multiAll = []
         }
         let exclude = Set(perfectAll).union(multiAll)
-        let nearAll = (nearMap[vowel0] ?? []).filter { $0 != normalized && !exclude.contains($0) }
+        let nearAll = Self.uniqueWords((nearMap[targetTail.vowel] ?? []).compactMap { entry in
+            guard entry.word != normalized,
+                  !exclude.contains(entry.word),
+                  ProsodyAnalyzer.hasSingleCodaEdit(targetTail.coda, entry.tail.coda) else {
+                return nil
+            }
+            return entry.word
+        })
+        let slantAll: [String]
+        if targetTail.coda.isEmpty {
+            slantAll = []
+        } else {
+            let nearSet = Set(nearAll)
+            slantAll = Self.uniqueWords((slantMap[Self.codaKey(targetTail.coda)] ?? []).compactMap { entry in
+                guard entry.word != normalized,
+                      entry.tail.vowel != targetTail.vowel,
+                      !exclude.contains(entry.word),
+                      !nearSet.contains(entry.word) else {
+                    return nil
+                }
+                return entry.word
+            })
+        }
 
         // Re-rank each pool by word frequency (most common first) before the
         // limit cut, so both candidateEndWords and the rhyme inspector surface
@@ -78,6 +114,7 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         return RhymeMatches(
             perfect: Array(wordFrequency.sortByFrequency(perfectAll).prefix(perfectLimit)),
             near: Array(wordFrequency.sortByFrequency(nearAll).prefix(nearLimit)),
+            slant: Array(wordFrequency.sortByFrequency(slantAll).prefix(nearLimit)),
             multi: Array(wordFrequency.sortByFrequency(multiAll).prefix(multiLimit))
         )
     }
@@ -94,7 +131,8 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
 
         var perfectBuild: [String: [String]] = [:]
         var multiBuild: [String: [String]] = [:]
-        var nearBuild: [String: [String]] = [:]
+        var nearBuild: [String: [RhymeTailEntry]] = [:]
+        var slantBuild: [String: [RhymeTailEntry]] = [:]
         perfectBuild.reserveCapacity(32_768)
         multiBuild.reserveCapacity(32_768)
         nearBuild.reserveCapacity(64)
@@ -103,16 +141,19 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
             guard word.count >= 2 else { return }
             var seenK0 = Set<String>()
             var seenK1 = Set<String>()
-            var seenVowel = Set<String>()
+            var seenTails = Set<RhymeTail>()
             for phones in variants {
                 let ks = ProsodyAnalyzer.rhymeKeysForPhonesPublic(phones, maxDepth: 2)
                 guard let k0 = ks.first else { continue }
                 if seenK0.insert(k0).inserted {
                     perfectBuild[k0, default: []].append(word)
                 }
-                let vowel0 = k0.split(separator: " ").first.map(String.init) ?? ""
-                if !vowel0.isEmpty, seenVowel.insert(vowel0).inserted {
-                    nearBuild[vowel0, default: []].append(word)
+                if let tail = ProsodyAnalyzer.rhymeTailForPhonesPublic(phones), seenTails.insert(tail).inserted {
+                    let entry = RhymeTailEntry(word: word, tail: tail)
+                    nearBuild[tail.vowel, default: []].append(entry)
+                    if !tail.coda.isEmpty {
+                        slantBuild[Self.codaKey(tail.coda), default: []].append(entry)
+                    }
                 }
                 if ks.count > 1 {
                     let k1 = ks[1]
@@ -126,7 +167,17 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         perfectByKey = perfectBuild
         multiByKey = multiBuild
         nearByVowel = nearBuild
+        slantByCoda = slantBuild
         builtForWordCount = dictionary.wordCount
+    }
+
+    private static func codaKey(_ coda: [String]) -> String {
+        coda.joined(separator: " ")
+    }
+
+    private static func uniqueWords(_ words: [String]) -> [String] {
+        var seen = Set<String>()
+        return words.filter { seen.insert($0).inserted }
     }
 }
 
@@ -340,6 +391,84 @@ nonisolated enum ProsodyAnalyzer {
         rhymeKeysForPhones(phones, maxDepth: maxDepth)
     }
 
+    static func rhymeTailForPhonesPublic(_ phones: [String]) -> RhymeTail? {
+        rhymeTailForPhones(phones)
+    }
+
+    static func rhymeTail(
+        for word: String,
+        dictionary: PronunciationDictionary = .shared
+    ) -> RhymeTail? {
+        let normalized = normalizeWord(word)
+        guard normalized.count >= 2, !stopwords.contains(normalized) else { return nil }
+        return dictionary.pronunciations(for: normalized).first.flatMap(rhymeTailForPhones)
+    }
+
+    static func rhymeRelation(
+        candidateWord: String,
+        targetWord: String,
+        dictionary: PronunciationDictionary = .shared
+    ) -> RhymeType? {
+        let normalizedCandidate = normalizeWord(candidateWord)
+        let normalizedTarget = normalizeWord(targetWord)
+        guard normalizedCandidate != normalizedTarget,
+              let targetPhones = dictionary.pronunciations(for: normalizedTarget).first,
+              let targetTail = rhymeTailForPhones(targetPhones) else {
+            return nil
+        }
+
+        let targetKeys = rhymeKeysForPhones(targetPhones, maxDepth: 2)
+        guard let targetKey = targetKeys.first else { return nil }
+        let targetMultiKey = targetKeys.dropFirst().first
+        var near = false
+        var slant = false
+        for candidatePhones in dictionary.pronunciations(for: normalizedCandidate) {
+            let candidateKeys = rhymeKeysForPhones(candidatePhones, maxDepth: 2)
+            if candidateKeys.first == targetKey ||
+                (targetMultiKey != nil && candidateKeys.dropFirst().first == targetMultiKey) {
+                return .perfect
+            }
+            guard let candidateTail = rhymeTailForPhones(candidatePhones) else { continue }
+            if candidateTail.vowel == targetTail.vowel,
+               hasSingleCodaEdit(targetTail.coda, candidateTail.coda) {
+                near = true
+            } else if !targetTail.coda.isEmpty,
+                      candidateTail.vowel != targetTail.vowel,
+                      candidateTail.coda == targetTail.coda {
+                slant = true
+            }
+        }
+        if near { return .near }
+        if slant { return .slant }
+        return nil
+    }
+
+    static func hasSingleCodaEdit(_ lhs: [String], _ rhs: [String]) -> Bool {
+        let difference = lhs.count - rhs.count
+        guard abs(difference) <= 1 else { return false }
+        if difference == 0 {
+            return zip(lhs, rhs).filter { $0.0 != $0.1 }.count == 1
+        }
+
+        let shorter = lhs.count < rhs.count ? lhs : rhs
+        let longer = lhs.count < rhs.count ? rhs : lhs
+        var shortIndex = 0
+        var longIndex = 0
+        var skipped = false
+        while shortIndex < shorter.count, longIndex < longer.count {
+            if shorter[shortIndex] == longer[longIndex] {
+                shortIndex += 1
+                longIndex += 1
+            } else if skipped {
+                return false
+            } else {
+                skipped = true
+                longIndex += 1
+            }
+        }
+        return true
+    }
+
     static func rhymeKeys(
         for word: String,
         maxDepth: Int = 2,
@@ -365,11 +494,13 @@ nonisolated enum ProsodyAnalyzer {
     }
 
     static func metricFeet(_ stressPattern: [Int]) -> String {
-        stride(from: 0, to: stressPattern.count, by: 2).map { start in
-            stressPattern[start..<min(start + 2, stressPattern.count)]
-                .map { $0 == 0 ? "da" : "ˈDA" }
-                .joined(separator: " ")
-        }.joined(separator: " | ")
+        stressPattern.map { stress in
+            switch stress {
+            case 1: return "ˈDA"
+            case 2: return "ˌDA"
+            default: return "da"
+            }
+        }.joined(separator: " ")
     }
 
     static func normalizeWord(_ word: String) -> String {
@@ -441,13 +572,23 @@ nonisolated enum ProsodyAnalyzer {
             previousWasVowel = isVowel
         }
 
-        if w.hasSuffix("e"), !w.hasSuffix("le"), count > 1 { count -= 1 }
-        // Vowel+"les" is a silent e ("miles"); consonant+"les" is a syllabic le
-        // ("tables") and must keep its count. "les" words are excluded from the
-        // generic "es" rule so they are never decremented twice.
-        let endsInLes = w.hasSuffix("les")
-        if endsInLes, w.count >= 4, vowels.contains(w[w.index(w.endIndex, offsetBy: -4)]), count > 1 { count -= 1 }
-        if !endsInLes, w.hasSuffix("es"), !w.hasSuffix("ses"), !w.hasSuffix("zes"), count > 1 { count -= 1 }
+        let syllabicLe: Bool = {
+            if w.hasSuffix("le"), w.count >= 3 {
+                return !vowels.contains(w[w.index(w.endIndex, offsetBy: -3)])
+            }
+            if w.hasSuffix("les"), w.count >= 4 {
+                return !vowels.contains(w[w.index(w.endIndex, offsetBy: -4)])
+            }
+            return false
+        }()
+
+        if !syllabicLe {
+            if w.hasSuffix("e"), count > 1 {
+                count -= 1
+            } else if w.hasSuffix("es"), !w.hasSuffix("ses"), !w.hasSuffix("zes"), count > 1 {
+                count -= 1
+            }
+        }
         if w.hasSuffix("ed"), !w.hasSuffix("ted"), !w.hasSuffix("ded"), count > 1 { count -= 1 }
 
         return max(count, 1)
@@ -488,5 +629,16 @@ nonisolated enum ProsodyAnalyzer {
         return anchors.suffix(maxDepth).reversed().map { index in
             phones[index...].map(basePhone).joined(separator: " ")
         }
+    }
+
+    private static func rhymeTailForPhones(_ phones: [String]) -> RhymeTail? {
+        let vowelIndexes = phones.indices.filter { vowels.contains(basePhone(phones[$0])) }
+        guard !vowelIndexes.isEmpty else { return nil }
+        let stressed = vowelIndexes.filter { (stressForPhone(phones[$0]) ?? 0) > 0 }
+        guard let vowelIndex = (stressed.isEmpty ? vowelIndexes : stressed).last else { return nil }
+        return RhymeTail(
+            vowel: basePhone(phones[vowelIndex]),
+            coda: phones[(vowelIndex + 1)...].map(basePhone)
+        )
     }
 }

@@ -36,6 +36,8 @@ enum RhymeAITokens {
         static let drawerMinWidth: CGFloat = 300
         static let drawerMaxWidth: CGFloat = 360
         static let drawerHorizontalMargin: CGFloat = 36
+        static let projectSidebarWidth: CGFloat = 320
+        static let threeColumnWorkspaceMinWidth: CGFloat = 1_100
         static let assistantColumnWidth: CGFloat = 380
         static let assistantReadableWidth: CGFloat = 420
         static let assistantSheetHandleArea: CGFloat = 72
@@ -110,38 +112,52 @@ func withRhymeAnimation<Result>(_ animation: Animation?, reduceMotion: Bool, _ b
 
 
 private struct LiquidGlassSurfaceModifier: ViewModifier {
+    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
     let cornerRadius: CGFloat
     let tint: Color?
     let interactive: Bool
     let fallbackOpacity: Double
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                .glassEffect(
-                    .regular
-                        .tint(tint)
-                        .interactive(interactive),
-                    in: .rect(cornerRadius: cornerRadius)
-                )
-        } else {
-            if cornerRadius == 0 {
-                content
-                    .background(.ultraThinMaterial)
-                    .background((tint ?? Color.white).opacity(fallbackOpacity))
-            } else {
-                content
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    .background(
-                        (tint ?? Color.white).opacity(fallbackOpacity),
-                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-                    )
+        let palette = appearance.palette
+        let border = colorSchemeContrast == .increased || interactive
+            ? palette.outlineStrong
+            : palette.outline
+        let surface = interactive ? palette.raisedSurface : palette.surface
+
+        content
+            .background(
+                surface,
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+            .overlay {
+                if let tint {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(tint.opacity(fallbackOpacity))
+                        .allowsHitTesting(false)
+                }
             }
-        }
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(border, lineWidth: 1)
+            )
+    }
+}
+
+private struct AppearanceActionSurfaceModifier: ViewModifier {
+    @Environment(\.appAppearanceStyle) private var appearance
+
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(appearance.palette.onAction)
+            .background(
+                appearance.palette.action,
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
     }
 }
 
@@ -162,14 +178,12 @@ extension View {
         )
     }
 
+    func appearanceActionSurface(cornerRadius: CGFloat) -> some View {
+        modifier(AppearanceActionSurfaceModifier(cornerRadius: cornerRadius))
+    }
+
     @ViewBuilder
     func liquidGlassGroup(spacing: CGFloat = 16) -> some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: spacing) {
-                self
-            }
-        } else {
-            self
-        }
+        self
     }
 }

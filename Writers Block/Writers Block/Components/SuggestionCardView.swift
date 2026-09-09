@@ -1,8 +1,20 @@
 import SwiftUI
 
+func suggestionRhymeBadgeLabel(rhymeTier: Int, isHookRepeat: Bool) -> String? {
+    if isHookRepeat { return "hook" }
+    switch rhymeTier {
+    case 3: return "slant"
+    case 2: return "perfect"
+    case 1: return "near"
+    default: return nil
+    }
+}
+
 struct SuggestionCardView: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let suggestion: String
-    /// Rhyme quality tier: 2 = perfect/multi, 1 = near, 0 = unverified (no badge shown).
+    /// Rhyme quality tier: 3 = slant, 2 = perfect/multi, 1 = near, 0 = unverified.
     var rhymeTier: Int = 0
     /// True when this is a chorus repeat and the end word matches the hook's established end word.
     var isHookRepeat: Bool = false
@@ -59,17 +71,12 @@ struct SuggestionCardView: View {
 
     // "hook" overrides "perfect" on chorus repeats.
     private var tierBadgeLabel: String? {
-        if isHookRepeat { return "hook" }
-        switch rhymeTier {
-        case 2: return "perfect"
-        case 1: return "near"
-        default: return nil
-        }
+        suggestionRhymeBadgeLabel(rhymeTier: rhymeTier, isHookRepeat: isHookRepeat)
     }
 
     private var tierBadgeColor: Color {
-        if isHookRepeat { return .indigo }
-        return rhymeTier >= 2 ? .green : .orange
+        if isHookRepeat { return analysisHighlightColor }
+        return rhymeTier == 2 ? .green : .orange
     }
 
     @ViewBuilder
@@ -98,9 +105,9 @@ struct SuggestionCardView: View {
         // Last word - highlighted
         if let wordRange = Range(match.range(at: 2), in: text) {
             var word = AttributedString(String(text[wordRange]))
-            word.foregroundColor = Color(red: 165.0 / 255, green: 180.0 / 255, blue: 252.0 / 255) // Indigo 200
+            word.foregroundColor = analysisHighlightColor
             word.underlineStyle = .single
-            word.underlineColor = UIColor(Color.indigo.opacity(0.6))
+            word.underlineColor = UIColor(analysisHighlightColor.opacity(0.65))
             result += word
         }
 
@@ -110,6 +117,12 @@ struct SuggestionCardView: View {
         }
 
         return result
+    }
+
+    private var analysisHighlightColor: Color {
+        appearance.usesDarkAnalysisPalette
+            ? Color(red: 196.0 / 255, green: 181.0 / 255, blue: 253.0 / 255)
+            : Color(red: 109.0 / 255, green: 40.0 / 255, blue: 217.0 / 255)
     }
 }
 
