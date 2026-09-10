@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import copy
 import hashlib
 import json
@@ -249,6 +250,28 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(previous, 3)
         self.assertEqual(current, 5)
         self.assertTrue(reached)
+        boundary = {
+            "enforcedDuringStreaming": True,
+            "reached": reached,
+            "previousValue": previous,
+            "value": current,
+        }
+        self.assertTrue(run_eval.response_boundary_passed(current, 4, boundary))
+        boundary["previousValue"] = 4
+        self.assertFalse(run_eval.response_boundary_passed(current, 4, boundary))
+
+    def test_deadline_timeout_is_recorded_for_report(self):
+        payload = {"content": "partial"}
+        run_eval.record_deadline_timeout(100, payload)
+        self.assertEqual(payload["stop_type"], "deadline")
+        with self.assertRaises(TimeoutError):
+            run_eval.record_deadline_timeout(None, {})
+
+    def test_case_limit_must_be_positive(self):
+        self.assertEqual(run_eval.positive_integer_argument("2"), 2)
+        for invalid in ("0", "-1", "not-a-number"):
+            with self.assertRaises(argparse.ArgumentTypeError):
+                run_eval.positive_integer_argument(invalid)
 
     def test_targeted_rhyme_miss_fails_case(self):
         score = {
@@ -259,6 +282,8 @@ class NativeContractTests(unittest.TestCase):
         self.assertFalse(run_eval.score_passed(score))
         score["rhyme"]["miss"] = 0
         self.assertTrue(run_eval.score_passed(score))
+        score["termination"] = {"passed": False, "reason": "deadline"}
+        self.assertFalse(run_eval.score_passed(score))
 
     def test_evaluation_gate_fails_when_any_case_fails(self):
         self.assertTrue(run_eval.evaluation_passed([{"passed": True}]))

@@ -49,12 +49,39 @@ def replay_seed_argument(value):
         raise argparse.ArgumentTypeError(str(error)) from error
 
 
+def positive_integer_argument(value):
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be an integer") from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
 def append_native_chunk(output, chunk, length_limit, length_unit):
     previous_length = native_contract.response_length(output, length_unit)
     output += chunk
     current_length = native_contract.response_length(output, length_unit)
     boundary_reached = length_limit is not None and current_length >= length_limit
     return output, previous_length, current_length, boundary_reached
+
+
+def response_boundary_passed(output_length, length_limit, boundary):
+    if length_limit is None or output_length <= length_limit:
+        return True
+    return (
+        boundary["enforcedDuringStreaming"]
+        and boundary["reached"]
+        and boundary["previousValue"] < length_limit <= boundary["value"]
+        and boundary["value"] == output_length
+    )
+
+
+def record_deadline_timeout(deadline_ms, final_payload):
+    if deadline_ms is None:
+        raise TimeoutError
+    final_payload["stop_type"] = "deadline"
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +261,7 @@ def score_passed(score):
     return (
         score["format"]["passed"]
         and score["response_length"]["passed"]
+        and score.get("termination", {"passed": True})["passed"]
         and heldout_passed
         and rhyme_passed
     )
@@ -326,38 +354,41 @@ def completion(port, contract, replay_seed):
     final_payload = {}
     predicted_tokens = None
     content_chunks = 0
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        content_type = response.headers.get_content_type()
-        for raw_line in response:
-            if deadline_ms is not None and (time.time() - started) * 1000 >= deadline_ms:
-                final_payload["stop_type"] = "deadline"
-                break
-            line = raw_line.decode("utf-8").strip()
-            if not line:
-                continue
-            if content_type == "text/event-stream":
-                if not line.startswith("data:"):
-                    continue
-                line = line[5:].strip()
-            if line == "[DONE]":
-                break
-            event = json.loads(line)
-            final_payload.update(event)
-            chunk = event.get("content", "")
-            if chunk:
-                content_chunks += 1
-                output, previous_length, current_length, crossed_boundary = append_native_chunk(
-                    output, chunk, length_limit, length_unit
-                )
-                reported_tokens = event.get("tokens_predicted")
-                if isinstance(reported_tokens, int) and not isinstance(reported_tokens, bool):
-                    predicted_tokens = reported_tokens
-                if crossed_boundary:
-                    boundary_reached = True
-                    final_payload["stop_type"] = "maximumResponseLength"
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            content_type = response.headers.get_content_type()
+            for raw_line in response:
+                if deadline_ms is not None and (time.time() - started) * 1000 >= deadline_ms:
+                    final_payload["stop_type"] = "deadline"
                     break
-            if event.get("stop"):
-                break
+                line = raw_line.decode("utf-8").strip()
+                if not line:
+                    continue
+                if content_type == "text/event-stream":
+                    if not line.startswith("data:"):
+                        continue
+                    line = line[5:].strip()
+                if line == "[DONE]":
+                    break
+                event = json.loads(line)
+                final_payload.update(event)
+                chunk = event.get("content", "")
+                if chunk:
+                    content_chunks += 1
+                    output, previous_length, current_length, crossed_boundary = append_native_chunk(
+                        output, chunk, length_limit, length_unit
+                    )
+                    reported_tokens = event.get("tokens_predicted")
+                    if isinstance(reported_tokens, int) and not isinstance(reported_tokens, bool):
+                        predicted_tokens = reported_tokens
+                    if crossed_boundary:
+                        boundary_reached = True
+                        final_payload["stop_type"] = "maximumResponseLength"
+                        break
+                if event.get("stop"):
+                    break
+    except TimeoutError:
+        record_deadline_timeout(deadline_ms, final_payload)
     latency = time.time() - started
     final_payload["content"] = output
     final_payload["tokens_predicted"] = predicted_tokens
@@ -485,7 +516,7 @@ def main():
         default=os.path.join(os.path.dirname(__file__), "heldout-cases-v1.json"),
         help="Held-out semantic fixture file (default: eval/heldout-cases-v1.json)",
     )
-    parser.add_argument("--cases", type=int, default=None,
+    parser.add_argument("--cases", type=positive_integer_argument, default=None,
                         help="Run the first N manifest cases on both platforms (default: all)")
     parser.add_argument("--out", default="report.json",
                         help="Path for the JSON report (default: report.json)")
@@ -496,7 +527,7 @@ def main():
     native_contract.validate_manifest_records(contracts, case_manifest)
     native_contract.validate_platform_pairs(contracts)
     heldout_fixtures = heldout.load(args.heldout_fixtures)
-    if args.cases:
+    if args.cases is not None:
         selected_ids = {
             case["caseId"] for case in case_manifest["cases"][: args.cases]
         }
@@ -538,7 +569,7 @@ def main():
             )
             length_limit = termination["maximumResponseLength"]
             boundary = payload["replay_boundary"]
-            length_passed = length_limit is None or output_length <= length_limit
+            length_passed = response_boundary_passed(output_length, length_limit, boundary)
             score["response_length"] = {
                 "passed": length_passed,
                 "value": output_length,
@@ -546,6 +577,11 @@ def main():
                 "unit": termination["responseLengthUnit"],
                 "enforced_during_streaming": boundary["enforcedDuringStreaming"],
                 "boundary_reached": boundary["reached"],
+                "boundary_previous_value": boundary["previousValue"],
+            }
+            score["termination"] = {
+                "passed": payload.get("stop_type") not in {"deadline", "error"},
+                "reason": payload.get("stop_type"),
             }
             passed = score_passed(score)
             print("[%2d/%2d] %-32s %s  (%.1fs, %s tok)" % (
@@ -601,6 +637,7 @@ def main():
         "case_manifest_file": args.case_manifest,
         "case_manifest_sha256": native_contract.model_sha256(args.case_manifest),
         "heldout_fixture_file": args.heldout_fixtures,
+        "heldout_fixture_sha256": native_contract.model_sha256(args.heldout_fixtures),
         "heldout_case_count": sum(
             1 for result in results if "heldout" in result["score"]
         ),

@@ -59,12 +59,12 @@ must also prove that its exported prompt bytes equal the output of the builder
 used for inference.
 
 The response-length unit is part of the contract. iOS currently uses UTF-8
-bytes and rejects a token that would cross its limit; Android uses UTF-16 code
-units and truncates a delivered chunk at a safe code-point boundary. The
-desktop evaluator caps each server content chunk in the exported unit and
-records the prior and final lengths. Its report labels the run
-`controlledReplay` because desktop stream chunks do not reproduce native token
-boundaries, engine behavior, or cache state.
+bytes and Android uses UTF-16 code units. Both native implementations append a
+complete delivered piece before stopping at the limit, so the final value can
+cross the limit by one native piece. The desktop evaluator mirrors that rule
+for each server content chunk and records the prior and final lengths. Its
+report labels the run `controlledReplay` because desktop stream chunks do not
+reproduce native token boundaries, engine behavior, or cache state.
 
 ## Run a contract replay
 
