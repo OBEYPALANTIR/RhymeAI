@@ -233,11 +233,12 @@ def suggestion_rhyme_constraint(
     rhyme_type: str,
     section_ref: Optional[SectionRef] = None,
     chorus_end_words: Sequence[str] = (),
+    platform: str = "android",
 ) -> Optional[SuggestionRhymeConstraint]:
     """AIService.suggestionRhymeConstraint."""
     if target_rhyme_line is None or not target_rhyme_line.strip():
         return None
-    target_word = scoring.line_end_word(target_rhyme_line)
+    target_word = scoring.line_end_word_for_platform(target_rhyme_line, platform)
     if not target_word:
         return None
     candidates = scoring.candidate_end_words(target_word, rhyme_type)

@@ -1,0 +1,92 @@
+[
+  {
+    "caseId": "train_adv_rewrite_bright_reject_vivid",
+    "requestKind": "rewrite_word",
+    "request": {
+      "controls": {
+        "action": "REPHRASE",
+        "rejectedCandidates": ["vivid"]
+      },
+      "localContext": {
+        "lyrics": "[Verse]\nBright windows wake above the square",
+        "selection": "Bright",
+        "lineContext": "Bright windows wake above the square"
+      }
+    },
+    "completion": "Luminous",
+    "adversarialRejectedOutputs": ["vivid", "v-i-v-i-d"]
+  },
+  {
+    "caseId": "train_adv_rewrite_silent_reject_quiet",
+    "requestKind": "rewrite_word",
+    "request": {
+      "controls": {
+        "action": "REPHRASE",
+        "rejectedCandidates": ["quiet"]
+      },
+      "localContext": {
+        "lyrics": "[Verse]\nA silent hallway holds the winter air",
+        "selection": "silent",
+        "lineContext": "A silent hallway holds the winter air"
+      }
+    },
+    "completion": "hushed",
+    "adversarialRejectedOutputs": ["quiet", "q-u-i-e-t"]
+  },
+  {
+    "caseId": "train_adv_synonyms_charge_noun",
+    "requestKind": "synonyms",
+    "request": {
+      "controls": { "limit": 4 },
+      "localContext": {
+        "word": "charge",
+        "lineContext": "The club added a charge at the door"
+      }
+    },
+    "completion": "fee\ncost\nprice\ntoll",
+    "adversarialRejectedOutputs": ["charging"]
+  },
+  {
+    "caseId": "train_adv_synonyms_charge_verb",
+    "requestKind": "synonyms",
+    "request": {
+      "controls": { "limit": 3 },
+      "localContext": {
+        "word": "charge",
+        "lineContext": "They charge him with breaking the lock"
+      }
+    },
+    "completion": "accuse\nblame\nindict",
+    "adversarialRejectedOutputs": ["fee"]
+  },
+  {
+    "caseId": "train_adv_synonyms_falling_inflection",
+    "requestKind": "synonyms",
+    "request": {
+      "controls": { "limit": 4 },
+      "localContext": {
+        "word": "falling",
+        "lineContext": "The falling leaves covered every step"
+      }
+    },
+    "completion": "descending\ndropping\nsinking\ntumbling",
+    "adversarialRejectedOutputs": ["fall"]
+  },
+  {
+    "caseId": "train_adv_rewrite_spoke_inflection",
+    "requestKind": "rewrite_word",
+    "request": {
+      "controls": {
+        "action": "REPHRASE",
+        "rejectedCandidates": ["whispered"]
+      },
+      "localContext": {
+        "lyrics": "[Verse]\nShe spoke the warning before sunrise",
+        "selection": "spoke",
+        "lineContext": "She spoke the warning before sunrise"
+      }
+    },
+    "completion": "murmured",
+    "adversarialRejectedOutputs": ["speak"]
+  }
+]

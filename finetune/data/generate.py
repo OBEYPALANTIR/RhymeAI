@@ -44,7 +44,6 @@ from data import sample_cases, teacher  # noqa: E402
 
 MAX_ATTEMPTS_PER_SAMPLE = 3  # first draw + up to 2 re-draws
 TASKS = ("suggestions", "rewrite_passage", "rewrite_word", "synonyms")
-MIN_SYNONYMS = 3  # reject degenerate 1-2 word synonym lists
 
 # ---------------------------------------------------------------------------
 # Teacher-output cleaning (BEFORE scoring).
@@ -144,7 +143,7 @@ def salvage_synonyms(text: str, case: dict) -> str | None:
         picked.append(word)
         if len(picked) == case["limit"]:
             break
-    if len(picked) < MIN_SYNONYMS:
+    if len(picked) < min(scoring.MIN_USEFUL_SYNONYMS, case["limit"]):
         return None
     return "\n".join(picked)
 
@@ -163,9 +162,6 @@ def accepted(task: str, score: dict) -> bool:
     elif task == "rewrite_word":
         rhyme = score.get("rhyme")  # present only for HARDER_RHYME
         if rhyme is not None and not rhyme["is_perfect_rhyme"]:
-            return False
-    elif task == "synonyms":
-        if score["format"]["word_count"] < MIN_SYNONYMS:
             return False
     return True
 

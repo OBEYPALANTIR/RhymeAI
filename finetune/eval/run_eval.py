@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Desktop eval harness for RhymeAI's on-device Gemma models.
+"""Desktop replay harness for native RhymeAI local-model contract exports.
 
-Replays the Android app's exact local-model prompts (see prompts.py, a parity
-port of AIService.kt) against a GGUF served by llama.cpp's llama-server, and
-scores the raw outputs programmatically. Intended as the before/after gate for
-LoRA fine-tunes.
+Consumes prompts and generation provenance emitted by the production native
+builders, runs a controlled desktop replay through llama-server, and scores the
+raw outputs programmatically. The report states the native behavior that this
+desktop engine cannot reproduce exactly.
 
 Usage:
   python3 finetune/eval/run_eval.py --model /path/to/model.gguf \
+      --contracts ios.json android.json --replay-seed 3407 \
       [--cases N] [--out report.json]
 
 Requires llama-server (Homebrew llama.cpp: /opt/homebrew/bin/llama-server).
@@ -17,12 +18,14 @@ Stdlib only.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -30,24 +33,91 @@ import urllib.request
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from eval import cases as cases_mod
-    from eval import prompts, scoring
+    from eval import heldout, native_contract, prompts, scoring
 else:
     from . import cases as cases_mod
-    from . import prompts, scoring
+    from . import heldout, native_contract, prompts, scoring
 
 LLAMA_SERVER = "/opt/homebrew/bin/llama-server"
 
-# Sampler contract shared with the mobile apps (iOS LocalModelService /
-# Android LocalModelService: ctx 2048; temp 0.8, top-k 40, top-p 0.95).
-CTX_SIZE = 2048
-TEMPERATURE = 0.8
-TOP_K = 40
-TOP_P = 0.95
-N_PREDICT = 256
-STOP = ["<end_of_turn>"]
-
 HEALTH_TIMEOUT_S = 300
 REQUEST_TIMEOUT_S = 600
+
+
+def replay_seed_argument(value):
+    try:
+        return native_contract.validate_replay_seed(int(value))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def positive_integer_argument(value):
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be an integer") from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
+def append_native_chunk(output, chunk, length_limit, length_unit):
+    previous_length = native_contract.response_length(output, length_unit)
+    output += chunk
+    current_length = native_contract.response_length(output, length_unit)
+    boundary_reached = length_limit is not None and current_length >= length_limit
+    return output, previous_length, current_length, boundary_reached
+
+
+def response_boundary_passed(output_length, length_limit, boundary):
+    if length_limit is None or output_length <= length_limit:
+        return True
+    return (
+        boundary["enforcedDuringStreaming"]
+        and boundary["reached"]
+        and boundary["previousValue"] < length_limit <= boundary["value"]
+        and boundary["value"] == output_length
+    )
+
+
+def record_deadline_timeout(deadline_ms, final_payload):
+    if deadline_ms is None:
+        raise TimeoutError
+    final_payload["stop_type"] = "deadline"
+
+
+def remaining_deadline_seconds(started, deadline_ms, current):
+    return deadline_ms / 1000 - (current - started)
+
+
+def contract_file_evidence(paths):
+    return [
+        {"path": path, "sha256": native_contract.model_sha256(path)}
+        for path in paths
+    ]
+
+
+def prepare_output_paths(output_path):
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    return os.path.splitext(output_path)[0] + ".server.log"
+
+
+def termination_passed(payload):
+    return (
+        payload["terminal_received"]
+        and payload.get("stop_type") in {"eos", "word", "limit", "maximumResponseLength"}
+    )
+
+
+def expire_deadline_socket(expired, socket_ref):
+    expired.set()
+    active_socket = socket_ref[0]
+    if active_socket is not None:
+        try:
+            active_socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        active_socket.close()
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +126,7 @@ REQUEST_TIMEOUT_S = 600
 
 def prepare_case(case):
     task = case["task"]
-    prepared = {"case": case, "task": task, "id": case["id"]}
+    prepared = {"case": case, "task": task, "id": case["id"], "platform": "android"}
 
     if task == "suggestions":
         section_ref = None
@@ -120,6 +190,25 @@ def prepare_case(case):
     return prepared
 
 
+def prepare_contract(record):
+    case = native_contract.scoring_case(record)
+    prepared = {
+        "case": case,
+        "task": case["task"],
+        "id": case["id"],
+        "prompt": record["prompt"]["renderedText"],
+        "contract": record,
+        "platform": record["platform"],
+    }
+    if case["task"] == "suggestions" and case["target_rhyme_line"]:
+        prepared["constraint"] = prompts.suggestion_rhyme_constraint(
+            case["target_rhyme_line"],
+            case["rhyme_type"],
+            platform=record["platform"],
+        )
+    return prepared
+
+
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
@@ -143,18 +232,43 @@ def score_case(prepared, output_text):
         constraint = prepared.get("constraint")
         if constraint is not None:
             matches = scoring.find_rhymes(constraint.target_word)
+            required_tier = {
+                "PERFECT": 2,
+                "NEAR": 1,
+                "SLANT": 3 if prepared["platform"] == "ios" else 1,
+            }[case["rhyme_type"]]
             per_line = []
             for line in fmt["lines"]:
-                end = scoring.line_end_word(line)
-                if end and end in constraint.candidate_words:
+                end = scoring.line_end_word_for_platform(
+                    line, prepared["platform"]
+                )
+                actual_tier = scoring.rhyme_tier_for_platform(
+                    line,
+                    constraint.target_word,
+                    prepared["platform"],
+                    matches,
+                )
+                accepted = (
+                    actual_tier == required_tier
+                    if prepared["platform"] == "ios"
+                    else actual_tier >= required_tier
+                )
+                if end and end in constraint.candidate_words and accepted:
                     tier = "candidate"
-                elif scoring.rhyme_tier(line, matches) > 0:
+                elif accepted:
                     tier = "rhymes"
                 else:
                     tier = "miss"
-                per_line.append({"line": line, "end_word": end, "tier": tier})
+                per_line.append({
+                    "line": line,
+                    "end_word": end,
+                    "tier": tier,
+                    "rhyme_tier": actual_tier,
+                })
             result["rhyme"] = {
                 "target_word": constraint.target_word,
+                "requested_type": case["rhyme_type"],
+                "required_tier": required_tier,
                 "per_line": per_line,
                 "candidate": sum(1 for p in per_line if p["tier"] == "candidate"),
                 "rhymes": sum(1 for p in per_line if p["tier"] == "rhymes"),
@@ -186,12 +300,36 @@ def score_case(prepared, output_text):
         result["format"] = {
             "passed": fmt["passed"],
             "word_count": len(fmt["words"]),
+            "minimum_useful_count": min(scoring.MIN_USEFUL_SYNONYMS, case["limit"]),
             "violations": [
                 {"line_index": idx, "violations": v} for idx, v in fmt["violations"]
             ],
             "words": fmt["words"],
         }
     return result
+
+
+def score_passed(score):
+    heldout_score = score.get("heldout")
+    heldout_passed = heldout_score is None or (
+        heldout_score["lexical_validity_passed"]
+        and heldout_score["rejection_passed"]
+        and heldout_score["fixture_pos_and_context_passed"]
+    )
+    rhyme = score.get("rhyme")
+    if rhyme is None:
+        rhyme_passed = True
+    elif "per_line" in rhyme:
+        rhyme_passed = rhyme["miss"] == 0
+    else:
+        rhyme_passed = rhyme["is_perfect_rhyme"]
+    return (
+        score["format"]["passed"]
+        and score["response_length"]["passed"]
+        and score.get("termination", {"passed": True})["passed"]
+        and heldout_passed
+        and rhyme_passed
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +342,7 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def start_server(model_path, port, log_path):
+def start_server(model_path, port, log_path, context_length):
     if not os.path.exists(LLAMA_SERVER):
         sys.exit("llama-server not found at %s (brew install llama.cpp)" % LLAMA_SERVER)
     if not os.path.exists(model_path):
@@ -212,7 +350,7 @@ def start_server(model_path, port, log_path):
     cmd = [
         LLAMA_SERVER,
         "-m", model_path,
-        "--ctx-size", str(CTX_SIZE),
+        "--ctx-size", str(context_length),
         "--host", "127.0.0.1",
         "--port", str(port),
         "--n-gpu-layers", "99",
@@ -258,28 +396,128 @@ def stop_server(process, log_handle):
     log_handle.close()
 
 
-def completion(port, prompt):
-    """POST the raw pre-templated prompt to /completion (no chat template)."""
-    body = json.dumps({
-        "prompt": prompt,
-        "n_predict": N_PREDICT,
-        "temperature": TEMPERATURE,
-        "top_k": TOP_K,
-        "top_p": TOP_P,
-        "stop": STOP,
-        "cache_prompt": False,
-    }).encode("utf-8")
-    request = urllib.request.Request(
-        "http://127.0.0.1:%d/completion" % port,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    started = time.time()
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    latency = time.time() - started
-    return payload, latency
+def completion(port, contract, replay_seed):
+    """Stream one replay and stop at the native response-length boundary."""
+    request_body = native_contract.completion_body(contract, replay_seed=replay_seed)
+    request_body["stream"] = True
+    body = json.dumps(request_body).encode("utf-8")
+    started = time.monotonic()
+    deadline_ms = contract["generation"]["termination"]["deadlineMs"]
+    timeout = deadline_ms / 1000 if deadline_ms is not None else REQUEST_TIMEOUT_S
+    termination = contract["generation"]["termination"]
+    length_limit = termination["maximumResponseLength"]
+    length_unit = termination["responseLengthUnit"]
+    output = ""
+    previous_length = 0
+    boundary_reached = False
+    final_payload = {}
+    predicted_tokens = None
+    content_chunks = 0
+    terminal_received = False
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    deadline_expired = threading.Event()
+    deadline_socket = [None]
+    deadline_timer = None
+    try:
+        connection.connect()
+        deadline_socket[0] = connection.sock
+        if deadline_ms is not None:
+            remaining = remaining_deadline_seconds(started, deadline_ms, time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError
+            deadline_timer = threading.Timer(
+                remaining, expire_deadline_socket, args=(deadline_expired, deadline_socket)
+            )
+            deadline_timer.daemon = True
+            deadline_timer.start()
+        connection.request(
+            "POST", "/completion", body=body,
+            headers={"Content-Type": "application/json"},
+        )
+        if deadline_ms is not None:
+            remaining = remaining_deadline_seconds(started, deadline_ms, time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError
+            connection.sock.settimeout(remaining)
+        response = connection.getresponse()
+        content_type = response.headers.get_content_type()
+        stream_socket = response.fp.raw._sock
+        deadline_socket[0] = stream_socket
+        while True:
+            if deadline_ms is not None:
+                remaining = remaining_deadline_seconds(started, deadline_ms, time.monotonic())
+                if remaining <= 0:
+                    final_payload["stop_type"] = "deadline"
+                    break
+                stream_socket.settimeout(remaining)
+            raw_line = response.readline()
+            if not raw_line:
+                break
+            if (
+                deadline_ms is not None
+                and remaining_deadline_seconds(started, deadline_ms, time.monotonic()) <= 0
+            ):
+                final_payload["stop_type"] = "deadline"
+                break
+            line = raw_line.decode("utf-8").strip()
+            if not line:
+                continue
+            if content_type == "text/event-stream":
+                if not line.startswith("data:"):
+                    continue
+                line = line[5:].strip()
+            if line == "[DONE]":
+                terminal_received = True
+                break
+            event = json.loads(line)
+            final_payload.update(event)
+            reported_tokens = event.get("tokens_predicted")
+            if isinstance(reported_tokens, int) and not isinstance(reported_tokens, bool):
+                predicted_tokens = reported_tokens
+            chunk = event.get("content", "")
+            if chunk:
+                content_chunks += 1
+                output, previous_length, current_length, crossed_boundary = append_native_chunk(
+                    output, chunk, length_limit, length_unit
+                )
+                if crossed_boundary:
+                    boundary_reached = True
+                    terminal_received = True
+                    final_payload["stop_type"] = "maximumResponseLength"
+                    break
+            if event.get("stop"):
+                terminal_received = True
+                break
+    except (TimeoutError, OSError, http.client.HTTPException):
+        if (
+            deadline_ms is None
+            or (
+                not deadline_expired.is_set()
+                and remaining_deadline_seconds(started, deadline_ms, time.monotonic()) > 0
+            )
+        ):
+            raise
+        record_deadline_timeout(deadline_ms, final_payload)
+    finally:
+        if deadline_timer is not None:
+            deadline_timer.cancel()
+        connection.close()
+    if deadline_expired.is_set():
+        record_deadline_timeout(deadline_ms, final_payload)
+    latency = time.monotonic() - started
+    final_payload["content"] = output
+    final_payload["tokens_predicted"] = predicted_tokens
+    final_payload["content_chunks"] = content_chunks
+    final_payload["terminal_received"] = terminal_received
+    final_payload["replay_boundary"] = {
+        "enforcedDuringStreaming": True,
+        "reached": boundary_reached,
+        "previousValue": previous_length,
+        "value": native_contract.response_length(output, length_unit),
+        "limit": length_limit,
+        "unit": length_unit,
+    }
+    return final_payload, latency
 
 
 # ---------------------------------------------------------------------------
@@ -287,95 +525,237 @@ def completion(port, prompt):
 # ---------------------------------------------------------------------------
 
 def summarize(results):
-    by_task = {}
+    by_platform_task = {}
     for entry in results:
-        by_task.setdefault(entry["task"], []).append(entry)
+        key = (entry["platform"], entry["task"])
+        by_platform_task.setdefault(key, []).append(entry)
 
     print()
-    print("=" * 78)
+    print("=" * 118)
     print("SUMMARY")
-    print("=" * 78)
-    header = "%-18s %5s %10s %26s %9s %8s" % (
-        "task", "n", "fmt pass", "rhyme lines (cand/rhy/miss)", "avg s", "avg tok"
+    print("=" * 118)
+    header = "%-8s %-18s %5s %10s %12s %11s %26s %9s %9s" % (
+        "platform", "task", "n", "fmt pass", "fixture pass", "human",
+        "rhyme lines (cand/rhy/miss)", "avg s", "avg tok",
     )
     print(header)
     print("-" * len(header))
-    for task in ("suggestions", "rewrite_passage", "rewrite_word", "synonyms"):
-        entries = by_task.get(task, [])
-        if not entries:
-            continue
-        n = len(entries)
-        fmt_pass = sum(1 for e in entries if e["score"]["format"]["passed"])
-        avg_latency = sum(e["latency_s"] for e in entries) / n
-        avg_tokens = sum(e["tokens_predicted"] for e in entries) / n
-
-        rhyme_col = "-"
-        rhyme_entries = [e for e in entries if "rhyme" in e["score"] and "per_line" in e["score"]["rhyme"]]
-        if rhyme_entries:
-            candidate = sum(e["score"]["rhyme"]["candidate"] for e in rhyme_entries)
-            rhymes = sum(e["score"]["rhyme"]["rhymes"] for e in rhyme_entries)
-            miss = sum(e["score"]["rhyme"]["miss"] for e in rhyme_entries)
-            total = candidate + rhymes + miss
-            if total:
-                rhyme_col = "%d/%d/%d (%.0f%% hit)" % (
-                    candidate, rhymes, miss, 100.0 * (candidate + rhymes) / total
+    for platform in ("ios", "android"):
+        for task in ("suggestions", "rewrite_passage", "rewrite_word", "synonyms"):
+            entries = by_platform_task.get((platform, task), [])
+            if not entries:
+                continue
+            n = len(entries)
+            fmt_pass = sum(1 for e in entries if e["score"]["format"]["passed"])
+            avg_latency = sum(e["latency_s"] for e in entries) / n
+            known_tokens = [
+                e["tokens_predicted"] for e in entries
+                if e["tokens_predicted"] is not None
+            ]
+            avg_tokens = (
+                "%.0f" % (sum(known_tokens) / len(known_tokens))
+                if known_tokens else "unknown"
+            )
+            fixture_entries = [e["score"]["heldout"] for e in entries if "heldout" in e["score"]]
+            if fixture_entries:
+                fixture_passes = sum(
+                    1 for score in fixture_entries
+                    if score["lexical_validity_passed"]
+                    and score["rejection_passed"]
+                    and score["fixture_pos_and_context_passed"]
                 )
-        elif task == "rewrite_word":
-            harder = [e for e in entries if "rhyme" in e["score"]]
-            if harder:
-                hits = sum(1 for e in harder if e["score"]["rhyme"]["is_perfect_rhyme"])
-                rhyme_col = "harder-rhyme %d/%d perfect" % (hits, len(harder))
+                fixture_col = "%d/%d" % (fixture_passes, len(fixture_entries))
+                human_col = "unverified"
+            else:
+                fixture_col = "-"
+                human_col = "-"
 
-        print("%-18s %5d %9.0f%% %26s %9.2f %8.0f" % (
-            task, n, 100.0 * fmt_pass / n, rhyme_col, avg_latency, avg_tokens
-        ))
+            rhyme_col = "-"
+            rhyme_entries = [
+                e for e in entries
+                if "rhyme" in e["score"] and "per_line" in e["score"]["rhyme"]
+            ]
+            if rhyme_entries:
+                candidate = sum(e["score"]["rhyme"]["candidate"] for e in rhyme_entries)
+                rhymes = sum(e["score"]["rhyme"]["rhymes"] for e in rhyme_entries)
+                miss = sum(e["score"]["rhyme"]["miss"] for e in rhyme_entries)
+                total = candidate + rhymes + miss
+                if total:
+                    rhyme_col = "%d/%d/%d (%.0f%% hit)" % (
+                        candidate, rhymes, miss, 100.0 * (candidate + rhymes) / total
+                    )
+            elif task == "rewrite_word":
+                harder = [e for e in entries if "rhyme" in e["score"]]
+                if harder:
+                    hits = sum(
+                        1 for e in harder if e["score"]["rhyme"]["is_perfect_rhyme"]
+                    )
+                    rhyme_col = "harder-rhyme %d/%d perfect" % (hits, len(harder))
+
+            print("%-8s %-18s %5d %9.0f%% %12s %11s %26s %9.2f %9s" % (
+                platform, task, n, 100.0 * fmt_pass / n,
+                fixture_col, human_col, rhyme_col, avg_latency, avg_tokens,
+            ))
     print()
+
+
+def evaluation_passed(results):
+    return bool(results) and all(result["passed"] for result in results)
+
+
+def validate_heldout_coverage(case_manifest, heldout_fixtures):
+    expected = {
+        case["caseId"]
+        for case in case_manifest["cases"]
+        if case["caseId"].startswith("heldout_")
+    }
+    actual = set(heldout_fixtures)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise ValueError(
+            "held-out fixtures differ from manifest (missing=%s extra=%s)"
+            % (missing, extra)
+        )
+
+
+def exit_on_evaluation_failure(passed):
+    if not passed:
+        raise SystemExit(1)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Replay RhymeAI's exact on-device prompts against a GGUF "
-                    "via llama-server and score the outputs.",
+        description="Run a controlled desktop replay of native RhymeAI contract exports against a "
+                    "GGUF via llama-server and score the outputs.",
     )
     parser.add_argument("--model", required=True, help="Path to the .gguf model file")
-    parser.add_argument("--cases", type=int, default=None,
-                        help="Only run the first N cases (default: all)")
+    parser.add_argument("--contracts", nargs="+", required=True,
+                        help="Native JSON/JSONL export file(s); JSON may contain one record or an array")
+    parser.add_argument(
+        "--replay-seed",
+        type=replay_seed_argument,
+        required=True,
+        help="Explicit non-negative seed for this controlled desktop replay; native seed provenance is preserved separately",
+    )
+    parser.add_argument(
+        "--case-manifest",
+        default=os.path.join(os.path.dirname(__file__), "native-contract-cases-v1.json"),
+        help="Frozen shared native request manifest",
+    )
+    parser.add_argument(
+        "--heldout-fixtures",
+        default=os.path.join(os.path.dirname(__file__), "heldout-cases-v1.json"),
+        help="Held-out semantic fixture file (default: eval/heldout-cases-v1.json)",
+    )
+    parser.add_argument("--cases", type=positive_integer_argument, default=None,
+                        help="Run the first N manifest cases on both platforms (default: all)")
     parser.add_argument("--out", default="report.json",
                         help="Path for the JSON report (default: report.json)")
     args = parser.parse_args()
 
-    all_cases = cases_mod.CASES
-    selected = all_cases[: args.cases] if args.cases else all_cases
-
-    # Prepare all prompts up front (also fails fast on bad cases and warms the
-    # pronunciation index).
-    prepared_cases = [prepare_case(case) for case in selected]
+    contract_files = contract_file_evidence(args.contracts)
+    case_manifest_sha256 = native_contract.model_sha256(args.case_manifest)
+    heldout_fixture_sha256 = native_contract.model_sha256(args.heldout_fixtures)
+    contracts = native_contract.load_contracts(args.contracts, exact=True)
+    case_manifest = native_contract.load_case_manifest(args.case_manifest)
+    native_contract.validate_manifest_records(contracts, case_manifest)
+    native_contract.validate_platform_pairs(contracts)
+    heldout_fixtures = heldout.load(args.heldout_fixtures)
+    validate_heldout_coverage(case_manifest, heldout_fixtures)
+    if (
+        contract_files != contract_file_evidence(args.contracts)
+        or case_manifest_sha256 != native_contract.model_sha256(args.case_manifest)
+        or heldout_fixture_sha256 != native_contract.model_sha256(args.heldout_fixtures)
+    ):
+        sys.exit("evaluation inputs changed while loading")
+    if args.cases is not None:
+        selected_ids = {
+            case["caseId"] for case in case_manifest["cases"][: args.cases]
+        }
+        selected = [record for record in contracts if record["caseId"] in selected_ids]
+    else:
+        selected = contracts
+    actual_model_sha = native_contract.model_sha256(args.model)
+    expected_model_shas = {record["modelSha256"] for record in selected}
+    if expected_model_shas != {actual_model_sha}:
+        sys.exit("model SHA-256 does not match every native contract: %s" % actual_model_sha)
+    context_lengths = {record["generation"]["contextLength"] for record in selected}
+    if len(context_lengths) != 1:
+        sys.exit("native contracts must use one contextLength per replay run")
+    prepared_cases = [prepare_contract(record) for record in selected]
 
     port = free_port()
-    log_path = os.path.splitext(args.out)[0] + ".server.log"
+    log_path = prepare_output_paths(args.out)
     print("starting llama-server on port %d (log: %s)" % (port, log_path))
-    process, log_handle = start_server(args.model, port, log_path)
+    process, log_handle = start_server(args.model, port, log_path, context_lengths.pop())
 
     results = []
     try:
         wait_for_health(port, process)
+        if native_contract.model_sha256(args.model) != actual_model_sha:
+            sys.exit("model changed while llama-server was loading")
         print("server healthy; running %d cases" % len(prepared_cases))
         for index, prepared in enumerate(prepared_cases, 1):
-            payload, latency = completion(port, prepared["prompt"])
+            contract = prepared["contract"]
+            payload, latency = completion(port, contract, args.replay_seed)
             output_text = payload.get("content", "")
-            tokens = payload.get("tokens_predicted", 0)
+            tokens = payload.get("tokens_predicted")
             score = score_case(prepared, output_text)
-            passed = score["format"]["passed"]
-            print("[%2d/%2d] %-32s %s  (%.1fs, %d tok)" % (
+            fixture = heldout_fixtures.get(prepared["id"])
+            if fixture is not None:
+                heldout.validate_contract(fixture, contract)
+                candidates = heldout.candidates_from_score(prepared["task"], score)
+                score["heldout"] = heldout.score_candidates(candidates, fixture)
+            termination = contract["generation"]["termination"]
+            output_length = native_contract.response_length(
+                output_text, termination["responseLengthUnit"]
+            )
+            length_limit = termination["maximumResponseLength"]
+            boundary = payload["replay_boundary"]
+            length_passed = response_boundary_passed(output_length, length_limit, boundary)
+            score["response_length"] = {
+                "passed": length_passed,
+                "value": output_length,
+                "limit": length_limit,
+                "unit": termination["responseLengthUnit"],
+                "enforced_during_streaming": boundary["enforcedDuringStreaming"],
+                "boundary_reached": boundary["reached"],
+                "boundary_previous_value": boundary["previousValue"],
+            }
+            score["termination"] = {
+                "passed": termination_passed(payload),
+                "reason": payload.get("stop_type"),
+                "terminal_received": payload["terminal_received"],
+            }
+            passed = score_passed(score)
+            print("[%2d/%2d] %-32s %s  (%.1fs, %s tok)" % (
                 index, len(prepared_cases), prepared["id"],
-                "PASS" if passed else "FAIL", latency, tokens,
+                "PASS" if passed else "FAIL", latency,
+                tokens if tokens is not None else "unknown",
             ))
             results.append({
                 "id": prepared["id"],
                 "task": prepared["task"],
+                "platform": contract["platform"],
+                "passed": passed,
+                "source_sha": contract["sourceSha"],
+                "model_sha256": contract["modelSha256"],
+                "prompt_sha256": contract["prompt"]["renderedTextSha256"],
+                "native_generation": contract["generation"],
+                "native_runtime": contract["runtime"],
+                "controlled_replay_seed": {
+                    "policy": "fixed",
+                    "value": args.replay_seed,
+                },
                 "prompt_chars": len(prepared["prompt"]),
                 "latency_s": round(latency, 3),
                 "tokens_predicted": tokens,
+                "tokens_predicted_provenance": (
+                    "serverReported" if tokens is not None else "unavailable"
+                ),
+                "stream_content_chunks": payload["content_chunks"],
+                "replay_stop_type": payload.get("stop_type"),
                 "output": output_text,
                 "score": score,
             })
@@ -385,15 +765,29 @@ def main():
 
     report = {
         "model": args.model,
-        "sampler": {
-            "ctx_size": CTX_SIZE,
-            "temperature": TEMPERATURE,
-            "top_k": TOP_K,
-            "top_p": TOP_P,
-            "n_predict": N_PREDICT,
-            "stop": STOP,
+        "model_sha256": actual_model_sha,
+        "llama_server": LLAMA_SERVER,
+        "replay_evidence_kind": "controlledReplay",
+        "controlled_replay_seed": {
+            "policy": "fixed",
+            "value": args.replay_seed,
         },
+        "replay_limitations": [
+            "Native prompt bytes and reported settings are preserved, but llama-server is not the native engine.",
+            "Native tokenizer flags are recorded and validated against the replay-supported combination; native token IDs are not captured, so tokenization is not byte-for-byte verified.",
+            "Response limits are applied to llama-server stream chunks in the exported native unit; native token boundaries and stop behavior may differ.",
+            "Native cache and cold/warm fields are provenance only and are not reproduced by the desktop server process.",
+        ],
+        "contract_files": contract_files,
+        "case_manifest_file": args.case_manifest,
+        "case_manifest_sha256": case_manifest_sha256,
+        "heldout_fixture_file": args.heldout_fixtures,
+        "heldout_fixture_sha256": heldout_fixture_sha256,
+        "heldout_case_count": sum(
+            1 for result in results if "heldout" in result["score"]
+        ),
         "case_count": len(results),
+        "passed": evaluation_passed(results),
         "results": results,
     }
     with open(args.out, "w", encoding="utf-8") as handle:
@@ -401,6 +795,7 @@ def main():
     print("report written to %s" % args.out)
 
     summarize(results)
+    exit_on_evaluation_failure(report["passed"])
 
 
 if __name__ == "__main__":

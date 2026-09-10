@@ -1,0 +1,202 @@
+[
+  {
+    "caseId": "heldout_rewrite_glow_reject_gleam",
+    "requestKind": "rewrite_word",
+    "request": {
+      "controls": {
+        "action": "REPHRASE",
+        "rejectedCandidates": ["gleam"]
+      },
+      "localContext": {
+        "lyrics": "[Verse]\nThe dashboard lights glow above the wheel",
+        "selection": "glow",
+        "lineContext": "The dashboard lights glow above the wheel"
+      }
+    },
+    "evaluation": {
+      "expectedPartOfSpeech": "verb",
+      "acceptedSpellings": ["beam", "radiate", "shine"],
+      "rejectedSpellings": ["gleam"],
+      "requiresHumanSemanticRating": true,
+      "adversarialOutputs": [
+        {
+          "text": "g-l-e-a-m",
+          "violations": ["invalidLexicalSpelling", "rejectedCandidate"]
+        }
+      ]
+    }
+  },
+  {
+    "caseId": "heldout_rewrite_crooked_reject_askew",
+    "requestKind": "rewrite_word",
+    "request": {
+      "controls": {
+        "action": "REPHRASE",
+        "rejectedCandidates": ["askew"]
+      },
+      "localContext": {
+        "lyrics": "[Verse]\nTomatoes lean crooked on their stakes",
+        "selection": "crooked",
+        "lineContext": "Tomatoes lean crooked on their stakes"
+      }
+    },
+    "evaluation": {
+      "expectedPartOfSpeech": "adjective",
+      "acceptedSpellings": ["bent", "tilted", "twisted"],
+      "rejectedSpellings": ["askew"],
+      "requiresHumanSemanticRating": true,
+      "adversarialOutputs": [
+        {
+          "text": "a-skew",
+          "violations": ["invalidLexicalSpelling", "rejectedCandidate"]
+        }
+      ]
+    }
+  },
+  {
+    "caseId": "heldout_synonyms_promise_noun",
+    "requestKind": "synonyms",
+    "request": {
+      "controls": { "limit": 5 },
+      "localContext": {
+        "word": "promise",
+        "lineContext": "I carried your promise through the storm"
+      }
+    },
+    "evaluation": {
+      "expectedPartOfSpeech": "noun",
+      "acceptedSpellings": ["assurance", "commitment", "pledge", "vow"],
+      "rejectedSpellings": [],
+      "requiresHumanSemanticRating": true,
+      "adversarialOutputs": [
+        {
+          "text": "promisee",
+          "violations": ["invalidLexicalSpelling", "contextualMismatch"]
+        },
+        {
+          "text": "vowee",
+          "violations": ["invalidLexicalSpelling", "contextualMismatch"]
+        }
+      ]
+    }
+  },
+  {
+    "caseId": "heldout_synonyms_promise_verb",
+    "requestKind": "synonyms",
+    "request": {
+      "controls": { "limit": 5 },
+      "localContext": {
+        "word": "promise",
+        "lineContext": "I promise to return before the dawn"
+      }
+    },
+    "evaluation": {
+      "expectedPartOfSpeech": "verb",
+      "acceptedSpellings": ["pledge", "swear", "vow"],
+      "rejectedSpellings": [],
+      "requiresHumanSemanticRating": true,
+      "adversarialOutputs": [
+        {
+          "text": "assurance",
+          "violations": ["partOfSpeechMismatch", "contextualMismatch"]
+        }
+      ]
+    }
+  },
+  {
+    "caseId": "heldout_synonyms_glow_noun",
+    "requestKind": "synonyms",
+    "request": {
+      "controls": { "limit": 5 },
+      "localContext": {
+        "word": "glow",
+        "lineContext": "The dashboard held a steady glow"
+      }
+    },
+    "evaluation": {
+      "expectedPartOfSpeech": "noun",
+      "acceptedSpellings": ["gleam", "luster", "radiance", "shine"],
+      "rejectedSpellings": [],
+      "requiresHumanSemanticRating": true,
+      "adversarialOutputs": [
+        {
+          "text": "glowing",
+          "violations": ["partOfSpeechMismatch", "contextualMismatch"]
+        }
+      ]
+    }
+  },
+  {
+    "caseId": "heldout_synonyms_glow_verb",
+    "requestKind": "synonyms",
+    "request": {
+      "controls": { "limit": 5 },
+      "localContext": {
+        "word": "glow",
+        "lineContext": "The lanterns glow along the pier"
+      }
+    },
+    "evaluation": {
+      "expectedPartOfSpeech": "verb",
+      "acceptedSpellings": ["beam", "gleam", "radiate", "shine"],
+      "rejectedSpellings": [],
+      "requiresHumanSemanticRating": true,
+      "adversarialOutputs": [
+        {
+          "text": "radiance",
+          "violations": ["partOfSpeechMismatch", "contextualMismatch"]
+        }
+      ]
+    }
+  },
+  {
+    "caseId": "heldout_synonyms_running_inflection",
+    "requestKind": "synonyms",
+    "request": {
+      "controls": { "limit": 5 },
+      "localContext": {
+        "word": "running",
+        "lineContext": "We followed running water through the pines"
+      }
+    },
+    "evaluation": {
+      "expectedPartOfSpeech": "adjective",
+      "acceptedSpellings": ["flowing", "moving", "rushing", "streaming"],
+      "rejectedSpellings": [],
+      "requiresHumanSemanticRating": true,
+      "adversarialOutputs": [
+        {
+          "text": "run",
+          "violations": ["inflectionMismatch", "contextualMismatch"]
+        }
+      ]
+    }
+  },
+  {
+    "caseId": "heldout_rewrite_walked_inflection",
+    "requestKind": "rewrite_word",
+    "request": {
+      "controls": {
+        "action": "REPHRASE",
+        "rejectedCandidates": ["marched"]
+      },
+      "localContext": {
+        "lyrics": "[Verse]\nI walked the empty block at closing time",
+        "selection": "walked",
+        "lineContext": "I walked the empty block at closing time"
+      }
+    },
+    "evaluation": {
+      "expectedPartOfSpeech": "pastTenseVerb",
+      "acceptedSpellings": ["paced", "strolled", "wandered"],
+      "rejectedSpellings": ["marched"],
+      "requiresHumanSemanticRating": true,
+      "adversarialOutputs": [
+        {
+          "text": "walk",
+          "violations": ["inflectionMismatch", "contextualMismatch"]
+        }
+      ]
+    }
+  }
+]

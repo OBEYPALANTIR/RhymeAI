@@ -9,6 +9,11 @@ Ports of the Android sources (do not let these drift):
   - android/.../util/SyllableCounter.kt   (dictionary-first with heuristic fallback)
   - android/.../service/AIService.kt      (output-cleaning regexes used as validators)
 
+The iOS-specific rhyme relation scorer mirrors
+`Writers Block/Services/ProsodyAnalyzer.swift` because iOS keeps PERFECT, NEAR,
+and SLANT acceptance exclusive while Android currently ranks NEAR and SLANT
+with its shared loose tier.
+
 Only what scoring needs is ported. Stdlib only.
 """
 
@@ -59,6 +64,10 @@ SUBSTITUTIONS = [
 
 # LyricTokenizer.wordPattern
 WORD_PATTERN = re.compile(r"[a-zA-Z']+")
+MIN_USEFUL_SYNONYMS = 3
+IOS_WHITESPACE_PATTERN = re.compile(
+    r"[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+"
+)
 
 _STRESS_SUFFIX = re.compile(r"[0-2]$")
 
@@ -345,6 +354,20 @@ def line_end_word(line):
     return normalize_word(matches[-1])
 
 
+def ios_line_end_word(line):
+    for token in reversed(IOS_WHITESPACE_PATTERN.split(line)):
+        normalized = normalize_word(token)
+        if normalized:
+            return normalized
+    return ""
+
+
+def line_end_word_for_platform(line, platform):
+    if platform == "ios":
+        return ios_line_end_word(line)
+    return line_end_word(line)
+
+
 def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None):
     """RhymeConstraint.candidateEndWords. rhyme_type: 'PERFECT'|'NEAR'|'SLANT'."""
     dictionary = dictionary or shared_dictionary()
@@ -376,6 +399,92 @@ def rhyme_tier(line, matches):
     if end_word in matches.near:
         return 1
     return 0
+
+
+def _rhyme_tail_for_phones(phones):
+    vowel_indexes = [
+        index for index, phone in enumerate(phones) if base_phone(phone) in VOWELS
+    ]
+    if not vowel_indexes:
+        return None
+    stressed = [index for index in vowel_indexes if (stress_for_phone(phones[index]) or 0) > 0]
+    vowel_index = (stressed or vowel_indexes)[-1]
+    return (
+        base_phone(phones[vowel_index]),
+        tuple(base_phone(phone) for phone in phones[vowel_index + 1:]),
+    )
+
+
+def _has_single_coda_edit(lhs, rhs):
+    difference = len(lhs) - len(rhs)
+    if abs(difference) > 1:
+        return False
+    if difference == 0:
+        return sum(left != right for left, right in zip(lhs, rhs)) == 1
+    shorter, longer = (lhs, rhs) if len(lhs) < len(rhs) else (rhs, lhs)
+    short_index = 0
+    skipped = False
+    for phone in longer:
+        if short_index < len(shorter) and shorter[short_index] == phone:
+            short_index += 1
+        elif skipped:
+            return False
+        else:
+            skipped = True
+    return short_index == len(shorter)
+
+
+def _ios_rhyme_tier(line, target_word, dictionary):
+    candidate = line_end_word_for_platform(line, "ios")
+    target = normalize_word(target_word)
+    target_pronunciations = dictionary.pronunciations(target)
+    if candidate == target or not target_pronunciations:
+        return 0
+    target_phones = target_pronunciations[0]
+    target_keys = rhyme_keys_for_phones(target_phones, 2)
+    target_tail = _rhyme_tail_for_phones(target_phones)
+    if not target_keys or target_tail is None:
+        return 0
+    target_key = target_keys[0]
+    target_multi_key = target_keys[1] if len(target_keys) > 1 else None
+    near = False
+    slant = False
+    for candidate_phones in dictionary.pronunciations(candidate):
+        candidate_keys = rhyme_keys_for_phones(candidate_phones, 2)
+        if (
+            (candidate_keys and candidate_keys[0] == target_key)
+            or (
+                target_multi_key is not None
+                and len(candidate_keys) > 1
+                and candidate_keys[1] == target_multi_key
+            )
+        ):
+            return 2
+        candidate_tail = _rhyme_tail_for_phones(candidate_phones)
+        if candidate_tail is None:
+            continue
+        if (
+            candidate_tail[0] == target_tail[0]
+            and _has_single_coda_edit(target_tail[1], candidate_tail[1])
+        ):
+            near = True
+        elif (
+            target_tail[1]
+            and candidate_tail[0] != target_tail[0]
+            and candidate_tail[1] == target_tail[1]
+        ):
+            slant = True
+    if near:
+        return 1
+    if slant:
+        return 3
+    return 0
+
+
+def rhyme_tier_for_platform(line, target_word, platform, matches):
+    if platform == "ios":
+        return _ios_rhyme_tier(line, target_word, shared_dictionary())
+    return rhyme_tier(line, matches)
 
 
 def is_perfect_rhyme(word_a, word_b, dictionary=None):
@@ -464,10 +573,13 @@ PROMPT_ECHO_RE = re.compile(
 )
 CONTROL_MARKER_RE = re.compile(
     r"<?/?(?:start_of_turn|end_of_turn)>?\w*|_?response>|_?model_response>|"
-    r"assistant_response>|model_response>",
+    r"assistant_response>|model_response>|<\|turn>|<turn\|>|"
+    r"<\|end_of_turn\|?>|<end_of_turn\|>",
     re.IGNORECASE,
 )
+HTML_MARKUP_RE = re.compile(r"</?[a-z][^>]*>", re.IGNORECASE)
 SINGLE_WORD_RE = re.compile(r"(?:[^\W_]|['-])+$", re.UNICODE)
+LEXICAL_SPELLING_RE = re.compile(r"^[a-z]+(?:['-][a-z]+)*$")
 _NORMALIZE_KEY_RE = re.compile(r"[^a-z0-9]+")
 _MARKDOWN_RE = re.compile(r"(```|\*\*|__|^#+\s)", re.MULTILINE)
 
@@ -480,6 +592,22 @@ def normalize_suggestion_key(text):
 def is_single_word(text):
     """AIService.isSingleWordSelection."""
     return bool(SINGLE_WORD_RE.fullmatch(text.strip()))
+
+
+def lexical_spelling(text):
+    return text.strip().lower().replace("’", "'")
+
+
+def rejection_key(text):
+    return lexical_spelling(text).replace("-", "").replace("'", "")
+
+
+def is_lexically_valid(text, dictionary=None):
+    spelling = lexical_spelling(text)
+    if not LEXICAL_SPELLING_RE.fullmatch(spelling):
+        return False
+    dictionary = dictionary or shared_dictionary()
+    return spelling in dictionary.entries
 
 
 def word_count(line):
@@ -532,6 +660,17 @@ def _line_violations(line, max_words=16):
     return violations
 
 
+def _raw_output_violations(raw_output):
+    violations = []
+    if CONTROL_MARKER_RE.search(raw_output):
+        violations.append("control_marker")
+    if HTML_MARKUP_RE.search(raw_output):
+        violations.append("html_markup")
+    if _MARKDOWN_RE.search(raw_output):
+        violations.append("markdown")
+    return violations
+
+
 def validate_suggestions(raw_output, expected_count, lyrics):
     """Format validation for a suggestions response.
 
@@ -541,6 +680,9 @@ def validate_suggestions(raw_output, expected_count, lyrics):
     text = strip_model_output(raw_output)
     lines = [l for l in text.split("\n") if l.strip()]
     violations = []
+    raw_violations = _raw_output_violations(raw_output)
+    if raw_violations:
+        violations.append((-1, raw_violations))
 
     if len(lines) != expected_count:
         violations.append((-1, ["expected_%d_lines_got_%d" % (expected_count, len(lines))]))
@@ -571,7 +713,7 @@ def validate_suggestions(raw_output, expected_count, lyrics):
 def validate_rewrite_passage(raw_output, selection):
     """Format validation for a passage rewrite response."""
     text = strip_model_output(raw_output)
-    violations = []
+    violations = _raw_output_violations(raw_output)
     if not text.strip():
         violations.append("empty")
         return {"text": text, "violations": violations, "passed": False}
@@ -598,7 +740,7 @@ def validate_rewrite_passage(raw_output, selection):
 def validate_single_word_rewrite(raw_output, selection, rejected=()):
     """Format validation for a single-word rewrite response."""
     text = strip_model_output(raw_output)
-    violations = []
+    violations = _raw_output_violations(raw_output)
     word = text.strip()
     if not word:
         violations.append("empty")
@@ -609,10 +751,10 @@ def validate_single_word_rewrite(raw_output, selection, rejected=()):
     candidate_key = normalize_suggestion_key(word)
     if candidate_key == original_key:
         violations.append("same_as_original")
-    rejected_keys = {
-        normalize_suggestion_key(r) for r in rejected if normalize_suggestion_key(r)
-    }
-    if candidate_key in rejected_keys:
+    if not is_lexically_valid(word):
+        violations.append("invalid_lexical_spelling")
+    rejected_keys = {rejection_key(r) for r in rejected if rejection_key(r)}
+    if rejection_key(word) in rejected_keys:
         violations.append("in_rejected_list")
     return {"word": word, "violations": violations, "passed": not violations}
 
@@ -622,8 +764,14 @@ def validate_synonyms(raw_output, target_word, limit):
     text = strip_model_output(raw_output)
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     violations = []
+    raw_violations = _raw_output_violations(raw_output)
+    if raw_violations:
+        violations.append((-1, raw_violations))
     if not lines:
         violations.append((-1, ["empty"]))
+    minimum_useful_count = min(MIN_USEFUL_SYNONYMS, limit)
+    if len(lines) < minimum_useful_count:
+        violations.append((-1, ["fewer_than_%d_lines" % minimum_useful_count]))
     if len(lines) > limit:
         violations.append((-1, ["more_than_%d_lines" % limit]))
     target_key = normalize_suggestion_key(target_word)
@@ -634,6 +782,8 @@ def validate_synonyms(raw_output, target_word, limit):
             line_violations.append("numbering_or_bullet")
         if not is_single_word(line):
             line_violations.append("not_single_word")
+        if not is_lexically_valid(line):
+            line_violations.append("invalid_lexical_spelling")
         key = normalize_suggestion_key(line)
         if key == target_key:
             line_violations.append("is_target_word")

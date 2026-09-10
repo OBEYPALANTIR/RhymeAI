@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/OBEYPALANTIR/RhymeAI/finetune/eval/native-contract-v1.schema.json",
+  "title": "RhymeAI native local-model contract export",
+  "description": "The examples array is illustrative. Exact replay rejects placeholder hashes, versions, and schema_example case IDs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "platform",
+    "sourceSha",
+    "modelSha256",
+    "caseId",
+    "requestKind",
+    "request",
+    "prompt",
+    "generation",
+    "runtime"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "platform": { "enum": ["ios", "android"] },
+    "sourceSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "modelSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "caseId": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+    "requestKind": {
+      "enum": ["suggestions", "rewrite_passage", "rewrite_word", "synonyms"]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["controls", "localContext"],
+      "properties": {
+        "controls": { "type": "object" },
+        "localContext": { "type": "object" }
+      }
+    },
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "userText",
+        "renderedText",
+        "userTextSha256",
+        "renderedTextSha256",
+        "tokenizerArchitecture",
+        "tokenizerEnvelope",
+        "tokenizerChatTemplateSha256",
+        "tokenization"
+      ],
+      "properties": {
+        "userText": { "type": "string", "minLength": 1 },
+        "renderedText": { "type": "string", "minLength": 1 },
+        "userTextSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "renderedTextSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "tokenizerArchitecture": { "type": "string", "minLength": 1 },
+        "tokenizerEnvelope": { "type": "string", "minLength": 1 },
+        "tokenizerChatTemplateSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "tokenization": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["addSpecial", "parseSpecial"],
+          "properties": {
+            "addSpecial": { "type": "boolean" },
+            "parseSpecial": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "contextLength", "sampler", "termination", "cache"],
+      "properties": {
+        "engine": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "version": { "type": "string", "minLength": 1 }
+          }
+        },
+        "contextLength": { "type": "integer", "minimum": 1 },
+        "sampler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["chain", "seed"],
+          "properties": {
+            "chain": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["algorithm", "parameters"],
+                "properties": {
+                  "algorithm": { "type": "string", "minLength": 1 },
+                  "parameters": { "type": "object" }
+                }
+              }
+            },
+            "seed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["policy", "value"],
+              "properties": {
+                "policy": { "enum": ["fixed", "randomPerRequest", "engineDefault"] },
+                "value": {
+                  "oneOf": [
+                    { "type": "integer" },
+                    { "type": "null" }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "termination": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stopOnEog",
+            "stopSequences",
+            "maximumOutputTokens",
+            "maximumResponseLength",
+            "responseLengthUnit",
+            "deadlineMs",
+            "reason"
+          ],
+          "properties": {
+            "stopOnEog": { "type": "boolean" },
+            "stopSequences": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            },
+            "maximumOutputTokens": {
+              "oneOf": [
+                { "type": "integer", "minimum": 1 },
+                { "type": "null" }
+              ]
+            },
+            "maximumResponseLength": {
+              "oneOf": [
+                { "type": "integer", "minimum": 1 },
+                { "type": "null" }
+              ]
+            },
+            "responseLengthUnit": {
+              "enum": ["utf8Bytes", "utf16CodeUnits"]
+            },
+            "deadlineMs": {
+              "oneOf": [
+                { "type": "integer", "minimum": 1 },
+                { "type": "null" }
+              ]
+            },
+            "reason": {
+              "enum": [
+                "notRun",
+                "eog",
+                "stopSequence",
+                "maximumOutputTokens",
+                "maximumResponseLength",
+                "contextExhausted",
+                "deadline",
+                "cancelled",
+                "error"
+              ]
+            }
+          }
+        },
+        "cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["clearKvBeforeRequest", "promptCache", "state"],
+          "properties": {
+            "clearKvBeforeRequest": { "type": "boolean" },
+            "promptCache": { "type": "boolean" },
+            "state": { "enum": ["cold", "warm"] }
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "osVersion", "buildVariant", "evidenceKind", "capturedAt"],
+      "properties": {
+        "target": { "type": "string", "minLength": 1 },
+        "osVersion": { "type": "string", "minLength": 1 },
+        "buildVariant": { "type": "string", "minLength": 1 },
+        "evidenceKind": { "enum": ["nativeRun", "controlledReplay", "contractExport"] },
+        "capturedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schemaVersion": 1,
+      "platform": "ios",
+      "sourceSha": "97e7cf0bb3920933a04262b123e609e0b769c923",
+      "modelSha256": "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+      "caseId": "schema_example_synonyms_glow",
+      "requestKind": "synonyms",
+      "request": {
+        "controls": { "limit": 3 },
+        "localContext": { "word": "glow", "lineContext": "The dashboard held a steady glow" }
+      },
+      "prompt": {
+        "userText": "Task: give up to 3 single-word replacements for \"glow\".",
+        "renderedText": "<|turn>user\nTask: give up to 3 single-word replacements for \"glow\".<turn|>\n<|turn>model\n",
+        "userTextSha256": "59f5f02a567b7d2da43100ac05e3524bf7337f0ad590ee05edfe84bd6003dcc8",
+        "renderedTextSha256": "0e771d33df3343b6ad46ac53f806dbd5041c8e09a37a70ca021dca0cd096d684",
+        "tokenizerArchitecture": "gemma4",
+        "tokenizerEnvelope": "gemma4",
+        "tokenizerChatTemplateSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "tokenization": { "addSpecial": true, "parseSpecial": true }
+      },
+      "generation": {
+        "engine": { "name": "llama.cpp", "version": "producer-reported" },
+        "contextLength": 2048,
+        "sampler": {
+          "chain": [
+            { "algorithm": "topK", "parameters": { "k": 40 } },
+            { "algorithm": "topP", "parameters": { "p": 0.95, "minimumKeep": 1 } },
+            { "algorithm": "temperature", "parameters": { "value": 0.8 } },
+            { "algorithm": "distribution", "parameters": {} }
+          ],
+          "seed": { "policy": "fixed", "value": 3407 }
+        },
+        "termination": {
+          "stopOnEog": true,
+          "stopSequences": [],
+          "maximumOutputTokens": null,
+          "maximumResponseLength": 4096,
+          "responseLengthUnit": "utf8Bytes",
+          "deadlineMs": 120000,
+          "reason": "notRun"
+        },
+        "cache": {
+          "clearKvBeforeRequest": true,
+          "promptCache": false,
+          "state": "cold"
+        }
+      },
+      "runtime": {
+        "target": "iPhone 17 Pro simulator",
+        "osVersion": "26.5",
+        "buildVariant": "Debug",
+        "evidenceKind": "contractExport",
+        "capturedAt": "2026-09-09T20:55:00Z"
+      }
+    }
+  ]
+}

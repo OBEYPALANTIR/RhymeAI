@@ -31,6 +31,12 @@ pipeline too.
   posts the inner user prompt to an OpenAI-compatible `/v1/chat/completions`.
   Default temperature 0.9 (diversity), retries and timeout configurable.
 - `generate.py` — the CLI loop.
+- `adversarial-training-cases-v1.json` — targeted rejection, lexical,
+  inflection, and context training cases that are disjoint from the held-out
+  regression set.
+- `build_adversarial.py` — joins those cases to prompts exported by both native
+  production builders and emits standard training JSONL with source, model,
+  and prompt lineage.
 - `out/` — generated JSONL (git-ignored artifacts; do not commit).
 
 ## Usage
