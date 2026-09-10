@@ -91,6 +91,16 @@ class NativeContractTests(unittest.TestCase):
         with self.assertRaisesRegex(native_contract.ContractError, "illustrative"):
             native_contract.validate_contract(example, exact=True)
 
+    def test_exact_contract_rejects_placeholder_lineage_hashes(self):
+        record = contract("ios", "exact prompt")
+        record["sourceSha"] = "0" * 40
+        with self.assertRaisesRegex(native_contract.ContractError, "placeholder commit"):
+            native_contract.validate_contract(record)
+        record = contract("ios", "exact prompt")
+        record["modelSha256"] = "0" * 64
+        with self.assertRaisesRegex(native_contract.ContractError, "placeholder hash"):
+            native_contract.validate_contract(record)
+
     def test_platform_pair_compares_request_but_allows_native_prompt_differences(self):
         records = [
             contract("ios", "iOS production wording"),
@@ -266,12 +276,26 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(payload["stop_type"], "deadline")
         with self.assertRaises(TimeoutError):
             run_eval.record_deadline_timeout(None, {})
+        self.assertTrue(run_eval.is_timeout_error(TimeoutError("timed out")))
+        self.assertTrue(
+            run_eval.is_timeout_error(run_eval.urllib.error.URLError(TimeoutError("timed out")))
+        )
+        self.assertFalse(run_eval.is_timeout_error(run_eval.urllib.error.URLError(OSError("down"))))
 
     def test_case_limit_must_be_positive(self):
         self.assertEqual(run_eval.positive_integer_argument("2"), 2)
         for invalid in ("0", "-1", "not-a-number"):
             with self.assertRaises(argparse.ArgumentTypeError):
                 run_eval.positive_integer_argument(invalid)
+
+    def test_contract_file_evidence_hashes_input_bytes(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as handle:
+            handle.write("native-contract-bytes")
+            handle.flush()
+            self.assertEqual(run_eval.contract_file_evidence([handle.name]), [{
+                "path": handle.name,
+                "sha256": hashlib.sha256(b"native-contract-bytes").hexdigest(),
+            }])
 
     def test_targeted_rhyme_miss_fails_case(self):
         score = {

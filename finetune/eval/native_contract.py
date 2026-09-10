@@ -285,6 +285,10 @@ def validate_contract(record, *, exact=True):
 
         if record["caseId"].startswith("schema_example_"):
             _fail("$.caseId", "illustrative schema examples cannot be replayed")
+        if record["sourceSha"] == "0" * 40:
+            _fail("$.sourceSha", "placeholder commit is not exact provenance")
+        if record["modelSha256"] == "0" * 64:
+            _fail("$.modelSha256", "placeholder hash is not exact provenance")
         if template_hash == "0" * 64:
             _fail("$.prompt.tokenizerChatTemplateSha256", "placeholder hash is not exact provenance")
         if engine["version"] == "producer-reported":

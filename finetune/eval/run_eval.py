@@ -84,6 +84,19 @@ def record_deadline_timeout(deadline_ms, final_payload):
     final_payload["stop_type"] = "deadline"
 
 
+def is_timeout_error(error):
+    if isinstance(error, TimeoutError):
+        return True
+    return isinstance(error, urllib.error.URLError) and isinstance(error.reason, TimeoutError)
+
+
+def contract_file_evidence(paths):
+    return [
+        {"path": path, "sha256": native_contract.model_sha256(path)}
+        for path in paths
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Case preparation: turn a case dict into (prompt, scoring context)
 # ---------------------------------------------------------------------------
@@ -387,7 +400,9 @@ def completion(port, contract, replay_seed):
                         break
                 if event.get("stop"):
                     break
-    except TimeoutError:
+    except (TimeoutError, urllib.error.URLError) as error:
+        if not is_timeout_error(error):
+            raise
         record_deadline_timeout(deadline_ms, final_payload)
     latency = time.time() - started
     final_payload["content"] = output
@@ -633,7 +648,7 @@ def main():
             "Response limits are applied to llama-server stream chunks in the exported native unit; native token boundaries and stop behavior may differ.",
             "Native cache and cold/warm fields are provenance only and are not reproduced by the desktop server process.",
         ],
-        "contract_files": args.contracts,
+        "contract_files": contract_file_evidence(args.contracts),
         "case_manifest_file": args.case_manifest,
         "case_manifest_sha256": native_contract.model_sha256(args.case_manifest),
         "heldout_fixture_file": args.heldout_fixtures,
