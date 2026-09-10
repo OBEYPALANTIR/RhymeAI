@@ -178,7 +178,7 @@ class AIServicePromptTest {
     }
 
     @Test
-    fun localRewriteCleanerAcceptsJsonAndDropsChatMarkers() {
+    fun localRewriteCleanerAcceptsJsonAndRejectsChatMarkers() {
         val service = AIService()
 
         assertEquals(
@@ -186,7 +186,7 @@ class AIServicePromptTest {
             service.cleanLocalRewrite("""{"rewrite":"I trade the dark for a borrowed glow"}""")
         )
         assertEquals(
-            "I trade the dark for a borrowed glow",
+            "",
             service.cleanLocalRewrite(
                 """
                 <start_of_turn>model
@@ -198,12 +198,13 @@ class AIServicePromptTest {
     }
 
     @Test
-    fun localRewriteCleanerExtractsSingleWordReplacement() {
+    fun localRewriteCleanerRequiresBareSingleWordReplacement() {
         val service = AIService()
 
-        assertEquals("gleam", service.cleanLocalRewrite("glow -> gleam", selection = "glow"))
-        assertEquals("shine", service.cleanLocalRewrite("shine, gleam, radiance", selection = "glow"))
-        assertEquals("gleam", service.cleanLocalRewrite("The replacement is \"gleam\".", selection = "glow"))
+        assertEquals("gleam", service.cleanLocalRewrite("gleam", selection = "glow"))
+        assertEquals("", service.cleanLocalRewrite("glow -> gleam", selection = "glow"))
+        assertEquals("", service.cleanLocalRewrite("shine, gleam, radiance", selection = "glow"))
+        assertEquals("", service.cleanLocalRewrite("The replacement is \"gleam\".", selection = "glow"))
     }
 
     @Test
