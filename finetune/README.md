@@ -1,7 +1,7 @@
 # finetune/ — On-Device Model Evaluation Harness
 
-The desktop evaluator replays captured local-model requests exported by the iOS and
-Android production prompt builders. Each export carries the semantic request,
+The desktop evaluator is staged to replay captured local-model requests from the
+iOS and Android production prompt builders. Each export carries the semantic request,
 rendered prompt bytes, model and source hashes, tokenizer flags, ordered
 sampler chain, seed provenance, termination policy, cache state, and runtime
 provenance. Python copies of native prompt strings are not accepted as parity
@@ -9,6 +9,10 @@ evidence.
 
 Python 3 stdlib only; model replay additionally requires `llama-server` at
 `/opt/homebrew/bin/llama-server`.
+
+Native producer changes are owned by the platform workstreams. Until both
+producers land and generate paired exports, this evaluator is a model-free
+contract and scoring gate; hand-authored records are not acceptance evidence.
 
 ## Layout
 
@@ -18,8 +22,8 @@ Python 3 stdlib only; model replay additionally requires `llama-server` at
 - `eval/native_contract.py` validates contracts, verifies prompt hashes,
   rejects unknown sampler settings, and pairs platforms by `caseId` and the
   semantic `request`. Native prompt wording may differ across platforms.
-- `eval/native-contract-cases-v1.json` is the shared case manifest consumed by
-  both native producer tests. It fixes case IDs and logical requests while each
+- `eval/native-contract-cases-v1.json` is the shared case manifest for both
+  native producer tests. It fixes case IDs and logical requests while each
   platform preserves its own prompt bytes and seed policy. Unexecuted iOS
   `contractExport` records truthfully leave a `randomPerRequest` seed null.
 - `eval/run_eval.py` streams each captured rendered prompt through

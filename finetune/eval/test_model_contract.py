@@ -276,11 +276,20 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(payload["stop_type"], "deadline")
         with self.assertRaises(TimeoutError):
             run_eval.record_deadline_timeout(None, {})
-        self.assertTrue(run_eval.is_timeout_error(TimeoutError("timed out")))
-        self.assertTrue(
-            run_eval.is_timeout_error(run_eval.urllib.error.URLError(TimeoutError("timed out")))
+        self.assertAlmostEqual(
+            run_eval.remaining_deadline_seconds(10.0, 1000, 10.25), 0.75
         )
-        self.assertFalse(run_eval.is_timeout_error(run_eval.urllib.error.URLError(OSError("down"))))
+
+    def test_stream_requires_terminal_evidence(self):
+        self.assertTrue(run_eval.termination_passed({
+            "terminal_received": True, "stop_type": "eog",
+        }))
+        self.assertFalse(run_eval.termination_passed({
+            "terminal_received": False, "stop_type": None,
+        }))
+        self.assertFalse(run_eval.termination_passed({
+            "terminal_received": False, "stop_type": "deadline",
+        }))
 
     def test_case_limit_must_be_positive(self):
         self.assertEqual(run_eval.positive_integer_argument("2"), 2)
@@ -296,6 +305,13 @@ class NativeContractTests(unittest.TestCase):
                 "path": handle.name,
                 "sha256": hashlib.sha256(b"native-contract-bytes").hexdigest(),
             }])
+
+    def test_report_path_parent_is_created_before_server_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = os.path.join(directory, "missing", "report.json")
+            log_path = run_eval.prepare_output_paths(output_path)
+            self.assertTrue(os.path.isdir(os.path.dirname(output_path)))
+            self.assertEqual(log_path, os.path.join(directory, "missing", "report.server.log"))
 
     def test_targeted_rhyme_miss_fails_case(self):
         score = {

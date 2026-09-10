@@ -18,6 +18,7 @@ Stdlib only.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import signal
@@ -84,10 +85,8 @@ def record_deadline_timeout(deadline_ms, final_payload):
     final_payload["stop_type"] = "deadline"
 
 
-def is_timeout_error(error):
-    if isinstance(error, TimeoutError):
-        return True
-    return isinstance(error, urllib.error.URLError) and isinstance(error.reason, TimeoutError)
+def remaining_deadline_seconds(started, deadline_ms, current):
+    return deadline_ms / 1000 - (current - started)
 
 
 def contract_file_evidence(paths):
@@ -95,6 +94,18 @@ def contract_file_evidence(paths):
         {"path": path, "sha256": native_contract.model_sha256(path)}
         for path in paths
     ]
+
+
+def prepare_output_paths(output_path):
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    return os.path.splitext(output_path)[0] + ".server.log"
+
+
+def termination_passed(payload):
+    return (
+        payload["terminal_received"]
+        and payload.get("stop_type") not in {"deadline", "error"}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -349,13 +360,7 @@ def completion(port, contract, replay_seed):
     request_body = native_contract.completion_body(contract, replay_seed=replay_seed)
     request_body["stream"] = True
     body = json.dumps(request_body).encode("utf-8")
-    request = urllib.request.Request(
-        "http://127.0.0.1:%d/completion" % port,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    started = time.time()
+    started = time.monotonic()
     deadline_ms = contract["generation"]["termination"]["deadlineMs"]
     timeout = deadline_ms / 1000 if deadline_ms is not None else REQUEST_TIMEOUT_S
     termination = contract["generation"]["termination"]
@@ -367,47 +372,75 @@ def completion(port, contract, replay_seed):
     final_payload = {}
     predicted_tokens = None
     content_chunks = 0
+    terminal_received = False
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            content_type = response.headers.get_content_type()
-            for raw_line in response:
-                if deadline_ms is not None and (time.time() - started) * 1000 >= deadline_ms:
+        connection.request(
+            "POST", "/completion", body=body,
+            headers={"Content-Type": "application/json"},
+        )
+        if deadline_ms is not None:
+            remaining = remaining_deadline_seconds(started, deadline_ms, time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError
+            connection.sock.settimeout(remaining)
+        response = connection.getresponse()
+        content_type = response.headers.get_content_type()
+        stream_socket = response.fp.raw._sock
+        while True:
+            if deadline_ms is not None:
+                remaining = remaining_deadline_seconds(started, deadline_ms, time.monotonic())
+                if remaining <= 0:
                     final_payload["stop_type"] = "deadline"
                     break
-                line = raw_line.decode("utf-8").strip()
-                if not line:
+                stream_socket.settimeout(remaining)
+            raw_line = response.readline()
+            if not raw_line:
+                break
+            if (
+                deadline_ms is not None
+                and remaining_deadline_seconds(started, deadline_ms, time.monotonic()) <= 0
+            ):
+                final_payload["stop_type"] = "deadline"
+                break
+            line = raw_line.decode("utf-8").strip()
+            if not line:
+                continue
+            if content_type == "text/event-stream":
+                if not line.startswith("data:"):
                     continue
-                if content_type == "text/event-stream":
-                    if not line.startswith("data:"):
-                        continue
-                    line = line[5:].strip()
-                if line == "[DONE]":
+                line = line[5:].strip()
+            if line == "[DONE]":
+                terminal_received = True
+                break
+            event = json.loads(line)
+            final_payload.update(event)
+            reported_tokens = event.get("tokens_predicted")
+            if isinstance(reported_tokens, int) and not isinstance(reported_tokens, bool):
+                predicted_tokens = reported_tokens
+            chunk = event.get("content", "")
+            if chunk:
+                content_chunks += 1
+                output, previous_length, current_length, crossed_boundary = append_native_chunk(
+                    output, chunk, length_limit, length_unit
+                )
+                if crossed_boundary:
+                    boundary_reached = True
+                    terminal_received = True
+                    final_payload["stop_type"] = "maximumResponseLength"
                     break
-                event = json.loads(line)
-                final_payload.update(event)
-                chunk = event.get("content", "")
-                if chunk:
-                    content_chunks += 1
-                    output, previous_length, current_length, crossed_boundary = append_native_chunk(
-                        output, chunk, length_limit, length_unit
-                    )
-                    reported_tokens = event.get("tokens_predicted")
-                    if isinstance(reported_tokens, int) and not isinstance(reported_tokens, bool):
-                        predicted_tokens = reported_tokens
-                    if crossed_boundary:
-                        boundary_reached = True
-                        final_payload["stop_type"] = "maximumResponseLength"
-                        break
-                if event.get("stop"):
-                    break
-    except (TimeoutError, urllib.error.URLError) as error:
-        if not is_timeout_error(error):
-            raise
+            if event.get("stop"):
+                terminal_received = True
+                break
+    except TimeoutError:
         record_deadline_timeout(deadline_ms, final_payload)
-    latency = time.time() - started
+    finally:
+        connection.close()
+    latency = time.monotonic() - started
     final_payload["content"] = output
     final_payload["tokens_predicted"] = predicted_tokens
     final_payload["content_chunks"] = content_chunks
+    final_payload["terminal_received"] = terminal_received
     final_payload["replay_boundary"] = {
         "enforcedDuringStreaming": True,
         "reached": boundary_reached,
@@ -537,11 +570,20 @@ def main():
                         help="Path for the JSON report (default: report.json)")
     args = parser.parse_args()
 
+    contract_files = contract_file_evidence(args.contracts)
+    case_manifest_sha256 = native_contract.model_sha256(args.case_manifest)
+    heldout_fixture_sha256 = native_contract.model_sha256(args.heldout_fixtures)
     contracts = native_contract.load_contracts(args.contracts, exact=True)
     case_manifest = native_contract.load_case_manifest(args.case_manifest)
     native_contract.validate_manifest_records(contracts, case_manifest)
     native_contract.validate_platform_pairs(contracts)
     heldout_fixtures = heldout.load(args.heldout_fixtures)
+    if (
+        contract_files != contract_file_evidence(args.contracts)
+        or case_manifest_sha256 != native_contract.model_sha256(args.case_manifest)
+        or heldout_fixture_sha256 != native_contract.model_sha256(args.heldout_fixtures)
+    ):
+        sys.exit("evaluation inputs changed while loading")
     if args.cases is not None:
         selected_ids = {
             case["caseId"] for case in case_manifest["cases"][: args.cases]
@@ -559,7 +601,7 @@ def main():
     prepared_cases = [prepare_contract(record) for record in selected]
 
     port = free_port()
-    log_path = os.path.splitext(args.out)[0] + ".server.log"
+    log_path = prepare_output_paths(args.out)
     print("starting llama-server on port %d (log: %s)" % (port, log_path))
     process, log_handle = start_server(args.model, port, log_path, context_lengths.pop())
 
@@ -595,8 +637,9 @@ def main():
                 "boundary_previous_value": boundary["previousValue"],
             }
             score["termination"] = {
-                "passed": payload.get("stop_type") not in {"deadline", "error"},
+                "passed": termination_passed(payload),
                 "reason": payload.get("stop_type"),
+                "terminal_received": payload["terminal_received"],
             }
             passed = score_passed(score)
             print("[%2d/%2d] %-32s %s  (%.1fs, %s tok)" % (
@@ -648,11 +691,11 @@ def main():
             "Response limits are applied to llama-server stream chunks in the exported native unit; native token boundaries and stop behavior may differ.",
             "Native cache and cold/warm fields are provenance only and are not reproduced by the desktop server process.",
         ],
-        "contract_files": contract_file_evidence(args.contracts),
+        "contract_files": contract_files,
         "case_manifest_file": args.case_manifest,
-        "case_manifest_sha256": native_contract.model_sha256(args.case_manifest),
+        "case_manifest_sha256": case_manifest_sha256,
         "heldout_fixture_file": args.heldout_fixtures,
-        "heldout_fixture_sha256": native_contract.model_sha256(args.heldout_fixtures),
+        "heldout_fixture_sha256": heldout_fixture_sha256,
         "heldout_case_count": sum(
             1 for result in results if "heldout" in result["score"]
         ),
