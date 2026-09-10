@@ -202,7 +202,9 @@ def prepare_contract(record):
     }
     if case["task"] == "suggestions" and case["target_rhyme_line"]:
         prepared["constraint"] = prompts.suggestion_rhyme_constraint(
-            case["target_rhyme_line"], case["rhyme_type"]
+            case["target_rhyme_line"],
+            case["rhyme_type"],
+            platform=record["platform"],
         )
     return prepared
 
@@ -237,7 +239,9 @@ def score_case(prepared, output_text):
             }[case["rhyme_type"]]
             per_line = []
             for line in fmt["lines"]:
-                end = scoring.line_end_word(line)
+                end = scoring.line_end_word_for_platform(
+                    line, prepared["platform"]
+                )
                 actual_tier = scoring.rhyme_tier_for_platform(
                     line,
                     constraint.target_word,

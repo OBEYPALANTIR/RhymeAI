@@ -64,6 +64,9 @@ SUBSTITUTIONS = [
 
 # LyricTokenizer.wordPattern
 WORD_PATTERN = re.compile(r"[a-zA-Z']+")
+IOS_WHITESPACE_PATTERN = re.compile(
+    r"[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+"
+)
 
 _STRESS_SUFFIX = re.compile(r"[0-2]$")
 
@@ -351,11 +354,17 @@ def line_end_word(line):
 
 
 def ios_line_end_word(line):
-    for token in reversed(line.split()):
+    for token in reversed(IOS_WHITESPACE_PATTERN.split(line)):
         normalized = normalize_word(token)
         if normalized:
             return normalized
     return ""
+
+
+def line_end_word_for_platform(line, platform):
+    if platform == "ios":
+        return ios_line_end_word(line)
+    return line_end_word(line)
 
 
 def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None):
@@ -425,7 +434,7 @@ def _has_single_coda_edit(lhs, rhs):
 
 
 def _ios_rhyme_tier(line, target_word, dictionary):
-    candidate = ios_line_end_word(line)
+    candidate = line_end_word_for_platform(line, "ios")
     target = normalize_word(target_word)
     target_pronunciations = dictionary.pronunciations(target)
     if candidate == target or not target_pronunciations:

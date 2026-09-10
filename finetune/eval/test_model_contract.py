@@ -463,6 +463,7 @@ class NativeContractTests(unittest.TestCase):
     def test_ios_rhyme_tiers_preserve_exclusive_native_relations(self):
         matches = scoring.find_rhymes("rain")
         self.assertEqual(scoring.ios_line_end_word("I follow the street—train"), "streettrain")
+        self.assertEqual(scoring.ios_line_end_word("I follow street\x1ctrain"), "streettrain")
         self.assertEqual(
             scoring.rhyme_tier_for_platform(
                 "I follow the street—train", "rain", "ios", matches
@@ -474,6 +475,18 @@ class NativeContractTests(unittest.TestCase):
                 "I follow the street—train", "rain", "android", matches
             ),
             2,
+        )
+        manifest = native_contract.load_case_manifest(MANIFEST_PATH)
+        punctuated_request = copy.deepcopy(manifest["cases"][0]["request"])
+        punctuated_request["controls"]["targetRhymeLine"] = "I follow the street—rain"
+        ios_record = contract("ios", "prompt", punctuated_request)
+        ios_record["requestKind"] = "suggestions"
+        self.assertIsNone(run_eval.prepare_contract(ios_record)["constraint"])
+        android_record = copy.deepcopy(ios_record)
+        android_record["platform"] = "android"
+        self.assertEqual(
+            run_eval.prepare_contract(android_record)["constraint"].target_word,
+            "rain",
         )
         self.assertEqual(
             scoring.rhyme_tier_for_platform("I drift toward day", "rain", "ios", matches),
