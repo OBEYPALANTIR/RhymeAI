@@ -101,9 +101,10 @@ python3 finetune/data/build_adversarial.py \
 ```
 
 The generated rows use each platform's own native `prompt.userText` and include
-source, model, and prompt hashes. The builder validates every positive
-completion and rechecks that training and held-out semantic requests remain
-disjoint.
+source, model, and prompt hashes. The builder requires every exported source
+commit to exist at or after the frozen manifest baseline, validates every
+positive completion, and rechecks that training and held-out semantic requests
+remain disjoint.
 
 ## Checks without a model
 

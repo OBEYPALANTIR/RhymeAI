@@ -345,13 +345,19 @@ class NativeContractTests(unittest.TestCase):
 
     def test_stream_requires_terminal_evidence(self):
         self.assertTrue(run_eval.termination_passed({
-            "terminal_received": True, "stop_type": "eog",
+            "terminal_received": True, "stop_type": "eos",
         }))
         self.assertFalse(run_eval.termination_passed({
             "terminal_received": False, "stop_type": None,
         }))
         self.assertFalse(run_eval.termination_passed({
             "terminal_received": False, "stop_type": "deadline",
+        }))
+        self.assertFalse(run_eval.termination_passed({
+            "terminal_received": True, "stop_type": None,
+        }))
+        self.assertFalse(run_eval.termination_passed({
+            "terminal_received": True, "stop_type": "unknown",
         }))
 
     def test_case_limit_must_be_positive(self):
@@ -421,6 +427,28 @@ class NativeContractTests(unittest.TestCase):
         )
         self.assertEqual(near_allowed["rhyme"]["required_tier"], 1)
         self.assertEqual(near_allowed["rhyme"]["miss"], 0)
+        ios_near_rejects_perfect = run_eval.score_case(
+            run_eval.prepare_contract(near_record),
+            "I board the last returning train\n"
+            "I trace the silver streets of main\n"
+            "I walk the wet-lit road again\n"
+            "I leave my footprints in the lane\n"
+            "I let the silence hold the pain\n"
+            "I hear the night repeat the strain",
+        )
+        self.assertEqual(ios_near_rejects_perfect["rhyme"]["miss"], 6)
+        android_near_record = copy.deepcopy(near_record)
+        android_near_record["platform"] = "android"
+        android_near_allows_perfect = run_eval.score_case(
+            run_eval.prepare_contract(android_near_record),
+            "I board the last returning train\n"
+            "I trace the silver streets of main\n"
+            "I walk the wet-lit road again\n"
+            "I leave my footprints in the lane\n"
+            "I let the silence hold the pain\n"
+            "I hear the night repeat the strain",
+        )
+        self.assertEqual(android_near_allows_perfect["rhyme"]["miss"], 0)
         perfect = run_eval.score_case(
             prepared,
             "I board the last returning train\n"
@@ -431,6 +459,21 @@ class NativeContractTests(unittest.TestCase):
             "I hear the night repeat the strain",
         )
         self.assertEqual(perfect["rhyme"]["miss"], 0)
+
+    def test_ios_rhyme_tiers_preserve_exclusive_native_relations(self):
+        matches = scoring.find_rhymes("rain")
+        self.assertEqual(
+            scoring.rhyme_tier_for_platform("I drift toward day", "rain", "ios", matches),
+            1,
+        )
+        self.assertEqual(
+            scoring.rhyme_tier_for_platform("I board the train", "rain", "ios", matches),
+            2,
+        )
+        self.assertEqual(
+            scoring.rhyme_tier_for_platform("I start to run", "rain", "ios", matches),
+            3,
+        )
 
     def test_evaluation_gate_fails_when_any_case_fails(self):
         self.assertTrue(run_eval.evaluation_passed([{"passed": True}]))
@@ -460,6 +503,7 @@ class LexicalFixtureTests(unittest.TestCase):
     def setUpClass(cls):
         cls.heldout = heldout.load(HELDOUT_PATH)
         cls.training = build_adversarial.load_specs(TRAINING_PATH)
+        cls.manifest = native_contract.load_case_manifest(MANIFEST_PATH)
 
     def test_separator_adversaries_fail_spelling_and_rejection(self):
         glow = scoring.validate_single_word_rewrite("g-l-e-a-m", "glow", ["gleam"])
@@ -530,7 +574,23 @@ class LexicalFixtureTests(unittest.TestCase):
                 record["runtime"]["evidenceKind"] = "controlledReplay"
                 records.append(record)
         with self.assertRaisesRegex(ValueError, "native prompt lineage"):
-            build_adversarial.build_rows(records, self.training, self.heldout)
+            build_adversarial.build_rows(
+                records, self.training, self.heldout, self.manifest["baseSourceSha"]
+            )
+
+    def test_adversarial_builder_rejects_unavailable_source_lineage(self):
+        records = []
+        for spec in self.training.values():
+            for platform in native_contract.PLATFORMS:
+                record = contract(platform, "native prompt", spec["request"])
+                record["caseId"] = spec["caseId"]
+                record["requestKind"] = spec["requestKind"]
+                record["sourceSha"] = "f" * 40
+                records.append(record)
+        with self.assertRaisesRegex(ValueError, "not available"):
+            build_adversarial.build_rows(
+                records, self.training, self.heldout, self.manifest["baseSourceSha"]
+            )
 
     def test_raw_markers_are_rejected_before_cleanup(self):
         for marker in ("<start_of_turn>model\n", "<|turn>model\n", "<turn|>\n"):

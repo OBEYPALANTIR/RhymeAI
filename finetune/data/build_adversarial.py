@@ -87,7 +87,7 @@ def validate_completion(spec):
         raise ValueError("%s completion fails scoring: %s" % (spec["caseId"], result))
 
 
-def build_rows(contracts, training_specs, heldout_fixtures):
+def build_rows(contracts, training_specs, heldout_fixtures, base_source_sha):
     validate_disjoint(training_specs, heldout_fixtures)
     selected = [record for record in contracts if record["caseId"] in training_specs]
     replay_records = [
@@ -100,6 +100,7 @@ def build_rows(contracts, training_specs, heldout_fixtures):
             "adversarial training requires native prompt lineage; controlled replay records: %s"
             % replay_records
         )
+    native_contract.validate_source_ancestry(selected, base_source_sha)
     native_contract.validate_platform_pairs(selected)
     expected_pairs = {
         (platform, case_id)
@@ -145,11 +146,21 @@ def main():
         "--heldout",
         default=os.path.join(os.path.dirname(__file__), "..", "eval", "heldout-cases-v1.json"),
     )
+    parser.add_argument(
+        "--manifest",
+        default=os.path.join(os.path.dirname(__file__), "..", "eval", "native-contract-cases-v1.json"),
+    )
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
     contracts = native_contract.load_contracts(args.contracts, exact=True)
-    rows = build_rows(contracts, load_specs(args.cases), heldout.load(args.heldout))
+    manifest = native_contract.load_case_manifest(args.manifest)
+    rows = build_rows(
+        contracts,
+        load_specs(args.cases),
+        heldout.load(args.heldout),
+        manifest["baseSourceSha"],
+    )
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as handle:
         for row in rows:

@@ -9,6 +9,11 @@ Ports of the Android sources (do not let these drift):
   - android/.../util/SyllableCounter.kt   (dictionary-first with heuristic fallback)
   - android/.../service/AIService.kt      (output-cleaning regexes used as validators)
 
+The iOS-specific rhyme relation scorer mirrors
+`Writers Block/Services/ProsodyAnalyzer.swift` because iOS keeps PERFECT, NEAR,
+and SLANT acceptance exclusive while Android currently ranks NEAR and SLANT
+with its shared loose tier.
+
 Only what scoring needs is ported. Stdlib only.
 """
 
@@ -376,6 +381,92 @@ def rhyme_tier(line, matches):
     if end_word in matches.near:
         return 1
     return 0
+
+
+def _rhyme_tail_for_phones(phones):
+    vowel_indexes = [
+        index for index, phone in enumerate(phones) if base_phone(phone) in VOWELS
+    ]
+    if not vowel_indexes:
+        return None
+    stressed = [index for index in vowel_indexes if (stress_for_phone(phones[index]) or 0) > 0]
+    vowel_index = (stressed or vowel_indexes)[-1]
+    return (
+        base_phone(phones[vowel_index]),
+        tuple(base_phone(phone) for phone in phones[vowel_index + 1:]),
+    )
+
+
+def _has_single_coda_edit(lhs, rhs):
+    difference = len(lhs) - len(rhs)
+    if abs(difference) > 1:
+        return False
+    if difference == 0:
+        return sum(left != right for left, right in zip(lhs, rhs)) == 1
+    shorter, longer = (lhs, rhs) if len(lhs) < len(rhs) else (rhs, lhs)
+    short_index = 0
+    skipped = False
+    for phone in longer:
+        if short_index < len(shorter) and shorter[short_index] == phone:
+            short_index += 1
+        elif skipped:
+            return False
+        else:
+            skipped = True
+    return short_index == len(shorter)
+
+
+def _ios_rhyme_tier(line, target_word, dictionary):
+    candidate = normalize_word(line_end_word(line))
+    target = normalize_word(target_word)
+    target_pronunciations = dictionary.pronunciations(target)
+    if candidate == target or not target_pronunciations:
+        return 0
+    target_phones = target_pronunciations[0]
+    target_keys = rhyme_keys_for_phones(target_phones, 2)
+    target_tail = _rhyme_tail_for_phones(target_phones)
+    if not target_keys or target_tail is None:
+        return 0
+    target_key = target_keys[0]
+    target_multi_key = target_keys[1] if len(target_keys) > 1 else None
+    near = False
+    slant = False
+    for candidate_phones in dictionary.pronunciations(candidate):
+        candidate_keys = rhyme_keys_for_phones(candidate_phones, 2)
+        if (
+            (candidate_keys and candidate_keys[0] == target_key)
+            or (
+                target_multi_key is not None
+                and len(candidate_keys) > 1
+                and candidate_keys[1] == target_multi_key
+            )
+        ):
+            return 2
+        candidate_tail = _rhyme_tail_for_phones(candidate_phones)
+        if candidate_tail is None:
+            continue
+        if (
+            candidate_tail[0] == target_tail[0]
+            and _has_single_coda_edit(target_tail[1], candidate_tail[1])
+        ):
+            near = True
+        elif (
+            target_tail[1]
+            and candidate_tail[0] != target_tail[0]
+            and candidate_tail[1] == target_tail[1]
+        ):
+            slant = True
+    if near:
+        return 1
+    if slant:
+        return 3
+    return 0
+
+
+def rhyme_tier_for_platform(line, target_word, platform, matches):
+    if platform == "ios":
+        return _ios_rhyme_tier(line, target_word, shared_dictionary())
+    return rhyme_tier(line, matches)
 
 
 def is_perfect_rhyme(word_a, word_b, dictionary=None):

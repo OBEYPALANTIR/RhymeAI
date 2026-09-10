@@ -105,7 +105,7 @@ def prepare_output_paths(output_path):
 def termination_passed(payload):
     return (
         payload["terminal_received"]
-        and payload.get("stop_type") not in {"deadline", "error"}
+        and payload.get("stop_type") in {"eos", "word", "limit", "maximumResponseLength"}
     )
 
 
@@ -126,7 +126,7 @@ def expire_deadline_socket(expired, socket_ref):
 
 def prepare_case(case):
     task = case["task"]
-    prepared = {"case": case, "task": task, "id": case["id"]}
+    prepared = {"case": case, "task": task, "id": case["id"], "platform": "android"}
 
     if task == "suggestions":
         section_ref = None
@@ -198,6 +198,7 @@ def prepare_contract(record):
         "id": case["id"],
         "prompt": record["prompt"]["renderedText"],
         "contract": record,
+        "platform": record["platform"],
     }
     if case["task"] == "suggestions" and case["target_rhyme_line"]:
         prepared["constraint"] = prompts.suggestion_rhyme_constraint(
@@ -229,14 +230,28 @@ def score_case(prepared, output_text):
         constraint = prepared.get("constraint")
         if constraint is not None:
             matches = scoring.find_rhymes(constraint.target_word)
-            required_tier = 2 if case["rhyme_type"] == "PERFECT" else 1
+            required_tier = {
+                "PERFECT": 2,
+                "NEAR": 1,
+                "SLANT": 3 if prepared["platform"] == "ios" else 1,
+            }[case["rhyme_type"]]
             per_line = []
             for line in fmt["lines"]:
                 end = scoring.line_end_word(line)
-                actual_tier = scoring.rhyme_tier(line, matches)
-                if end and end in constraint.candidate_words and actual_tier >= required_tier:
+                actual_tier = scoring.rhyme_tier_for_platform(
+                    line,
+                    constraint.target_word,
+                    prepared["platform"],
+                    matches,
+                )
+                accepted = (
+                    actual_tier == required_tier
+                    if prepared["platform"] == "ios"
+                    else actual_tier >= required_tier
+                )
+                if end and end in constraint.candidate_words and accepted:
                     tier = "candidate"
-                elif actual_tier >= required_tier:
+                elif accepted:
                     tier = "rhymes"
                 else:
                     tier = "miss"

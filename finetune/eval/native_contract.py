@@ -395,23 +395,8 @@ def load_case_manifest(path):
     return manifest
 
 
-def validate_manifest_records(records, manifest):
-    cases = {row["caseId"]: row for row in manifest["cases"]}
-    expected_ids = set(cases)
-    for platform in PLATFORMS:
-        platform_ids = {
-            record["caseId"] for record in records if record["platform"] == platform
-        }
-        if platform_ids and platform_ids != expected_ids:
-            missing = sorted(expected_ids - platform_ids)
-            extra = sorted(platform_ids - expected_ids)
-            raise ContractError(
-                "%s export differs from case manifest (missing=%s extra=%s)"
-                % (platform, missing, extra)
-            )
-    capture = manifest["captureByPlatform"]
+def validate_source_ancestry(records, base_source_sha):
     source_shas = {record["sourceSha"] for record in records}
-    base_source_sha = manifest["baseSourceSha"]
     for source_sha in sorted(source_shas | {base_source_sha}):
         _string(source_sha, "sourceSha", pattern=SHA1_RE)
         resolved = subprocess.run(
@@ -435,6 +420,25 @@ def validate_manifest_records(records, manifest):
             )
         if ancestry.returncode != 0:
             raise ContractError("could not verify source commit ancestry: %s" % source_sha)
+    return records
+
+
+def validate_manifest_records(records, manifest):
+    cases = {row["caseId"]: row for row in manifest["cases"]}
+    expected_ids = set(cases)
+    for platform in PLATFORMS:
+        platform_ids = {
+            record["caseId"] for record in records if record["platform"] == platform
+        }
+        if platform_ids and platform_ids != expected_ids:
+            missing = sorted(expected_ids - platform_ids)
+            extra = sorted(platform_ids - expected_ids)
+            raise ContractError(
+                "%s export differs from case manifest (missing=%s extra=%s)"
+                % (platform, missing, extra)
+            )
+    capture = manifest["captureByPlatform"]
+    validate_source_ancestry(records, manifest["baseSourceSha"])
     for record in records:
         case = cases.get(record["caseId"])
         if case is None:
