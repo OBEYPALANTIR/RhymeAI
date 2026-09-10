@@ -6,7 +6,9 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
+import subprocess
 
 
 class ContractError(ValueError):
@@ -32,6 +34,7 @@ CASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DATE_TIME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$"
 )
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 TOP_KEYS = {
     "schemaVersion", "platform", "sourceSha", "modelSha256", "caseId",
@@ -407,6 +410,31 @@ def validate_manifest_records(records, manifest):
                 % (platform, missing, extra)
             )
     capture = manifest["captureByPlatform"]
+    source_shas = {record["sourceSha"] for record in records}
+    base_source_sha = manifest["baseSourceSha"]
+    for source_sha in sorted(source_shas | {base_source_sha}):
+        _string(source_sha, "sourceSha", pattern=SHA1_RE)
+        resolved = subprocess.run(
+            ["git", "cat-file", "-e", source_sha + "^{commit}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+        )
+        if resolved.returncode != 0:
+            raise ContractError("source commit is not available: %s" % source_sha)
+    for source_sha in sorted(source_shas):
+        ancestry = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", base_source_sha, source_sha],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+        )
+        if ancestry.returncode == 1:
+            raise ContractError(
+                "source commit does not descend from manifest baseline: %s" % source_sha
+            )
+        if ancestry.returncode != 0:
+            raise ContractError("could not verify source commit ancestry: %s" % source_sha)
     for record in records:
         case = cases.get(record["caseId"])
         if case is None:

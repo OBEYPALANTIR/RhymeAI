@@ -583,6 +583,22 @@ def evaluation_passed(results):
     return bool(results) and all(result["passed"] for result in results)
 
 
+def validate_heldout_coverage(case_manifest, heldout_fixtures):
+    expected = {
+        case["caseId"]
+        for case in case_manifest["cases"]
+        if case["caseId"].startswith("heldout_")
+    }
+    actual = set(heldout_fixtures)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise ValueError(
+            "held-out fixtures differ from manifest (missing=%s extra=%s)"
+            % (missing, extra)
+        )
+
+
 def exit_on_evaluation_failure(passed):
     if not passed:
         raise SystemExit(1)
@@ -626,6 +642,7 @@ def main():
     native_contract.validate_manifest_records(contracts, case_manifest)
     native_contract.validate_platform_pairs(contracts)
     heldout_fixtures = heldout.load(args.heldout_fixtures)
+    validate_heldout_coverage(case_manifest, heldout_fixtures)
     if (
         contract_files != contract_file_evidence(args.contracts)
         or case_manifest_sha256 != native_contract.model_sha256(args.case_manifest)

@@ -194,6 +194,23 @@ class NativeContractTests(unittest.TestCase):
         with self.assertRaisesRegex(native_contract.ContractError, "request"):
             native_contract.validate_manifest_records(records, manifest)
 
+    def test_manifest_rejects_unresolved_export_source_commit(self):
+        manifest = native_contract.load_case_manifest(MANIFEST_PATH)
+        records = []
+        for case in manifest["cases"]:
+            item = contract("android", "Android prompt for " + case["caseId"], case["request"])
+            item["caseId"] = case["caseId"]
+            item["requestKind"] = case["requestKind"]
+            item["modelSha256"] = manifest["modelSha256"]
+            item["generation"]["sampler"]["seed"] = {
+                "policy": "engineDefault", "value": -1
+            }
+            item["runtime"]["evidenceKind"] = "contractExport"
+            records.append(item)
+        records[0]["sourceSha"] = "1" * 40
+        with self.assertRaisesRegex(native_contract.ContractError, "not available"):
+            native_contract.validate_manifest_records(records, manifest)
+
     def test_unknown_sampler_is_rejected(self):
         record = contract("ios", "exact prompt")
         record["generation"]["sampler"]["chain"][0] = {
@@ -423,6 +440,19 @@ class NativeContractTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as failure:
             run_eval.exit_on_evaluation_failure(False)
         self.assertEqual(failure.exception.code, 1)
+
+    def test_heldout_fixtures_must_exactly_cover_manifest_cases(self):
+        manifest = native_contract.load_case_manifest(MANIFEST_PATH)
+        fixtures = heldout.load(HELDOUT_PATH)
+        run_eval.validate_heldout_coverage(manifest, fixtures)
+        missing = copy.deepcopy(fixtures)
+        missing.pop(next(iter(missing)))
+        with self.assertRaisesRegex(ValueError, "missing"):
+            run_eval.validate_heldout_coverage(manifest, missing)
+        extra = copy.deepcopy(fixtures)
+        extra["heldout_unmanifested"] = next(iter(fixtures.values()))
+        with self.assertRaisesRegex(ValueError, "extra"):
+            run_eval.validate_heldout_coverage(manifest, extra)
 
 
 class LexicalFixtureTests(unittest.TestCase):
