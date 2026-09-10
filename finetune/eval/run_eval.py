@@ -25,6 +25,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -106,6 +107,17 @@ def termination_passed(payload):
         payload["terminal_received"]
         and payload.get("stop_type") not in {"deadline", "error"}
     )
+
+
+def expire_deadline_socket(expired, socket_ref):
+    expired.set()
+    active_socket = socket_ref[0]
+    if active_socket is not None:
+        try:
+            active_socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        active_socket.close()
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +386,21 @@ def completion(port, contract, replay_seed):
     content_chunks = 0
     terminal_received = False
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    deadline_expired = threading.Event()
+    deadline_socket = [None]
+    deadline_timer = None
     try:
+        connection.connect()
+        deadline_socket[0] = connection.sock
+        if deadline_ms is not None:
+            remaining = remaining_deadline_seconds(started, deadline_ms, time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError
+            deadline_timer = threading.Timer(
+                remaining, expire_deadline_socket, args=(deadline_expired, deadline_socket)
+            )
+            deadline_timer.daemon = True
+            deadline_timer.start()
         connection.request(
             "POST", "/completion", body=body,
             headers={"Content-Type": "application/json"},
@@ -387,6 +413,7 @@ def completion(port, contract, replay_seed):
         response = connection.getresponse()
         content_type = response.headers.get_content_type()
         stream_socket = response.fp.raw._sock
+        deadline_socket[0] = stream_socket
         while True:
             if deadline_ms is not None:
                 remaining = remaining_deadline_seconds(started, deadline_ms, time.monotonic())
@@ -432,10 +459,22 @@ def completion(port, contract, replay_seed):
             if event.get("stop"):
                 terminal_received = True
                 break
-    except TimeoutError:
+    except (TimeoutError, OSError, http.client.HTTPException):
+        if (
+            deadline_ms is None
+            or (
+                not deadline_expired.is_set()
+                and remaining_deadline_seconds(started, deadline_ms, time.monotonic()) > 0
+            )
+        ):
+            raise
         record_deadline_timeout(deadline_ms, final_payload)
     finally:
+        if deadline_timer is not None:
+            deadline_timer.cancel()
         connection.close()
+    if deadline_expired.is_set():
+        record_deadline_timeout(deadline_ms, final_payload)
     latency = time.monotonic() - started
     final_payload["content"] = output
     final_payload["tokens_predicted"] = predicted_tokens
@@ -608,6 +647,8 @@ def main():
     results = []
     try:
         wait_for_health(port, process)
+        if native_contract.model_sha256(args.model) != actual_model_sha:
+            sys.exit("model changed while llama-server was loading")
         print("server healthy; running %d cases" % len(prepared_cases))
         for index, prepared in enumerate(prepared_cases, 1):
             contract = prepared["contract"]

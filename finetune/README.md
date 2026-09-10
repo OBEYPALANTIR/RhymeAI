@@ -44,8 +44,8 @@ contract and scoring gate; hand-authored records are not acceptance evidence.
 
 ## Native export contract
 
-Both platform test targets emit the same required fields as JSON, a JSON array,
-or one record per line in JSONL:
+Once their producer changes land, both platform test targets will emit the same
+required fields as JSON, a JSON array, or one record per line in JSONL:
 
 ```text
 schemaVersion, platform, sourceSha, modelSha256, caseId, requestKind
