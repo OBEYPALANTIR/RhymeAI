@@ -90,6 +90,16 @@ def validate_completion(spec):
 def build_rows(contracts, training_specs, heldout_fixtures):
     validate_disjoint(training_specs, heldout_fixtures)
     selected = [record for record in contracts if record["caseId"] in training_specs]
+    replay_records = [
+        "%s/%s" % (record["platform"], record["caseId"])
+        for record in selected
+        if record["runtime"]["evidenceKind"] not in {"contractExport", "nativeRun"}
+    ]
+    if replay_records:
+        raise ValueError(
+            "adversarial training requires native prompt lineage; controlled replay records: %s"
+            % replay_records
+        )
     native_contract.validate_platform_pairs(selected)
     expected_pairs = {
         (platform, case_id)

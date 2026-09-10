@@ -229,18 +229,27 @@ def score_case(prepared, output_text):
         constraint = prepared.get("constraint")
         if constraint is not None:
             matches = scoring.find_rhymes(constraint.target_word)
+            required_tier = 2 if case["rhyme_type"] == "PERFECT" else 1
             per_line = []
             for line in fmt["lines"]:
                 end = scoring.line_end_word(line)
-                if end and end in constraint.candidate_words:
+                actual_tier = scoring.rhyme_tier(line, matches)
+                if end and end in constraint.candidate_words and actual_tier >= required_tier:
                     tier = "candidate"
-                elif scoring.rhyme_tier(line, matches) > 0:
+                elif actual_tier >= required_tier:
                     tier = "rhymes"
                 else:
                     tier = "miss"
-                per_line.append({"line": line, "end_word": end, "tier": tier})
+                per_line.append({
+                    "line": line,
+                    "end_word": end,
+                    "tier": tier,
+                    "rhyme_tier": actual_tier,
+                })
             result["rhyme"] = {
                 "target_word": constraint.target_word,
+                "requested_type": case["rhyme_type"],
+                "required_tier": required_tier,
                 "per_line": per_line,
                 "candidate": sum(1 for p in per_line if p["tier"] == "candidate"),
                 "rhymes": sum(1 for p in per_line if p["tier"] == "rhymes"),
@@ -728,7 +737,7 @@ def main():
         },
         "replay_limitations": [
             "Native prompt bytes and reported settings are preserved, but llama-server is not the native engine.",
-            "Native tokenizer flags and token IDs are recorded but are not byte-for-byte token-verified by this runner.",
+            "Native tokenizer flags are recorded and validated against the replay-supported combination; native token IDs are not captured, so tokenization is not byte-for-byte verified.",
             "Response limits are applied to llama-server stream chunks in the exported native unit; native token boundaries and stop behavior may differ.",
             "Native cache and cold/warm fields are provenance only and are not reproduced by the desktop server process.",
         ],

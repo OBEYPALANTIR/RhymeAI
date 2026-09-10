@@ -55,6 +55,13 @@ TERMINATION_KEYS = {
 }
 CACHE_KEYS = {"clearKvBeforeRequest", "promptCache", "state"}
 RUNTIME_KEYS = {"target", "osVersion", "buildVariant", "evidenceKind", "capturedAt"}
+MANIFEST_KEYS = {
+    "manifestVersion", "contractSchema", "baseSourceSha", "sourceShaPolicy",
+    "modelSha256", "captureByPlatform", "cases",
+}
+MANIFEST_CAPTURE_KEYS = {"evidenceKind", "seed"}
+MANIFEST_SEED_KEYS = {"policy", "value", "recordActualValueInExport"}
+MANIFEST_CASE_KEYS = {"caseId", "requestKind", "request"}
 
 SAMPLER_PARAMETERS = {
     "penalties": {
@@ -321,14 +328,65 @@ def load_contracts(paths, *, exact=True):
 def load_case_manifest(path):
     with open(path, "r", encoding="utf-8") as handle:
         manifest = json.load(handle)
-    if manifest.get("manifestVersion") != 1:
-        raise ContractError("case manifest version must equal 1")
-    cases = manifest.get("cases")
+    _exact_keys(manifest, MANIFEST_KEYS, "$manifest")
+    manifest_version = _integer(
+        manifest["manifestVersion"], "$manifest.manifestVersion", minimum=1
+    )
+    if manifest_version != 1:
+        _fail("$manifest.manifestVersion", "must equal 1")
+    if manifest["contractSchema"] != "native-contract-v1.schema.json":
+        _fail("$manifest.contractSchema", "must name native-contract-v1.schema.json")
+    base_source_sha = _string(
+        manifest["baseSourceSha"], "$manifest.baseSourceSha", pattern=SHA1_RE
+    )
+    if base_source_sha == "0" * 40:
+        _fail("$manifest.baseSourceSha", "placeholder commit is not exact provenance")
+    if manifest["sourceShaPolicy"] != "recordNativeProducerHeadAtCapture":
+        _fail(
+            "$manifest.sourceShaPolicy",
+            "must equal recordNativeProducerHeadAtCapture",
+        )
+    model_sha = _string(
+        manifest["modelSha256"], "$manifest.modelSha256", pattern=SHA256_RE
+    )
+    if model_sha == "0" * 64:
+        _fail("$manifest.modelSha256", "placeholder hash is not exact provenance")
+
+    capture = _object(manifest["captureByPlatform"], "$manifest.captureByPlatform")
+    _exact_keys(capture, PLATFORMS, "$manifest.captureByPlatform")
+    for platform in sorted(PLATFORMS):
+        capture_path = "$manifest.captureByPlatform." + platform
+        row = capture[platform]
+        _exact_keys(row, MANIFEST_CAPTURE_KEYS, capture_path)
+        if row["evidenceKind"] not in {"nativeRun", "contractExport"}:
+            _fail(capture_path + ".evidenceKind", "must be nativeRun or contractExport")
+        seed = row["seed"]
+        _exact_keys(seed, MANIFEST_SEED_KEYS, capture_path + ".seed")
+        if seed["policy"] not in {"fixed", "randomPerRequest", "engineDefault"}:
+            _fail(capture_path + ".seed.policy", "unknown seed policy")
+        records_actual_value = _bool(
+            seed["recordActualValueInExport"],
+            capture_path + ".seed.recordActualValueInExport",
+        )
+        if records_actual_value:
+            _integer(seed["value"], capture_path + ".seed.value")
+        elif seed["value"] is not None:
+            _fail(capture_path + ".seed.value", "must be null when actual value is not exported")
+
+    cases = manifest["cases"]
     if not isinstance(cases, list) or not cases:
         raise ContractError("case manifest must contain cases")
-    case_ids = [row.get("caseId") for row in cases]
-    if any(not isinstance(case_id, str) for case_id in case_ids):
-        raise ContractError("case manifest has an invalid caseId")
+    case_ids = []
+    for index, row in enumerate(cases):
+        case_path = "$manifest.cases[%d]" % index
+        _exact_keys(row, MANIFEST_CASE_KEYS, case_path)
+        case_ids.append(_string(row["caseId"], case_path + ".caseId", pattern=CASE_ID_RE))
+        if row["requestKind"] not in REQUEST_KINDS:
+            _fail(case_path + ".requestKind", "unknown task")
+        request = row["request"]
+        _exact_keys(request, REQUEST_KEYS, case_path + ".request")
+        _object(request["controls"], case_path + ".request.controls")
+        _object(request["localContext"], case_path + ".request.localContext")
     if len(case_ids) != len(set(case_ids)):
         raise ContractError("case manifest contains duplicate caseIds")
     return manifest
@@ -368,6 +426,10 @@ def validate_manifest_records(records, manifest):
         actual_seed = record["generation"]["sampler"]["seed"]
         if actual_seed["policy"] != expected_seed["policy"]:
             raise ContractError("%s: seed policy differs from manifest" % record["caseId"])
+        if expected_seed["recordActualValueInExport"] and actual_seed["value"] is None:
+            raise ContractError("%s: required actual seed value is missing" % record["caseId"])
+        if not expected_seed["recordActualValueInExport"] and actual_seed["value"] is not None:
+            raise ContractError("%s: seed value must not be exported" % record["caseId"])
         if actual_seed["value"] != expected_seed["value"]:
             raise ContractError("%s: seed value differs from manifest" % record["caseId"])
     return records
@@ -454,6 +516,11 @@ def completion_body(record, *, replay_seed):
     sampler = generation["sampler"]
     termination = generation["termination"]
     validate_replay_seed(replay_seed)
+    tokenization = record["prompt"]["tokenization"]
+    if tokenization != {"addSpecial": True, "parseSpecial": True}:
+        raise ContractError(
+            "controlled replay supports tokenization addSpecial=true and parseSpecial=true only"
+        )
     body = {
         "prompt": record["prompt"]["renderedText"],
         "n_predict": termination["maximumOutputTokens"]

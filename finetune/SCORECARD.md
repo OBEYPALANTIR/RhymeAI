@@ -10,7 +10,8 @@ After both native producers land, current evaluation will use paired iOS and
 Android exports from each production builder and report each platform
 separately. Desktop runs are labeled
 `controlledReplay`: they preserve exported prompt bytes and settings, but
-`llama-server` does not reproduce native tokenizer token IDs, engine behavior,
+`llama-server` does not expose the native tokenizer token IDs for comparison,
+and does not reproduce native engine behavior,
 cache state, or exact stop boundaries. Response limits are applied at desktop
 stream-chunk boundaries in the exported UTF-8-byte or UTF-16-code-unit unit.
 

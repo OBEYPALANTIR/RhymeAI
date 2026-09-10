@@ -84,6 +84,43 @@ class NativeContractTests(unittest.TestCase):
             "recordActualValueInExport": True,
         })
 
+    def test_manifest_rejects_lineage_and_capture_metadata_drift(self):
+        with open(MANIFEST_PATH, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        mutations = [
+            ("schema", lambda value: value.__setitem__("contractSchema", "other.json")),
+            ("base source", lambda value: value.__setitem__("baseSourceSha", "0" * 40)),
+            ("source policy", lambda value: value.__setitem__("sourceShaPolicy", "floating")),
+            ("model", lambda value: value.__setitem__("modelSha256", "0" * 64)),
+            (
+                "capture platforms",
+                lambda value: value["captureByPlatform"].pop("ios"),
+            ),
+            (
+                "seed recording",
+                lambda value: value["captureByPlatform"]["ios"]["seed"].__setitem__(
+                    "recordActualValueInExport", True
+                ),
+            ),
+            (
+                "case shape",
+                lambda value: value["cases"][0].__setitem__("unexpected", True),
+            ),
+        ]
+        for name, mutate in mutations:
+            with self.subTest(name=name), tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False
+            ) as handle:
+                changed = copy.deepcopy(manifest)
+                mutate(changed)
+                json.dump(changed, handle)
+                path = handle.name
+            try:
+                with self.assertRaises(native_contract.ContractError):
+                    native_contract.load_case_manifest(path)
+            finally:
+                os.unlink(path)
+
     def test_schema_example_is_illustrative_only(self):
         with open(SCHEMA_PATH, "r", encoding="utf-8") as handle:
             example = json.load(handle)["examples"][0]
@@ -187,7 +224,7 @@ class NativeContractTests(unittest.TestCase):
             record["runtime"]["evidenceKind"] = "contractExport"
             records.append(record)
         records[0]["generation"]["sampler"]["seed"]["value"] = 3407
-        with self.assertRaisesRegex(native_contract.ContractError, "seed value differs"):
+        with self.assertRaisesRegex(native_contract.ContractError, "must not be exported"):
             native_contract.validate_manifest_records(records, manifest)
 
     def test_native_run_rejects_missing_actual_seed(self):
@@ -242,6 +279,15 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(body["seed"], 991)
         self.assertEqual(body["min_keep"], 1)
         self.assertEqual(record["generation"]["sampler"]["seed"], native_seed)
+
+    def test_controlled_replay_rejects_unsupported_tokenization_flags(self):
+        for flag in ("addSpecial", "parseSpecial"):
+            record = contract("ios", "exact prompt")
+            record["prompt"]["tokenization"][flag] = False
+            with self.subTest(flag=flag), self.assertRaisesRegex(
+                native_contract.ContractError, "tokenization"
+            ):
+                native_contract.completion_body(record, replay_seed=991)
 
     def test_controlled_replay_seed_must_be_deterministic(self):
         record = contract("ios", "exact prompt")
@@ -325,6 +371,50 @@ class NativeContractTests(unittest.TestCase):
         score["termination"] = {"passed": False, "reason": "deadline"}
         self.assertFalse(run_eval.score_passed(score))
 
+    def test_perfect_rhyme_request_rejects_near_rhymes(self):
+        manifest = native_contract.load_case_manifest(MANIFEST_PATH)
+        case = manifest["cases"][0]
+        record = contract("ios", "prompt", case["request"])
+        record["caseId"] = case["caseId"]
+        record["requestKind"] = case["requestKind"]
+        prepared = run_eval.prepare_contract(record)
+        near = run_eval.score_case(
+            prepared,
+            "I carry daylight into day\n"
+            "I carry all the letters on their way\n"
+            "I hear the tired traffic say\n"
+            "I watch the children run and play\n"
+            "I watch the players finish every game\n"
+            "I hear the station calling out my name",
+        )
+        self.assertEqual(near["rhyme"]["required_tier"], 2)
+        self.assertEqual(near["rhyme"]["miss"], 6)
+        near_request = copy.deepcopy(case["request"])
+        near_request["controls"]["rhymeType"] = "NEAR"
+        near_record = contract("ios", "prompt", near_request)
+        near_record["requestKind"] = case["requestKind"]
+        near_allowed = run_eval.score_case(
+            run_eval.prepare_contract(near_record),
+            "I carry daylight into day\n"
+            "I carry all the letters on their way\n"
+            "I hear the tired traffic say\n"
+            "I watch the children run and play\n"
+            "I watch the players finish every game\n"
+            "I hear the station calling out my name",
+        )
+        self.assertEqual(near_allowed["rhyme"]["required_tier"], 1)
+        self.assertEqual(near_allowed["rhyme"]["miss"], 0)
+        perfect = run_eval.score_case(
+            prepared,
+            "I board the last returning train\n"
+            "I trace the silver streets of main\n"
+            "I walk the wet-lit road again\n"
+            "I leave my footprints in the lane\n"
+            "I let the silence hold the pain\n"
+            "I hear the night repeat the strain",
+        )
+        self.assertEqual(perfect["rhyme"]["miss"], 0)
+
     def test_evaluation_gate_fails_when_any_case_fails(self):
         self.assertTrue(run_eval.evaluation_passed([{"passed": True}]))
         self.assertFalse(run_eval.evaluation_passed([{"passed": True}, {"passed": False}]))
@@ -399,6 +489,18 @@ class LexicalFixtureTests(unittest.TestCase):
             )
             with open(output_path, "r", encoding="utf-8") as handle:
                 self.assertEqual(len(handle.readlines()), len(records))
+
+    def test_adversarial_builder_rejects_controlled_replay_prompt_lineage(self):
+        records = []
+        for spec in self.training.values():
+            for platform in native_contract.PLATFORMS:
+                record = contract(platform, "replayed prompt", spec["request"])
+                record["caseId"] = spec["caseId"]
+                record["requestKind"] = spec["requestKind"]
+                record["runtime"]["evidenceKind"] = "controlledReplay"
+                records.append(record)
+        with self.assertRaisesRegex(ValueError, "native prompt lineage"):
+            build_adversarial.build_rows(records, self.training, self.heldout)
 
     def test_raw_markers_are_rejected_before_cleanup(self):
         for marker in ("<start_of_turn>model\n", "<|turn>model\n", "<turn|>\n"):
