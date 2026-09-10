@@ -300,6 +300,7 @@ def score_case(prepared, output_text):
         result["format"] = {
             "passed": fmt["passed"],
             "word_count": len(fmt["words"]),
+            "minimum_useful_count": min(scoring.MIN_USEFUL_SYNONYMS, case["limit"]),
             "violations": [
                 {"line_index": idx, "violations": v} for idx, v in fmt["violations"]
             ],

@@ -538,6 +538,14 @@ class LexicalFixtureTests(unittest.TestCase):
             self.assertIn("invalid_lexical_spelling", result["violations"])
             self.assertIn("in_rejected_list", result["violations"])
 
+    def test_synonym_validation_requires_the_native_minimum_useful_count(self):
+        self.assertFalse(scoring.validate_synonyms("shine", "glow", 5)["passed"])
+        self.assertFalse(scoring.validate_synonyms("shine\ngleam", "glow", 5)["passed"])
+        self.assertTrue(
+            scoring.validate_synonyms("shine\ngleam\nradiance", "glow", 5)["passed"]
+        )
+        self.assertTrue(scoring.validate_synonyms("shine\ngleam", "glow", 2)["passed"])
+
     def test_all_declared_adversarial_violations_are_observed(self):
         for fixture in self.heldout.values():
             for adversary in fixture["evaluation"]["adversarialOutputs"]:

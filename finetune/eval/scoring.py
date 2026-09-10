@@ -64,6 +64,7 @@ SUBSTITUTIONS = [
 
 # LyricTokenizer.wordPattern
 WORD_PATTERN = re.compile(r"[a-zA-Z']+")
+MIN_USEFUL_SYNONYMS = 3
 IOS_WHITESPACE_PATTERN = re.compile(
     r"[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+"
 )
@@ -768,6 +769,9 @@ def validate_synonyms(raw_output, target_word, limit):
         violations.append((-1, raw_violations))
     if not lines:
         violations.append((-1, ["empty"]))
+    minimum_useful_count = min(MIN_USEFUL_SYNONYMS, limit)
+    if len(lines) < minimum_useful_count:
+        violations.append((-1, ["fewer_than_%d_lines" % minimum_useful_count]))
     if len(lines) > limit:
         violations.append((-1, ["more_than_%d_lines" % limit]))
     target_key = normalize_suggestion_key(target_word)
