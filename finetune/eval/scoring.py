@@ -350,6 +350,14 @@ def line_end_word(line):
     return normalize_word(matches[-1])
 
 
+def ios_line_end_word(line):
+    for token in reversed(line.split()):
+        normalized = normalize_word(token)
+        if normalized:
+            return normalized
+    return ""
+
+
 def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None):
     """RhymeConstraint.candidateEndWords. rhyme_type: 'PERFECT'|'NEAR'|'SLANT'."""
     dictionary = dictionary or shared_dictionary()
@@ -417,7 +425,7 @@ def _has_single_coda_edit(lhs, rhs):
 
 
 def _ios_rhyme_tier(line, target_word, dictionary):
-    candidate = normalize_word(line_end_word(line))
+    candidate = ios_line_end_word(line)
     target = normalize_word(target_word)
     target_pronunciations = dictionary.pronunciations(target)
     if candidate == target or not target_pronunciations:

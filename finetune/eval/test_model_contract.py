@@ -462,6 +462,19 @@ class NativeContractTests(unittest.TestCase):
 
     def test_ios_rhyme_tiers_preserve_exclusive_native_relations(self):
         matches = scoring.find_rhymes("rain")
+        self.assertEqual(scoring.ios_line_end_word("I follow the street—train"), "streettrain")
+        self.assertEqual(
+            scoring.rhyme_tier_for_platform(
+                "I follow the street—train", "rain", "ios", matches
+            ),
+            0,
+        )
+        self.assertEqual(
+            scoring.rhyme_tier_for_platform(
+                "I follow the street—train", "rain", "android", matches
+            ),
+            2,
+        )
         self.assertEqual(
             scoring.rhyme_tier_for_platform("I drift toward day", "rain", "ios", matches),
             1,
