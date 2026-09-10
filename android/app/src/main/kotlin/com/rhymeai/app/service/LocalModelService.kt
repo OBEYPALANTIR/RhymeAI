@@ -86,7 +86,7 @@ class LocalModelService : AutoCloseable {
                     mapOf(
                         "model" to modelUri,
                         "model_fd" to model.fd,
-                        "use_mmap" to false,
+                        "use_mmap" to true,
                         "use_mlock" to false,
                         "n_ctx" to CONTEXT_LENGTH,
                         "embedding" to false,

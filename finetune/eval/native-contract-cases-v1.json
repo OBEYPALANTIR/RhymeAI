@@ -10,7 +10,7 @@
       "seed": {
         "policy": "randomPerRequest",
         "value": null,
-        "recordActualValueInExport": true
+        "recordActualValueInExport": false
       }
     },
     "android": {
