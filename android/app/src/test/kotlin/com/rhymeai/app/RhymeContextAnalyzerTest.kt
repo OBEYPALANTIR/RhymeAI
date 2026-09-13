@@ -39,6 +39,21 @@ class RhymeContextAnalyzerTest {
     }
 
     @Test
+    fun ignoresBareSectionHeadersForSchemePositionAndSectionDetection() {
+        val lyrics = "verse\nfirst light\nsecond night\npre-chorus\nbuild higher"
+
+        val context = RhymeContextAnalyzer.compute(
+            text = lyrics,
+            cursor = lyrics.length,
+            scheme = "ABAB"
+        )
+
+        assertEquals("A", context.currentLetter)
+        assertEquals(SongSection.UNKNOWN, context.currentSection)
+        assertEquals("pre-chorus", context.currentSectionRef?.label)
+    }
+
+    @Test
     fun detectsBridgeSectionForPromptShaping() {
         val lyrics = "[Verse 1]\nfirst line\n\n[Bridge]\nnew angle"
 

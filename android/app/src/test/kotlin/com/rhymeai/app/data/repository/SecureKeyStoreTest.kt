@@ -3,6 +3,7 @@ package com.rhymeai.app.data.repository
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class SecureKeyStoreTest {
@@ -90,5 +91,24 @@ class SecureKeyStoreTest {
 
         assertFalse(migrated)
         assertEquals("", store.getKey("GEMINI"))
+    }
+
+    @Test
+    fun migrationPropagatesSecureWriteFailure() {
+        val store = object : SecureKeyStore {
+            override fun getKey(provider: String): String = ""
+            override fun setKey(provider: String, key: String) {
+                error("write failed")
+            }
+            override fun allKeys(): Map<String, String> = emptyMap()
+            override fun clear() = Unit
+        }
+
+        assertFailsWith<IllegalStateException> {
+            ApiKeyMigration.apply(
+                mapOf("GEMINI" to "legacy", "OPENAI" to "", "CLAUDE" to ""),
+                store
+            )
+        }
     }
 }

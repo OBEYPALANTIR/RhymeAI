@@ -4,9 +4,6 @@ import com.rhymeai.app.data.model.SongSection
 import com.rhymeai.app.util.SectionMap
 
 internal object RhymeContextAnalyzer {
-    private val sectionHeaderRegex = Regex("^\\s*\\[.*]\\s*$")
-    private val sectionHeaderCaptureRegex = Regex("^\\s*\\[(.+)]\\s*$")
-
     fun compute(text: String, cursor: Int, scheme: String): RhymeContext {
         if (text.isEmpty()) {
             return RhymeContext(null, scheme.firstOrNull()?.toString() ?: "A", emptyList(), 0)
@@ -30,7 +27,7 @@ internal object RhymeContextAnalyzer {
         val rawCursorLineIndex = stanzaTextBefore.split("\n").size - 1
 
         val lyricLinePos = stanzaLines.take(rawCursorLineIndex + 1).count { line ->
-            !sectionHeaderRegex.matches(line) && line.isNotBlank()
+            SectionMap.headerTitle(line) == null && line.isNotBlank()
         } - 1
         val effectiveLineIndex = maxOf(lyricLinePos, 0)
 
@@ -46,7 +43,7 @@ internal object RhymeContextAnalyzer {
         for (i in stanzaLines.indices) {
             if (i >= rawCursorLineIndex) break
             val line = stanzaLines[i].trim()
-            if (sectionHeaderRegex.matches(line) || line.isEmpty()) continue
+            if (SectionMap.headerTitle(line) != null || line.isEmpty()) continue
             val letterForThis = schemeLetters[lyricCount % schemeLetters.size].toString()
             if (letterForThis == currentLetter) {
                 targetLine = line
@@ -59,15 +56,19 @@ internal object RhymeContextAnalyzer {
         val currentLineIndex = text.substring(0, pos).count { it == '\n' }
         val sectionRef = SectionMap.parse(text).sectionAt(currentLineIndex)
 
-        return RhymeContext(targetLine, currentLetter, stanzaLines, rawCursorLineIndex, currentSection, sectionRef)
+        return RhymeContext(
+            targetLine = targetLine,
+            currentLetter = currentLetter,
+            stanzaLines = stanzaLines,
+            currentLineIndex = rawCursorLineIndex,
+            currentSection = currentSection,
+            currentSectionRef = sectionRef
+        )
     }
 
     fun currentSongSection(text: String, cursor: Int): SongSection {
-        val textBeforeCursor = text.take(cursor.coerceIn(0, text.length))
-        val header = textBeforeCursor
-            .lineSequence()
-            .mapNotNull { sectionHeaderCaptureRegex.matchEntire(it)?.groupValues?.getOrNull(1) }
-            .lastOrNull()
-        return header?.let(SongSection::fromHeader) ?: SongSection.UNKNOWN
+        val safeCursor = cursor.coerceIn(0, text.length)
+        val currentLineIndex = text.substring(0, safeCursor).count { it == '\n' }
+        return SectionMap.parse(text).sectionAt(currentLineIndex).type
     }
 }

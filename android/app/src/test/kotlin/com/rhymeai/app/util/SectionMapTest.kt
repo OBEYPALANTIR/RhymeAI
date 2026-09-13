@@ -3,6 +3,7 @@ package com.rhymeai.app.util
 import com.rhymeai.app.data.model.SongSection
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SectionMapTest {
@@ -20,10 +21,12 @@ class SectionMapTest {
 
     @Test
     fun bare_headers_are_parsed() {
-        val map = SectionMap.parse("verse\nLine one\nchorus\nHook line")
+        val map = SectionMap.parse("verse\nLine one\nchorus\nHook line\nrefrain\nAgain\ninterlude\nBreathe")
         val sections = map.allSections
         assertTrue(sections.any { it.type == SongSection.VERSE }, "Expected VERSE")
         assertTrue(sections.any { it.type == SongSection.CHORUS }, "Expected CHORUS")
+        assertTrue(sections.any { it.label == "refrain" }, "Expected refrain header")
+        assertTrue(sections.any { it.label == "interlude" }, "Expected interlude header")
     }
 
     @Test
@@ -148,5 +151,44 @@ class SectionMapTest {
         // Only one section: the Verse.
         assertTrue(map.allSections.none { it.type == SongSection.BRIDGE },
             "Lyric line containing 'bridge' must not be parsed as a Bridge header")
+    }
+
+    @Test
+    fun lyricContent_excludes_standard_and_custom_section_headers() {
+        val lyrics = "[Verse]\nHold the line\nPre-Chorus\nBuild it up\n[Post-Chorus]\nLet it ring"
+
+        assertEquals(
+            "Hold the line\nBuild it up\nLet it ring",
+            SectionMap.lyricContent(lyrics)
+        )
+        assertEquals(listOf(0 until 7, 22 until 32, 45 until 58), SectionMap.headerRanges(lyrics))
+        assertEquals(9, SyllableCounter.lyricWordCount(lyrics))
+        assertEquals(
+            SyllableCounter.countText("Hold the line\nBuild it up\nLet it ring"),
+            SyllableCounter.lyricSyllableCount(lyrics)
+        )
+    }
+
+    @Test
+    fun header_intersection_search_respects_range_boundaries() {
+        val headerRanges = listOf(0 until 7, 22 until 32, 45 until 58)
+
+        assertTrue(SectionMap.intersectsHeader(1..4, headerRanges))
+        assertTrue(SectionMap.intersectsHeader(20..22, headerRanges))
+        assertFalse(SectionMap.intersectsHeader(7..21, headerRanges))
+        assertFalse(SectionMap.intersectsHeader(32..44, headerRanges))
+        assertFalse(SectionMap.intersectsHeader(58..60, headerRanges))
+    }
+
+    @Test
+    fun insertHeader_adds_a_structural_block_and_returns_the_new_cursor() {
+        val insertion = SectionMap.insertHeader(
+            lyrics = "First line",
+            cursor = "First line".length,
+            label = "Chorus"
+        )
+
+        assertEquals("First line\n\n[Chorus]\n", insertion.text)
+        assertEquals(insertion.text.length, insertion.cursor)
     }
 }

@@ -38,6 +38,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -47,6 +48,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.ExportFormat
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.appWritingSurface
 import kotlinx.coroutines.delay
 
 @Composable
@@ -126,7 +128,8 @@ fun ExportSheet(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(colorScheme.surfaceContainerLow, RoundedCornerShape(DesignTokens.Radius.xxl))
+                            .clip(RoundedCornerShape(DesignTokens.Radius.xxl))
+                            .appWritingSurface()
                             .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.xxl))
                             .padding(DesignTokens.Spacing.lg)
                     ) {

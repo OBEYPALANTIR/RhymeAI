@@ -169,7 +169,8 @@ class AIServicePromptTest {
             useWholeSongContext = false
         )
 
-        assertContains(prompt, "<start_of_turn>user")
+        assertFalse(prompt.contains("<start_of_turn>"))
+        assertFalse(prompt.contains("<|turn>"))
         assertContains(prompt, "Task: write exactly 6 next-line options for the song.")
         assertContains(prompt, "End every suggestion with a slant rhyme")
         assertContains(prompt, "Return only candidate lyric lines")
@@ -178,7 +179,7 @@ class AIServicePromptTest {
     }
 
     @Test
-    fun localRewriteCleanerAcceptsJsonAndDropsChatMarkers() {
+    fun localRewriteCleanerAcceptsJsonAndRejectsChatMarkers() {
         val service = AIService()
 
         assertEquals(
@@ -186,7 +187,7 @@ class AIServicePromptTest {
             service.cleanLocalRewrite("""{"rewrite":"I trade the dark for a borrowed glow"}""")
         )
         assertEquals(
-            "I trade the dark for a borrowed glow",
+            "",
             service.cleanLocalRewrite(
                 """
                 <start_of_turn>model
@@ -198,12 +199,13 @@ class AIServicePromptTest {
     }
 
     @Test
-    fun localRewriteCleanerExtractsSingleWordReplacement() {
+    fun localRewriteCleanerRequiresBareSingleWordReplacement() {
         val service = AIService()
 
-        assertEquals("gleam", service.cleanLocalRewrite("glow -> gleam", selection = "glow"))
-        assertEquals("shine", service.cleanLocalRewrite("shine, gleam, radiance", selection = "glow"))
-        assertEquals("gleam", service.cleanLocalRewrite("The replacement is \"gleam\".", selection = "glow"))
+        assertEquals("gleam", service.cleanLocalRewrite("gleam", selection = "glow"))
+        assertEquals("", service.cleanLocalRewrite("glow -> gleam", selection = "glow"))
+        assertEquals("", service.cleanLocalRewrite("shine, gleam, radiance", selection = "glow"))
+        assertEquals("", service.cleanLocalRewrite("The replacement is \"gleam\".", selection = "glow"))
     }
 
     @Test
@@ -219,6 +221,40 @@ class AIServicePromptTest {
         assertContains(prompt, "Return exactly one replacement word")
         assertContains(prompt, "Do not return \"glow\"")
         assertContains(prompt, "The replacement must be different from the selected word")
+    }
+
+    @Test
+    fun localPassageRewriteCleanerRequiresExactSelectedLineCount() {
+        val service = AIService()
+
+        assertEquals(
+            "I hum a tune to hold it near",
+            service.cleanLocalRewrite(
+                response = "I hum a tune to hold it near",
+                selection = "I hum the hook to keep it close"
+            )
+        )
+        assertEquals(
+            "I counted all the miles\nYou watched the county line",
+            service.cleanLocalRewrite(
+                response = "I counted all the miles\nYou watched the county line",
+                selection = "I counted every mile\nYou watched the county line"
+            )
+        )
+        assertEquals(
+            "",
+            service.cleanLocalRewrite(
+                response = "I hum a tune to hold it near\nA low and steady sound I hear",
+                selection = "I hum the hook to keep it close"
+            )
+        )
+        assertEquals(
+            "",
+            service.cleanLocalRewrite(
+                response = "I counted all the miles",
+                selection = "I counted every mile\nYou watched the county line"
+            )
+        )
     }
 
     @Test

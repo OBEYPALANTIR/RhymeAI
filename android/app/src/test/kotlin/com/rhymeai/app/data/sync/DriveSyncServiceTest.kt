@@ -5,8 +5,10 @@ import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.data.repository.SecureKeyStore
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.ByteArrayInputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -28,6 +30,16 @@ class DriveSyncServiceTest {
     private val wrongPassphrase = "definitely wrong key".toCharArray()
     private val clientId = "device-001"
     private val json = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun boundedDriveReadAcceptsExactLimitAndRejectsUnknownLengthOverflow() {
+        val exact = ByteArray(8) { it.toByte() }
+
+        assertTrue(ByteArrayInputStream(exact).readBytesBounded(exact.size.toLong()).contentEquals(exact))
+        assertFailsWith<DriveNetworkException> {
+            ByteArrayInputStream(exact).readBytesBounded(exact.size - 1L)
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -71,6 +83,52 @@ class DriveSyncServiceTest {
     }
 
     @Test
+    fun uploadOnlyRejectsLocalRecordingOutsideRestorePolicy() {
+        val oversized = RecordingManifestEntry(
+            projectId = "project",
+            fileName = "clip.m4a",
+            sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1L,
+            modifiedAt = 1L,
+            sha256 = "digest"
+        )
+
+        assertFailsWith<DriveNetworkException> {
+            decideSyncAction(
+                SyncDecisionInput(
+                    local = SyncBlob(recordings = listOf(oversized)),
+                    remoteBytes = null,
+                    passphrase = passphrase,
+                    clientId = clientId
+                )
+            )
+        }
+    }
+
+    @Test
+    fun uploadOnlyRejectsManifestWhoseAggregateRecordingsExceedRestorePolicy() {
+        val recordings = List(5) { index ->
+            RecordingManifestEntry(
+                projectId = "project-$index",
+                fileName = "clip.m4a",
+                sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES,
+                modifiedAt = index.toLong(),
+                sha256 = "digest-$index"
+            )
+        }
+
+        assertFailsWith<DriveNetworkException> {
+            decideSyncAction(
+                SyncDecisionInput(
+                    local = SyncBlob(recordings = recordings),
+                    remoteBytes = null,
+                    passphrase = passphrase,
+                    clientId = clientId
+                )
+            )
+        }
+    }
+
+    @Test
     fun uploadOnlyEnvelopeRoundTripsCorrectly() {
         val local = SyncBlob(projects = listOf(project("a", "lyrics A")))
         val input = SyncDecisionInput(local, remoteBytes = null, passphrase, clientId)
@@ -106,6 +164,23 @@ class DriveSyncServiceTest {
         val decision = decideSyncAction(input)
 
         assertIs<SyncDecision.MergeAndUpload>(decision)
+    }
+
+    @Test
+    fun mergeRejectsAggregateRecordingManifestThatCannotBeRestoredFresh() {
+        fun recording(index: Int) = RecordingManifestEntry(
+            projectId = "project-$index",
+            fileName = "clip.m4a",
+            sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES,
+            modifiedAt = index.toLong(),
+            sha256 = "digest-$index"
+        )
+        val local = SyncBlob(recordings = (0 until 4).map(::recording))
+        val remote = SyncBlob(recordings = listOf(recording(4)))
+
+        assertFailsWith<DriveNetworkException> {
+            decideSyncAction(SyncDecisionInput(local, sealBlob(remote), passphrase, clientId))
+        }
     }
 
     @Test
@@ -190,6 +265,75 @@ class DriveSyncServiceTest {
             is SyncDecision.UploadOnly -> error("unexpected")
             is SyncDecision.MergeAndUpload -> error("unexpected")
         }
+    }
+
+    @Test
+    fun corruptRemoteWhenAuthenticatedProjectIdEscapesRecordingRoot() {
+        val remote = SyncBlob(projects = listOf(project("../escape", "remote")))
+
+        val decision = decideSyncAction(
+            SyncDecisionInput(SyncBlob(), sealBlob(remote), passphrase, clientId)
+        )
+
+        assertIs<SyncDecision.CorruptRemote>(decision)
+    }
+
+    @Test
+    fun corruptRemoteWhenAuthenticatedRecordingDriveNameIsForged() {
+        val remote = SyncBlob(
+            recordings = listOf(
+                RecordingManifestEntry(
+                    projectId = "legacy opaque:é id",
+                    fileName = "take 1.m4a",
+                    driveName = "rec_other_take 1.m4a.enc",
+                    sizeBytes = 12L,
+                    modifiedAt = 100L,
+                    sha256 = "digest"
+                )
+            )
+        )
+
+        val decision = decideSyncAction(
+            SyncDecisionInput(SyncBlob(), sealBlob(remote), passphrase, clientId)
+        )
+
+        assertIs<SyncDecision.CorruptRemote>(decision)
+    }
+
+    @Test
+    fun syncMergerRejectsInvalidInMemoryRecordingIdentity() {
+        val invalid = RecordingManifestEntry(
+            projectId = "safe",
+            fileName = "../clip.m4a",
+            sizeBytes = 12L,
+            modifiedAt = 100L,
+            sha256 = "digest"
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            SyncMerger.merge(SyncBlob(), SyncBlob(recordings = listOf(invalid)))
+        }
+    }
+
+    @Test
+    fun authenticatedLegacyUnicodeIdentityStillMerges() {
+        val remote = SyncBlob(
+            recordings = listOf(
+                RecordingManifestEntry(
+                    projectId = "legacy opaque:é id",
+                    fileName = "take 1.m4a",
+                    sizeBytes = 12L,
+                    modifiedAt = 100L,
+                    sha256 = "digest"
+                )
+            )
+        )
+
+        val decision = decideSyncAction(
+            SyncDecisionInput(SyncBlob(), sealBlob(remote), passphrase, clientId)
+        )
+
+        assertIs<SyncDecision.MergeAndUpload>(decision)
     }
 
     @Test

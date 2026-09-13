@@ -26,6 +26,14 @@ object DesignTokens {
         val golden = 52.dp
     }
 
+    object Rhythm {
+        val tight = 8.dp
+        val related = 13.dp
+        val standard = 21.dp
+        val section = 34.dp
+        val primary = 55.dp
+    }
+
     object Typography {
         // De-facto caption size used across dialogs, sheets, and the editor for
         // secondary/support text — the 13px rung of the φ-rounded 12/13px caption tier.
@@ -42,24 +50,29 @@ object DesignTokens {
     }
 
     object Editor {
-        val horizontalPadding = 24.dp
+        val horizontalPadding = Rhythm.standard
         val bottomRest = 300.dp
         val keyboardOffset = 72.dp
         val estimatedCharacterWidth = 8.5.dp
-        val lyricMeasureLineHeight = 28.dp
-        val lyricFontSize = 16.sp
-        val lyricLineHeight = 28.sp
+        val lyricMeasureLineHeight = 27.dp
+        val lyricFontSize = 17.sp
+        val lyricLineHeight = 27.sp
+        val titleFontSize = 34.sp
+        val titleLineHeight = 42.sp
+        val metadataFontSize = 13.sp
+        val metadataLineHeight = 16.sp
         val syllableUnderlineGap = 2.dp
         val syllableUnderlineWidth = 3.dp
     }
 
     object EditorChrome {
         val saveStatusStrokeWidth = 2.dp
-        val statsEndPadding = 4.dp
-        val fabSize = 56.dp
+        val fabSize = Rhythm.primary
         val micRecordingWidth = 216.dp
-        val unBlockExtendedWidth = 150.dp
-        val unBlockWordmarkWidth = 76.dp
+        val micRecordingRestWidth = fabSize
+        val unBlockExtendedWidth = 144.dp
+        val unBlockScribbleWidth = 68.dp
+        val unBlockHorizontalPadding = Rhythm.standard
         val recordingContentGap = 8.dp
         val recordingContentStartPadding = 16.dp
         val recordingMeterHeight = 24.dp
@@ -102,6 +115,7 @@ object DesignTokens {
     object Motion {
         // Golden-ratio duration ladder: 0.16 ×φ ≈0.26 ×φ ≈0.42 (φ=1.618). Utilitarian tiers ≤0.50s.
         const val feedbackMillis = 160
+        const val pageFadeMillis = 140
         const val dismissMillis = 160
         const val standardMillis = 260
         const val dialogMillis = 260
@@ -109,7 +123,7 @@ object DesignTokens {
         const val sheetPresentMillis = 260
         const val drawerPresentMillis = 260
         const val dragSettleMillis = 420
-        const val rewriteShimmerMillis = 1200
+        const val rewriteMotionLoopMillis = 1200
 
         val standardEasing: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
         val emphasizedEasing: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)

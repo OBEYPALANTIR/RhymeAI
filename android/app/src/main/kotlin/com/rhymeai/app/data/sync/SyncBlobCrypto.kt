@@ -31,12 +31,18 @@ object SyncBlobCrypto {
     private const val IV_BYTES = 12
     private const val TAG_BITS = 128
     private const val KEY_BITS = 256
+    internal const val ENVELOPE_OVERHEAD_BYTES = 4 + SALT_BYTES + IV_BYTES + (TAG_BITS / 8)
 
     // OWASP 2023 floor for PBKDF2-HmacSHA256. Derivation runs once per
     // sync push/pull, so the ~0.5s cost on a phone is acceptable.
     private const val PBKDF2_ITERATIONS = 210_000
 
     private val random = SecureRandom()
+
+    internal fun envelopeSizeForPlaintext(plaintextBytes: Long): Long {
+        require(plaintextBytes >= 0) { "Plaintext size must be non-negative" }
+        return Math.addExact(plaintextBytes, ENVELOPE_OVERHEAD_BYTES.toLong())
+    }
 
     fun seal(plaintext: ByteArray, passphrase: CharArray): ByteArray {
         val salt = ByteArray(SALT_BYTES).also(random::nextBytes)

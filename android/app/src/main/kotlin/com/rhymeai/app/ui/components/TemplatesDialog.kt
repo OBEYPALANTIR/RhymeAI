@@ -1,13 +1,10 @@
 package com.rhymeai.app.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -38,9 +35,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
@@ -54,8 +51,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.SONG_TEMPLATES
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import com.rhymeai.app.ui.theme.appWritingSurface
 
 @Composable
 fun TemplatesDialog(
@@ -64,23 +60,20 @@ fun TemplatesDialog(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val animationsEnabled = LocalAnimationsEnabled.current
-    val scope = rememberCoroutineScope()
-    var visible by remember { mutableStateOf(false) }
+    val pageTransition = remember { MutableTransitionState(false).apply { targetState = true } }
     var isClosing by remember { mutableStateOf(false) }
 
-    // Modal motion: the card scales in from its resting point instead of just
-    // appearing, and plays the faster dismiss tier on the way out.
     fun requestDismiss() {
         if (isClosing) return
         isClosing = true
-        visible = false
-        scope.launch {
-            delay(if (animationsEnabled) DesignTokens.Motion.dismissMillis.toLong() else 0L)
+        pageTransition.targetState = false
+    }
+
+    LaunchedEffect(pageTransition.isIdle, pageTransition.currentState, isClosing) {
+        if (isClosing && pageTransition.isIdle && !pageTransition.currentState) {
             onDismiss()
         }
     }
-
-    LaunchedEffect(Unit) { visible = true }
 
     Dialog(
         onDismissRequest = ::requestDismiss,
@@ -95,24 +88,15 @@ fun TemplatesDialog(
         // ourselves so it fades with the card; the window dim is disabled.
         val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
         SideEffect { dialogWindow?.setDimAmount(0f) }
-        val scrimAlpha = animateFloatAsState(
-            targetValue = if (visible) 0.42f else 0f,
-            animationSpec = if (animationsEnabled) {
-                tween(
-                    if (visible) DesignTokens.Motion.standardMillis else DesignTokens.Motion.dismissMillis,
-                    easing = if (visible) DesignTokens.Motion.standardEasing else DesignTokens.Motion.exitEasing
-                )
-            } else {
-                snap()
-            },
-            label = "templatesScrim"
-        )
+        AnimatedVisibility(
+            visibleState = pageTransition,
+            enter = fadeIn(animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.pageFadeMillis else 0, easing = DesignTokens.Motion.standardEasing)),
+            exit = fadeOut(animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.pageFadeMillis else 0, easing = DesignTokens.Motion.exitEasing))
+        ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                // drawBehind: the fading scrim invalidates only the draw phase
-                // instead of recomposing the dialog every animation frame.
-                .drawBehind { drawRect(Color.Black.copy(alpha = scrimAlpha.value)) }
+                .drawBehind { drawRect(Color.Black.copy(alpha = 0.42f)) }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
@@ -121,25 +105,20 @@ fun TemplatesDialog(
                 .bottomSafeActionPadding(extra = DesignTokens.Spacing.lg),
             contentAlignment = Alignment.Center
         ) {
-            AnimatedVisibility(
-                visible = visible,
-                enter = fadeIn(animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.standardMillis else 0, easing = DesignTokens.Motion.standardEasing)) +
-                    scaleIn(initialScale = 0.92f, animationSpec = if (animationsEnabled) DesignTokens.Motion.standardSpring() else tween(0)),
-                exit = fadeOut(animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.dismissMillis else 0, easing = DesignTokens.Motion.exitEasing)) +
-                    scaleOut(targetScale = 0.95f, animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.dismissMillis else 0, easing = DesignTokens.Motion.exitEasing))
-            ) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = DesignTokens.Drawer.expandedWidth)
+                    .clip(RoundedCornerShape(DesignTokens.Radius.xxl))
+                    .appWritingSurface()
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) { /* consume so card taps don't dismiss */ },
                 shape = RoundedCornerShape(DesignTokens.Radius.xxl),
-                color = colorScheme.surfaceContainerLow,
+                color = Color.Transparent,
                 contentColor = colorScheme.onSurface,
-                tonalElevation = 6.dp,
+                tonalElevation = 0.dp,
                 border = BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {

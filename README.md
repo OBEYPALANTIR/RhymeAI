@@ -81,9 +81,13 @@ Then run:
 ./gradlew :app:bundleRelease
 ```
 
-Without `keystore.properties`, Gradle still builds the minified release APK/AAB for
-R8 verification, but the APK output is unsigned. To run the release gate from the
-repo root:
+CI or an explicit local build may instead supply the complete `RHYMEAI_KEYSTORE_FILE`,
+`RHYMEAI_STORE_PASSWORD`, `RHYMEAI_KEY_ALIAS`, and `RHYMEAI_KEY_PASSWORD` tuple.
+When any of those variables is present, that complete tuple takes precedence over
+`keystore.properties`; partial environment signing material is rejected. Release
+APK/AAB tasks fail before packaging when the selected signing material is incomplete
+or unavailable, so Gradle does not emit an unsigned release fallback. To run the
+release gate from the repo root:
 
 ```sh
 ./scripts/android-release-smoke.sh

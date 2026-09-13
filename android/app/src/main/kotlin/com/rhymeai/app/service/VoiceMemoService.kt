@@ -8,6 +8,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.rhymeai.app.BuildConfig
+import com.rhymeai.app.data.sync.SyncIdentity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -101,6 +103,14 @@ class VoiceMemoService(private val context: Context) {
         val amplitude = raw / 32767f
         val db = 20.0 * log10(amplitude.toDouble())
         return (((db + 60.0) / 60.0).toFloat()).coerceIn(0f, 1f)
+    }
+
+    internal fun seedRecordingForTesting() {
+        check(BuildConfig.DEBUG || BuildConfig.BENCHMARK) {
+            "Recording test seeding requires a debug or benchmark build"
+        }
+        recordingElapsedMs = 3_000L
+        isRecording = true
     }
 
     // ---------------------------------------------------------------------------
@@ -405,10 +415,11 @@ class VoiceMemoService(private val context: Context) {
      * when a project is permanently deleted so orphaned audio files do not accumulate.
      */
     suspend fun deleteMemoDirectory(projectId: String) {
-        val dir = memoDir(projectId)
-        val trash = trashDir(projectId)
+        val (dir, trash) = runCatching { memoDir(projectId) to trashDir(projectId) }
+            .getOrNull() ?: return
         val playing = playingFile
-        if (playing != null && (playing.path.startsWith(dir.path) || playing.path.startsWith(trash.path))) {
+        val playingPath = playing?.let { runCatching { it.canonicalFile.toPath() }.getOrNull() }
+        if (playingPath != null && (playingPath.startsWith(dir.toPath()) || playingPath.startsWith(trash.toPath()))) {
             stopPlayback()
         }
 
@@ -439,7 +450,7 @@ class VoiceMemoService(private val context: Context) {
         memoDirectory(context.filesDir, projectId)
 
     private fun trashDir(projectId: String): File =
-        File(trashRoot(context.filesDir), projectId)
+        trashDirectory(context.filesDir, projectId)
 
     private fun trashedMemoFromFile(file: File, projectId: String): TrashedVoiceMemo? {
         val separatorIndex = file.name.indexOf(TRASH_NAME_SEPARATOR)
@@ -508,8 +519,29 @@ class VoiceMemoService(private val context: Context) {
             File(filesDir, MEMOS_TRASH_ROOT_DIR)
 
         fun memoDirectory(filesDir: File, projectId: String): File =
-            File(memosRoot(filesDir), projectId)
+            safeProjectDirectory(memosRoot(filesDir), projectId)
 
+        fun trashDirectory(filesDir: File, projectId: String): File =
+            safeProjectDirectory(trashRoot(filesDir), projectId)
+
+        fun memoFile(filesDir: File, projectId: String, fileName: String): File {
+            SyncIdentity.validateFileName(fileName)
+            return requireDescendant(memosRoot(filesDir), File(memoDirectory(filesDir, projectId), fileName))
+        }
+
+        private fun safeProjectDirectory(root: File, projectId: String): File {
+            SyncIdentity.validateProjectId(projectId)
+            return requireDescendant(root, File(root, projectId))
+        }
+
+        private fun requireDescendant(root: File, candidate: File): File {
+            val canonicalRoot = root.canonicalFile.toPath()
+            val canonicalCandidate = candidate.canonicalFile.toPath()
+            require(canonicalCandidate != canonicalRoot && canonicalCandidate.startsWith(canonicalRoot)) {
+                "Recording path is outside its storage root"
+            }
+            return canonicalCandidate.toFile()
+        }
 
         fun formatMemoLabel(timestampMs: Long): String =
             LABEL_FORMAT.format(Date(timestampMs))

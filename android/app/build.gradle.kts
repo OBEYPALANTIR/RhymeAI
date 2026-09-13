@@ -15,6 +15,20 @@ val localProperties = Properties().apply {
     }
 }
 val geminiTestKey = localProperties.getProperty("geminiTestKey", "")
+val includeGeminiTestKey = providers.gradleProperty("includeGeminiTestKey")
+    .orNull
+    ?.toBooleanStrictOrNull()
+    ?: false
+val embeddedGeminiTestKey = if (includeGeminiTestKey) geminiTestKey else ""
+val rewriteMotionStyleProperty = providers.gradleProperty("rewriteMotionStyle")
+val rewriteMotionStyle = rewriteMotionStyleProperty
+    .getOrElse("ripple")
+val rewriteMotionStyles = setOf("pencil", "ripple", "paper")
+if (rewriteMotionStyle !in rewriteMotionStyles) {
+    throw GradleException(
+        "rewriteMotionStyle must be one of ${rewriteMotionStyles.sorted().joinToString()}, got '$rewriteMotionStyle'"
+    )
+}
 // Optional OAuth web client id for the Drive appData integration. If absent, the
 // Android installed-app flow proceeds without a server client id (which is fine for
 // device-only sync). Set in android/local.properties as: driveOauthClientId=<value>
@@ -37,23 +51,42 @@ fun env(name: String): String? =
 fun Map<String, String?>.completeSigningProperties(): Map<String, String>? =
     takeIf { values.all { value -> value.isNullOrBlank().not() } }?.mapValues { it.value.orEmpty() }
 
-val releaseSigningProperties = mapOf(
-    "storeFile" to (keystoreProperties.nonBlankProperty("storeFile") ?: env("RHYMEAI_KEYSTORE_FILE")),
-    "storePassword" to (keystoreProperties.nonBlankProperty("storePassword") ?: env("RHYMEAI_STORE_PASSWORD")),
-    "keyAlias" to (keystoreProperties.nonBlankProperty("keyAlias") ?: env("RHYMEAI_KEY_ALIAS")),
-    "keyPassword" to (keystoreProperties.nonBlankProperty("keyPassword") ?: env("RHYMEAI_KEY_PASSWORD")),
-).completeSigningProperties()
+val environmentSigningProperties = mapOf(
+    "storeFile" to env("RHYMEAI_KEYSTORE_FILE"),
+    "storePassword" to env("RHYMEAI_STORE_PASSWORD"),
+    "keyAlias" to env("RHYMEAI_KEY_ALIAS"),
+    "keyPassword" to env("RHYMEAI_KEY_PASSWORD"),
+)
+val fileSigningProperties = mapOf(
+    "storeFile" to keystoreProperties.nonBlankProperty("storeFile"),
+    "storePassword" to keystoreProperties.nonBlankProperty("storePassword"),
+    "keyAlias" to keystoreProperties.nonBlankProperty("keyAlias"),
+    "keyPassword" to keystoreProperties.nonBlankProperty("keyPassword"),
+)
+val releaseSigningProperties = if (environmentSigningProperties.values.any { it != null }) {
+    environmentSigningProperties.completeSigningProperties()
+} else {
+    fileSigningProperties.completeSigningProperties()
+}
 val releaseStoreFile = releaseSigningProperties?.get("storeFile")?.let { rootProject.file(it) }
 val hasReleaseSigningConfig = releaseSigningProperties != null && releaseStoreFile?.isFile == true
+val releaseArtifactTaskNames = setOf("assembleRelease", "bundleRelease", "packageRelease", "validateSigningRelease")
+val releaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.substringAfterLast(':') in releaseArtifactTaskNames
+}
+if (releaseTaskRequested && !hasReleaseSigningConfig) {
+    throw GradleException(
+        "Release signing material missing: configure android/keystore.properties or RHYMEAI_* signing variables"
+    )
+}
 
 tasks.configureEach {
-    // bundleRelease (Play upload) still demands real signing material.
-    // assembleRelease falls back to the debug key so optimized builds can be
-    // side-loaded for performance testing without a production keystore.
-    if (name == "bundleRelease") {
+    if (name in releaseArtifactTaskNames) {
         doFirst {
             if (!hasReleaseSigningConfig) {
-                throw GradleException("Release signing material missing: create android/keystore.properties")
+                throw GradleException(
+                    "Release signing material missing: configure android/keystore.properties or RHYMEAI_* signing variables"
+                )
             }
         }
     }
@@ -67,10 +100,21 @@ android {
         applicationId = "com.rhymeai.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
+        versionCode = 4
         versionName = "1.0"
 
+        ndk {
+            abiFilters += setOf("arm64-v8a", "x86_64")
+        }
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("boolean", "BENCHMARK", "false")
+        buildConfigField("String", "REWRITE_MOTION_STYLE", buildConfigString(rewriteMotionStyle))
+        buildConfigField(
+            "boolean",
+            "REWRITE_MOTION_STYLE_IS_OVERRIDE",
+            rewriteMotionStyleProperty.isPresent.toString()
+        )
     }
 
     buildFeatures {
@@ -93,20 +137,27 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(geminiTestKey))
+            versionNameSuffix = "-$rewriteMotionStyle"
+            buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(embeddedGeminiTestKey))
             buildConfigField("String", "DRIVE_OAUTH_CLIENT_ID", buildConfigString(driveOauthClientId))
         }
         release {
             isMinifyEnabled = true
-            signingConfig = if (hasReleaseSigningConfig) {
-                signingConfigs.getByName("release")
-            } else {
-                // Debug-key fallback: installable for local testing; not for Play.
-                signingConfigs.getByName("debug")
+            if (rewriteMotionStyleProperty.isPresent) {
+                versionNameSuffix = "-$rewriteMotionStyle-eval"
+            }
+            if (hasReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
             }
             buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(""))
             buildConfigField("String", "DRIVE_OAUTH_CLIENT_ID", buildConfigString(driveOauthClientId))
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        create("benchmark") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("boolean", "BENCHMARK", "true")
         }
     }
 
@@ -145,6 +196,7 @@ dependencies {
 
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.security:security-crypto:1.1.0")
@@ -152,7 +204,7 @@ dependencies {
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
 
     // On-device LLM inference (GGUF support via llama.cpp)
-    implementation("io.github.ljcamargo:llamacpp-kotlin:0.4.0")
+    implementation(project(":kotlinllamacpp"))
 
     // OAuth for Drive appData scope; Drive REST calls use HttpURLConnection (same
     // idiom as AIService) — no heavy Google API client library needed.

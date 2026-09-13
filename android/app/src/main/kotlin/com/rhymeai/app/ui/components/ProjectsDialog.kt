@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -11,8 +13,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -39,6 +41,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -62,6 +65,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -96,19 +100,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.R
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
@@ -117,7 +121,9 @@ import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.service.TrashedVoiceMemo
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.motion.OffsetMotionState
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.appWritingSurface
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -157,7 +163,8 @@ fun ProjectsDrawer(
     val importJson = remember { Json { ignoreUnknownKeys = true } }
     var importError by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
-    var drawerVisible by remember { mutableStateOf(false) }
+    val drawerTransition = remember { MutableTransitionState(false).apply { targetState = true } }
+    val animationsEnabled = LocalAnimationsEnabled.current
     var isClosing by remember { mutableStateOf(false) }
     var showTrashBin by remember { mutableStateOf(false) }
     var trashBinVisible by remember { mutableStateOf(false) }
@@ -177,7 +184,7 @@ fun ProjectsDrawer(
         isTrashBinClosing = true
         trashBinVisible = false
         scope.launch {
-            delay(DrawerDismissMillis.toLong())
+            if (animationsEnabled) delay(DrawerDismissMillis.toLong())
             showTrashBin = false
             isTrashBinClosing = false
         }
@@ -187,19 +194,25 @@ fun ProjectsDrawer(
         closeTrashBin()
     }
 
-    fun closeDrawer(afterClose: () -> Unit = {}) {
+    fun closeDrawer(onSelection: (() -> Unit)? = null) {
         if (isClosing) return
         isClosing = true
-        drawerVisible = false
-        scope.launch {
-            delay(DrawerDismissMillis.toLong())
-            afterClose()
+        if (onSelection != null) {
+            onSelection()
             onDismiss()
+        } else {
+            drawerTransition.targetState = false
         }
     }
 
-    LaunchedEffect(Unit) {
-        drawerVisible = true
+    BackHandler(enabled = !showTrashBin) {
+        closeDrawer()
+    }
+
+    LaunchedEffect(drawerTransition.isIdle, drawerTransition.currentState, isClosing) {
+        if (isClosing && drawerTransition.isIdle && !drawerTransition.currentState) {
+            onDismiss()
+        }
     }
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -209,14 +222,15 @@ fun ProjectsDrawer(
         scope.launch {
             try {
                 val text = withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    context.contentResolver.openInputStream(uri)?.use(::readProjectText)
                         ?: throw Exception("Cannot read file")
                 }
                 val project = importJson.decodeFromString(SongProject.serializer(), text)
                 importError = null
                 closeDrawer { onImportProject(project) }
             } catch (e: Exception) {
-                importError = "Could not import this file. Pick a RhymeAI project JSON."
+                importError = e.message?.takeIf { it.startsWith("Project files must be") }
+                    ?: "Could not import this file. Pick a RhymeAI project JSON."
             }
         }
     }
@@ -241,7 +255,6 @@ fun ProjectsDrawer(
     // Push-style reveal: while the trash screen slides in from the right, the
     // drawer slides toward the left like a navigation push, so the trash reads
     // as the next screen rather than an overlay.
-    val animationsEnabled = LocalAnimationsEnabled.current
     val density = LocalDensity.current
     val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
     val trashRevealProgress by animateFloatAsState(
@@ -256,62 +269,47 @@ fun ProjectsDrawer(
         label = "trashRevealProgress"
     )
 
-    Dialog(
-        onDismissRequest = {
-            if (showTrashBin) closeTrashBin() else closeDrawer()
-        },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
-    ) {
-        EdgeToEdgeDialogEffect()
-        Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
-                visible = drawerVisible,
-                enter = fadeIn(animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing)),
-                exit = fadeOut(animationSpec = tween(if (animationsEnabled) DrawerDismissMillis else 0, easing = DesignTokens.Motion.exitEasing))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(colorScheme.scrim.copy(alpha = 0.42f))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { closeDrawer() }
-                        )
-                )
-            }
-
-            AnimatedVisibility(
-                visible = drawerVisible,
-                // Pure slide — the moving edge carries the spatial story; a
-                // simultaneous fade just muddies it. Exit rides the faster
-                // dismiss tier with an accelerate curve.
-                enter = slideInHorizontally(
-                    animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing),
-                    initialOffsetX = { -it }
-                ),
-                exit = slideOutHorizontally(
-                    animationSpec = tween(if (animationsEnabled) DrawerDismissMillis else 0, easing = DesignTokens.Motion.exitEasing),
-                    targetOffsetX = { -it }
-                )
+                visibleState = drawerTransition,
+                enter = if (animationsEnabled) {
+                    slideInHorizontally(
+                        animationSpec = tween(
+                            DrawerAnimationMillis,
+                            easing = DesignTokens.Motion.standardEasing
+                        ),
+                        initialOffsetX = { -it }
+                    )
+                } else {
+                    EnterTransition.None
+                },
+                exit = if (animationsEnabled) {
+                    slideOutHorizontally(
+                        animationSpec = tween(
+                            DrawerDismissMillis,
+                            easing = DesignTokens.Motion.exitEasing
+                        ),
+                        targetOffsetX = { -it }
+                    )
+                } else {
+                    ExitTransition.None
+                }
             ) {
                 Surface(
                     modifier = Modifier
                         .graphicsLayer { translationX = -screenWidthPx * 0.3f * trashRevealProgress }
                         .fillMaxSize()
+                        .appWritingSurface()
                         .imePadding()
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = {}
-                        ),
+                    ),
                     shape = RoundedCornerShape(0.dp),
-                    color = colorScheme.surfaceContainerLow,
+                    color = Color.Transparent,
                     contentColor = colorScheme.onSurface,
-                    tonalElevation = 8.dp
+                    tonalElevation = 0.dp
                 ) {
                     val bottomActionClearance = maxOf(
                         navigationBarBottomPadding(),
@@ -335,8 +333,31 @@ fun ProjectsDrawer(
                                         DesignTokens.Spacing.lg
                                 )
                         ) {
-                            // Full-bleed search: one trailing X inside the field — clears the
-                            // query while typing, closes the drawer when the field is empty.
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Song Library",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                IconButton(
+                                    onClick = { closeDrawer() },
+                                    modifier = Modifier.size(DesignTokens.Touch.minTarget)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close drawer",
+                                        tint = colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
@@ -348,18 +369,19 @@ fun ProjectsDrawer(
                                         modifier = Modifier.size(18.dp)
                                     )
                                 },
-                                trailingIcon = {
-                                    val isClearing = searchQuery.isNotEmpty()
-                                    IconButton(onClick = {
-                                        if (isClearing) searchQuery = "" else closeDrawer()
-                                    }) {
-                                        Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = if (isClearing) "Clear search" else "Close drawer",
-                                            tint = colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(18.dp)
-                                        )
+                                trailingIcon = if (searchQuery.isNotEmpty()) {
+                                    {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "Clear search",
+                                                tint = colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                     }
+                                } else {
+                                    null
                                 },
                                 placeholder = {
                                     Text(
@@ -371,19 +393,20 @@ fun ProjectsDrawer(
                                         fontSize = 14.sp
                                     )
                                 },
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = DesignTokens.Spacing.sm),
                                 colors = textFieldColors,
-                                shape = RoundedCornerShape(DesignTokens.Radius.xl)
+                                shape = RoundedCornerShape(DesignTokens.Radius.lg)
                             )
 
-                            OutlinedButton(
-                                onClick = { closeDrawer(afterClose = onNewProject) },
+                            Button(
+                                onClick = { closeDrawer(onSelection = onNewProject) },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(top = DesignTokens.Spacing.md)
-                                    .heightIn(min = 56.dp),
-                                shape = RoundedCornerShape(DesignTokens.Radius.xl),
-                                border = BorderStroke(1.dp, colorScheme.outline)
+                                    .heightIn(min = DesignTokens.Rhythm.primary),
+                                shape = RoundedCornerShape(DesignTokens.Radius.lg)
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(DesignTokens.Spacing.sm))
@@ -484,7 +507,7 @@ fun ProjectsDrawer(
                                 horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OutlinedButton(
+                                TextButton(
                                     onClick = {
                                         importError = null
                                         importLauncher.launch(arrayOf("application/json", "*/*"))
@@ -492,15 +515,13 @@ fun ProjectsDrawer(
                                     modifier = Modifier
                                         .weight(1f)
                                         .fillMaxHeight(),
-                                    shape = RoundedCornerShape(DesignTokens.Radius.xl),
-                                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
                                 ) {
                                     Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(DesignTokens.Spacing.sm))
                                     Text("Import Files", fontWeight = FontWeight.Medium)
                                 }
 
-                                OutlinedIconButton(
+                                IconButton(
                                     onClick = {
                                         onPurgeExpiredTrash()
                                         openTrashBin()
@@ -509,12 +530,10 @@ fun ProjectsDrawer(
                                         .fillMaxHeight()
                                         .width(DesignTokens.Touch.minTarget)
                                         .semantics { contentDescription = "Open Trash Bin" },
-                                    shape = RoundedCornerShape(DesignTokens.Radius.xl),
-                                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
                                 ) {
                                     Icon(
                                         Icons.Default.Delete,
-                                        contentDescription = "Open Trash Bin",
+                                        contentDescription = null,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
@@ -554,12 +573,14 @@ fun ProjectsDrawer(
                 hostState = snackbarHostState,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    // Clear the gesture bar: without the inset the snackbar (and
-                    // its Undo action) renders half off-screen behind it.
-                    .padding(bottom = navigationBarBottomPadding())
+                    .padding(
+                        bottom = maxOf(
+                            navigationBarBottomPadding(),
+                            DialogBottomActionMinClearance
+                        ) + DesignTokens.Touch.minTarget + DesignTokens.Spacing.lg
+                    )
                     .padding(DesignTokens.Spacing.lg)
             )
-        }
     }
 
 }
@@ -866,17 +887,16 @@ private fun FolderHeaderRow(
         targetValue = if (isExpanded) 180f else 0f,
         animationSpec = DesignTokens.Motion.expressiveSpring()
     )
-    OutlinedCard(
+    Card(
         onClick = onToggle,
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = DesignTokens.Touch.minTarget),
         shape = RoundedCornerShape(DesignTokens.Radius.xl),
-        colors = CardDefaults.outlinedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = colorScheme.surfaceContainer,
             contentColor = colorScheme.onSurface
-        ),
-        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+        )
     ) {
         Row(
             modifier = Modifier
@@ -924,12 +944,17 @@ private fun SwipeToRevealDelete(
     val revealWidth = 64.dp
     val revealPx = with(density) { revealWidth.toPx() }
     val revealPxInt = revealPx.roundToInt()
-    val offsetX = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
+    val offsetX = remember(scope) { OffsetMotionState(scope) }
+    val animationsEnabled = LocalAnimationsEnabled.current
+
+    fun settleOffset(target: Float) {
+        offsetX.animateTo(target, DesignTokens.Motion.settleSpring(), animationsEnabled)
+    }
     // Only compose the red reveal layer when the rendered row offset is visibly open.
     // At rest the stationary container and moving foreground both paint the row surface,
     // so anti-aliased rounded edges cannot blend with red and leave a halo.
-    val displayOffsetPx by remember {
+    val displayOffsetPx by remember(revealPxInt) {
         derivedStateOf { offsetX.value.roundToInt().coerceIn(-revealPxInt, 0) }
     }
     val revealVisible by remember { derivedStateOf { displayOffsetPx < 0 } }
@@ -939,7 +964,6 @@ private fun SwipeToRevealDelete(
             .fillMaxWidth()
             .clip(rowShape)
             .background(colorScheme.surfaceContainerLow)
-            .border(1.dp, colorScheme.outlineVariant, rowShape)
     ) {
         if (revealVisible) {
             Box(
@@ -950,7 +974,7 @@ private fun SwipeToRevealDelete(
             ) {
                 IconButton(
                     onClick = {
-                        scope.launch { offsetX.animateTo(0f, DesignTokens.Motion.settleSpring()) }
+                        settleOffset(0f)
                         onDelete()
                     },
                     modifier = Modifier.width(revealWidth)
@@ -969,24 +993,20 @@ private fun SwipeToRevealDelete(
                 .fillMaxWidth()
                 .offset { IntOffset(displayOffsetPx, 0) }
                 .background(colorScheme.surfaceContainerLow)
-                .pointerInput(Unit) {
+                .pointerInput(revealPx, animationsEnabled) {
                     detectHorizontalDragGestures(
-                        onHorizontalDrag = { _, dragAmount ->
-                            scope.launch {
-                                offsetX.snapTo((offsetX.value + dragAmount).coerceIn(-revealPx, 0f))
-                            }
+                        onDragStart = { offsetX.snapTo(offsetX.value) },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            offsetX.snapTo((offsetX.value + dragAmount).coerceIn(-revealPx, 0f))
                         },
                         onDragEnd = {
                             val target = if (offsetX.value < -revealPx / 2f) -revealPx else 0f
-                            scope.launch {
-                                offsetX.animateTo(target, DesignTokens.Motion.settleSpring())
-                            }
+                            settleOffset(target)
                         },
                         onDragCancel = {
                             val target = if (offsetX.value < -revealPx / 2f) -revealPx else 0f
-                            scope.launch {
-                                offsetX.animateTo(target, DesignTokens.Motion.settleSpring())
-                            }
+                            settleOffset(target)
                         }
                     )
                 }
@@ -1150,15 +1170,15 @@ private fun ProjectDrawerRow(
     val dateStr = remember(project.updatedAt) {
         SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(project.updatedAt))
     }
-    val wordCount = remember(project.lyrics) { SyllableCounter.wordCount(project.lyrics) }
+    val wordCount = remember(project.lyrics) { SyllableCounter.lyricWordCount(project.lyrics) }
 
-    OutlinedCard(
+    Card(
         onClick = { onLoadProject(project) },
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = DesignTokens.Touch.minTarget),
         shape = RoundedCornerShape(DesignTokens.Radius.xl),
-        colors = CardDefaults.outlinedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = if (isActive) {
                 colorScheme.primaryContainer
             } else {
@@ -1169,10 +1189,6 @@ private fun ProjectDrawerRow(
             } else {
                 colorScheme.onSurface
             }
-        ),
-        border = BorderStroke(
-            1.dp,
-            if (isActive) colorScheme.primary else colorScheme.outlineVariant
         )
     ) {
         Row(
@@ -1189,6 +1205,9 @@ private fun ProjectDrawerRow(
                     color = if (isActive) colorScheme.onPrimaryContainer else colorScheme.onSurface,
                     maxLines = 1
                 )
+                com.rhymeai.app.util.SectionMap.lyricContent(project.lyrics).lineSequence().firstOrNull { it.isNotBlank() }?.let { preview ->
+                    Text(preview.trim(), style = MaterialTheme.typography.bodyMedium, color = colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
                 Text(
                     "$dateStr \u2022 $wordCount words",
                     fontSize = DesignTokens.Typography.caption,
@@ -1204,7 +1223,7 @@ private fun ProjectDrawerRow(
                 modifier = Modifier.size(DesignTokens.Touch.minTarget)
             ) {
                 Icon(
-                    Icons.Default.Close,
+                    Icons.Default.Delete,
                     contentDescription = "Delete ${project.title.ifEmpty { "Untitled Song" }}",
                     tint = colorScheme.error.copy(alpha = 0.75f),
                     modifier = Modifier.size(18.dp)
@@ -1324,8 +1343,10 @@ private fun TrashBinPage(
     }
 
     Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = colorScheme.surfaceContainerLow,
+        modifier = Modifier
+            .fillMaxSize()
+            .appWritingSurface(),
+        color = Color.Transparent,
         contentColor = colorScheme.onSurface
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -1520,7 +1541,12 @@ private fun TrashRecordingSelectableRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
-            .clickable(onClick = onToggle)
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
+            .semantics { contentDescription = displayName }
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
@@ -1558,7 +1584,7 @@ private fun TrashRecordingSelectableRow(
             )
         }
 
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
@@ -1593,7 +1619,12 @@ private fun TrashSelectionHeaderRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(DesignTokens.Touch.minTarget)
-            .clickable(onClick = onToggle),
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
+            .semantics { contentDescription = "All items" },
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -1603,7 +1634,7 @@ private fun TrashSelectionHeaderRow(
             color = colorScheme.onSurface,
             modifier = Modifier.weight(1f)
         )
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
@@ -1615,13 +1646,20 @@ private fun TrashProjectSelectableRow(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val project = trashedProject.project
-    val wordCount = remember(project.lyrics) { SyllableCounter.wordCount(project.lyrics) }
+    val wordCount = remember(project.lyrics) { SyllableCounter.lyricWordCount(project.lyrics) }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
-            .clickable(onClick = onToggle)
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
+            .semantics {
+                contentDescription = project.title.ifEmpty { "Untitled Song" }
+            }
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
@@ -1659,12 +1697,12 @@ private fun TrashProjectSelectableRow(
             )
         }
 
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
 @Composable
-private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
+private fun SelectionCircle(selected: Boolean) {
     val colorScheme = MaterialTheme.colorScheme
     val fillColor by animateColorAsState(
         targetValue = if (selected) colorScheme.primary else colorScheme.surfaceContainerLow,
@@ -1675,9 +1713,7 @@ private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
         animationSpec = tween(DesignTokens.Motion.feedbackMillis)
     )
     Box(
-        modifier = Modifier
-            .size(DesignTokens.Touch.minTarget)
-            .clickable(onClick = onToggle),
+        modifier = Modifier.size(DesignTokens.Touch.minTarget),
         contentAlignment = Alignment.Center
     ) {
         Box(

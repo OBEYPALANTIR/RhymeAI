@@ -3,6 +3,7 @@ package com.rhymeai.app.ui.components
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -12,6 +13,9 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.MessageDigest
 import kotlin.io.path.createTempDirectory
 
 class GemmaDownloadsTest {
@@ -26,7 +30,7 @@ class GemmaDownloadsTest {
 
     @Test
     fun validateDownloadedGemmaRejectsMissingIncompleteAndNonGgufFiles() {
-        val model = tinyGemma(expectedBytes = 8)
+        val model = tinyGemma(expectedBytes = 24)
         val dir = tempDir()
         val file = File(dir, model.fileName)
 
@@ -38,35 +42,98 @@ class GemmaDownloadsTest {
             validateDownloadedGemma(model, file)
         )
 
-        file.writeText("not-a-gguf")
+        file.writeBytes(ByteArray(24) { 1 })
         assertEquals("Gemma Tiny download did not produce a GGUF file", validateDownloadedGemma(model, file))
 
-        file.writeBytes(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte(), 1, 2, 3, 4))
+        file.writeBytes(
+            ByteBuffer.allocate(24)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .put("GGUF".toByteArray())
+                .putInt(3)
+                .putLong(1)
+                .putLong(1)
+                .array()
+        )
         assertNull(validateDownloadedGemma(model, file))
+
+        file.appendBytes(byteArrayOf(0))
+        assertEquals(
+            "Gemma Tiny download has an unexpected size: 0.00 GB instead of 0.00 GB",
+            validateDownloadedGemma(model, file)
+        )
+    }
+
+    @Test
+    fun validateDownloadedGemmaIntegrityRequiresMatchingSha256() {
+        val bytes = validTinyGguf()
+        val dir = tempDir()
+        val file = File(dir, "tiny.gguf")
+        file.writeBytes(bytes)
+
+        val validModel = tinyGemma(
+            expectedBytes = bytes.size.toLong(),
+            sha256 = sha256(bytes)
+        )
+        assertNull(validateDownloadedGemmaIntegrity(validModel, file))
+
+        val mismatchedModel = validModel.copy(sha256 = "0".repeat(64))
+        assertEquals(
+            "Gemma Tiny download failed its integrity check",
+            validateDownloadedGemmaIntegrity(mismatchedModel, file)
+        )
+    }
+
+    @Test
+    fun catalogPinsTheSameImmutableHuggingFaceArtifactsAsIos() {
+        assertEquals(
+            listOf(3_427_878_784L, 5_335_290_784L),
+            GEMMA_DOWNLOADS.map(GemmaDownload::expectedBytes)
+        )
+        assertEquals(
+            listOf(
+                "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+                "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3"
+            ),
+            GEMMA_DOWNLOADS.map(GemmaDownload::sha256)
+        )
+        GEMMA_DOWNLOADS.forEach { model ->
+            assertTrue(model.url.contains("/resolve/$GEMMA_HUGGING_FACE_REVISION/"))
+            assertFalse(model.url.contains("/resolve/main/"))
+        }
     }
 
     @Test
     fun downloadGemmaToTempResumesPartialFileAndReportsProgress() = runBlocking {
         val dir = tempDir()
         val tempFile = File(dir, "tiny.gguf.download")
-        tempFile.writeBytes(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+        val expected = validTinyGguf()
+        val prefix = expected.copyOfRange(0, 8)
+        val suffix = expected.copyOfRange(8, expected.size)
+        tempFile.writeBytes(prefix)
 
         var sawRangeHeader = false
         val url = startServer { request, output ->
-            sawRangeHeader = request.contains("Range: bytes=4-")
-            output.writeResponse(206, byteArrayOf(1, 2, 3, 4))
+            sawRangeHeader = request.contains("Range: bytes=8-23")
+            output.writeResponse(206, suffix, contentRange = "bytes 8-23/24")
         }
-        val model = tinyGemma(url = url, expectedBytes = 8)
+        val model = tinyGemma(
+            url = url,
+            expectedBytes = expected.size.toLong(),
+            sha256 = sha256(expected)
+        )
         val progress = mutableListOf<Float>()
 
-        downloadGemmaToTemp(model, tempFile) { progress += it }
+        downloadGemmaToTemp(
+            model = model,
+            tempFile = tempFile,
+            onProgress = { progress += it },
+            connectionCount = 1
+        )
 
         assertTrue(sawRangeHeader)
-        assertEquals(listOf(0.5f, 1.0f), progress)
-        assertEquals(
-            byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte(), 1, 2, 3, 4).toList(),
-            tempFile.readBytes().toList()
-        )
+        assertEquals(listOf(1f / 3f, 1.0f), progress)
+        assertEquals(expected.toList(), tempFile.readBytes().toList())
+        assertFalse(gemmaDownloadStateFile(tempFile).exists())
     }
 
     @Test
@@ -79,11 +146,83 @@ class GemmaDownloadsTest {
         val model = tinyGemma(url = url, expectedBytes = 8)
 
         val error = runCatching {
-            downloadGemmaToTemp(model, tempFile) {}
+            downloadGemmaToTemp(
+                model = model,
+                tempFile = tempFile,
+                onProgress = {},
+                connectionCount = 1
+            )
         }.exceptionOrNull()
 
         assertNotNull(error)
         assertTrue(error!!.message!!.contains("Hugging Face returned HTTP 503"))
+        assertTrue(gemmaDownloadStateFile(tempFile).isFile)
+    }
+
+    @Test
+    fun failedRedownloadPreservesExistingInstalledModel() = runBlocking {
+        val dir = tempDir()
+        val destinationFile = File(dir, "installed.gguf")
+        val existingBytes = validTinyGguf()
+        destinationFile.writeBytes(existingBytes)
+        val tempFile = File(dir, "replacement.gguf.download")
+        val url = startServer { _, output ->
+            output.writeResponse(503, ByteArray(0))
+        }
+        val model = tinyGemma(
+            url = url,
+            expectedBytes = existingBytes.size.toLong(),
+            sha256 = "0".repeat(64)
+        )
+
+        val error = runCatching {
+            downloadGemmaAndInstall(
+                model = model,
+                tempFile = tempFile,
+                destinationFile = destinationFile,
+                onProgress = {},
+                connectionCount = 1
+            )
+        }.exceptionOrNull()
+
+        assertNotNull(error)
+        assertEquals(existingBytes.toList(), destinationFile.readBytes().toList())
+    }
+
+    @Test
+    fun verifiedTempAtomicallyReplacesInstalledModel() = runBlocking {
+        val dir = tempDir()
+        val destinationFile = File(dir, "installed.gguf").apply { writeText("old") }
+        val expectedBytes = validTinyGguf()
+        val tempFile = File(dir, "replacement.gguf.download").apply { writeBytes(expectedBytes) }
+        val model = tinyGemma(
+            expectedBytes = expectedBytes.size.toLong(),
+            sha256 = sha256(expectedBytes)
+        )
+
+        downloadGemmaAndInstall(
+            model = model,
+            tempFile = tempFile,
+            destinationFile = destinationFile,
+            onProgress = {},
+            connectionCount = 1
+        )
+
+        assertEquals(expectedBytes.toList(), destinationFile.readBytes().toList())
+        assertFalse(tempFile.exists())
+    }
+
+    @Test
+    fun gemmaDownloadSegmentsCoverTheModelWithFourNonOverlappingRanges() {
+        assertEquals(
+            listOf(
+                GemmaDownloadSegment(0, 4),
+                GemmaDownloadSegment(5, 9),
+                GemmaDownloadSegment(10, 14),
+                GemmaDownloadSegment(15, 16)
+            ),
+            gemmaDownloadSegments(expectedBytes = 17, connectionCount = 4)
+        )
     }
 
     @Test
@@ -152,14 +291,30 @@ class GemmaDownloadsTest {
 
     private fun tinyGemma(
         url: String = "https://example.invalid/tiny.gguf",
-        expectedBytes: Long
+        expectedBytes: Long,
+        sha256: String = "0".repeat(64)
     ) = GemmaDownload(
         label = "Gemma Tiny",
         description = "Tiny test model.",
         fileName = "tiny.gguf",
         url = url,
-        expectedBytes = expectedBytes
+        expectedBytes = expectedBytes,
+        sha256 = sha256
     )
+
+    private fun validTinyGguf(): ByteArray =
+        ByteBuffer.allocate(24)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .put("GGUF".toByteArray())
+            .putInt(3)
+            .putLong(1)
+            .putLong(1)
+            .array()
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString("") { String.format("%02x", it.toInt() and 0xff) }
 
     private fun tempDir(): File {
         val dir = createTempDirectory("rhymeai-gemma-test").toFile()
@@ -210,11 +365,16 @@ class GemmaDownloadsTest {
         }
     }
 
-    private fun OutputStream.writeResponse(statusCode: Int, body: ByteArray) {
+    private fun OutputStream.writeResponse(
+        statusCode: Int,
+        body: ByteArray,
+        contentRange: String? = null
+    ) {
         write(
             buildString {
                 append("HTTP/1.1 $statusCode Test\r\n")
                 append("Content-Length: ${body.size}\r\n")
+                contentRange?.let { append("Content-Range: $it\r\n") }
                 append("Connection: close\r\n")
                 append("\r\n")
             }.toByteArray(Charsets.UTF_8)

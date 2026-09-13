@@ -1,90 +1,188 @@
 package com.rhymeai.app.ui.theme
 
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
+import com.rhymeai.app.data.model.AnalysisPresentation
+import com.rhymeai.app.data.model.AppAppearance
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Indigo600,
-    onPrimary = Color.White,
-    primaryContainer = Indigo500,
-    onPrimaryContainer = Color.White,
-    secondary = Purple400,
-    onSecondary = Color.White,
-    tertiary = SyllableEmerald,
-    onTertiary = Color(0xFF003824),
-    tertiaryContainer = Color(0xFF005235),
-    onTertiaryContainer = Color(0xFF90F7C4),
-    background = DarkBackground,
-    surface = DarkBackground,
-    surfaceVariant = DarkSurface,
-    surfaceContainerLow = DarkSurface,
-    surfaceContainer = DarkSurfaceVariant,
-    surfaceContainerHigh = Color(0xFF222222),
-    onBackground = Color.White,
-    onSurface = Color.White,
-    onSurfaceVariant = WhiteMedium,
-    outline = WhiteVeryLow,
-    outlineVariant = Color.White.copy(alpha = 0.1f),
-    inverseSurface = Color.White,
-    inverseOnSurface = DarkBackground
+val InkColorScheme = lightColorScheme(
+    primary = Ink,
+    onPrimary = PaperWhite,
+    primaryContainer = InkSurfaceHighest,
+    onPrimaryContainer = Ink,
+    inversePrimary = GraphiteWarmWhite,
+    secondary = Pencil,
+    onSecondary = PaperWhite,
+    secondaryContainer = InkSurfaceHigh,
+    onSecondaryContainer = Ink,
+    tertiary = SuccessLight,
+    onTertiary = OnSuccessLight,
+    tertiaryContainer = SuccessContainerLight,
+    onTertiaryContainer = OnSuccessContainerLight,
+    background = PaperWhite,
+    onBackground = Ink,
+    surface = PaperWhite,
+    onSurface = Ink,
+    surfaceVariant = InkSurface,
+    onSurfaceVariant = InkMuted,
+    surfaceTint = Ink,
+    inverseSurface = GraphiteSurfaceBase,
+    inverseOnSurface = GraphiteWarmWhite,
+    error = ErrorLight,
+    onError = OnErrorLight,
+    errorContainer = OnErrorDark,
+    onErrorContainer = ErrorDark,
+    outline = InkOutlineStrong,
+    outlineVariant = InkOutlineStrong,
+    scrim = InkScrim,
+    surfaceBright = PaperWhite,
+    surfaceDim = InkSurfaceHigh,
+    surfaceContainer = InkSurface,
+    surfaceContainerHigh = InkSurfaceHigh,
+    surfaceContainerHighest = InkSurfaceHighest,
+    surfaceContainerLow = InkSurfaceLow,
+    surfaceContainerLowest = PaperWhite
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = Indigo600,
-    onPrimary = Color.White,
-    primaryContainer = Indigo400.copy(alpha = 0.2f),
-    onPrimaryContainer = Indigo600,
-    secondary = Purple400,
-    onSecondary = Color.White,
-    tertiary = Color(0xFF006D43),
-    onTertiary = Color.White,
-    tertiaryContainer = Color(0xFF90F7C4),
-    onTertiaryContainer = Color(0xFF002111),
-    background = Color(0xFFFBFBFE),
-    surface = Color(0xFFFBFBFE),
-    surfaceVariant = Color(0xFFF0F0F5),
-    surfaceContainerLow = Color(0xFFFFFFFF),
-    surfaceContainer = Color(0xFFF3F2F8),
-    surfaceContainerHigh = Color(0xFFEDEBF2),
-    onBackground = Color(0xFF1B1B1F),
-    onSurface = Color(0xFF1B1B1F),
-    onSurfaceVariant = Color(0xFF46464F),
-    outline = Color(0xFF767680),
-    outlineVariant = Color(0xFFC6C5D0)
+val PaperColorScheme = lightColorScheme(
+    primary = Pencil,
+    onPrimary = PaperActionForeground,
+    primaryContainer = PaperSurfaceHighest,
+    onPrimaryContainer = Pencil,
+    inversePrimary = GraphiteWarmWhite,
+    secondary = PaperMuted,
+    onSecondary = PaperActionForeground,
+    secondaryContainer = PaperSurfaceHigh,
+    onSecondaryContainer = Pencil,
+    tertiary = SuccessLight,
+    onTertiary = OnSuccessLight,
+    tertiaryContainer = SuccessContainerLight,
+    onTertiaryContainer = OnSuccessContainerLight,
+    background = PaperIvory,
+    onBackground = Pencil,
+    surface = PaperSurface,
+    onSurface = Pencil,
+    surfaceVariant = PaperSurfaceContainer,
+    onSurfaceVariant = PaperMuted,
+    surfaceTint = Pencil,
+    inverseSurface = Pencil,
+    inverseOnSurface = PaperActionForeground,
+    error = ErrorLight,
+    onError = OnErrorLight,
+    errorContainer = OnErrorDark,
+    onErrorContainer = ErrorDark,
+    outline = PaperOutlineStrong,
+    outlineVariant = PaperOutlineStrong,
+    scrim = PaperScrim,
+    surfaceBright = PaperSurface,
+    surfaceDim = PaperSurfaceHigh,
+    surfaceContainer = PaperSurfaceContainer,
+    surfaceContainerHigh = PaperSurfaceHigh,
+    surfaceContainerHighest = PaperSurfaceHighest,
+    surfaceContainerLow = PaperSurfaceLow,
+    surfaceContainerLowest = PaperIvory
 )
+
+val GraphiteColorScheme = darkColorScheme(
+    primary = GraphiteWarmWhite,
+    onPrimary = Graphite,
+    primaryContainer = GraphiteSelection,
+    onPrimaryContainer = GraphiteWarmWhite,
+    inversePrimary = Ink,
+    secondary = GraphiteMuted,
+    onSecondary = Graphite,
+    secondaryContainer = GraphiteSurfaceHigh,
+    onSecondaryContainer = GraphiteWarmWhite,
+    tertiary = SuccessDark,
+    onTertiary = OnSuccessDark,
+    tertiaryContainer = SuccessContainerDark,
+    onTertiaryContainer = OnSuccessContainerDark,
+    background = Graphite,
+    onBackground = GraphiteWarmWhite,
+    surface = GraphiteSurfaceBase,
+    onSurface = GraphiteWarmWhite,
+    surfaceVariant = GraphiteSurface,
+    onSurfaceVariant = GraphiteMuted,
+    surfaceTint = GraphiteWarmWhite,
+    inverseSurface = GraphiteWarmWhite,
+    inverseOnSurface = Graphite,
+    error = ErrorDark,
+    onError = OnErrorDark,
+    errorContainer = OnErrorDark,
+    onErrorContainer = ErrorDark,
+    outline = GraphiteOutlineStrong,
+    outlineVariant = GraphiteOutlineStrong,
+    scrim = GraphiteScrim,
+    surfaceBright = GraphiteSurfaceHighest,
+    surfaceDim = Graphite,
+    surfaceContainer = GraphiteSurface,
+    surfaceContainerHigh = GraphiteSurfaceHigh,
+    surfaceContainerHighest = GraphiteSurfaceHighest,
+    surfaceContainerLow = GraphiteSurfaceLow,
+    surfaceContainerLowest = Graphite
+)
+
+val LocalAppAppearance = staticCompositionLocalOf { AppAppearance.INK }
+
+val RhymeShapes = Shapes(
+    small = RoundedCornerShape(DesignTokens.Radius.sm),
+    medium = RoundedCornerShape(DesignTokens.Radius.md),
+    large = RoundedCornerShape(DesignTokens.Radius.lg)
+)
+
+internal fun colorSchemeFor(appearance: AppAppearance): ColorScheme = when (appearance) {
+    AppAppearance.INK -> InkColorScheme
+    AppAppearance.PAPER -> PaperColorScheme
+    AppAppearance.GRAPHITE -> GraphiteColorScheme
+}
+
+internal fun placeholderColorFor(appearance: AppAppearance) = when (appearance) {
+    AppAppearance.INK -> InkOutlineStrong
+    AppAppearance.PAPER -> PaperMuted
+    AppAppearance.GRAPHITE -> GraphitePlaceholder
+}
+
+internal fun subtleColorFor(appearance: AppAppearance) = when (appearance) {
+    AppAppearance.INK -> InkSubtle
+    AppAppearance.PAPER -> PaperSubtle
+    AppAppearance.GRAPHITE -> GraphiteSubtle
+}
+
+internal fun selectionColorFor(appearance: AppAppearance) = when (appearance) {
+    AppAppearance.INK -> InkSurfaceHighest
+    AppAppearance.PAPER -> PaperSurfaceHighest
+    AppAppearance.GRAPHITE -> GraphiteSelection
+}
+
+internal fun outlineStrongColorFor(appearance: AppAppearance) = when (appearance) {
+    AppAppearance.INK -> InkOutlineStrong
+    AppAppearance.PAPER -> PaperOutlineStrong
+    AppAppearance.GRAPHITE -> GraphiteOutlineStrong
+}
 
 @Composable
 fun RhymeAITheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    appearance: AppAppearance = AppAppearance.INK,
+    analysisPresentation: AnalysisPresentation = AnalysisPresentation.COLOR,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && darkTheme && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            dynamicDarkColorScheme(context)
-        }
-        dynamicColor && !darkTheme && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = RhymeTypography,
-        content = {
+    CompositionLocalProvider(
+        LocalAppAppearance provides appearance,
+        LocalAnalysisPresentation provides analysisPresentation
+    ) {
+        MaterialTheme(
+            colorScheme = colorSchemeFor(appearance),
+            typography = RhymeTypography,
+            shapes = RhymeShapes
+        ) {
             ProvideAccessibleAnimations(content = content)
         }
-    )
+    }
 }

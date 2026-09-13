@@ -2,12 +2,26 @@ package com.rhymeai.app.ui.components
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import com.rhymeai.app.ui.theme.SyllableEmerald
+import com.rhymeai.app.ui.theme.SyllableEmeraldOnLight
+import com.rhymeai.app.ui.theme.SyllableRose
+import com.rhymeai.app.ui.theme.SyllableRoseOnLight
+import com.rhymeai.app.ui.theme.editorSyllableCountColor
+import com.rhymeai.app.ui.theme.editorWordCountColor
 import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.SyllableCounter
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SyllableWordColorTest {
+    @Test
+    fun editorCountersUseGreenForWordsAndRedForSyllables() {
+        assertEquals(SyllableEmeraldOnLight, editorWordCountColor(isDark = false))
+        assertEquals(SyllableEmerald, editorWordCountColor(isDark = true))
+        assertEquals(SyllableRoseOnLight, editorSyllableCountColor(isDark = false))
+        assertEquals(SyllableRose, editorSyllableCountColor(isDark = true))
+    }
+
     @Test
     fun eachWordIsTintedBySyllableCount() {
         val base = Color(0xFF101010)
@@ -26,5 +40,21 @@ class SyllableWordColorTest {
         val sunSpan = annotated.spanStyles.first { it.start == sunStart }
         assertEquals(syllableColor(SyllableCounter.count("sunshine"), true), sunSpan.item.color)
         assertEquals(FontWeight.SemiBold, sunSpan.item.fontWeight)
+    }
+
+    @Test
+    fun themeChangesReuseThemeIndependentSyllableAnalysis() {
+        val text = "[Verse]\nhello sunshine"
+        val analysis = analyzeSyllableUnderlines(text, enabled = true)
+
+        assertEquals(listOf("hello", "sunshine"), analysis.map { text.substring(it.start, it.endExclusive) })
+        assertEquals(
+            analysis.map { it.start to it.endExclusive },
+            colorSyllableUnderlines(analysis, isDark = false).map { it.start to it.endExclusive }
+        )
+        assertEquals(
+            analysis.map { it.start to it.endExclusive },
+            colorSyllableUnderlines(analysis, isDark = true).map { it.start to it.endExclusive }
+        )
     }
 }

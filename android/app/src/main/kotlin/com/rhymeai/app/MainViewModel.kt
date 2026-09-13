@@ -8,16 +8,22 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.rhymeai.app.data.model.AnalysisPresentation
+import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.RewriteAction
+import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
+import com.rhymeai.app.data.model.SongWorkspace
+import com.rhymeai.app.data.model.DraftVersion
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.model.TrashedSongProject
 import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
+import com.rhymeai.app.data.repository.CorruptLibraryException
 import com.rhymeai.app.data.sync.DriveSyncService
 import com.rhymeai.app.data.sync.DRIVE_SYNC_PASSPHRASE_REQUIREMENT_MESSAGE
 import com.rhymeai.app.data.sync.SyncResult
@@ -28,7 +34,9 @@ import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.ProsodyAnalyzer
+import com.rhymeai.app.util.EditHistory
 import com.rhymeai.app.util.RhymeMatches
+import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SectionRef
 import com.rhymeai.app.util.WordProsody
 import kotlinx.coroutines.CancellationException
@@ -108,6 +116,8 @@ internal fun shouldDeferBackgroundDriveSync(
 private fun plural(count: Int, noun: String): String =
     if (count == 1) "$count $noun" else "$count ${noun}s"
 
+data class SuggestionInsertion(val id: Long, val range: TextRange, val lyrics: String)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         private const val AUTOSAVE_DEBOUNCE_MILLIS = 450L
@@ -140,6 +150,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // UI state
     var suggestions by mutableStateOf<List<SuggestedLine>>(emptyList())
+    var suggestionInsertion by mutableStateOf<SuggestionInsertion?>(null)
+        private set
+    private var suggestionInsertionRevision = 0L
     var isLoading by mutableStateOf(false)
     var rhymeType by mutableStateOf(RhymeType.PERFECT)
     var rhymeScheme by mutableStateOf(RhymeScheme.AABB)
@@ -158,6 +171,152 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var projects by mutableStateOf<List<SongProject>>(emptyList())
     var trashedProjects by mutableStateOf<List<TrashedSongProject>>(emptyList())
     var currentProjectId by mutableStateOf<String?>(null)
+    private var positionSaveJob: Job? = null
+    private var workspaces by mutableStateOf<Map<String, SongWorkspace>>(emptyMap())
+    val songWorkspace: SongWorkspace get() = workspaces[currentProjectId] ?: SongWorkspace()
+    var editorScrollOffset by mutableStateOf(0f)
+        private set
+    var editorPositionRevision by mutableStateOf(0)
+        private set
+    var showSongNotebook by mutableStateOf(false)
+    var persistenceError by mutableStateOf<String?>(null)
+    var savingBeforeNavigation by mutableStateOf(false)
+        private set
+    var notebookError by mutableStateOf<String?>(null)
+        private set
+    var restoringDraft by mutableStateOf(false)
+        private set
+    val recentProject: SongProject? get() = projects.maxByOrNull { it.updatedAt }
+    val localReady: Boolean get() = localModelLoaded && !localModelLoading && localModelError == null
+    val localReadinessLabel: String get() = when {
+        localModelLoading -> "Loading model"
+        localModelError != null -> "Model unavailable"
+        localReady -> "Ready"
+        else -> "Choose a model"
+    }
+
+    private fun updateWorkspace(id: String, transform: (SongWorkspace) -> SongWorkspace) {
+        if (notebookError != null || restoringDraft) return
+        val next = transform(workspaces[id] ?: SongWorkspace())
+        workspaces = workspaces + (id to next)
+        viewModelScope.launch {
+            try { repo.saveWorkspace(id, next) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again." }
+        }
+    }
+
+    fun rememberEditorPosition(scrollOffset: Float = editorScrollOffset) {
+        editorScrollOffset = scrollOffset.coerceAtLeast(0f)
+        if (notebookError != null || restoringDraft) return
+        val id = currentProjectId ?: return
+        val range = lyricsFieldValue.selection
+        workspaces = workspaces + (id to songWorkspace.copy(selectionStart = range.start, selectionEnd = range.end, scrollOffset = editorScrollOffset))
+        positionSaveJob?.cancel()
+        positionSaveJob = viewModelScope.launch {
+            delay(250)
+            try { workspaces[id]?.let { repo.saveWorkspace(id, it) } } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again." }
+        }
+    }
+
+    private fun restoreEditorPosition() {
+        val saved = songWorkspace
+        lyricsFieldValue = lyricsFieldValue.copy(selection = TextRange(
+            saved.selectionStart.coerceIn(0, lyrics.length), saved.selectionEnd.coerceIn(0, lyrics.length)
+        ))
+        editorScrollOffset = saved.scrollOffset.coerceAtLeast(0f)
+        editorPositionRevision++
+    }
+
+    fun keepAlternate(text: String) {
+        if (text.isBlank() || notebookError != null || restoringDraft) return
+        val id = ensureProjectForRecording()
+        updateWorkspace(id) { it.keep(text, System.currentTimeMillis()) }
+    }
+
+    fun keepSelectedLyrics() {
+        val selection = pendingRewriteRange ?: lyricsFieldValue.selection
+        keepAlternate(lyrics.substring(selection.min.coerceIn(0, lyrics.length), selection.max.coerceIn(0, lyrics.length)))
+    }
+
+    fun removeAlternate(id: String) {
+        currentProjectId?.let { songId -> updateWorkspace(songId) { it.copy(alternates = it.alternates.filterNot { line -> line.id == id }) } }
+    }
+
+    fun saveDraftVersion() {
+        if (notebookError != null || restoringDraft) return
+        val id = ensureProjectForRecording()
+        updateWorkspace(id) { it.checkpoint(title, lyrics, theme, System.currentTimeMillis(), force = true) }
+        triggerAutoSave()
+    }
+
+    fun restoreDraftVersion(version: DraftVersion, onRestored: () -> Unit = {}) {
+        val id = currentProjectId ?: return
+        if (notebookError != null || restoringDraft) return
+        val currentTitle = title
+        val currentLyrics = lyrics
+        val currentTheme = theme
+        val preserved = songWorkspace.checkpoint(currentTitle, currentLyrics, currentTheme, System.currentTimeMillis(), force = true)
+        positionSaveJob?.cancel()
+        restoringDraft = true
+        var restored = false
+        viewModelScope.launch {
+            try {
+                repo.saveWorkspace(id, preserved)
+                if (currentProjectId != id || projects.none { it.id == id } || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
+                workspaces = workspaces + (id to preserved)
+                dismissRewrite()
+                title = version.title
+                theme = version.theme
+                applyAtomicLyricsEdit(TextFieldValue(version.lyrics))
+                editorScrollOffset = 0f
+                editorPositionRevision++
+                restored = true
+                triggerAutoSave()
+                onRestored()
+            } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {
+                notebookError = "Your current draft could not be preserved, so nothing was restored. Restart the app to try again."
+            } finally {
+                restoringDraft = false
+                if (restored) rememberEditorPosition()
+                purgeExpiredTrashedProjects()
+            }
+        }
+    }
+
+    fun flushCurrentDraft(onSaved: () -> Unit = {}) {
+        if (restoringDraft || savingBeforeNavigation) return
+        if (!appearanceLoaded || showStartMenu) { onSaved(); return }
+        autoSaveJob?.cancel()
+        positionSaveJob?.cancel()
+        if (title.isBlank() && lyrics.isBlank() && theme.isBlank() && currentProjectId == null) { onSaved(); return }
+        val now = System.currentTimeMillis()
+        val existing = projects.firstOrNull { it.id == currentProjectId }
+        val project = existing?.copy(
+            title = title.ifEmpty { "Untitled Song" }, lyrics = lyrics, theme = theme,
+            updatedAt = if (existing.lyrics == lyrics && existing.title == title.ifEmpty { "Untitled Song" } && existing.theme == theme) existing.updatedAt else now
+        ) ?: createUntitledProjectSnapshot()
+        currentProjectId = project.id
+        projects = listOf(project) + projects.filterNot { it.id == project.id }
+        rememberEditorPosition()
+        updateWorkspace(project.id) { it.checkpoint(title, lyrics, theme, now, force = true) }
+        val savedProjects = projects
+        val savedTitle = title
+        val savedLyrics = lyrics
+        val savedTheme = theme
+        savingBeforeNavigation = true
+        viewModelScope.launch {
+            try {
+                persistActiveProjectSnapshot(project.id, savedProjects, savedTitle, savedLyrics, savedTheme)
+                if (currentProjectId == project.id && title == savedTitle && lyrics == savedLyrics && theme == savedTheme) {
+                    onSaved()
+                }
+            } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {
+                persistenceError = "Your draft could not be saved. It is still open. Free up storage and try again."
+            } finally {
+                savingBeforeNavigation = false
+            }
+        }
+    }
+
     var saveStatus by mutableStateOf(SaveStatus.IDLE)
     var showProjectsDialog by mutableStateOf(false)
     var showTemplatesDialog by mutableStateOf(false)
@@ -165,8 +324,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var showExportSheet by mutableStateOf(false)
 
     // Settings
-    var selectedProvider by mutableStateOf(AIProvider.GEMINI)
-    var selectedModel by mutableStateOf(AIModel.DEFAULT)
+    private var _appAppearance by mutableStateOf(AppAppearance.INK)
+    val appAppearance: AppAppearance
+        get() = _appAppearance
+    private var _analysisPresentation by mutableStateOf(AnalysisPresentation.COLOR)
+    val analysisPresentation: AnalysisPresentation
+        get() = _analysisPresentation
+    var appearanceLoaded by mutableStateOf(false)
+        private set
+    var selectedProvider by mutableStateOf(AIProvider.LOCAL)
+    var selectedModel by mutableStateOf(AIModel.LOCAL_MODEL)
     var showSettingsDialog by mutableStateOf(false)
     /**
      * Surfaces whether each provider has any key stored. The actual key values
@@ -357,6 +524,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var localModelLoading by mutableStateOf(false)
     var localModelLoaded by mutableStateOf(false)
     var localModelError by mutableStateOf<String?>(null)
+    var savedLocalModels by mutableStateOf<List<SavedLocalModel>>(emptyList())
+        private set
+    var selectedLocalModelId by mutableStateOf<String?>(null)
+        private set
 
     // Error state
     var errorMessage by mutableStateOf<String?>(null)
@@ -432,6 +603,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var autoSaveJob: Job? = null
     private var trashSchedulerJob: Job? = null
+    private val lyricsHistory = EditHistory<TextFieldValue>()
+    var canUndoLyrics by mutableStateOf(false)
+        private set
+    var canRedoLyrics by mutableStateOf(false)
+        private set
 
     val activeRhymeScheme: String
         get() = if (rhymeScheme == RhymeScheme.CUSTOM)
@@ -443,9 +619,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         syncPassphraseStored = driveSyncService.hasPassphrase()
 
         viewModelScope.launch {
+            _appAppearance = runCatching { repo.appearanceFlow.first() }
+                .getOrDefault(AppAppearance.INK)
+            _analysisPresentation = runCatching { repo.analysisPresentationFlow.first() }
+                .getOrDefault(AnalysisPresentation.COLOR)
+            appearanceLoaded = true
+
             // Load projects
-            projects = repo.projectsFlow.first()
-            trashedProjects = repo.trashedProjectsFlow.first()
+            projects = try {
+                repo.projectsFlow.first()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: CorruptLibraryException) {
+                persistenceError = corruptLibraryMessage(error)
+                emptyList()
+            }
+            trashedProjects = try {
+                repo.trashedProjectsFlow.first()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: CorruptLibraryException) {
+                persistenceError = corruptLibraryMessage(error)
+                emptyList()
+            }
+            workspaces = try { repo.workspacesFlow.first() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {
+                notebookError = "Song Notebook could not be opened. Your songs are still available; notebook data has been left untouched."
+                emptyMap()
+            }
             purgeExpiredTrashedProjects()
             scheduleTrashPurge()
             currentProjectId = repo.currentProjectIdFlow.first()
@@ -458,13 +658,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val savedProvider = repo.selectedProviderFlow.first()
             selectedProvider = AIProvider.fromName(savedProvider)
             val savedModelId = repo.modelIdFlow.first()
-            if (savedModelId.isNotEmpty()) selectedModel = AIModel.fromId(savedModelId)
+            selectedModel = AIModel.entries.find { it.id == savedModelId && it.provider == selectedProvider }
+                ?: AIModel.modelsForProvider(selectedProvider).first()
+            restoreSavedLocalModels()
 
             // Load editor state
             val (savedTitle, savedLyrics, savedTheme) = repo.editorStateFlow().first()
             title = savedTitle
             lyricsFieldValue = TextFieldValue(savedLyrics)
             theme = savedTheme
+            restoreEditorPosition()
 
             // Load persisted editor toggles — must happen before the editor is shown.
             val toggles = repo.editorTogglesFlow.first()
@@ -480,12 +683,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             // Observe project changes
             launch {
-                repo.projectsFlow.collect { projects = it }
+                try {
+                    repo.projectsFlow.collect { projects = it }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: CorruptLibraryException) {
+                    persistenceError = corruptLibraryMessage(error)
+                }
             }
             launch {
-                repo.trashedProjectsFlow.collect {
-                    trashedProjects = it
-                    scheduleTrashPurge()
+                try {
+                    repo.trashedProjectsFlow.collect {
+                        trashedProjects = it
+                        scheduleTrashPurge()
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: CorruptLibraryException) {
+                    persistenceError = corruptLibraryMessage(error)
                 }
             }
         }
@@ -501,6 +716,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getSuggestions() {
         if (lyrics.isEmpty()) return
+        if (selectedProvider == AIProvider.LOCAL && !localReady) {
+            errorMessage = if (localModelLoading) "Wait for your local model to finish loading." else "Choose a local model in Settings to get suggestions."
+            return
+        }
         val context = computeRhymeContext()
         suggestionsJob?.cancel()
         suggestions = emptyList()
@@ -523,6 +742,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                suggestions = emptyList()
                 errorMessage = e.message ?: "Failed to get suggestions"
             } finally {
                 isLoading = false
@@ -553,6 +773,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isBeatGridEnabled = isBeatGridEnabled
                 )
             )
+        }
+    }
+
+    fun setAppAppearance(appearance: AppAppearance) {
+        if (_appAppearance == appearance) return
+        _appAppearance = appearance
+        viewModelScope.launch {
+            try {
+                repo.saveAppearance(appearance)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                errorMessage = e.message ?: "Failed to save appearance"
+            }
+        }
+    }
+
+    fun setAnalysisPresentation(value: AnalysisPresentation) {
+        _analysisPresentation = value
+        viewModelScope.launch {
+            try {
+                repo.saveAnalysisPresentation(value)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                errorMessage = error.message ?: "Failed to save analysis style"
+            }
         }
     }
 
@@ -632,6 +879,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun seedEditorForTesting(title: String, lyrics: String, selection: TextRange = TextRange.Zero) {
+        check(BuildConfig.DEBUG) { "Editor test seeding is only available in debug builds." }
+        autoSaveJob?.cancel()
+        dismissRewrite()
+        this.title = title
+        lyricsFieldValue = TextFieldValue(lyrics, selection)
+        theme = ""
+        currentProjectId = null
+        restoreEditorPosition()
+        suggestions = emptyList()
+        _analysisPresentation = AnalysisPresentation.INK_MARKS
+        isSyllableColoringEnabled = true
+        isRhymeHighlightEnabled = true
+        saveStatus = SaveStatus.SAVED
+        showStartMenu = false
+        resetLyricsHistory()
+    }
+
     fun seedRewriteErrorForTesting(action: RewriteAction, range: TextRange, original: String, error: String) {
         seedRewriteStateForTesting(
             action = action,
@@ -694,7 +959,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val after = text.substring(range.max)
         val newText = before + preview + after
         val newCursor = (range.min + preview.length).coerceAtMost(newText.length)
-        lyricsFieldValue = TextFieldValue(newText, TextRange(newCursor))
+        applyAtomicLyricsEdit(TextFieldValue(newText, TextRange(newCursor)))
         dismissRewrite()
         triggerAutoSave()
     }
@@ -795,7 +1060,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val newText = text.replaceRange(range.min, range.max, replacement)
         val newCursor = (range.min + replacement.length).coerceAtMost(newText.length)
-        lyricsFieldValue = TextFieldValue(newText, TextRange(newCursor))
+        applyAtomicLyricsEdit(TextFieldValue(newText, TextRange(newCursor)))
         dismissInspector()
         triggerAutoSave()
     }
@@ -822,44 +1087,89 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val insertText = (if (needsNewline) "\n" else "") + suggestion + "\n"
         val newText = before + insertText + after
         val newPos = pos + insertText.length
-        lyricsFieldValue = TextFieldValue(newText, TextRange(newPos))
+        applyAtomicLyricsEdit(TextFieldValue(newText, TextRange(newPos)))
+        suggestionInsertion = SuggestionInsertion(
+            id = ++suggestionInsertionRevision,
+            range = TextRange(pos + if (needsNewline) 1 else 0, newPos - 1),
+            lyrics = newText
+        )
         suggestions = emptyList()
         triggerAutoSave()
     }
 
-    fun newProject() {
-        autoSaveJob?.cancel()
+    fun dismissSuggestionInsertion(id: Long) {
+        if (suggestionInsertion?.id == id) suggestionInsertion = null
+    }
+
+    fun undoSuggestionInsertion(id: Long) {
+        val insertion = suggestionInsertion ?: return
+        if (insertion.id != id || insertion.lyrics != lyrics) return
+        undoLyrics()
+    }
+
+    fun insertSection(label: String) {
+        val insertion = SectionMap.insertHeader(lyrics, cursorPosition, label)
         pendingRewriteRange = null
-        title = ""
-        lyricsFieldValue = TextFieldValue("")
-        theme = ""
-        currentProjectId = null
+        applyAtomicLyricsEdit(
+            TextFieldValue(
+                text = insertion.text,
+                selection = TextRange(insertion.cursor)
+            )
+        )
         suggestions = emptyList()
-        showProjectsDialog = false
-        showStartMenu = false
-        viewModelScope.launch {
-            repo.setCurrentProjectId(null)
-            repo.saveEditorState("", "", "")
+        triggerAutoSave()
+    }
+
+    fun newProject(onReady: () -> Unit = {}) {
+        flushCurrentDraft {
+            autoSaveJob?.cancel()
+            dismissRewrite()
+            title = ""
+            lyricsFieldValue = TextFieldValue("")
+            theme = ""
+            currentProjectId = null
+            restoreEditorPosition()
+            suggestions = emptyList()
+            showProjectsDialog = false
+            showStartMenu = false
+            resetLyricsHistory()
+            viewModelScope.launch {
+                repo.saveActiveState(projects, null, "", "", "")
+            }
+
+            onReady()
         }
     }
 
-    fun loadProject(project: SongProject) {
-        autoSaveJob?.cancel()
-        pendingRewriteRange = null
-        title = project.title
-        lyricsFieldValue = TextFieldValue(project.lyrics)
-        theme = project.theme
-        currentProjectId = project.id
-        suggestions = emptyList()
-        showProjectsDialog = false
-        showStartMenu = false
-        viewModelScope.launch {
-            repo.setCurrentProjectId(project.id)
-            repo.saveEditorState(project.title, project.lyrics, project.theme)
+    fun loadProject(requestedProject: SongProject, onReady: () -> Unit = {}) {
+        flushCurrentDraft {
+            val project = projects.firstOrNull { it.id == requestedProject.id } ?: requestedProject
+            autoSaveJob?.cancel()
+            dismissRewrite()
+            title = project.title
+            lyricsFieldValue = TextFieldValue(project.lyrics)
+            theme = project.theme
+            currentProjectId = project.id
+            restoreEditorPosition()
+            suggestions = emptyList()
+            showProjectsDialog = false
+            showStartMenu = false
+            resetLyricsHistory()
+            viewModelScope.launch {
+                repo.saveActiveState(projects, project.id, project.title, project.lyrics, project.theme)
+            }
+
+            onReady()
         }
     }
 
     fun moveProjectToTrash(id: String) {
+        if (restoringDraft || savingBeforeNavigation) return
+        if (currentProjectId == id) { flushCurrentDraft { moveSavedProjectToTrash(id) }; return }
+        moveSavedProjectToTrash(id)
+    }
+
+    private fun moveSavedProjectToTrash(id: String) {
         val project = projects.firstOrNull { it.id == id } ?: return
         val now = System.currentTimeMillis()
         val wasCurrentProject = currentProjectId == id
@@ -906,28 +1216,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun permanentlyDeleteTrashedProject(id: String) {
+        if (restoringDraft || savingBeforeNavigation) return
         val updatedTrashedProjects = trashedProjects.filter { it.project.id != id }
         trashedProjects = updatedTrashedProjects
+        workspaces = workspaces - id
         viewModelScope.launch {
             repo.saveTrashedProjects(updatedTrashedProjects)
             // Remove any recorded memos that belonged to this project.
+            if (notebookError == null) try { repo.saveWorkspace(id, null) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { notebookError = "Song Notebook could not be updated." }
             voiceMemoService.deleteMemoDirectory(id)
         }
         scheduleTrashPurge()
     }
 
     fun purgeExpiredTrashedProjects() {
+        if (restoringDraft) return
         val now = System.currentTimeMillis()
         val retainedProjects = trashedProjects.filter { it.deleteAfter > now }
         if (retainedProjects.size != trashedProjects.size) {
             val purgedIds = trashedProjects
                 .filter { it.deleteAfter <= now }
                 .map { it.project.id }
+            workspaces = workspaces - purgedIds.toSet()
             trashedProjects = retainedProjects
             viewModelScope.launch {
                 repo.saveTrashedProjects(retainedProjects)
                 // Purge memo directories for each project that was permanently removed.
-                purgedIds.forEach { voiceMemoService.deleteMemoDirectory(it) }
+                purgedIds.forEach {
+                    if (notebookError == null) try { repo.saveWorkspace(it, null) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { notebookError = "Song Notebook could not be updated." }
+                    voiceMemoService.deleteMemoDirectory(it)
+                }
             }
         }
         viewModelScope.launch {
@@ -957,40 +1275,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun clearEditorAfterProjectDelete() {
         autoSaveJob?.cancel()
-        pendingRewriteRange = null
+        dismissRewrite()
         title = ""
         lyricsFieldValue = TextFieldValue("")
         theme = ""
         currentProjectId = null
+        restoreEditorPosition()
         suggestions = emptyList()
         errorMessage = null
         saveStatus = SaveStatus.IDLE
+        resetLyricsHistory()
     }
 
-    fun importProject(imported: SongProject) {
-        pendingRewriteRange = null
-        val newId = java.util.UUID.randomUUID().toString()
-        val project = imported.copy(
-            id = newId,
-            title = imported.title.ifBlank { "Imported Song" },
-            updatedAt = System.currentTimeMillis()
-        )
-        projects = listOf(project) + projects
-        title = project.title
-        lyricsFieldValue = TextFieldValue(project.lyrics)
-        theme = project.theme
-        currentProjectId = project.id
-        suggestions = emptyList()
-        showProjectsDialog = false
-        showStartMenu = false
-        viewModelScope.launch {
-            persistActiveProjectSnapshot(
-                projectId = project.id,
-                projectList = projects,
-                editorTitle = project.title,
-                editorLyrics = project.lyrics,
-                editorTheme = project.theme
+    fun importProject(imported: SongProject, onReady: () -> Unit = {}) {
+        flushCurrentDraft {
+            dismissRewrite()
+            val newId = java.util.UUID.randomUUID().toString()
+            val project = imported.copy(
+                id = newId,
+                title = imported.title.ifBlank { "Imported Song" },
+                updatedAt = System.currentTimeMillis()
             )
+            projects = listOf(project) + projects
+            title = project.title
+            lyricsFieldValue = TextFieldValue(project.lyrics)
+            theme = project.theme
+            currentProjectId = project.id
+            restoreEditorPosition()
+            suggestions = emptyList()
+            showProjectsDialog = false
+            showStartMenu = false
+            resetLyricsHistory()
+            viewModelScope.launch {
+                persistActiveProjectSnapshot(
+                    projectId = project.id,
+                    projectList = projects,
+                    editorTitle = project.title,
+                    editorLyrics = project.lyrics,
+                    editorTheme = project.theme
+                )
+            }
+
+            onReady()
         }
     }
 
@@ -1035,20 +1361,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         editorLyrics: String,
         editorTheme: String
     ) {
-        repo.saveProjects(projectList)
-        repo.setCurrentProjectId(projectId)
-        repo.saveEditorState(editorTitle, editorLyrics, editorTheme)
+        repo.saveActiveState(projectList, projectId, editorTitle, editorLyrics, editorTheme)
     }
 
-    fun applyTemplate(name: String, templateTheme: String, templateLyrics: String) {
-        pendingRewriteRange = null
-        title = "Untitled $name"
-        theme = templateTheme
-        lyricsFieldValue = TextFieldValue(templateLyrics)
-        currentProjectId = null
-        showTemplatesDialog = false
-        showStartMenu = false
-        triggerAutoSave()
+    fun applyTemplate(name: String, templateTheme: String, templateLyrics: String, onReady: () -> Unit = {}) {
+        flushCurrentDraft {
+            dismissRewrite()
+            title = "Untitled $name"
+            theme = templateTheme
+            lyricsFieldValue = TextFieldValue(templateLyrics)
+            currentProjectId = null
+            restoreEditorPosition()
+            showTemplatesDialog = false
+            showStartMenu = false
+            resetLyricsHistory()
+            triggerAutoSave()
+
+            onReady()
+        }
     }
 
     // A recording needs a project folder before any lyrics exist (people hum
@@ -1059,13 +1389,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         projects = listOf(newProject) + projects
         currentProjectId = newProject.id
         showStartMenu = false
+        val savedProjects = projects
+        val savedTitle = title
+        val savedLyrics = lyrics
+        val savedTheme = theme
         viewModelScope.launch {
             persistActiveProjectSnapshot(
                 projectId = newProject.id,
-                projectList = projects,
-                editorTitle = title,
-                editorLyrics = lyrics,
-                editorTheme = theme
+                projectList = savedProjects,
+                editorTitle = savedTitle,
+                editorLyrics = savedLyrics,
+                editorTheme = savedTheme
             )
         }
         return newProject.id
@@ -1115,8 +1449,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
+                projects.firstOrNull { it.id == updatedProjectId }?.let { previous ->
+                    if (previous.lyrics != currentLyrics || previous.title != currentTitle || previous.theme != currentTheme) {
+                        updateWorkspace(updatedProjectId) { it.checkpoint(previous.title, previous.lyrics, previous.theme, System.currentTimeMillis(), force = false) }
+                    }
+                }
                 projects = updatedProjects
                 currentProjectId = updatedProjectId
+                rememberEditorPosition()
 
                 persistActiveProjectSnapshot(
                     projectId = updatedProjectId,
@@ -1128,6 +1468,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 delay(SAVE_STATUS_VISIBLE_MILLIS)
                 saveStatus = SaveStatus.SAVED
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                persistenceError = "Your draft could not be saved. It is still open. Free up storage and try again."
             } finally {
                 // Cancellation mid-save would otherwise leave the indicator stuck on SAVING.
                 if (saveStatus == SaveStatus.SAVING) saveStatus = SaveStatus.IDLE
@@ -1140,13 +1484,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         triggerAutoSave()
     }
 
-    fun onLyricsChanged(newValue: TextFieldValue) {
+    fun onLyricsChanged(
+        newValue: TextFieldValue,
+        timestampMilliseconds: Long = android.os.SystemClock.uptimeMillis()
+    ) {
         if (hasActiveRewrite) return
         val previousText = lyricsFieldValue.text
         val nextValue = newValue.withValidRanges()
         if (nextValue.text != previousText) {
+            suggestionInsertion = null
             pendingRewriteRange = null
+            lyricsHistory.recordUserEdit(
+                previous = lyricsFieldValue,
+                current = nextValue,
+                timestampMilliseconds = timestampMilliseconds
+            )
             lyricsFieldValue = nextValue
+            updateLyricsHistoryAvailability()
             triggerAutoSave()
             return
         }
@@ -1162,6 +1516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 null
             }
             lyricsFieldValue = nextValue
+            rememberEditorPosition()
             return
         }
 
@@ -1171,6 +1526,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         lyricsFieldValue = nextValue
+        rememberEditorPosition()
+    }
+
+    fun undoLyrics() {
+        val previous = lyricsHistory.undo(lyricsFieldValue) ?: return
+        applyHistoryState(previous)
+    }
+
+    fun redoLyrics() {
+        val next = lyricsHistory.redo(lyricsFieldValue) ?: return
+        applyHistoryState(next)
+    }
+
+    private fun applyAtomicLyricsEdit(nextValue: TextFieldValue) {
+        suggestionInsertion = null
+        val safeValue = nextValue.withValidRanges()
+        lyricsHistory.recordAtomicEdit(previous = lyricsFieldValue, current = safeValue)
+        lyricsFieldValue = safeValue
+        updateLyricsHistoryAvailability()
+    }
+
+    private fun applyHistoryState(state: TextFieldValue) {
+        suggestionInsertion = null
+        dismissRewrite()
+        dismissInspector()
+        lyricsFieldValue = state.withValidRanges()
+        suggestions = emptyList()
+        updateLyricsHistoryAvailability()
+        triggerAutoSave()
+    }
+
+    private fun resetLyricsHistory() {
+        suggestionInsertion = null
+        lyricsHistory.reset()
+        updateLyricsHistoryAvailability()
+    }
+
+    private fun updateLyricsHistoryAvailability() {
+        canUndoLyrics = lyricsHistory.canUndo
+        canRedoLyrics = lyricsHistory.canRedo
     }
 
     fun clearPendingRewriteSelection() {
@@ -1186,8 +1581,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         triggerAutoSave()
     }
 
-    fun goToStartMenu() {
-        showStartMenu = true
+    fun goToStartMenu(onReady: () -> Unit = {}) {
+        flushCurrentDraft { suggestionInsertion = null; showStartMenu = true; onReady() }
     }
 
     private fun TextFieldValue.withValidRanges(): TextFieldValue {
@@ -1216,6 +1611,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    suspend fun applyAISettings(
+        provider: AIProvider,
+        model: AIModel,
+        keys: Map<AIProvider, String>
+    ): Result<Unit> {
+        return try {
+            withContext(Dispatchers.IO) {
+                keys.forEach { (keyProvider, key) -> repo.saveApiKey(keyProvider.name, key) }
+                repo.saveSelectedProvider(provider.name)
+                repo.saveModelId(model.id)
+            }
+            selectedProvider = provider
+            selectedModel = model
+            apiKeyPresence = apiKeyPresence + keys
+                .mapKeys { it.key.name }
+                .mapValues { it.value.isNotEmpty() }
+            Result.success(Unit)
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+    }
+
     fun saveProvider(provider: AIProvider) {
         selectedProvider = provider
         // Auto-select first model for this provider
@@ -1230,8 +1649,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        super.onCleared()
-        voiceMemoService.release()
+        try {
+            localModelService.close()
+        } finally {
+            voiceMemoService.release()
+            super.onCleared()
+        }
     }
 
     fun saveModel(model: AIModel) {
@@ -1241,6 +1664,125 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun restoreSavedLocalModels() {
+        val filesDir = getApplication<Application>().filesDir
+        val storedModels = try {
+            repo.localModelsFlow.first()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: CorruptLibraryException) {
+            localModelError = "Saved local models could not be read. Existing files were left untouched."
+            return
+        }
+        val verifiedCatalogFiles = mutableSetOf<String>()
+        val persisted = withContext(Dispatchers.IO) {
+            storedModels.filter { model ->
+                val file = java.io.File(filesDir, model.fileName)
+                if (!file.isFile) return@filter false
+                if (model.isCustom) return@filter true
+                val catalogModel = com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
+                    .firstOrNull { it.fileName == model.fileName }
+                    ?: return@filter false
+                val valid = com.rhymeai.app.ui.components
+                    .validateDownloadedGemmaIntegrity(catalogModel, file) == null
+                if (valid) verifiedCatalogFiles += model.fileName
+                valid
+            }.toMutableList()
+        }
+        val legacyFile = java.io.File(filesDir, "local_model.gguf")
+        if (legacyFile.isFile && persisted.none { it.fileName == legacyFile.name }) {
+            persisted += SavedLocalModel(
+                id = legacyFile.name,
+                displayName = "Custom Model",
+                fileName = legacyFile.name,
+                isCustom = true
+            )
+        }
+        savedLocalModels = persisted
+        verifiedGemmaFileNames = verifiedCatalogFiles
+        if (persisted != storedModels) {
+            repo.saveLocalModels(persisted)
+        }
+        selectedLocalModelId = repo.selectedLocalModelIdFlow.first()
+            ?.takeIf { selectedId -> persisted.any { it.id == selectedId } }
+            ?: persisted.firstOrNull()?.id
+        repo.saveSelectedLocalModelId(selectedLocalModelId)
+        if (selectedProvider == AIProvider.LOCAL) {
+            selectedSavedLocalModel()?.let { model ->
+                loadLocalModel(java.io.File(filesDir, model.fileName).absolutePath)
+            }
+        }
+    }
+
+    fun registerAndSelectLocalModel(
+        path: String,
+        displayName: String,
+        isCustom: Boolean
+    ) {
+        val file = java.io.File(path)
+        val model = SavedLocalModel(
+            id = file.name,
+            displayName = displayName.ifBlank { file.nameWithoutExtension },
+            fileName = file.name,
+            isCustom = isCustom
+        )
+        savedLocalModels = (savedLocalModels.filterNot { it.id == model.id } + model)
+            .sortedBy { it.displayName.lowercase() }
+        selectedLocalModelId = model.id
+        viewModelScope.launch {
+            repo.saveLocalModels(savedLocalModels)
+            repo.saveSelectedLocalModelId(model.id)
+        }
+        saveProvider(AIProvider.LOCAL)
+        saveModel(AIModel.LOCAL_MODEL)
+        loadLocalModel(file.absolutePath)
+    }
+
+    fun selectSavedLocalModel(modelId: String) {
+        val model = savedLocalModels.firstOrNull { it.id == modelId } ?: return
+        val file = java.io.File(getApplication<Application>().filesDir, model.fileName)
+        if (!file.isFile) {
+            localModelError = "Saved model file is missing. Import it again."
+            return
+        }
+        if (!model.isCustom) {
+            val catalogModel = com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
+                .firstOrNull { it.fileName == model.fileName }
+            viewModelScope.launch(Dispatchers.IO) {
+                val validationError = if (catalogModel == null) {
+                    "Saved downloaded model is not in the trusted catalog."
+                } else {
+                    com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(catalogModel, file)
+                }
+                withContext(Dispatchers.Main) {
+                    if (validationError != null) {
+                        verifiedGemmaFileNames -= model.fileName
+                        localModelError = validationError
+                    } else {
+                        verifiedGemmaFileNames += model.fileName
+                        selectValidatedLocalModel(model, file)
+                    }
+                }
+            }
+            return
+        }
+        selectValidatedLocalModel(model, file)
+    }
+
+    private fun selectValidatedLocalModel(model: SavedLocalModel, file: java.io.File) {
+        selectedLocalModelId = model.id
+        viewModelScope.launch { repo.saveSelectedLocalModelId(model.id) }
+        saveProvider(AIProvider.LOCAL)
+        saveModel(AIModel.LOCAL_MODEL)
+        loadLocalModel(file.absolutePath)
+    }
+
+    private fun selectedSavedLocalModel(): SavedLocalModel? =
+        savedLocalModels.firstOrNull { it.id == selectedLocalModelId }
+
+    private fun corruptLibraryMessage(error: CorruptLibraryException): String =
+        "Your ${error.area} could not be read. Existing data was left untouched. Restore a backup before editing."
+
     // ── Gemma download — lives here (not in Settings' composable scope) so a
     // multi-gigabyte download survives leaving the screen. Resume support in
     // downloadGemmaToTemp means an app restart continues where it stopped. ──
@@ -1248,22 +1790,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var gemmaDownloadProgress by mutableStateOf<Float?>(null)
         private set
+    var gemmaDownloadVerifying by mutableStateOf(false)
+        private set
     var gemmaDownloadError by mutableStateOf<String?>(null)
     internal var gemmaLastDownloadAttempt by mutableStateOf<com.rhymeai.app.ui.components.GemmaDownload?>(null)
         private set
     var gemmaDownloadRevision by mutableStateOf(0)
         private set
+    var verifiedGemmaFileNames by mutableStateOf<Set<String>>(emptySet())
+        private set
 
-    internal fun useDownloadedGemma(model: com.rhymeai.app.ui.components.GemmaDownload): Boolean {
+    internal suspend fun useDownloadedGemma(model: com.rhymeai.app.ui.components.GemmaDownload): Boolean {
         val destFile = java.io.File(getApplication<android.app.Application>().filesDir, model.fileName)
-        val validationError = com.rhymeai.app.ui.components.validateDownloadedGemma(model, destFile)
+        val validationError = withContext(Dispatchers.IO) {
+            com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, destFile)
+        }
         if (validationError != null) {
             gemmaDownloadError = validationError
+            verifiedGemmaFileNames -= model.fileName
             return false
         }
-        saveProvider(AIProvider.LOCAL)
-        saveModel(AIModel.LOCAL_MODEL)
-        loadLocalModel(destFile.absolutePath)
+        verifiedGemmaFileNames += model.fileName
+        registerAndSelectLocalModel(
+            path = destFile.absolutePath,
+            displayName = model.label,
+            isCustom = false
+        )
         return true
     }
 
@@ -1271,6 +1823,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (gemmaDownloadingModel != null) return
         gemmaDownloadingModel = model
         gemmaDownloadProgress = 0f
+        gemmaDownloadVerifying = false
         gemmaDownloadError = null
         gemmaLastDownloadAttempt = model
         val app = getApplication<android.app.Application>()
@@ -1279,50 +1832,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val destFile = java.io.File(app.filesDir, model.fileName)
             val tempFile = java.io.File(app.cacheDir, "${model.fileName}.download")
             try {
-                if (com.rhymeai.app.ui.components.validateDownloadedGemma(model, destFile) == null) {
+                if (com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, destFile) == null) {
                     withContext(Dispatchers.Main) {
                         gemmaDownloadingModel = null
                         gemmaDownloadProgress = null
+                        gemmaDownloadVerifying = false
                         useDownloadedGemma(model)
                     }
                     return@launch
                 }
 
                 com.rhymeai.app.ui.components.ensureEnoughSpaceForGemma(model, destFile, tempFile)
-                if (destFile.exists()) destFile.delete()
-
-                if (com.rhymeai.app.ui.components.validateDownloadedGemma(model, tempFile) != null) {
-                    com.rhymeai.app.ui.components.downloadGemmaToTemp(model, tempFile) { progress ->
+                com.rhymeai.app.ui.components.downloadGemmaAndInstall(
+                    model = model,
+                    tempFile = tempFile,
+                    destinationFile = destFile,
+                    onProgress = { progress ->
                         withContext(Dispatchers.Main) {
                             gemmaDownloadProgress = progress
                         }
+                    },
+                    onVerifying = {
+                        withContext(Dispatchers.Main) {
+                            gemmaDownloadVerifying = true
+                        }
                     }
-                }
-
-                com.rhymeai.app.ui.components.validateDownloadedGemma(model, tempFile)?.let {
-                    throw IllegalStateException(it)
-                }
-
-                if (!tempFile.renameTo(destFile)) {
-                    tempFile.copyTo(destFile, overwrite = true, bufferSize = com.rhymeai.app.ui.components.DOWNLOAD_BUFFER_BYTES)
-                    tempFile.delete()
-                }
+                )
 
                 withContext(Dispatchers.Main) {
                     gemmaDownloadingModel = null
                     gemmaDownloadProgress = null
+                    gemmaDownloadVerifying = false
                     gemmaDownloadRevision++
                     useDownloadedGemma(model)
                 }
             } catch (e: Exception) {
                 android.util.Log.w("RhymeAI", "Gemma download failed", e)
-                // Keep a PARTIAL temp file so the next attempt resumes with a
-                // Range request; delete it if it reached full size but failed
-                // validation (corrupt download would otherwise stick forever).
-                if (tempFile.length() >= model.expectedBytes) tempFile.delete()
                 withContext(Dispatchers.Main) {
                     gemmaDownloadingModel = null
                     gemmaDownloadProgress = null
+                    gemmaDownloadVerifying = false
                     gemmaDownloadError = "Failed to download ${model.label}: ${e.message}"
                 }
             }
@@ -1348,8 +1897,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun unloadLocalModel() {
-        localModelService.unload()
-        localModelLoaded = false
-        localModelPath = null
+        viewModelScope.launch {
+            localModelService.unload()
+            localModelLoaded = false
+            localModelPath = null
+        }
     }
 }
