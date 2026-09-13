@@ -97,6 +97,8 @@ internal fun validateDownloadedGemma(model: GemmaDownload, file: File): String? 
 
 internal fun validateDownloadedGemmaIntegrity(model: GemmaDownload, file: File): String? {
     validateDownloadedGemma(model, file)?.let { return it }
+    val sizeBefore = file.length()
+    val modifiedBefore = file.lastModified()
 
     val digest = MessageDigest.getInstance("SHA-256")
     file.inputStream().use { input ->
@@ -110,10 +112,27 @@ internal fun validateDownloadedGemmaIntegrity(model: GemmaDownload, file: File):
     val actualSha256 = digest.digest().joinToString("") {
         String.format(Locale.US, "%02x", it.toInt() and 0xff)
     }
+    if (file.length() != sizeBefore || file.lastModified() != modifiedBefore) {
+        return "${model.label} changed while its integrity was being checked"
+    }
     if (!actualSha256.equals(model.sha256, ignoreCase = true)) {
         return "${model.label} download failed its integrity check"
     }
     return null
+}
+
+internal fun hasCurrentGemmaVerification(
+    model: GemmaDownload,
+    file: File,
+    verifiedCatalogSha256: String?,
+    verifiedSizeBytes: Long?,
+    verifiedLastModifiedMillis: Long?
+): Boolean {
+    if (verifiedLastModifiedMillis == null || verifiedLastModifiedMillis <= 0L) return false
+    if (!verifiedCatalogSha256.equals(model.sha256, ignoreCase = true)) return false
+    if (verifiedSizeBytes != file.length()) return false
+    if (verifiedLastModifiedMillis != file.lastModified()) return false
+    return validateDownloadedGemma(model, file) == null
 }
 
 internal data class GemmaDownloadSegment(

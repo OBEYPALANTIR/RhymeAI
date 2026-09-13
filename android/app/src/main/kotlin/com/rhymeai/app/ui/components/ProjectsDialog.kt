@@ -1546,7 +1546,6 @@ private fun TrashRecordingSelectableRow(
                 role = Role.Checkbox,
                 onValueChange = { onToggle() }
             )
-            .semantics { contentDescription = displayName }
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
@@ -1623,8 +1622,7 @@ private fun TrashSelectionHeaderRow(
                 value = selected,
                 role = Role.Checkbox,
                 onValueChange = { onToggle() }
-            )
-            .semantics { contentDescription = "All items" },
+            ),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -1657,9 +1655,6 @@ private fun TrashProjectSelectableRow(
                 role = Role.Checkbox,
                 onValueChange = { onToggle() }
             )
-            .semantics {
-                contentDescription = project.title.ifEmpty { "Untitled Song" }
-            }
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)

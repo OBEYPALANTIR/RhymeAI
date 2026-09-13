@@ -1676,17 +1676,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val verifiedCatalogFiles = mutableSetOf<String>()
         val persisted = withContext(Dispatchers.IO) {
-            storedModels.filter { model ->
+            storedModels.mapNotNull { model ->
                 val file = java.io.File(filesDir, model.fileName)
-                if (!file.isFile) return@filter false
-                if (model.isCustom) return@filter true
+                if (!file.isFile) return@mapNotNull null
+                if (model.isCustom) return@mapNotNull model
                 val catalogModel = com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
                     .firstOrNull { it.fileName == model.fileName }
-                    ?: return@filter false
-                val valid = com.rhymeai.app.ui.components
-                    .validateDownloadedGemmaIntegrity(catalogModel, file) == null
-                if (valid) verifiedCatalogFiles += model.fileName
-                valid
+                    ?: return@mapNotNull null
+                val hasCurrentVerification = com.rhymeai.app.ui.components.hasCurrentGemmaVerification(
+                    model = catalogModel,
+                    file = file,
+                    verifiedCatalogSha256 = model.verifiedCatalogSha256,
+                    verifiedSizeBytes = model.verifiedSizeBytes,
+                    verifiedLastModifiedMillis = model.verifiedLastModifiedMillis
+                )
+                if (!hasCurrentVerification && com.rhymeai.app.ui.components
+                        .validateDownloadedGemmaIntegrity(catalogModel, file) != null
+                ) {
+                    return@mapNotNull null
+                }
+                verifiedCatalogFiles += model.fileName
+                model.copy(
+                    verifiedCatalogSha256 = catalogModel.sha256,
+                    verifiedSizeBytes = file.length(),
+                    verifiedLastModifiedMillis = file.lastModified().takeIf { it > 0L }
+                )
             }.toMutableList()
         }
         val legacyFile = java.io.File(filesDir, "local_model.gguf")
@@ -1717,14 +1731,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun registerAndSelectLocalModel(
         path: String,
         displayName: String,
-        isCustom: Boolean
+        isCustom: Boolean,
+        verifiedCatalogSha256: String? = null
     ) {
         val file = java.io.File(path)
         val model = SavedLocalModel(
             id = file.name,
             displayName = displayName.ifBlank { file.nameWithoutExtension },
             fileName = file.name,
-            isCustom = isCustom
+            isCustom = isCustom,
+            verifiedCatalogSha256 = verifiedCatalogSha256,
+            verifiedSizeBytes = file.length().takeIf { verifiedCatalogSha256 != null },
+            verifiedLastModifiedMillis = file.lastModified().takeIf {
+                verifiedCatalogSha256 != null && it > 0L
+            }
         )
         savedLocalModels = (savedLocalModels.filterNot { it.id == model.id } + model)
             .sortedBy { it.displayName.lowercase() }
@@ -1814,7 +1834,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         registerAndSelectLocalModel(
             path = destFile.absolutePath,
             displayName = model.label,
-            isCustom = false
+            isCustom = false,
+            verifiedCatalogSha256 = model.sha256
         )
         return true
     }

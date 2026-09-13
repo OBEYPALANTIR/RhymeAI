@@ -524,7 +524,7 @@ class NewFeatureUiTest {
         composeRule.onNodeWithText("UI Trash Song").assertIsDisplayed()
         composeRule.onNode(hasText("30 days left", substring = true)).assertIsDisplayed()
 
-        val trashSelection = composeRule.onNodeWithContentDescription("UI Trash Song")
+        val trashSelection = composeRule.onNodeWithText("UI Trash Song")
         val semantics = trashSelection.fetchSemanticsNode().config
         assertEquals(Role.Checkbox, semantics[SemanticsProperties.Role])
         assertEquals(ToggleableState.Off, semantics[SemanticsProperties.ToggleableState])
@@ -578,10 +578,10 @@ class NewFeatureUiTest {
         composeRule.onNodeWithText("\"$title\" moved to Trash").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Open Trash Bin").performClick()
         composeRule.waitUntil(timeoutMillis = 3_000) {
-            composeRule.onAllNodesWithContentDescription(title).fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()
         }
 
-        val selector = composeRule.onNodeWithContentDescription(title)
+        val selector = composeRule.onNodeWithText(title)
         val before = selector.fetchSemanticsNode().config
         assertEquals(Role.Checkbox, before[SemanticsProperties.Role])
         assertEquals(ToggleableState.Off, before[SemanticsProperties.ToggleableState])

@@ -15,6 +15,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
+import java.nio.file.attribute.FileTime
 import java.security.MessageDigest
 import kotlin.io.path.createTempDirectory
 
@@ -80,6 +82,57 @@ class GemmaDownloadsTest {
         assertEquals(
             "Gemma Tiny download failed its integrity check",
             validateDownloadedGemmaIntegrity(mismatchedModel, file)
+        )
+    }
+
+    @Test
+    fun cachedIntegrityVerificationIsAcceptedOnlyForTheSameCatalogAndFileIdentity() {
+        val bytes = validTinyGguf()
+        val file = File(tempDir(), "tiny.gguf").apply { writeBytes(bytes) }
+        val model = tinyGemma(expectedBytes = bytes.size.toLong(), sha256 = sha256(bytes))
+        val verifiedModified = file.lastModified()
+
+        assertTrue(
+            hasCurrentGemmaVerification(
+                model,
+                file,
+                model.sha256,
+                file.length(),
+                verifiedModified
+            )
+        )
+        assertFalse(
+            hasCurrentGemmaVerification(
+                model.copy(sha256 = "0".repeat(64)),
+                file,
+                model.sha256,
+                file.length(),
+                verifiedModified
+            )
+        )
+
+        Files.setLastModifiedTime(file.toPath(), FileTime.fromMillis(verifiedModified + 2_000L))
+        assertFalse(
+            hasCurrentGemmaVerification(
+                model,
+                file,
+                model.sha256,
+                file.length(),
+                verifiedModified
+            )
+        )
+
+        val invalidHeader = bytes.copyOf().also { it[0] = 0 }
+        file.writeBytes(invalidHeader)
+        Files.setLastModifiedTime(file.toPath(), FileTime.fromMillis(verifiedModified))
+        assertFalse(
+            hasCurrentGemmaVerification(
+                model,
+                file,
+                model.sha256,
+                file.length(),
+                file.lastModified()
+            )
         )
     }
 
