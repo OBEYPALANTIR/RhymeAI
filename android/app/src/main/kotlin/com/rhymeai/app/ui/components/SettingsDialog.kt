@@ -596,7 +596,9 @@ internal fun SettingsDialog(
                                 ) {
                                     Text("Unload Model")
                                 }
-                            } else {
+                            }
+
+                            run {
                                 // Recommended model downloads
                                 Text("Recommended Downloads", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                                 Spacer(Modifier.height(8.dp))
@@ -727,6 +729,7 @@ internal fun SettingsDialog(
                                         Text("Choose Model File", fontWeight = FontWeight.Medium)
                                     }
                                 }
+
                             }
 
                             val displayError = copyError ?: gemmaDownloadError ?: localModelError

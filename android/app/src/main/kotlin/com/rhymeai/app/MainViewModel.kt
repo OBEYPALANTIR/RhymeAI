@@ -528,6 +528,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var selectedLocalModelId by mutableStateOf<String?>(null)
         private set
+    private var localModelValidationJob: Job? = null
+    private var localModelValidationGeneration = 0L
 
     // Error state
     var errorMessage by mutableStateOf<String?>(null)
@@ -1760,27 +1762,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSavedLocalModel(modelId: String) {
         val model = savedLocalModels.firstOrNull { it.id == modelId } ?: return
+        val generation = ++localModelValidationGeneration
+        localModelValidationJob?.cancel()
         val file = java.io.File(getApplication<Application>().filesDir, model.fileName)
         if (!file.isFile) {
+            localModelLoading = false
             localModelError = "Saved model file is missing. Import it again."
             return
         }
         if (!model.isCustom) {
             val catalogModel = com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
                 .firstOrNull { it.fileName == model.fileName }
-            viewModelScope.launch(Dispatchers.IO) {
-                val validationError = if (catalogModel == null) {
-                    "Saved downloaded model is not in the trusted catalog."
-                } else {
-                    com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(catalogModel, file)
-                }
-                withContext(Dispatchers.Main) {
+            localModelLoading = true
+            localModelError = null
+            localModelValidationJob = viewModelScope.launch {
+                var startedLoad = false
+                try {
+                    val validationError = withContext(Dispatchers.IO) {
+                        if (catalogModel == null) {
+                            "Saved downloaded model is not in the trusted catalog."
+                        } else {
+                            com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(catalogModel, file)
+                        }
+                    }
+                    if (generation != localModelValidationGeneration) return@launch
                     if (validationError != null) {
                         verifiedGemmaFileNames -= model.fileName
                         localModelError = validationError
                     } else {
                         verifiedGemmaFileNames += model.fileName
+                        startedLoad = true
                         selectValidatedLocalModel(model, file)
+                    }
+                } finally {
+                    if (generation == localModelValidationGeneration && !startedLoad) {
+                        localModelLoading = false
                     }
                 }
             }

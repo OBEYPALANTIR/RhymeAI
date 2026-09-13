@@ -237,12 +237,11 @@ class AIService {
      */
     private fun buildSectionDirective(ref: SectionRef?, lyrics: String): String {
         if (ref == null) return ""
-        val labelDirective = sectionLabelDirective(explicitSectionLabel(ref, lyrics))
         val instanceDirective = when (ref.type) {
             SongSection.VERSE -> "This is Verse ${ref.ordinal}.\n"
             SongSection.BRIDGE -> "This is the bridge — introduce a contrasting rhyme sound and cadence; avoid the chorus's ending words.\n"
             SongSection.CHORUS -> {
-                if (ref.ordinal < 2) return labelDirective
+                if (ref.ordinal < 2) return ""
                 // Collect the first chorus's lines to anchor hook language.
                 val firstChorusLines = firstChorusLines(lyrics)
                 val chorusBlock = if (firstChorusLines.isNotEmpty()) {
@@ -254,7 +253,7 @@ class AIService {
             }
             SongSection.UNKNOWN -> ""
         }
-        return labelDirective + instanceDirective
+        return instanceDirective
     }
 
     /** Lines of lyrics content (non-header, non-blank) within the first chorus section. */
@@ -266,43 +265,6 @@ class AIService {
         return firstChorus.lineRange
             .mapNotNull { idx -> lines.getOrNull(idx) }
             .filter { it.isNotBlank() && SectionMap.headerTitle(it) == null }
-    }
-
-    private fun explicitSectionLabel(ref: SectionRef, lyrics: String): String? {
-        val headerLine = lyrics.split('\n').getOrNull(ref.lineRange.first) ?: return null
-        return SectionMap.headerTitle(headerLine)
-    }
-
-    private fun sectionRefAt(lyrics: String, cursor: Int?): SectionRef? {
-        val safeCursor = cursor?.coerceIn(0, lyrics.length) ?: return null
-        val lineIndex = lyrics.substring(0, safeCursor).count { it == '\n' }
-        return SectionMap.parse(lyrics).sectionAt(lineIndex)
-    }
-
-    private fun sectionLabelDirective(label: String?): String {
-        val safeLabel = label
-            ?.trim()
-            ?.replace('"', '\'')
-            ?.takeIf(String::isNotEmpty)
-            ?: return ""
-        val squashed = safeLabel.lowercase().replace("-", "").replace(" ", "")
-        val role = when {
-            "prechorus" in squashed ->
-                "Build momentum and tension toward the chorus without resolving the hook early."
-            squashed.startsWith("intro") ->
-                "Establish the song's mood, world, or central image while leaving room for the song to open up."
-            squashed.startsWith("hook") ->
-                "Center the shortest, most memorable, repeatable phrase in the song."
-            squashed.startsWith("refrain") ->
-                "Craft a returning line or compact phrase that can recur without becoming a full chorus."
-            squashed.startsWith("interlude") ->
-                "Use this as a sparse transition; keep any lyric minimal and textural."
-            squashed.startsWith("outro") ->
-                "Resolve or echo the song's core idea and create a clear sense of closure."
-            else -> "Follow the named section's structural role when shaping the next line."
-        }
-        return "Current section label: \"$safeLabel\". Treat this label as song structure, not lyric content.\n" +
-            "Section-specific direction: $role\n"
     }
 
     internal fun buildPrompt(
@@ -925,14 +887,11 @@ Rules:
                 rejectedCandidates = rejectedCandidates
             )
         } else {
-            val sectionLabel = sectionRefAt(fullLyrics, selectionStart)
-                ?.let { explicitSectionLabel(it, fullLyrics) }
             val prompt = buildRewritePrompt(
                 action,
                 fullLyrics,
                 selection,
-                currentSection,
-                sectionLabel
+                currentSection
             )
             val raw = callCloudRaw(provider, apiKey, modelId, prompt)
             extractRewriteField(raw)?.takeIf { it.isNotBlank() }
@@ -944,8 +903,7 @@ Rules:
         action: RewriteAction,
         lyrics: String,
         selection: String,
-        currentSection: SongSection = SongSection.UNKNOWN,
-        currentSectionLabel: String? = null
+        currentSection: SongSection = SongSection.UNKNOWN
     ): String =
         """
 You are an expert songwriter helping the user rewrite a portion of their song.
@@ -962,7 +920,6 @@ ${"\"\"\""}
 
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
-${sectionLabelDirective(currentSectionLabel)}
 
 Action: ${action.label}
 Instruction: ${action.instruction}
@@ -1000,8 +957,6 @@ Respond ONLY with a JSON object of the form {"rewrite": "..."}. No code fences.
         rejectedCandidates: Set<String> = emptySet()
     ): String {
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext = false)
-        val sectionLabel = sectionRefAt(lyrics, selectionStart)
-            ?.let { explicitSectionLabel(it, lyrics) }
         val singleWord = isSingleWordSelection(selection)
         val selectedLine = selectionStart
             ?.let { lyricLineAt(lyrics, it) }
@@ -1041,7 +996,6 @@ You are RhymeAI's on-device songwriting assistant.
 $taskLine
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
-${sectionLabelDirective(sectionLabel)}
 Action: ${action.label}.
 Instruction: ${action.instruction}
 
