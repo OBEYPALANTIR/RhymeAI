@@ -959,6 +959,16 @@ private actor SwitchingGGUFRunner: LocalGGUFRunner {
         return generate(prompt: prompt)
     }
 
+    func generate(
+        prompt: String,
+        loading filePath: String,
+        onChunk: @escaping @Sendable (String) -> Void
+    ) -> String {
+        let response = generate(prompt: prompt, loading: filePath)
+        onChunk(response)
+        return response
+    }
+
     func unload() {}
 }
 
@@ -1006,6 +1016,16 @@ private actor InterleavingGGUFRunner: LocalGGUFRunner {
         return "\(prompt):\(filePath)"
     }
 
+    func generate(
+        prompt: String,
+        loading filePath: String,
+        onChunk: @escaping @Sendable (String) -> Void
+    ) async -> String {
+        let response = await generate(prompt: prompt, loading: filePath)
+        onChunk(response)
+        return response
+    }
+
     func waitUntilFirstLoadStarts() async {
         guard !firstLoadStarted else { return }
         await withCheckedContinuation { continuation in
@@ -1043,6 +1063,16 @@ private actor LifecycleGGUFRunner: LocalGGUFRunner {
             finishGenerationContinuation = continuation
         }
         return prompt
+    }
+
+    func generate(
+        prompt: String,
+        loading filePath: String,
+        onChunk: @escaping @Sendable (String) -> Void
+    ) async -> String {
+        let response = await generate(prompt: prompt, loading: filePath)
+        onChunk(response)
+        return response
     }
 
     func unload() async {

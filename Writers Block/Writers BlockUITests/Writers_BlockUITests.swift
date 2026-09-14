@@ -503,6 +503,38 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testLocalAssistantStopAndRestart() throws {
+        guard UserDefaults.standard.bool(forKey: "RhymeAITestNativeRuntimeUI") else {
+            throw XCTSkip("Enable the local runtime UI gate after installing the accepted E2B model.")
+        }
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song", "--ui-test-open-assistant",
+            "-ggufEngineChoice", "gemma",
+            "-selectedGGUFModelFileName", "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf"
+        ])
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        let suggest = app.buttons["Suggest Next Line"]
+        XCTAssertTrue(suggest.waitForExistence(timeout: 5))
+        suggest.tap()
+        XCTAssertTrue(app.buttons["Stop"].waitForExistence(timeout: 5))
+        let loading = XCTAttachment(screenshot: app.screenshot())
+        loading.name = "local-suggestions-loading"
+        loading.lifetime = .keepAlways
+        add(loading)
+        app.buttons["Stop"].tap()
+        XCTAssertTrue(suggest.waitForExistence(timeout: 1))
+        let stopped = XCTAttachment(screenshot: app.screenshot())
+        stopped.name = "local-suggestions-stopped"
+        stopped.lifetime = .keepAlways
+        add(stopped)
+        suggest.tap()
+        XCTAssertTrue(app.buttons["Stop"].waitForExistence(timeout: 5))
+        app.buttons["Stop"].tap()
+        XCTAssertTrue(suggest.waitForExistence(timeout: 1))
+    }
+
+    @MainActor
     func testAssistantStopCancelsSuggestionRequest() throws {
         let geminiTestKey = ProcessInfo.processInfo.environment["GEMINI_TEST_KEY"]
             ?? ProcessInfo.processInfo.environment["SIMCTL_CHILD_GEMINI_TEST_KEY"]

@@ -1,6 +1,7 @@
 import Foundation
 
 nonisolated enum SynonymPromptFormat: Equatable { case newlineList, jsonObject }
+nonisolated enum SynonymValidationMode: Equatable { case syntaxOnly, knownWords }
 
 protocol SynonymProviding {
     func getSynonyms(
@@ -43,9 +44,11 @@ enum SynonymSanitizer {
         _ raw: String,
         excluding target: String,
         additionallyExcluding exclusions: [String] = [],
-        limit: Int
+        limit: Int,
+        validation: SynonymValidationMode = .syntaxOnly
     ) -> [String] {
         guard limit > 0 else { return [] }
+        if validation == .knownWords, containsMarkupOrControl(raw) { return [] }
         let cleaned = extractCodeFencePayload(from: raw)
         guard !cleaned.isEmpty else { return [] }
         let candidates = parseCandidates(cleaned)
@@ -65,7 +68,8 @@ enum SynonymSanitizer {
                   candidate.count <= 32,
                   candidate.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
                   !isPromptEchoLine(candidate),
-                  isSingleWord(candidate) else {
+                  isSingleWord(candidate),
+                  validation != .knownWords || isKnownWord(candidate) else {
                 continue
             }
             let key = canonicalKey(candidate)
@@ -224,6 +228,29 @@ enum SynonymSanitizer {
         }
         return hasLetter && !followsConnector
     }
+
+    private static func isKnownWord(_ candidate: String) -> Bool {
+        LexicalWordValidator.isKnownSpelling(candidate)
+    }
+
+    private static func containsMarkupOrControl(_ raw: String) -> Bool {
+        if raw.unicodeScalars.contains(where: { scalar in
+            CharacterSet.controlCharacters.contains(scalar)
+                && scalar != "\n"
+                && scalar != "\r"
+                && scalar != "\t"
+        }) {
+            return true
+        }
+        if raw.contains("```") { return true }
+        if raw.range(
+            of: #"(?i)<\|turn>|<turn\|>|<?/?(?:start|end)_?(?:of_?)?turn>?\w*|_?response>|_?model_response>|assistant_response>|model_response>"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+        return raw.range(of: #"<\s*[/A-Za-z|]"#, options: .regularExpression) != nil
+    }
 }
 
 enum SynonymGenerationPipeline {
@@ -233,6 +260,7 @@ enum SynonymGenerationPipeline {
         target: String,
         limit: Int,
         accepting existing: [String] = [],
+        validation: SynonymValidationMode = .syntaxOnly,
         request: (_ exclusions: [String]) async throws -> String
     ) async throws -> [String] {
         try Task.checkCancellation()
@@ -241,7 +269,8 @@ enum SynonymGenerationPipeline {
         var accepted = SynonymSanitizer.extract(
             existing.joined(separator: "\n"),
             excluding: target,
-            limit: resultLimit
+            limit: resultLimit,
+            validation: validation
         )
         let usefulCount = min(minimumUsefulCount, resultLimit)
         guard accepted.count < usefulCount else { return accepted }
@@ -252,7 +281,8 @@ enum SynonymGenerationPipeline {
             firstRaw,
             excluding: target,
             additionallyExcluding: accepted,
-            limit: resultLimit - accepted.count
+            limit: resultLimit - accepted.count,
+            validation: validation
         )
         accepted.append(contentsOf: first)
         guard accepted.count < usefulCount else { return accepted }
@@ -264,7 +294,8 @@ enum SynonymGenerationPipeline {
                 topUpRaw,
                 excluding: target,
                 additionallyExcluding: accepted,
-                limit: resultLimit - accepted.count
+                limit: resultLimit - accepted.count,
+                validation: validation
             )
             accepted.append(contentsOf: topUp)
         } catch is CancellationError {

@@ -68,10 +68,12 @@ This tracks behavior that must stay aligned between Android and iOS.
   response bodies into user-facing text.
 - Trash retention: 30 days on both platforms
   (`TrashedSongProject.kt` / `TrashedSongProject.swift`).
-- Prompt templates: section labels, rhyme-constraint blocks, rewrite action
-  instructions, and the Gemma chat template are byte-identical across
-  platforms (iOS softens punch-up wording only on the Apple Intelligence
-  local path due to on-device guardrails).
+- Local request controls: iOS forwards cursor-stanza context, rhyme scheme,
+  complexity, section, and the whole-song policy to both local engines. Generated
+  suggestions, passage rewrites, and single-word results are validated before
+  display; suggestion streams expose complete accepted lines and support Stop.
+  Native prompt bytes differ by platform and must be captured independently.
+  The shared 12-case model acceptance and physical-device timing gates remain open.
 - Syllable coloring: identical two-toggle semantics — syllables on with rhyme
   highlight off tints whole words semibold; with rhyme highlight on, syllable
   color moves to the underline.

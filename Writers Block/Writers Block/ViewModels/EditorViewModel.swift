@@ -45,6 +45,24 @@ private struct InspectorSynonymRequestIdentity: Equatable {
     let localIdentity: SynonymLocalIdentity?
 }
 
+struct AISuggestionInput {
+    let provider: AIProvider
+    let apiKey: String
+    let modelID: String
+    let theme: String
+    let lyrics: String
+    let stanzaLines: [String]
+    let targetRhymeLine: String?
+    let rhymeType: RhymeType
+    let rhymeScheme: String
+    let currentLetter: String
+    let currentSection: SongSection
+    let sectionOrdinal: Int
+    let firstChorusLines: [String]?
+    let complexity: RhymeComplexity
+    let useWholeSongContext: Bool
+}
+
 final class EditorViewModel: ObservableObject {
 
     // MARK: - Editor State
@@ -484,32 +502,24 @@ final class EditorViewModel: ObservableObject {
         let sectionOrdinal = sectionContext.sectionOrdinal
         let firstChorusLines = sectionContext.firstChorusLines
 
-        let textIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
-        let textAfterCursor = String(lyrics.suffix(lyrics.count - pos))
-
-        let stanzaStartOffset: Int
-        if let range = textBeforeCursor.range(of: "\n\n", options: .backwards) {
-            stanzaStartOffset = textBeforeCursor.distance(from: textBeforeCursor.startIndex, to: range.upperBound)
-        } else {
-            stanzaStartOffset = 0
+        let cursorLineIndex = min(max(globalCursorLineIndex, 0), rawLines.count - 1)
+        let isBlankLine: (Int) -> Bool = { index in
+            rawLines[index].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-
-        let stanzaEndOffset: Int
-        if let range = textAfterCursor.range(of: "\n\n") {
-            stanzaEndOffset = pos + textAfterCursor.distance(from: textAfterCursor.startIndex, to: range.lowerBound)
+        let stanzaStartLine = rawLines.indices.prefix(cursorLineIndex)
+            .last(where: isBlankLine)
+            .map { $0 + 1 } ?? 0
+        let stanzaEndLine: Int
+        if isBlankLine(cursorLineIndex) {
+            stanzaEndLine = cursorLineIndex + 1
         } else {
-            stanzaEndOffset = lyrics.count
+            stanzaEndLine = rawLines.indices.dropFirst(cursorLineIndex + 1)
+                .first(where: isBlankLine) ?? rawLines.endIndex
         }
-
-        let stanzaStart = lyrics.index(lyrics.startIndex, offsetBy: stanzaStartOffset)
-        let stanzaEnd = lyrics.index(lyrics.startIndex, offsetBy: stanzaEndOffset)
-
-        let currentStanza = String(lyrics[stanzaStart..<stanzaEnd])
-        let stanzaLines = currentStanza.components(separatedBy: "\n")
+        let stanzaLines = Array(rawLines[stanzaStartLine..<stanzaEndLine])
 
         // Determine the raw cursor line, then map only real lyric lines to the rhyme scheme.
-        let stanzaTextBeforeCursor = String(lyrics[stanzaStart..<textIndex])
-        let rawCursorLineIndex = stanzaTextBeforeCursor.components(separatedBy: "\n").count - 1
+        let rawCursorLineIndex = cursorLineIndex - stanzaStartLine
         let lyricLinePosition = stanzaLines.prefix(rawCursorLineIndex + 1).filter { line in
             !Self.isSectionHeader(line) && !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }.count - 1
@@ -623,7 +633,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func startSuggestions() {
-        let context = rhymeContext
+        let input = makeSuggestionInput()
         suggestionsTask?.cancel()
         let requestID = UUID()
         suggestionsRequestID = requestID
@@ -633,31 +643,32 @@ final class EditorViewModel: ObservableObject {
         suggestions = []
 
         let stream = aiService.streamSuggestions(
-            provider: selectedProvider,
-            apiKey: currentApiKey,
-            modelId: selectedModel.id,
-            theme: theme,
-            lyrics: lyrics,
-            targetRhymeLine: context.targetLine,
-            rhymeType: rhymeType,
-            rhymeScheme: activeRhymeScheme,
-            currentLetter: context.currentLetter,
-            currentSection: context.currentSection,
-            sectionOrdinal: context.sectionOrdinal,
-            firstChorusLines: context.firstChorusLines,
-            complexity: rhymeComplexity,
-            useWholeSongContext: useWholeSongContext
+            provider: input.provider,
+            apiKey: input.apiKey,
+            modelId: input.modelID,
+            theme: input.theme,
+            lyrics: input.lyrics,
+            stanzaLines: input.stanzaLines,
+            targetRhymeLine: input.targetRhymeLine,
+            rhymeType: input.rhymeType,
+            rhymeScheme: input.rhymeScheme,
+            currentLetter: input.currentLetter,
+            currentSection: input.currentSection,
+            sectionOrdinal: input.sectionOrdinal,
+            firstChorusLines: input.firstChorusLines,
+            complexity: input.complexity,
+            useWholeSongContext: input.useWholeSongContext
         )
 
         // Compute tier per emitted line using the same filter the streaming
         // path uses, so the badge always agrees with what was held/passed.
-        let filter = RhymeLineFilter(targetLine: context.targetLine, rhymeType: rhymeType)
+        let filter = RhymeLineFilter(targetLine: input.targetRhymeLine, rhymeType: input.rhymeType)
 
         // Hook-repeat: end words from first chorus used to flag "hook" badge
         // variant on subsequent choruses.
         let firstChorusEndWordSet: Set<String> = {
-            guard context.currentSection == .chorus, context.sectionOrdinal >= 2,
-                  let lines = context.firstChorusLines else { return [] }
+            guard input.currentSection == .chorus, input.sectionOrdinal >= 2,
+                  let lines = input.firstChorusLines else { return [] }
             return Set(lines.compactMap { line -> String? in
                 let w = RhymeConstraint.lineEndWord(line)
                 return w.isEmpty ? nil : w
@@ -696,6 +707,31 @@ final class EditorViewModel: ObservableObject {
                 self.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private func makeSuggestionInput() -> AISuggestionInput {
+        let context = computeRhymeContext()
+        return AISuggestionInput(
+            provider: selectedProvider,
+            apiKey: currentApiKey,
+            modelID: selectedModel.id,
+            theme: theme,
+            lyrics: lyrics,
+            stanzaLines: context.stanzaLines,
+            targetRhymeLine: context.targetLine,
+            rhymeType: rhymeType,
+            rhymeScheme: activeRhymeScheme,
+            currentLetter: context.currentLetter,
+            currentSection: context.currentSection,
+            sectionOrdinal: context.sectionOrdinal,
+            firstChorusLines: context.firstChorusLines,
+            complexity: rhymeComplexity,
+            useWholeSongContext: useWholeSongContext
+        )
+    }
+
+    func suggestionInputForTest() -> AISuggestionInput {
+        makeSuggestionInput()
     }
 
     func cancelSuggestions() {

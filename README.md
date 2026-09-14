@@ -45,6 +45,27 @@ secrets:
 Set `CLOUDKIT_SIM_A` and `CLOUDKIT_SIM_B` to specific booted simulator UDIDs, or
 leave them unset to use the first two booted iOS simulators.
 
+## iOS local generation regression gate
+
+Run `LocalGenerationBoundaryTests` on an existing simulator to verify cursor-stanza
+context, scheme and complexity controls, strict local output validation, and
+stream framing. Both local engines validate complete lines before publishing them.
+
+`LocalGenerationRuntimeTests/testInstalledE2BStreamAndStop` is an opt-in installed
+app gate. In the selected simulator's `ShaydeTree.Writers-Block` preferences, set
+`RhymeAITestNativeRuntimeModelPath` to the accepted E2B GGUF and
+`RhymeAITestNativeRuntimeSourceSHA` to the exact tested commit. The test verifies
+the catalog digest, temporarily links the model if absent, restores its settings,
+and records cold/warm timing, prompt hashes captured at tokenization, and Stop
+quiescence in a retained JSON XCTest attachment. Remove the two test preferences
+afterward. Run it separately from tests that mutate the global engine setting.
+
+The UI gate `Writers_BlockUITests/testLocalAssistantStopAndRestart` requires the
+accepted model in the app's model directory and `RhymeAITestNativeRuntimeUI=true`
+in the UI test runner's preferences. It captures loading and stopped screens.
+Simulator results do not certify physical-device latency or Apple Intelligence
+availability, and these gates do not establish all 12 native model contracts.
+
 ## Features
 
 - Section-aware suggestions and rewrites for `[Verse]`, `[Chorus]`, and `[Bridge]`.

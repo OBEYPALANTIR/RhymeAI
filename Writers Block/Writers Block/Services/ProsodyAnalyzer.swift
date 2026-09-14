@@ -238,6 +238,28 @@ nonisolated struct PronunciationDictionary: Sendable {
     }
 }
 
+nonisolated enum LexicalWordValidator {
+    static func isKnownSpelling(_ word: String) -> Bool {
+        let spelling = canonicalSpelling(word)
+        let dictionaryKey = ProsodyAnalyzer.normalizeWord(spelling)
+        return spelling == dictionaryKey
+            && !PronunciationDictionary.shared.pronunciations(for: dictionaryKey).isEmpty
+    }
+
+    private static func canonicalSpelling(_ word: String) -> String {
+        word.precomposedStringWithCompatibilityMapping.unicodeScalars.reduce(into: "") { result, scalar in
+            switch scalar.value {
+            case 0x2018, 0x2019, 0x02BC, 0xFF07:
+                result.append("'")
+            case 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212:
+                result.append("-")
+            default:
+                result.unicodeScalars.append(scalar)
+            }
+        }.lowercased(with: Locale(identifier: "en_US_POSIX"))
+    }
+}
+
 nonisolated enum ProsodyAnalyzer {
     private static let vowels: Set<String> = [
         "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY",

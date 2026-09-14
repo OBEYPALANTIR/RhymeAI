@@ -139,7 +139,11 @@ nonisolated enum GGUFModelCatalog {
         return directory
     }
 
-    static func validateFile(at url: URL, against model: GGUFModelDescriptor) throws {
+    static func validateFile(
+        at url: URL,
+        against model: GGUFModelDescriptor,
+        cancellationCheck: () throws -> Void = {}
+    ) throws {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         let fileBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         guard fileBytes == model.expectedBytes else {
@@ -150,6 +154,7 @@ nonisolated enum GGUFModelCatalog {
         defer { try? handle.close() }
         var hasher = SHA256()
         while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+            try cancellationCheck()
             hasher.update(data: data)
         }
         let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
@@ -242,7 +247,7 @@ nonisolated enum GGUFModelSelection {
 
 /// Minimal interface both the llama.cpp-backed implementation and the
 /// compile-time stub must satisfy.
-nonisolated protocol LocalGGUFRunner: AnyObject {
+nonisolated protocol LocalGGUFRunner: AnyObject, Sendable {
     /// True after a successful loadModel call.
     var isLoaded: Bool { get }
 
@@ -253,6 +258,12 @@ nonisolated protocol LocalGGUFRunner: AnyObject {
     func generate(prompt: String) async throws -> String
 
     func generate(prompt: String, loading filePath: String) async throws -> String
+
+    func generate(
+        prompt: String,
+        loading filePath: String,
+        onChunk: @escaping @Sendable (String) -> Void
+    ) async throws -> String
 
     /// Release native resources. Safe to call when not loaded.
     func unload() async
@@ -272,7 +283,7 @@ nonisolated func makeLocalGGUFRunner() -> LocalGGUFRunner {
 
 // MARK: - Stub (always compiled, used when llama.cpp SPM package is absent)
 
-nonisolated final class GGUFModelStub: LocalGGUFRunner {
+nonisolated final class GGUFModelStub: LocalGGUFRunner, @unchecked Sendable {
     var isLoaded: Bool { false }
 
     func loadModel(filePath: String) async throws {
@@ -288,6 +299,15 @@ nonisolated final class GGUFModelStub: LocalGGUFRunner {
     }
 
     func generate(prompt: String, loading filePath: String) async throws -> String {
+        try await loadModel(filePath: filePath)
+        return try await generate(prompt: prompt)
+    }
+
+    func generate(
+        prompt: String,
+        loading filePath: String,
+        onChunk: @escaping @Sendable (String) -> Void
+    ) async throws -> String {
         try await loadModel(filePath: filePath)
         return try await generate(prompt: prompt)
     }
@@ -316,6 +336,112 @@ nonisolated enum GGUFPromptFormat: Equatable, Sendable {
 }
 
 nonisolated enum GGUFModelService {
+    struct GenerationTrace {
+        let seed: UInt32
+        let tokenizerArchitecture: String
+        let tokenizerEnvelope: String
+        let tokenizerChatTemplateSHA256: String
+        let terminationReason: String
+        let userPromptSHA256: String
+        let renderedPromptSHA256: String
+        let promptTokenCount: Int
+        let modelLoadSeconds: Double
+    }
+
+    private final class TraceStore: @unchecked Sendable {
+        private let lock = NSLock()
+        private var tokenizerArchitecture = ""
+        private var tokenizerEnvelope = ""
+        private var tokenizerChatTemplateSHA256 = ""
+        private var seed: UInt32?
+        private var terminationReason = "notRun"
+        private var userPromptSHA256 = ""
+        private var renderedPromptSHA256 = ""
+        private var promptTokenCount = 0
+        private var modelLoadSeconds = 0.0
+
+        func setTokenizer(architecture: String, envelope: String, chatTemplate: String) {
+            lock.lock()
+            tokenizerArchitecture = architecture
+            tokenizerEnvelope = envelope
+            tokenizerChatTemplateSHA256 = SHA256.hash(data: Data(chatTemplate.utf8))
+                .map { String(format: "%02x", $0) }
+                .joined()
+            lock.unlock()
+        }
+
+        func begin(seed: UInt32, userPrompt: String, renderedPrompt: String, tokens: Int, modelLoadSeconds: Double) {
+            lock.lock()
+            self.seed = seed
+            self.userPromptSHA256 = SHA256.hash(data: Data(userPrompt.utf8)).map { String(format: "%02x", $0) }.joined()
+            self.renderedPromptSHA256 = SHA256.hash(data: Data(renderedPrompt.utf8)).map { String(format: "%02x", $0) }.joined()
+            self.promptTokenCount = tokens
+            self.modelLoadSeconds = modelLoadSeconds
+            terminationReason = "running"
+            lock.unlock()
+        }
+
+        func finish(reason: String) {
+            lock.lock()
+            terminationReason = reason
+            lock.unlock()
+        }
+
+        func value() -> GenerationTrace? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let seed,
+                  !tokenizerArchitecture.isEmpty,
+                  !tokenizerEnvelope.isEmpty,
+                  !tokenizerChatTemplateSHA256.isEmpty else { return nil }
+            return GenerationTrace(
+                seed: seed,
+                tokenizerArchitecture: tokenizerArchitecture,
+                tokenizerEnvelope: tokenizerEnvelope,
+                tokenizerChatTemplateSHA256: tokenizerChatTemplateSHA256,
+                terminationReason: terminationReason,
+                userPromptSHA256: userPromptSHA256,
+                renderedPromptSHA256: renderedPromptSHA256,
+                promptTokenCount: promptTokenCount,
+                modelLoadSeconds: modelLoadSeconds
+            )
+        }
+    }
+
+    private static let traceStore = TraceStore()
+    static let engineVersion = "b9949"
+    static let contextLength: UInt32 = 2_048
+    static let generationTimeoutSeconds: Double = 120
+    static let maxResponseCharacters = 4_096
+    static let samplerTopK: Int32 = 40
+    static let samplerTopP: Float = 0.95
+    static let samplerTemperature: Float = 0.8
+    static let addSpecialTokens = true
+    static let parseSpecialTokens = true
+    static let cachePolicy = "clear_kv_per_request_keep_model_resident"
+
+    static var lastGenerationTrace: GenerationTrace? { traceStore.value() }
+
+    static func recordTokenizerMetadata(
+        architecture: String,
+        format: GGUFPromptFormat,
+        chatTemplate: String
+    ) {
+        traceStore.setTokenizer(
+            architecture: architecture,
+            envelope: format == .gemma4 ? "gemma4" : "gemmaLegacy",
+            chatTemplate: chatTemplate
+        )
+    }
+
+    static func recordGenerationStarted(seed: UInt32, userPrompt: String, renderedPrompt: String, tokens: Int, modelLoadSeconds: Double) {
+        traceStore.begin(seed: seed, userPrompt: userPrompt, renderedPrompt: renderedPrompt, tokens: tokens, modelLoadSeconds: modelLoadSeconds)
+    }
+
+    static func recordGenerationFinished(reason: String) {
+        traceStore.finish(reason: reason)
+    }
+
     /// True only when the llama.cpp engine is linked into this target.
     static var isEngineAvailable: Bool {
 #if canImport(llama)
@@ -378,11 +504,6 @@ import llama
 /// synchronously from any thread.
 actor GGUFLlamaService: LocalGGUFRunner {
 
-    // Match Android's constants (LocalModelService.kt).
-    private static let contextLength: UInt32 = 2048
-    private static let generationTimeoutSeconds: Double = 120
-    private static let maxResponseChars = 4096
-
     /// Process-wide backend init, executed once on first model load.
     private static let backendReady: Void = llama_backend_init()
 
@@ -404,6 +525,18 @@ actor GGUFLlamaService: LocalGGUFRunner {
     nonisolated var isLoaded: Bool { loadedFlag.get() }
 
     func loadModel(filePath: String) async throws {
+        await acquireTransaction()
+        defer { releaseTransaction() }
+        let cancelled = LockedBool()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try loadModelNative(filePath: filePath, cancelled: cancelled)
+        } onCancel: {
+            cancelled.set(true)
+        }
+    }
+
+    private func loadModelNative(filePath: String, cancelled: LockedBool) throws {
         // Idempotent: reloading the same file is a no-op so callers can call
         // this unconditionally before each request.
         if loadedPath == filePath, model != nil { return }
@@ -412,26 +545,39 @@ actor GGUFLlamaService: LocalGGUFRunner {
 
         let fileURL = URL(fileURLWithPath: filePath)
         if let descriptor = GGUFModelCatalog.descriptor(fileName: fileURL.lastPathComponent) {
-            try await Task.detached(priority: .userInitiated) {
-                try GGUFModelCatalog.validateFile(at: fileURL, against: descriptor)
-            }.value
+            try GGUFModelCatalog.validateFile(
+                at: fileURL,
+                against: descriptor,
+                cancellationCheck: { try Task.checkCancellation() }
+            )
         } else if GGUFCustomModelRegistry.contains(fileName: fileURL.lastPathComponent) {
             try GGUFModelCatalog.validateCustomFile(at: fileURL)
         } else {
             throw AIServiceError.localModelUnavailable(reason: "This GGUF model is not registered with RhymeAI.")
         }
 
+        try Task.checkCancellation()
         var modelParams = llama_model_default_params()
+        modelParams.progress_callback_user_data = Unmanaged.passUnretained(cancelled).toOpaque()
+        modelParams.progress_callback = { _, data in
+            guard let data else { return false }
+            return !Unmanaged<LockedBool>.fromOpaque(data).takeUnretainedValue().get()
+        }
 #if targetEnvironment(simulator)
         // The simulator Metal device corrupts Gemma4 output; its CPU backend is verified.
         modelParams.n_gpu_layers = 0
 #endif
         guard let loadedModel = llama_model_load_from_file(filePath, modelParams) else {
+            try Task.checkCancellation()
             throw AIServiceError.localModelUnavailable(
                 reason: "Failed to load GGUF model at \(filePath). File may be corrupt or incompatible."
             )
         }
 
+        if cancelled.get() {
+            llama_model_free(loadedModel)
+            throw CancellationError()
+        }
         let architectureLength = llama_model_meta_val_str(loadedModel, "general.architecture", nil, 0)
         guard architectureLength > 0,
               let template = llama_model_chat_template(loadedModel, nil) else {
@@ -440,17 +586,19 @@ actor GGUFLlamaService: LocalGGUFRunner {
         }
         var architecture = [CChar](repeating: 0, count: Int(architectureLength) + 1)
         llama_model_meta_val_str(loadedModel, "general.architecture", &architecture, architecture.count)
+        let architectureName = String(cString: architecture)
+        let chatTemplate = String(cString: template)
         guard let format = GGUFPromptFormat.resolve(
-            architecture: String(cString: architecture),
-            chatTemplate: String(cString: template)
+            architecture: architectureName,
+            chatTemplate: chatTemplate
         ) else {
             llama_model_free(loadedModel)
             throw AIServiceError.localModelUnavailable(reason: "The selected GGUF chat format is not supported. Choose a Gemma model with its original chat template.")
         }
 
         var ctxParams = llama_context_default_params()
-        ctxParams.n_ctx = Self.contextLength
-        ctxParams.n_batch = Self.contextLength
+        ctxParams.n_ctx = GGUFModelService.contextLength
+        ctxParams.n_batch = GGUFModelService.contextLength
         let threads = Int32(max(1, ProcessInfo.processInfo.processorCount / 2))
         ctxParams.n_threads = threads
         ctxParams.n_threads_batch = threads
@@ -464,15 +612,42 @@ actor GGUFLlamaService: LocalGGUFRunner {
         self.context = ctx
         self.loadedPath = filePath
         self.promptFormat = format
+        GGUFModelService.recordTokenizerMetadata(
+            architecture: architectureName,
+            format: format,
+            chatTemplate: chatTemplate
+        )
         loadedFlag.set(true)
     }
 
     func generate(prompt: String) async throws -> String {
+        await acquireTransaction()
+        defer { releaseTransaction() }
+        let cancelled = LockedBool()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await generateText(prompt: prompt, onChunk: nil, cancelled: cancelled, modelLoadSeconds: 0)
+        } onCancel: {
+            cancelled.set(true)
+        }
+    }
+
+    private func generateText(
+        prompt: String,
+        onChunk: (@Sendable (String) -> Void)?,
+        cancelled: LockedBool,
+        modelLoadSeconds: Double
+    ) async throws -> String {
         guard let ctx = context, let model = model, let promptFormat else {
             throw AIServiceError.localModelUnavailable(
                 reason: "No GGUF model loaded. Download a Gemma model in Settings."
             )
         }
+        llama_set_abort_callback(ctx, { data in
+            guard let data else { return true }
+            return Unmanaged<LockedBool>.fromOpaque(data).takeUnretainedValue().get()
+        }, Unmanaged.passUnretained(cancelled).toOpaque())
+        defer { llama_set_abort_callback(ctx, nil, nil) }
         let vocab = llama_model_get_vocab(model)
 
         // Each request is a fresh single-turn conversation: drop KV state.
@@ -488,7 +663,7 @@ actor GGUFLlamaService: LocalGGUFRunner {
         guard nTokens > 0 else {
             throw AIServiceError.localModelUnavailable(reason: "Tokenization produced no tokens.")
         }
-        guard nTokens < Int32(Self.contextLength) else {
+        guard nTokens < Int32(GGUFModelService.contextLength) else {
             throw AIServiceError.localModelUnavailable(
                 reason: "Prompt is too long for the local model. Shorten the lyric context."
             )
@@ -496,17 +671,28 @@ actor GGUFLlamaService: LocalGGUFRunner {
         tokens.removeSubrange(Int(nTokens)...)
 
         // One sampler chain per request — the dist sampler carries RNG state.
-        let sampler = try makeSampler()
+        let seed = UInt32.random(in: 0..<UInt32.max)
+        GGUFModelService.recordGenerationStarted(seed: seed, userPrompt: prompt, renderedPrompt: fullPrompt, tokens: Int(nTokens), modelLoadSeconds: modelLoadSeconds)
+        var terminationReason = "error"
+        defer {
+            GGUFModelService.recordGenerationFinished(
+                reason: Task.isCancelled ? "cancelled" : terminationReason
+            )
+        }
+        let sampler = try makeSampler(seed: seed)
         defer { llama_sampler_free(sampler) }
 
         var resultBytes: [UInt8] = []
+        var chunkBytes: [UInt8] = []
         var pending = tokens // next batch to decode; positions auto-tracked (pos == NULL)
         var nPast = nTokens
-        let deadline = Date().addingTimeInterval(Self.generationTimeoutSeconds)
+        let deadline = Date().addingTimeInterval(GGUFModelService.generationTimeoutSeconds)
 
-        while nPast < Int32(Self.contextLength), resultBytes.count < Self.maxResponseChars {
-            guard !Task.isCancelled else { break }
+        generationLoop: while nPast < Int32(GGUFModelService.contextLength),
+              resultBytes.count < GGUFModelService.maxResponseCharacters {
+            try Task.checkCancellation()
             guard Date() < deadline else {
+                terminationReason = "deadline"
                 throw AIServiceError.localModelUnavailable(
                     reason: "Local model took too long to respond. Try a smaller model or shorten the lyric context."
                 )
@@ -515,12 +701,16 @@ actor GGUFLlamaService: LocalGGUFRunner {
             let status = pending.withUnsafeMutableBufferPointer { buffer in
                 llama_decode(ctx, llama_batch_get_one(buffer.baseAddress, Int32(buffer.count)))
             }
+            try Task.checkCancellation()
             guard status == 0 else {
                 throw AIServiceError.localModelUnavailable(reason: "Failed to evaluate tokens.")
             }
 
             let nextToken = llama_sampler_sample(sampler, ctx, -1)
-            if llama_vocab_is_eog(vocab, nextToken) { break }
+            if llama_vocab_is_eog(vocab, nextToken) {
+                terminationReason = "eog"
+                break
+            }
 
             var piece = [CChar](repeating: 0, count: 128)
             var pieceLength = llama_token_to_piece(vocab, nextToken, &piece, Int32(piece.count), 0, false)
@@ -529,7 +719,17 @@ actor GGUFLlamaService: LocalGGUFRunner {
                 pieceLength = llama_token_to_piece(vocab, nextToken, &piece, Int32(piece.count), 0, false)
             }
             if pieceLength > 0 {
-                resultBytes.append(contentsOf: piece.prefix(Int(pieceLength)).map { UInt8(bitPattern: $0) })
+                let bytes = piece.prefix(Int(pieceLength)).map { UInt8(bitPattern: $0) }
+                guard resultBytes.count + bytes.count <= GGUFModelService.maxResponseCharacters else {
+                    terminationReason = "maximumResponseLength"
+                    break generationLoop
+                }
+                resultBytes.append(contentsOf: bytes)
+                chunkBytes.append(contentsOf: bytes)
+                if let chunk = String(bytes: chunkBytes, encoding: .utf8) {
+                    onChunk?(chunk)
+                    chunkBytes.removeAll(keepingCapacity: true)
+                }
             }
 
             pending = [nextToken]
@@ -537,16 +737,41 @@ actor GGUFLlamaService: LocalGGUFRunner {
             await Task.yield()
         }
 
-        return GGUFModelService.stripMarkers(String(decoding: resultBytes, as: UTF8.self))
+        if terminationReason == "error" {
+            terminationReason = resultBytes.count >= GGUFModelService.maxResponseCharacters
+                ? "maximumResponseLength"
+                : "contextExhausted"
+        }
+
+        try Task.checkCancellation()
+        guard terminationReason == "eog", let response = String(bytes: resultBytes, encoding: .utf8) else {
+            throw AIServiceError.decodingError
+        }
+        return response
     }
 
     func generate(prompt: String, loading filePath: String) async throws -> String {
+        try await generate(prompt: prompt, loading: filePath, onChunk: { _ in })
+    }
+
+    func generate(
+        prompt: String,
+        loading filePath: String,
+        onChunk: @escaping @Sendable (String) -> Void
+    ) async throws -> String {
         await acquireTransaction()
         defer { releaseTransaction() }
-        try Task.checkCancellation()
-        try await loadModel(filePath: filePath)
-        try Task.checkCancellation()
-        return try await generate(prompt: prompt)
+        let cancelled = LockedBool()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let loadStarted = Date()
+            try loadModelNative(filePath: filePath, cancelled: cancelled)
+            let modelLoadSeconds = Date().timeIntervalSince(loadStarted)
+            try Task.checkCancellation()
+            return try await generateText(prompt: prompt, onChunk: onChunk, cancelled: cancelled, modelLoadSeconds: modelLoadSeconds)
+        } onCancel: {
+            cancelled.set(true)
+        }
     }
 
     func unload() async {
@@ -583,14 +808,14 @@ actor GGUFLlamaService: LocalGGUFRunner {
         }
     }
 
-    private func makeSampler() throws -> UnsafeMutablePointer<llama_sampler> {
+    private func makeSampler(seed: UInt32) throws -> UnsafeMutablePointer<llama_sampler> {
         guard let chain = llama_sampler_chain_init(llama_sampler_chain_default_params()) else {
             throw AIServiceError.localModelUnavailable(reason: "Failed to create llama sampler.")
         }
-        llama_sampler_chain_add(chain, llama_sampler_init_top_k(40))
-        llama_sampler_chain_add(chain, llama_sampler_init_top_p(0.95, 1))
-        llama_sampler_chain_add(chain, llama_sampler_init_temp(0.8))
-        llama_sampler_chain_add(chain, llama_sampler_init_dist(UInt32.random(in: 0..<UInt32.max)))
+        llama_sampler_chain_add(chain, llama_sampler_init_top_k(GGUFModelService.samplerTopK))
+        llama_sampler_chain_add(chain, llama_sampler_init_top_p(GGUFModelService.samplerTopP, 1))
+        llama_sampler_chain_add(chain, llama_sampler_init_temp(GGUFModelService.samplerTemperature))
+        llama_sampler_chain_add(chain, llama_sampler_init_dist(seed))
         return chain
     }
 }
