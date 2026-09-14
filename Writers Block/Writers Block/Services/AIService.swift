@@ -117,7 +117,7 @@ struct AIService {
         modelId: String,
         theme: String,
         lyrics: String,
-        stanzaLines: [String] = [],
+        stanzaLines: [String]? = nil,
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         rhymeScheme: String,
@@ -209,7 +209,7 @@ struct AIService {
         modelId: String,
         theme: String,
         lyrics: String,
-        stanzaLines: [String] = [],
+        stanzaLines: [String]? = nil,
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         rhymeScheme: String,
@@ -326,7 +326,7 @@ struct AIService {
             while (requiresExactCount || accepted < rawLimit), let newlineIdx = buffer.firstIndex(of: "\n") {
                 let rawLine = String(buffer[..<newlineIdx])
                 buffer = String(buffer[buffer.index(after: newlineIdx)...])
-                if rejectsLocalArtifacts, containsGeneratedMarkupOrControl(rawLine) {
+                if rejectsLocalArtifacts, SynonymSanitizer.containsMarkupOrControl(rawLine) {
                     throw AIServiceError.decodingError
                 }
                 guard let cleaned = rejectsLocalArtifacts ? validatedLocalSuggestionLine(rawLine) : cleanSuggestionLine(rawLine) else { continue }
@@ -347,7 +347,7 @@ struct AIService {
 
         if requiresExactCount || (emitted < Self.suggestionCount && accepted < rawLimit) {
             let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            if rejectsLocalArtifacts, containsGeneratedMarkupOrControl(remaining) {
+            if rejectsLocalArtifacts, SynonymSanitizer.containsMarkupOrControl(remaining) {
                 throw AIServiceError.decodingError
             }
             if !remaining.isEmpty, let cleaned = rejectsLocalArtifacts ? validatedLocalSuggestionLine(remaining) : cleanSuggestionLine(remaining) {
@@ -489,12 +489,22 @@ struct AIService {
         return cleaned
     }
 
+    private func validatedLocalLyricLine(_ line: String, maxLength: Int) -> String? {
+        guard !SynonymSanitizer.containsMarkupOrControl(line),
+              line.rangeOfCharacter(from: CharacterSet(charactersIn: "#[]*\u{0060}_{}")) == nil,
+              !line.hasPrefix(">"),
+              line.range(
+                of: #"^(?:task|theme|rhyme scheme|lyrics context|rules|complexity|current song section|instruction|action|context|assistant|model|user|rewrite|replacement|answer|output|verse|chorus|bridge):"#,
+                options: [.regularExpression, .caseInsensitive]
+              ) == nil,
+              cleanLocalOutputLine(line, maxLength: maxLength) == line else { return nil }
+        return line
+    }
+
     private func validatedLocalSuggestionLine(_ raw: String) -> String? {
         let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !containsGeneratedMarkupOrControl(line),
-              !line.hasPrefix("["),
-              line.range(of: #"^(?:[-*•]|\d+[.)]|(?:assistant|model|user|complexity|current song section|instruction|context):)"#, options: [.regularExpression, .caseInsensitive]) == nil,
-              let cleaned = cleanLocalOutputLine(line, maxLength: 140),
+        guard let cleaned = validatedLocalLyricLine(line, maxLength: 140),
+              !cleaned.isEmpty,
               cleaned.split(whereSeparator: \.isWhitespace).count < 16 else { return nil }
         return cleaned
     }
@@ -504,7 +514,7 @@ struct AIService {
         lyrics: String,
         limit: Int
     ) throws -> [String] {
-        guard !containsGeneratedMarkupOrControl(raw) else {
+        guard !SynonymSanitizer.containsMarkupOrControl(raw) else {
             throw AIServiceError.decodingError
         }
         let excludedKeys = existingSuggestionKeys(in: lyrics)
@@ -929,7 +939,7 @@ struct AIService {
     private func buildLocalPrompt(
         theme: String,
         lyrics: String,
-        stanzaLines: [String],
+        stanzaLines: [String]?,
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         rhymeScheme: String,
@@ -1013,11 +1023,11 @@ struct AIService {
 
     private func localLyricsContext(
         lyrics: String,
-        stanzaLines: [String],
+        stanzaLines: [String]?,
         useWholeSongContext: Bool
     ) -> String {
         if useWholeSongContext { return lyrics }
-        let stanza = stanzaLines.joined(separator: "\n")
+        let stanza = (stanzaLines ?? lyrics.components(separatedBy: .newlines)).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return stanza
     }
@@ -1033,9 +1043,16 @@ struct AIService {
             model: model,
             instructions: "You are an expert songwriter and lyricist. Return concise lyric line suggestions only."
         )
-        let response = try await session.respond(to: prompt, options: Self.localGenerationOptions(maxTokens: 256))
+        // Explicit token caps silently truncate Foundation Models responses.
+        // Require natural completion so a cut-off tail cannot become a lyric.
+        let response = try await session.respond(to: prompt)
         try Task.checkCancellation()
         return try validatedLocalSuggestions(response.content, lyrics: lyrics, limit: limit)
+    }
+
+    static func localSnapshotDelta(previous: String, current: String) throws -> String {
+        guard current.utf8.starts(with: previous.utf8) else { throw AIServiceError.decodingError }
+        return String(decoding: current.utf8.dropFirst(previous.utf8.count), as: UTF8.self)
     }
 
     @available(iOS 26.0, *)
@@ -1052,10 +1069,9 @@ struct AIService {
                         instructions: "You are an expert songwriter and lyricist. Return concise lyric line suggestions only."
                     )
                     var previous = ""
-                    for try await snapshot in session.streamResponse(to: prompt, options: Self.localGenerationOptions(maxTokens: 256)) {
+                    for try await snapshot in session.streamResponse(to: prompt) {
                         try Task.checkCancellation()
-                        guard snapshot.content.hasPrefix(previous) else { throw AIServiceError.decodingError }
-                        continuation.yield(String(snapshot.content.dropFirst(previous.count)))
+                        continuation.yield(try Self.localSnapshotDelta(previous: previous, current: snapshot.content))
                         previous = snapshot.content
                     }
                     try Task.checkCancellation()
@@ -1288,7 +1304,7 @@ struct AIService {
     func buildLocalSuggestionPromptForTest(
         theme: String,
         lyrics: String,
-        stanzaLines: [String] = [],
+        stanzaLines: [String]? = nil,
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         rhymeScheme: String = "AABB",
@@ -1488,15 +1504,7 @@ struct AIService {
             throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
         }
         let session = LanguageModelSession(model: model, instructions: instructions)
-        return try await session.respond(to: prompt, options: Self.localGenerationOptions(maxTokens: 256)).content
-    }
-
-    /// Unbounded on-device generation can ramble until it overflows the 4k
-    /// context window (observed: a 55s harder-rhyme rewrite dying at 4089
-    /// tokens). Capping the response keeps latency and the window in check.
-    @available(iOS 26.0, *)
-    private static func localGenerationOptions(maxTokens: Int) -> GenerationOptions {
-        GenerationOptions(maximumResponseTokens: maxTokens)
+        return try await session.respond(to: prompt).content
     }
 
     // MARK: - Rewrite
@@ -1749,7 +1757,7 @@ struct AIService {
             )
             let content: String
             do {
-                content = try await session.respond(to: prompt, options: Self.localGenerationOptions(maxTokens: 256)).content
+                content = try await session.respond(to: prompt).content
             } catch {
                 throw Self.mapLocalGenerationError(error)
             }
@@ -1772,7 +1780,7 @@ struct AIService {
             )
             let content: String
             do {
-                content = try await session.respond(to: prompt, options: Self.localGenerationOptions(maxTokens: 32)).content
+                content = try await session.respond(to: prompt).content
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -2138,13 +2146,13 @@ struct AIService {
 
     func validatedLocalWord(_ raw: String) throws -> String {
         let word = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !containsGeneratedMarkupOrControl(word),
+        guard !SynonymSanitizer.containsMarkupOrControl(word),
               LexicalWordValidator.isKnownSpelling(word) else { throw AIServiceError.decodingError }
         return word
     }
 
     func validatedLocalPassage(_ raw: String, selection: String) throws -> String {
-        guard !containsGeneratedMarkupOrControl(raw) else { throw AIServiceError.decodingError }
+        guard !SynonymSanitizer.containsMarkupOrControl(raw) else { throw AIServiceError.decodingError }
         let passage = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let lines = passage.components(separatedBy: .newlines)
         let expected = selection.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).count
@@ -2152,28 +2160,11 @@ struct AIService {
             throw AIServiceError.incompleteResponse(expected: expected, actual: lines.count)
         }
         guard !passage.isEmpty, normalizeSuggestionKey(passage) != normalizeSuggestionKey(selection),
-              lines.allSatisfy({ $0.isEmpty || cleanLocalOutputLine($0, maxLength: 240) == $0 }),
+              lines.allSatisfy({ $0.isEmpty || validatedLocalLyricLine($0, maxLength: 240) != nil }),
               !lines.contains(where: { $0.hasPrefix("[") }) else { throw AIServiceError.decodingError }
         return passage
     }
 
-    private func containsGeneratedMarkupOrControl(_ text: String) -> Bool {
-        if text.unicodeScalars.contains(where: { scalar in
-            CharacterSet.controlCharacters.contains(scalar)
-                && scalar != "\n"
-                && scalar != "\r"
-                && scalar != "\t"
-        }) {
-            return true
-        }
-        if text.contains("```") || containsLocalControlMarker(text) {
-            return true
-        }
-        return text.range(
-            of: #"<\s*[/A-Za-z|]"#,
-            options: .regularExpression
-        ) != nil
-    }
 
     // MARK: - HTTP
 

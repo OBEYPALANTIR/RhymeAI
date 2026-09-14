@@ -5,7 +5,7 @@ import Testing
 @MainActor
 struct LocalGenerationBoundaryTests {
     @Test func productionRequestUsesEarlierCursorStanza() {
-        let viewModel = EditorViewModel()
+        let viewModel = EditorViewModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         viewModel.rhymeScheme = .abab
         viewModel.rhymeComplexity = .complex
         viewModel.lyrics = "[Verse 1]\nfirst glow\nsecond sky\nthird show\n\n[Chorus]\nlate refrain"
@@ -24,7 +24,7 @@ struct LocalGenerationBoundaryTests {
     }
 
     @Test func productionRequestKeepsEmptyEarlierStanzaEmpty() {
-        let viewModel = EditorViewModel()
+        let viewModel = EditorViewModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         viewModel.lyrics = "[Verse 1]\n\n[Chorus]\nlate refrain"
         viewModel.cursorPosition = ("[Verse 1]\n" as NSString).length
 
@@ -36,7 +36,7 @@ struct LocalGenerationBoundaryTests {
     }
 
     @Test func productionRequestPreservesNewSoundControls() {
-        let viewModel = EditorViewModel()
+        let viewModel = EditorViewModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         viewModel.rhymeScheme = .abab
         viewModel.rhymeComplexity = .simple
         viewModel.lyrics = "[Verse 1]\nfirst glow\nsecond sky"
@@ -111,7 +111,10 @@ struct LocalGenerationBoundaryTests {
             "Complexity: Simple. Keep the language clear",
             "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen",
             "[Verse 2]",
-            "assistant: A borrowed line"
+            "assistant: A borrowed line",
+            "# Verse 2",
+            "Moon **shines** above",
+            "Moon _shines_ above"
         ]
         for candidate in invalid {
             var displayed: [String] = []
@@ -172,7 +175,7 @@ struct LocalGenerationBoundaryTests {
         for raw in ["gleam and shine", "zqxvplight", "<end_", "word: gleam"] {
             #expect(throws: AIServiceError.self) { try service.validatedLocalWord(raw) }
         }
-        for raw in ["One line", "One\nTwo\nThree", "<script>first\nsecond", "Here are your lines\nsecond", "Old first\nOld last"] {
+        for raw in ["One line", "One\nTwo\nThree", "<script>first\nsecond", "Here are your lines\nsecond", "Old first\nOld last", "Instruction: use clearer language\nSecond line", "Action: Rephrase\nSecond line", "Current song section: Verse.\nSecond line"] {
             #expect(throws: AIServiceError.self) {
                 try service.validatedLocalPassage(raw, selection: "Old first\nOld last")
             }
@@ -193,6 +196,17 @@ struct LocalGenerationBoundaryTests {
             #expect(prompt.contains("Complexity: Complex"))
             #expect(prompt.contains(wholeSong ? "FULL SONG CONTEXT" : "FIRST CONTEXT DETAIL"))
             #expect(!prompt.contains(wholeSong ? "quiet harbor" : "FULL SONG CONTEXT"))
+        }
+    }
+
+
+    @Test func cumulativeLocalSnapshotsPreserveCombiningScalars() throws {
+        let previous = "cafe"
+        let next = "cafe\u{301}"
+        #expect(previous + (try AIService.localSnapshotDelta(previous: previous, current: next)) == next)
+        #expect(try AIService.localSnapshotDelta(previous: "🌒", current: "🌒\nDawn") == "\nDawn")
+        #expect(throws: AIServiceError.self) {
+            try AIService.localSnapshotDelta(previous: "old", current: "new")
         }
     }
 

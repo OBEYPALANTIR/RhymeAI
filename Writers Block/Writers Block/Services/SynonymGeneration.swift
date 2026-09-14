@@ -233,7 +233,7 @@ enum SynonymSanitizer {
         LexicalWordValidator.isKnownSpelling(candidate)
     }
 
-    private static func containsMarkupOrControl(_ raw: String) -> Bool {
+    static func containsMarkupOrControl(_ raw: String) -> Bool {
         if raw.unicodeScalars.contains(where: { scalar in
             CharacterSet.controlCharacters.contains(scalar)
                 && scalar != "\n"
