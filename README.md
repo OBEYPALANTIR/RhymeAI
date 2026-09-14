@@ -55,7 +55,7 @@ stream framing. Both local engines validate complete lines before publishing the
 app gate. In the selected simulator's `ShaydeTree.Writers-Block` preferences, set
 `RhymeAITestNativeRuntimeModelPath` to the accepted E2B GGUF and
 `RhymeAITestNativeRuntimeSourceSHA` to the exact tested commit. The test verifies
-the catalog digest, temporarily links the model if absent, restores its settings,
+the catalog digest, temporarily copies the model if absent, restores its settings,
 and records cold/warm timing, prompt hashes captured at tokenization, and Stop
 quiescence in a retained JSON XCTest attachment. Remove the two test preferences
 afterward. Run it separately from tests that mutate the global engine setting.

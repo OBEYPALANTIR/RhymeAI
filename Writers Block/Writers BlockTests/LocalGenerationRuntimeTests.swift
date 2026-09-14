@@ -14,11 +14,11 @@ final class LocalGenerationRuntimeTests: XCTestCase {
         let sourceSHA = try XCTUnwrap(defaults.string(forKey: "RhymeAITestNativeRuntimeSourceSHA"))
         let descriptor = try XCTUnwrap(GGUFModelCatalog.models.first)
         let modelURL = try GGUFModelCatalog.modelsDirectory(create: true).appendingPathComponent(descriptor.fileName)
-        let ownsLink = !FileManager.default.fileExists(atPath: modelURL.path)
-        if ownsLink {
-            try FileManager.default.createSymbolicLink(atPath: modelURL.path, withDestinationPath: sourcePath)
+        let ownsModel = !FileManager.default.fileExists(atPath: modelURL.path)
+        if ownsModel {
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: sourcePath), to: modelURL)
         }
-        defer { if ownsLink { try? FileManager.default.removeItem(at: modelURL) } }
+        defer { if ownsModel { try? FileManager.default.removeItem(at: modelURL) } }
         try GGUFModelCatalog.validateFile(at: modelURL, against: descriptor)
 
         let keys = ["ggufEngineChoice", "selectedGGUFModelFileName", "synonymLocalRevision"]
@@ -67,7 +67,7 @@ final class LocalGenerationRuntimeTests: XCTestCase {
             XCTAssertEqual(Set(viewModel.suggestions.map(\.text)).count, 6)
             records.append([
                 "phase": phase,
-                "firstValidatedVisibleSeconds": firstVisible ?? -1,
+                "firstValidatedSuggestionSeconds": firstVisible ?? -1,
                 "terminalSeconds": Date().timeIntervalSince(start),
                 "modelLoadSeconds": trace.modelLoadSeconds,
                 "seed": trace.seed,
@@ -128,4 +128,3 @@ final class LocalGenerationRuntimeTests: XCTestCase {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
-
