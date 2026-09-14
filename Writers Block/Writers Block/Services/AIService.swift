@@ -491,7 +491,7 @@ struct AIService {
 
     private func validatedLocalLyricLine(_ line: String, maxLength: Int) -> String? {
         guard !SynonymSanitizer.containsMarkupOrControl(line),
-              line.rangeOfCharacter(from: CharacterSet(charactersIn: "#[]*\u{0060}_{}")) == nil,
+              line.rangeOfCharacter(from: CharacterSet(charactersIn: "#[]*\u{0060}_{}•●‣◦⁃∙")) == nil,
               !line.hasPrefix(">"),
               line.range(
                 of: #"^(?:task|theme|rhyme scheme|lyrics context|rules|complexity|current song section|instruction|action|context|assistant|model|user|rewrite|replacement|answer|output|verse|chorus|bridge):"#,

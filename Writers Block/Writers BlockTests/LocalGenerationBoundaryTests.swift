@@ -210,4 +210,21 @@ struct LocalGenerationBoundaryTests {
         }
     }
 
+
+    @Test func localListBulletsNeverReachSuggestionsOrRewritePreview() async {
+        for bullet in ["•", "●", "‣", "◦", "⁃", "∙", "-", "*"] {
+            let line = "\(bullet) Moonlight settles on the shore"
+            var displayed: [String] = []
+            do {
+                for try await candidate in AIService().validatedLocalSuggestionStreamForTest(chunks: [line + "\n"], lyrics: "") {
+                    displayed.append(candidate)
+                }
+            } catch {}
+            #expect(displayed.isEmpty)
+            #expect(throws: AIServiceError.self) {
+                try AIService().validatedLocalPassage(line, selection: "The moon above")
+            }
+        }
+    }
+
 }
