@@ -1029,7 +1029,7 @@ struct AIService {
         useWholeSongContext: Bool
     ) -> String {
         if useWholeSongContext { return lyrics }
-        let stanza = (stanzaLines ?? lyrics.components(separatedBy: .newlines)).joined(separator: "\n")
+        let stanza = (stanzaLines ?? []).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return stanza
     }
