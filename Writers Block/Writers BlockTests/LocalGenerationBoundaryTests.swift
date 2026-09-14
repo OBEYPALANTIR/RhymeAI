@@ -212,7 +212,7 @@ struct LocalGenerationBoundaryTests {
 
 
     @Test func localListBulletsNeverReachSuggestionsOrRewritePreview() async {
-        for bullet in ["•", "●", "‣", "◦", "⁃", "∙", "-", "*"] {
+        for bullet in ["•", "●", "‣", "◦", "⁃", "∙", "·", "▪", "▫", "⁌", "⁍", "○", "‒", "–", "—", "-", "*", "+", "1.", "2)", "3:", "a)"] {
             let line = "\(bullet) Moonlight settles on the shore"
             var displayed: [String] = []
             do {
@@ -224,6 +224,25 @@ struct LocalGenerationBoundaryTests {
             #expect(throws: AIServiceError.self) {
                 try AIService().validatedLocalPassage(line, selection: "The moon above")
             }
+        }
+    }
+
+    @Test func localMarkdownAndQuoteWrappersNeverReachPreview() async throws {
+        let service = AIService()
+        for line in ["~~Moonlight~~ settles on the shore", "~~~text", "| Moonlight | settles |", "---", "===", "~~~", "“Moonlight settles on the shore”", "‘Moonlight settles on the shore’", "«Moonlight settles on the shore»"] {
+            var displayed: [String] = []
+            do {
+                for try await candidate in service.validatedLocalSuggestionStreamForTest(chunks: [line + "\n"], lyrics: "") {
+                    displayed.append(candidate)
+                }
+            } catch {}
+            #expect(displayed.isEmpty)
+            #expect(throws: AIServiceError.self) {
+                try service.validatedLocalPassage(line, selection: "The moon above")
+            }
+        }
+        for line in ["2 + 2 makes four", "Moonlight—settles on the shore", "I’m waiting by the shore"] {
+            #expect(try service.validatedLocalPassage(line, selection: "The moon above") == line)
         }
     }
 

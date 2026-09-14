@@ -491,8 +491,10 @@ struct AIService {
 
     private func validatedLocalLyricLine(_ line: String, maxLength: Int) -> String? {
         guard !SynonymSanitizer.containsMarkupOrControl(line),
-              line.rangeOfCharacter(from: CharacterSet(charactersIn: "#[]*\u{0060}_{}•●‣◦⁃∙")) == nil,
+              line.rangeOfCharacter(from: CharacterSet(charactersIn: "#[]*\u{0060}_{}~|•●‣◦⁃∙·▪▫⁌⁍○")) == nil,
               !line.hasPrefix(">"),
+              !normalizeSuggestionKey(line).isEmpty,
+              line.range(of: #"^(?:[‒–—]\s+|[A-Za-z][.)]\s+|“.*”$|‘.*’$|«.*»$)"#, options: .regularExpression) == nil,
               line.range(
                 of: #"^(?:task|theme|rhyme scheme|lyrics context|rules|complexity|current song section|instruction|action|context|assistant|model|user|rewrite|replacement|answer|output|verse|chorus|bridge):"#,
                 options: [.regularExpression, .caseInsensitive]
@@ -2080,7 +2082,7 @@ struct AIService {
         if let range = cleaned.range(of: markerPrefix, options: [.regularExpression, .caseInsensitive]) {
             cleaned = String(cleaned[range.upperBound...])
         }
-        if let range = cleaned.range(of: #"^(?:[-*]\s+|\d+[.)\-:]\s*)"#, options: .regularExpression) {
+        if let range = cleaned.range(of: #"^(?:[-*+]\s+|\d+[.)\-:]\s*)"#, options: .regularExpression) {
             cleaned = String(cleaned[range.upperBound...])
         }
         cleaned = cleaned
