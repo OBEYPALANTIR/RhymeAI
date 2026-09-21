@@ -20,7 +20,7 @@ enum SyncIdentity {
 
     nonisolated static func validateFileName(_ value: String) throws {
         let illegal = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
-        guard !value.isEmpty, value.utf8.count <= 240, VoiceMemoService.supportedAudioExtensions.contains((value as NSString).pathExtension.lowercased()),
+        guard !value.isEmpty, value.utf8.count <= 240, VoiceMemoService.supportedAudioExtensions.contains((value as NSString).pathExtension),
               value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.unicodeScalars.contains(where: { illegal.contains($0) }) else {
             throw SyncValidationError.invalidFileName
@@ -234,7 +234,7 @@ struct SyncRecordingManifestEntry: Codable, Equatable, Sendable {
 }
 
 struct SyncBlob: Codable, Equatable, Sendable {
-    static let currentVersion = 2
+    static let currentVersion = 3
     static let driveFileName = "rhymeai-projects.json"
     static let driveMimeType = "application/json"
 
@@ -288,7 +288,7 @@ struct SyncBlob: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try validate()
         try container.encode(version, forKey: .version)
-        if version == 2 { try container.encode(deletions, forKey: .deletions) }
+        if version >= 2 { try container.encode(deletions, forKey: .deletions) }
         try container.encode(projects, forKey: .projects)
         try container.encode(trashed, forKey: .trashed)
         try container.encode(recordings, forKey: .recordings)
@@ -298,7 +298,7 @@ struct SyncBlob: Codable, Equatable, Sendable {
 
     func validate() throws {
         guard (1...Self.currentVersion).contains(version) else { throw SyncValidationError.unsupportedVersion(version) }
-        guard version == 2 || deletions.isEmpty else { throw SyncValidationError.invalidVersionShape }
+        guard version >= 2 || deletions.isEmpty else { throw SyncValidationError.invalidVersionShape }
         for project in projects { try SyncIdentity.validateProjectId(project.id) }
         for project in trashed { try SyncIdentity.validateProjectId(project.id) }
         for entry in recordings { try entry.validate() }
