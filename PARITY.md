@@ -2,6 +2,15 @@
 
 This tracks behavior that must stay aligned between Android and iOS.
 
+## Song recordings
+
+- Open the recording library from the active song's editor. The song selector contains songs only; recording trash remains in Trash Bin.
+- Import M4A, MP3, WAV, or AAC audio into the song selected when the library opens. Imports preserve the original audio bytes, use app-owned storage, and require no microphone permission.
+- Reject empty, unsupported, invalid audio, or files larger than 100 MiB. Cancellation and failed validation remove staged files; duplicate names keep both recordings.
+- Imported formats retain their extension through rename, trash, restore, and backup. Existing M4A backup names remain unchanged.
+- Native Mac follows the same import contract in its existing song-level library; that unfinished app is maintained in a separate worktree from the mobile targets.
+- Validation for this change is tracked separately from historical evidence below. Live cloud backup, store delivery, and native Mac UI acceptance are not established by source or build checks.
+
 ## Provider and key handling
 
 - Android: API keys are read on demand through `MainViewModel.apiKey(provider)`. Debug builds may fall back to `BuildConfig.GEMINI_TEST_KEY` for Gemini only when the secure store is blank.
