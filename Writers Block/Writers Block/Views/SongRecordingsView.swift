@@ -498,6 +498,7 @@ private struct PlayPauseButton: View {
                 .foregroundStyle(rowIsPlaying ? appearance.palette.recording : appearance.palette.action)
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
         }
+        .buttonStyle(.rhymePress)
         .disabled(service.isRecording)
         .accessibilityLabel(rowIsPlaying ? "Pause recording" : "Play recording")
     }
