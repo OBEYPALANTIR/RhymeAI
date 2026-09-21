@@ -22,8 +22,7 @@ struct MacVoiceMemosView: View {
                 }
                 .disabled(isImporting)
                 Button("Import Recording") {
-                    guard let id = editor.ensureProjectForRecording() else { return }
-                    importProjectId = id
+                    importProjectId = editor.currentProjectId
                     importError = nil
                     showingImporter = true
                 }
@@ -60,9 +59,9 @@ struct MacVoiceMemosView: View {
         }.padding(24).frame(width: 410)
         .fileImporter(isPresented: $showingImporter,
                       allowedContentTypes: VoiceMemoService.supportedAudioExtensions.sorted().compactMap { UTType(filenameExtension: $0) }) { result in
-            guard let projectId = importProjectId else { return }
             switch result {
             case .success(let source):
+                guard let projectId = importProjectId ?? editor.ensureProjectForRecording() else { return }
                 isImporting = true
                 importTask = Task { @MainActor in
                     defer { isImporting = false; importTask = nil }
