@@ -17,7 +17,8 @@ enum SyncBlobCryptoError: Error, Equatable {
 
 enum SyncBlobCrypto {
     private static let magic = Data("RAI1".utf8)
-    private static let manifestMagic = Data("RAI2".utf8)
+    private static let legacyManifestMagic = Data("RAI2".utf8)
+    private static let manifestMagic = Data("RAI3".utf8)
     private static let saltByteCount = 16
     private static let ivByteCount = 12
     private static let tagByteCount = 16
@@ -48,13 +49,18 @@ enum SyncBlobCrypto {
     static func openManifest(_ envelope: Data, passphrase: String) throws -> SyncBlob {
         guard envelope.count >= magic.count else { throw SyncBlobCryptoError.truncatedEnvelope }
         let envelopeMagic = Data(envelope.prefix(magic.count))
-        guard envelopeMagic == magic || envelopeMagic == manifestMagic else {
+        let expectedVersion: Int
+        switch envelopeMagic {
+        case magic: expectedVersion = 1
+        case legacyManifestMagic: expectedVersion = 2
+        case manifestMagic: expectedVersion = 3
+        default:
             if envelopeMagic.prefix(3) == Data("RAI".utf8) { throw SyncBlobCryptoError.unsupportedEnvelopeVersion }
             throw SyncBlobCryptoError.unrecognizedEnvelope
         }
         let plaintext = try open(envelope, passphrase: passphrase, magic: envelopeMagic)
         let blob = try SyncJSON.decoder.decode(SyncBlob.self, from: plaintext)
-        guard blob.version == (envelopeMagic == magic ? 1 : 2) else { throw SyncBlobCryptoError.manifestVersionMismatch }
+        guard blob.version == expectedVersion else { throw SyncBlobCryptoError.manifestVersionMismatch }
         return blob
     }
 
