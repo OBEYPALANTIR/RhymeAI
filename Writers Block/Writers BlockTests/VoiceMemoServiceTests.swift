@@ -47,53 +47,50 @@ struct VoiceMemoServiceTests {
         #expect(folder.lastPathComponent == projectId)
     }
 
-    // MARK: - Listing sorted by name (= creation date)
+    // MARK: - File-date ordering
 
-    @Test func memosReturnsSortedByFilename() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("VoiceMemoTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        // Write three files with timestamps in non-sequential write order.
-        let names = ["1000.m4a", "3000.m4a", "2000.m4a"]
-        for name in names {
-            FileManager.default.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data())
+    @Test @MainActor func memosReturnNewestFirstAndRenamePreservesDateOrder() throws {
+        let projectId = "memo-date-order-" + UUID().uuidString
+        let folder = VoiceMemoService.memoFolder(for: projectId)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { VoiceMemoService.deleteMemosFolder(for: projectId) }
+        let oldest = folder.appendingPathComponent("Zulu.m4a")
+        let middle = folder.appendingPathComponent("1700000000000.wav")
+        let newest = folder.appendingPathComponent("Alpha.mp3")
+        for (url, timestamp) in [(oldest, 1_700_000_000.0), (middle, 1_700_000_100.0), (newest, 1_700_000_200.0)] {
+            try Data([1, 2, 3]).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: timestamp)], ofItemAtPath: url.path)
         }
-
-        // Stub: temporarily redirect memosRoot isn't possible without DI, so
-        // test the sort logic directly against the raw FileManager call that
-        // memos(for:) mirrors.
-        let items = try FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: nil,
-            options: .skipsHiddenFiles
-        )
-        .filter { $0.pathExtension == "m4a" }
-        .sorted { $0.lastPathComponent < $1.lastPathComponent }
-
-        let sorted = items.map { $0.deletingPathExtension().lastPathComponent }
-        #expect(sorted == ["1000", "2000", "3000"])
+        #expect(VoiceMemoService.memos(for: projectId) == [newest, middle, oldest])
+        let originalDate = try newest.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        let service = VoiceMemoService()
+        let renamed = try service.renameMemo(at: newest, to: "Zzz renamed")
+        #expect(try renamed.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == originalDate)
+        #expect(VoiceMemoService.memos(for: projectId) == [renamed, middle, oldest])
     }
 
-    @Test func memosSkipsNonM4aFiles() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("VoiceMemoTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        for name in ["1000.m4a", "readme.txt", "2000.wav", "3000.m4a"] {
-            FileManager.default.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data())
+    @Test @MainActor func memosUseStableFilenameOrderWhenDatesMatch() throws {
+        let projectId = "memo-date-tie-" + UUID().uuidString
+        let folder = VoiceMemoService.memoFolder(for: projectId)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { VoiceMemoService.deleteMemosFolder(for: projectId) }
+        for name in ["Zulu.m4a", "Middle.wav", "Alpha.mp3"] {
+            let url = folder.appendingPathComponent(name)
+            try Data([1, 2, 3]).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)], ofItemAtPath: url.path)
         }
+        #expect(VoiceMemoService.memos(for: projectId).map(\.lastPathComponent) == ["Alpha.mp3", "Middle.wav", "Zulu.m4a"])
+    }
 
-        let items = try FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: nil,
-            options: .skipsHiddenFiles
-        )
-        .filter { $0.pathExtension == "m4a" }
-
-        #expect(items.count == 2)
+    @Test @MainActor func memosSkipsUnsupportedAndHiddenFiles() throws {
+        let projectId = "memo-filter-" + UUID().uuidString
+        let folder = VoiceMemoService.memoFolder(for: projectId)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { VoiceMemoService.deleteMemosFolder(for: projectId) }
+        for name in ["take.m4a", "take.mp3", "take.wav", "take.aac", "notes.txt", ".staging.wav"] {
+            try Data([1, 2, 3]).write(to: folder.appendingPathComponent(name))
+        }
+        #expect(Set(VoiceMemoService.memos(for: projectId).map(\.lastPathComponent)) == ["take.m4a", "take.mp3", "take.wav", "take.aac"])
     }
 
     @Test func memosForAbsentProjectReturnsEmpty() {
