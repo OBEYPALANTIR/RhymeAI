@@ -11,14 +11,14 @@ enum SyncValidationError: Error, Equatable {
 }
 
 enum SyncIdentity {
-    static func validateProjectId(_ value: String) throws {
+    nonisolated static func validateProjectId(_ value: String) throws {
         guard !value.isEmpty, value.utf8.count <= 128, value != ".", value != "..",
               !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || "/\\".unicodeScalars.contains($0) }) else {
             throw SyncValidationError.invalidProjectId
         }
     }
 
-    static func validateFileName(_ value: String) throws {
+    nonisolated static func validateFileName(_ value: String) throws {
         let illegal = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
         guard !value.isEmpty, value.utf8.count <= 240, VoiceMemoService.supportedAudioExtensions.contains((value as NSString).pathExtension.lowercased()),
               value == value.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -405,7 +405,7 @@ enum RecordingBackupManifest {
         "rec_\(projectId)_\(fileName).enc"
     }
 
-    static func projectURL(projectId: String, memosRoot: URL) throws -> URL {
+    nonisolated static func projectURL(projectId: String, memosRoot: URL) throws -> URL {
         try SyncIdentity.validateProjectId(projectId)
         let root = memosRoot.standardizedFileURL.resolvingSymlinksInPath()
         let folder = root.appendingPathComponent(projectId, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
@@ -413,7 +413,7 @@ enum RecordingBackupManifest {
         return folder
     }
 
-    static func localURL(projectId: String, fileName: String, memosRoot: URL) throws -> URL {
+    nonisolated static func localURL(projectId: String, fileName: String, memosRoot: URL) throws -> URL {
         try SyncIdentity.validateFileName(fileName)
         let root = memosRoot.standardizedFileURL.resolvingSymlinksInPath()
         let folder = try projectURL(projectId: projectId, memosRoot: root)
@@ -422,7 +422,7 @@ enum RecordingBackupManifest {
         return url
     }
 
-    private static func requireDescendant(_ url: URL, of root: URL) throws {
+    nonisolated private static func requireDescendant(_ url: URL, of root: URL) throws {
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         guard url.path.hasPrefix(prefix), url.path != root.path else { throw SyncValidationError.pathOutsideMemoRoot }
     }
