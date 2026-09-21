@@ -54,6 +54,82 @@ final class VoiceMemoService {
     @ObservationIgnored private var activePlayURL: URL?
     @ObservationIgnored private var delegateForwarder: VoiceMemoDelegate?
 
+    nonisolated static let supportedAudioExtensions: Set<String> = ["m4a", "mp3", "wav", "aac"]
+    nonisolated static let maximumImportBytes = 100 * 1024 * 1024
+
+    nonisolated enum ImportError: Error {
+        case unsupportedAudio, emptyAudio, tooLarge, cannotCreateFile
+    }
+
+    /// Copy provider-owned bytes into staging, decode them, then atomically publish.
+    /// No microphone or audio session is needed to import a recording.
+    nonisolated static func importMemo(from source: URL, projectId: String) async throws -> URL {
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let scoped = source.startAccessingSecurityScopedResource()
+            defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+            let ext = source.pathExtension.lowercased()
+            guard supportedAudioExtensions.contains(ext) else { throw ImportError.unsupportedAudio }
+            let folder = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: memosRoot())
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let staging = folder.appendingPathComponent(".import-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(at: staging) }
+            let copied = staging.appendingPathComponent("audio").appendingPathExtension(ext)
+            guard FileManager.default.createFile(atPath: copied.path, contents: nil) else {
+                throw ImportError.cannotCreateFile
+            }
+            let input = try FileHandle(forReadingFrom: source)
+            defer { try? input.close() }
+            let output = try FileHandle(forWritingTo: copied)
+            defer { try? output.close() }
+            var total = 0
+            while let bytes = try input.read(upToCount: 64 * 1024), !bytes.isEmpty {
+                try Task.checkCancellation()
+                total += bytes.count
+                guard total <= maximumImportBytes else { throw ImportError.tooLarge }
+                try output.write(contentsOf: bytes)
+            }
+            try output.close()
+            guard total > 0 else { throw ImportError.emptyAudio }
+            let audio = try AVAudioFile(forReading: copied)
+            guard audio.length > 0, audio.processingFormat.sampleRate > 0,
+                  let buffer = AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 4096) else {
+                throw ImportError.emptyAudio
+            }
+            // Decode the full stream so a renamed non-audio or corrupt file is not accepted.
+            var frames: AVAudioFramePosition = 0
+            while audio.framePosition < audio.length {
+                try Task.checkCancellation()
+                try audio.read(into: buffer)
+                guard buffer.frameLength > 0 else { throw ImportError.emptyAudio }
+                frames += AVAudioFramePosition(buffer.frameLength)
+            }
+            guard frames > 0 else { throw ImportError.emptyAudio }
+            try Task.checkCancellation()
+            let stem = sanitizeName(source.deletingPathExtension().lastPathComponent)
+            let name = stem.isEmpty || stem.hasPrefix(".") ? "Imported recording" : stem
+            var suffix = 1
+            var target: URL
+            repeat {
+                let filename = suffix == 1 ? "\(name).\(ext)" : "\(name) \(suffix).\(ext)"
+                target = try RecordingBackupManifest.localURL(projectId: projectId, fileName: filename, memosRoot: memosRoot())
+                suffix += 1
+            } while FileManager.default.fileExists(atPath: target.path)
+            try FileManager.default.moveItem(at: copied, to: target)
+            return target
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func isPlayingMemo(at url: URL) -> Bool {
+        isPlaying && activePlayURL == url
+    }
+
     // MARK: - File System
 
     // Root under Application Support so iOS backs it up and excludes it from
@@ -84,7 +160,7 @@ final class VoiceMemoService {
             options: .skipsHiddenFiles
         ) else { return [] }
         return items
-            .filter { $0.pathExtension == "m4a" }
+            .filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
@@ -136,7 +212,7 @@ final class VoiceMemoService {
                     options: .skipsHiddenFiles
                 ) else { return [] }
                 return files
-                    .filter { $0.pathExtension == "m4a" }
+                    .filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
                     .compactMap { trashedMemo(at: $0, projectId: projectId) }
             }
             .sorted { $0.deletedAt > $1.deletedAt }
@@ -198,7 +274,7 @@ final class VoiceMemoService {
                 let stem = (trashed.originalName as NSString).deletingPathExtension
                 var suffix = 2
                 repeat {
-                    target = folder.appendingPathComponent("\(stem) \(suffix).m4a")
+                    target = folder.appendingPathComponent("\(stem) \(suffix).\((trashed.originalName as NSString).pathExtension)")
                     suffix += 1
                 } while FileManager.default.fileExists(atPath: target.path) && suffix < 1000
             }
@@ -478,11 +554,11 @@ final class VoiceMemoService {
 
     /// Strip illegal filesystem characters from a candidate display name.
     /// Rules: trim whitespace; remove `/`, `:`, `\0`; collapse runs of whitespace;
-    /// truncate to 255 UTF-8 code units (HFS+ limit minus .m4a overhead).
-    static func sanitizeName(_ raw: String) -> String {
+    /// reserve room within the shared 240-byte backup filename limit.
+    nonisolated static func sanitizeName(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         // Strip characters that are illegal in HFS+ / APFS filenames.
-        let illegal = CharacterSet(charactersIn: "/:\u{0000}")
+        let illegal = CharacterSet.controlCharacters.subtracting(.whitespacesAndNewlines).union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
         s = s.unicodeScalars
             .filter { !illegal.contains($0) }
             .reduce(into: "") { $0.unicodeScalars.append($1) }
@@ -490,9 +566,8 @@ final class VoiceMemoService {
         s = s.components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-        // Ensure the result, when encoded as UTF-8, fits within 255 bytes
-        // (leaving headroom for the ".m4a" extension — 4 bytes).
-        let limit = 251
+        // Leave room for an extension and collision suffix within the shared backup limit.
+        let limit = 220
         if let data = s.data(using: .utf8), data.count > limit {
             var truncated = s
             while let d = truncated.data(using: .utf8), d.count > limit {
@@ -513,11 +588,11 @@ final class VoiceMemoService {
         guard !sanitized.isEmpty else { return url }
 
         let folder = url.deletingLastPathComponent()
-        var targetURL = folder.appendingPathComponent(sanitized).appendingPathExtension("m4a")
+        var targetURL = folder.appendingPathComponent(sanitized).appendingPathExtension(url.pathExtension)
 
         // Collision avoidance: append " 2" if target already exists (and isn't the source itself).
         if targetURL != url && FileManager.default.fileExists(atPath: targetURL.path) {
-            targetURL = folder.appendingPathComponent(sanitized + " 2").appendingPathExtension("m4a")
+            targetURL = folder.appendingPathComponent(sanitized + " 2").appendingPathExtension(url.pathExtension)
         }
 
         // No-op if names are identical.

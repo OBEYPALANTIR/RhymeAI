@@ -20,7 +20,7 @@ enum SyncIdentity {
 
     static func validateFileName(_ value: String) throws {
         let illegal = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
-        guard !value.isEmpty, value.utf8.count <= 240, value.hasSuffix(".m4a"),
+        guard !value.isEmpty, value.utf8.count <= 240, VoiceMemoService.supportedAudioExtensions.contains((value as NSString).pathExtension.lowercased()),
               value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.unicodeScalars.contains(where: { illegal.contains($0) }) else {
             throw SyncValidationError.invalidFileName
@@ -219,7 +219,7 @@ struct SyncRecordingManifestEntry: Codable, Equatable, Sendable {
         try SyncIdentity.validateFileName(fileName)
         guard driveName == RecordingBackupManifest.driveName(projectId: projectId, fileName: fileName),
               !driveName.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || "/\\".unicodeScalars.contains($0) }),
-              driveName.hasSuffix(".m4a.enc") else { throw SyncValidationError.invalidDriveName }
+              driveName.hasSuffix(".enc") else { throw SyncValidationError.invalidDriveName }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -402,7 +402,7 @@ enum RecordingBackupManifest {
     }
 
     static func driveName(projectId: String, fileName: String) -> String {
-        "rec_\(projectId)_\(fileName.dropLast(4)).m4a.enc"
+        "rec_\(projectId)_\(fileName).enc"
     }
 
     static func projectURL(projectId: String, memosRoot: URL) throws -> URL {
@@ -437,7 +437,7 @@ enum RecordingBackupManifest {
             ) else { return [] }
 
             return try urls
-                .filter { $0.pathExtension == "m4a" }
+                .filter { VoiceMemoService.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
                 .map { url in
                     let url = try localURL(projectId: projectId, fileName: url.lastPathComponent, memosRoot: memosRoot)

@@ -99,6 +99,13 @@ struct EditorView: View {
     @State private var assistantSheetDragOffset: CGFloat = EditorViewConstants.AssistantSheet.restingOffset
     @State private var assistantSheetIsDismissing = false
     @State private var assistantSheetLifecycleTask: Task<Void, Never>?
+    @State private var recordingSong: RecordingSong?
+
+    private struct RecordingSong: Identifiable {
+        let id: String
+        let title: String
+    }
+
     @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
     @State private var fileExporterPresented: Bool = false
     @State private var projectDrawerOpen: Bool = false
@@ -170,6 +177,9 @@ struct EditorView: View {
                 },
                 onDismiss: { viewModel.showExportSheet = false }
             )
+        }
+        .sheet(item: $recordingSong) { song in
+            SongRecordingsView(projectId: song.id, projectTitle: song.title)
         }
         .fileExporter(
             isPresented: $fileExporterPresented,
@@ -860,6 +870,7 @@ struct EditorView: View {
             if horizontalSizeClass == .regular {
                 compactUndoRedoControls
             }
+            recordingsButton
             exportButton
             settingsButton
         }
@@ -881,6 +892,7 @@ struct EditorView: View {
                 if horizontalSizeClass == .regular {
                     compactUndoRedoControls
                 }
+                recordingsButton
                 exportButton
                 settingsButton
             }
@@ -961,6 +973,21 @@ struct EditorView: View {
             onUndo: viewModel.undoLyrics,
             onRedo: viewModel.redoLyrics
         )
+    }
+
+    private var recordingsButton: some View {
+        Button {
+            dismissKeyboard()
+            guard let id = viewModel.ensureProjectForRecording() else { return }
+            recordingSong = RecordingSong(id: id, title: viewModel.title.isEmpty ? "Untitled Song" : viewModel.title)
+        } label: {
+            Image(systemName: "waveform")
+                .font(.body)
+                .foregroundStyle(appearance.palette.secondaryInk)
+                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+        }
+        .accessibilityLabel("Song recordings")
+        .accessibilityIdentifier("songRecordings")
     }
 
     private var exportButton: some View {
