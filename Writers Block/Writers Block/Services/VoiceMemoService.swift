@@ -158,13 +158,12 @@ final class VoiceMemoService {
             includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey],
             options: .skipsHiddenFiles
         ) else { return [] }
-        return items
-            .filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
-            .map { url in
-                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
-                return (url: url, date: values?.contentModificationDate ?? values?.creationDate ?? .distantPast)
-            }
-            .sorted { lhs, rhs in
+        let memoURLs = items.filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
+        let datedMemos = memoURLs.map { url -> (url: URL, date: Date) in
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+            return (url: url, date: values?.contentModificationDate ?? values?.creationDate ?? .distantPast)
+        }
+        return datedMemos.sorted { lhs, rhs in
                 lhs.date == rhs.date
                     ? lhs.url.lastPathComponent < rhs.url.lastPathComponent
                     : lhs.date > rhs.date
