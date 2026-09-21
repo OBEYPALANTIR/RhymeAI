@@ -150,18 +150,26 @@ final class VoiceMemoService {
         return folder.appendingPathComponent("\(timestamp).m4a")
     }
 
-    /// Returns all memo URLs for a project, sorted oldest-first by filename
-    /// (filenames are millisecond timestamps, so lexicographic == chronological).
+    /// Newest recordings first. Renaming a recording does not change its file date.
     nonisolated static func memos(for projectId: String) -> [URL] {
         let folder = memoFolder(for: projectId)
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: folder,
-            includingPropertiesForKeys: [.creationDateKey],
+            includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey],
             options: .skipsHiddenFiles
         ) else { return [] }
         return items
             .filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .map { url in
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+                return (url: url, date: values?.contentModificationDate ?? values?.creationDate ?? .distantPast)
+            }
+            .sorted { lhs, rhs in
+                lhs.date == rhs.date
+                    ? lhs.url.lastPathComponent < rhs.url.lastPathComponent
+                    : lhs.date > rhs.date
+            }
+            .map(\.url)
     }
 
     /// Remove a project's entire memo folder — live and trashed. Called on
