@@ -41,6 +41,15 @@ class RecordingSyncTest {
     }
 
     @Test
+    fun importedFormatsPreserveExtensionAndCannotCollideWithM4aBackupNames() {
+        val wav = RecordingManifestEntry.driveNameFor("song", "take.wav")
+        val m4a = RecordingManifestEntry.driveNameFor("song", "take.wav.m4a")
+        assertEquals("rec_song_take.wav.enc", wav)
+        assertEquals("rec_song_take.wav.m4a.enc", m4a)
+        assertFalse(wav == m4a)
+    }
+
+    @Test
     fun syncMergerUnionsRecordingsAndKeepsNewestPerIdentity() {
         val localOnly = recording("p1", "local.m4a", modifiedAt = 100L, sha256 = "local")
         val staleLocal = recording("p1", "shared.m4a", modifiedAt = 100L, sha256 = "old")

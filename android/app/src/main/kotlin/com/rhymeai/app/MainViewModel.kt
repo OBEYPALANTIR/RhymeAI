@@ -1053,21 +1053,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // A recording needs a project folder before any lyrics exist (people hum
     // the melody first). Creates and persists an Untitled project on demand.
-    fun ensureProjectForRecording(): String {
+    suspend fun ensureProjectForRecording(): String {
         currentProjectId?.let { return it }
         val newProject = createUntitledProjectSnapshot()
-        projects = listOf(newProject) + projects
+        val updatedProjects = listOf(newProject) + projects
+        persistActiveProjectSnapshot(
+            projectId = newProject.id,
+            projectList = updatedProjects,
+            editorTitle = title,
+            editorLyrics = lyrics,
+            editorTheme = theme
+        )
+        projects = updatedProjects
         currentProjectId = newProject.id
         showStartMenu = false
-        viewModelScope.launch {
-            persistActiveProjectSnapshot(
-                projectId = newProject.id,
-                projectList = projects,
-                editorTitle = title,
-                editorLyrics = lyrics,
-                editorTheme = theme
-            )
-        }
         return newProject.id
     }
 

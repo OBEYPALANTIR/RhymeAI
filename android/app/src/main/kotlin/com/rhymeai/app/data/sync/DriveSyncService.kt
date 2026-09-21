@@ -1057,7 +1057,7 @@ class DriveSyncService(
             ?.flatMap { projectDir ->
                 projectDir.listFiles()
                     ?.asSequence()
-                    ?.filter { it.isFile && it.name.endsWith(VoiceMemoService.MEMO_EXTENSION) }
+                    ?.filter { VoiceMemoService.isMemoFile(it) }
                     ?.map { file ->
                         val entry = RecordingManifestEntry(
                             projectId = projectDir.name,

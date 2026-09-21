@@ -1,6 +1,10 @@
 package com.rhymeai.app.service
 
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -8,6 +12,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -48,7 +54,7 @@ data class TrashedVoiceMemo(
 /**
  * Handles recording, playback, and deletion of per-song voice memos.
  *
- * Files live at: context.filesDir/voice-memos/<projectId>/<timestamp>.m4a
+ * Files live at: context.filesDir/voice-memos/<projectId>/<name>.<audio extension>
  *
  * Resource discipline: every MediaRecorder and MediaPlayer is stop()ed and
  * release()d in all exit paths — including cancellation and error — mirroring
@@ -279,10 +285,53 @@ class VoiceMemoService(private val context: Context) {
         val dir = memoDir(projectId)
         if (!dir.exists()) return@withContext emptyList()
         dir.listFiles()
-            ?.filter { it.isFile && it.name.endsWith(".m4a") }
+            ?.filter { isMemoFile(it) && it != recordingFile }
             ?.sortedByDescending { it.lastModified() }
             ?.map { memoFromFile(it) }
             ?: emptyList()
+    }
+
+    /** Copy a selected document into this song; no microphone permission is needed. */
+    suspend fun importRecording(projectId: String, uri: Uri): VoiceMemo {
+        var imported: File? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                val resolver = context.contentResolver
+                val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    } ?: throw IllegalArgumentException("Missing audio filename")
+                val coroutineContext = currentCoroutineContext()
+                val source = resolver.openInputStream(uri)
+                    ?: throw java.io.IOException("Cannot open audio")
+                val file = source.use { input ->
+                    RecordingImportStore.copy(
+                        input = input,
+                        directory = memoDir(projectId),
+                        displayName = name,
+                        checkCancellation = { coroutineContext.ensureActive() },
+                        validate = { candidate ->
+                            val extractor = MediaExtractor()
+                            try {
+                                extractor.setDataSource(candidate.absolutePath)
+                                require((0 until extractor.trackCount).any { index ->
+                                    extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)
+                                        ?.startsWith("audio/") == true
+                                }) { "No audio track" }
+                            } finally {
+                                extractor.release()
+                            }
+                            require(probeAudioDurationMs(candidate) > 0) { "Audio cannot be played" }
+                        }
+                    )
+                }
+                imported = file
+                memoFromFile(file)
+            }
+        } catch (error: Exception) {
+            imported?.delete()
+            throw error
+        }
     }
 
     /** Delete a single memo. Stops playback of that file if it is currently playing. */
@@ -299,7 +348,7 @@ class VoiceMemoService(private val context: Context) {
 
     /**
      * Move [memo] to the Trash Bin instead of deleting it. The file is relocated
-     * to voice-memos-trash/<projectId>/<deletedAt>__<name>.m4a and kept for
+     * to voice-memos-trash/<projectId>/<deletedAt>__<original filename> and kept for
      * [TRASH_RETENTION_MILLIS] before purge. Returns false on I/O failure.
      */
     /** Returns the trashed record on success (usable for undo), null on failure. */
@@ -330,7 +379,7 @@ class VoiceMemoService(private val context: Context) {
             ?.filter { it.isDirectory }
             ?.flatMap { dir ->
                 dir.listFiles()
-                    ?.filter { it.isFile && it.name.endsWith(MEMO_EXTENSION) }
+                    ?.filter { isMemoFile(it) }
                     ?.mapNotNull { file -> trashedMemoFromFile(file, dir.name) }
                     ?: emptyList()
             }
@@ -346,8 +395,8 @@ class VoiceMemoService(private val context: Context) {
         if (!trashed.file.exists()) return@withContext false
         val dir = memoDir(trashed.projectId)
         if (!dir.exists() && !dir.mkdirs()) return@withContext false
-        val base = trashed.originalName.removeSuffix(MEMO_EXTENSION)
-        val target = resolveCollision(dir, base)
+        val original = File(trashed.originalName)
+        val target = resolveCollision(dir, original.nameWithoutExtension, original.extension)
         trashed.file.renameTo(target).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
     }
 
@@ -376,7 +425,7 @@ class VoiceMemoService(private val context: Context) {
      * (`/ \ : * ? " < > |`) are removed, and runs of whitespace collapsed to a single
      * space. If the sanitized string is empty the rename is rejected (returns null).
      *
-     * Collision: if `<sanitized>.m4a` already exists in the same directory, suffixes
+     * Collision: if the sanitized name with the original extension already exists, suffixes
      * " 2", " 3", … are tried until a free name is found (mirrors iOS behavior).
      *
      * Returns the renamed [VoiceMemo] on success, null on failure (bad name or
@@ -390,7 +439,7 @@ class VoiceMemoService(private val context: Context) {
 
         return withContext(Dispatchers.IO) {
             val dir = memo.file.parentFile ?: return@withContext null
-            val targetFile = resolveCollision(dir, sanitized)
+            val targetFile = resolveCollision(dir, sanitized, memo.file.extension)
 
             if (memo.file.renameTo(targetFile)) {
                 memoFromFile(targetFile)
@@ -497,6 +546,10 @@ class VoiceMemoService(private val context: Context) {
         const val MEMOS_ROOT_DIR = "voice-memos"
         const val MEMOS_TRASH_ROOT_DIR = "voice-memos-trash"
         const val MEMO_EXTENSION = ".m4a"
+        val SUPPORTED_AUDIO_EXTENSIONS = setOf("m4a", "mp3", "wav", "aac")
+
+        fun isMemoFile(file: File): Boolean =
+            file.isFile && file.extension.lowercase(Locale.ROOT) in SUPPORTED_AUDIO_EXTENSIONS
 
         /** Separates the deletion timestamp from the original name in trash filenames. */
         const val TRASH_NAME_SEPARATOR = "__"
@@ -557,16 +610,15 @@ class VoiceMemoService(private val context: Context) {
                 .trim()
 
         /**
-         * Find a free filename for [base].m4a inside [dir]. If [base].m4a already
+         * Find a free filename for [base] with [extension] inside [dir]. If that name already
          * exists (and is not the source file being renamed), append " 2", " 3", … until
-         * a free slot is found. The loop is capped at 999 to avoid an infinite cycle in
-         * degenerate cases.
+         * a free slot is found.
          */
-        internal fun resolveCollision(dir: File, base: String): File {
-            var candidate = File(dir, "$base.m4a")
+        internal fun resolveCollision(dir: File, base: String, extension: String = "m4a"): File {
+            var candidate = File(dir, "$base.$extension")
             var suffix = 2
-            while (candidate.exists() && suffix < 1000) {
-                candidate = File(dir, "$base $suffix.m4a")
+            while (candidate.exists()) {
+                candidate = File(dir, "$base $suffix.$extension")
                 suffix++
             }
             return candidate

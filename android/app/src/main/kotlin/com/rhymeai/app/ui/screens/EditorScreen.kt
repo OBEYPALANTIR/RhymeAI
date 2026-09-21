@@ -73,6 +73,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.SnackbarHost
@@ -117,6 +118,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import com.rhymeai.app.ui.components.SongRecordingsDialog
 import com.rhymeai.app.R
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -176,6 +178,7 @@ private fun rememberExportDocumentLauncher(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
+    var recordingsProjectId by remember { mutableStateOf<String?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
     var lyricsFocused by remember { mutableStateOf(false) }
     var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -413,7 +416,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         viewModel.showExportSheet = false
     }
 
-    val modalOpen = viewModel.showSettingsDialog ||
+    val modalOpen = recordingsProjectId != null || viewModel.showSettingsDialog ||
         viewModel.showProjectsDialog ||
         viewModel.showExportSheet ||
         viewModel.showInspector
@@ -548,6 +551,30 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     actionIconContentColor = colorScheme.onSurfaceVariant
                 )
             )
+
+            TextButton(
+                onClick = {
+                    if (!micBusy) {
+                        micBusy = true
+                        scope.launch {
+                            try {
+                                recordingsProjectId = viewModel.ensureProjectForRecording()
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                snackbarHostState.showSnackbar("Could not save this song. Try opening recordings again.")
+                            } finally {
+                                micBusy = false
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Icon(Icons.Default.Mic, contentDescription = null)
+                Spacer(Modifier.width(DesignTokens.Spacing.sm))
+                Text("Recordings")
+            }
 
             // Divider
             HorizontalDivider(color = colorScheme.outlineVariant)
@@ -1256,6 +1283,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
 
         // Export sheet
+        recordingsProjectId?.let { projectId ->
+            SongRecordingsDialog(
+                projectId = projectId,
+                songTitle = viewModel.title.ifBlank { "Untitled Song" },
+                service = viewModel.voiceMemoService,
+                onRecord = { recordingsProjectId = null; onMicFabTap() },
+                onDismiss = { recordingsProjectId = null }
+            )
+        }
+
         if (viewModel.showExportSheet) {
             ExportSheet(
                 onPick = { launchExport(it) },

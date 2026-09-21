@@ -43,12 +43,10 @@ data class RecordingManifestEntry(
 
     companion object {
         const val DRIVE_PREFIX = "rec_"
-        const val DRIVE_SUFFIX = ".m4a.enc"
         const val MIME_TYPE = "application/octet-stream"
 
         fun driveNameFor(projectId: String, fileName: String): String {
-            val stem = fileName.removeSuffix(".m4a")
-            return "$DRIVE_PREFIX${projectId}_${stem}$DRIVE_SUFFIX"
+            return "$DRIVE_PREFIX${projectId}_${fileName}.enc"
         }
     }
 }
