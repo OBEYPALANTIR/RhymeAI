@@ -8,6 +8,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Import M4A, MP3, WAV, or AAC audio into the song selected when the library opens. Imports preserve the original audio bytes, use app-owned storage, and require no microphone permission.
 - Reject empty, unsupported, invalid audio, or files larger than 100 MiB. Cancellation and failed validation remove staged files; duplicate names keep both recordings.
 - Imported formats retain their extension through rename, trash, restore, and backup. Existing M4A backup names remain unchanged.
+- Apple backup manifests use schema 3 / authenticated RAI3 and require an updated Apple app; legacy RAI1/v1 and RAI2/v2 reads remain supported. Android still uses RAI1 and cannot read Apple RAI2/RAI3 backups; the existing cross-platform protocol gap is tracked separately in PR #36. Older Apple apps also cannot read Android backups containing the newly imported formats.
 - Native Mac follows the same import contract in its existing song-level library; that unfinished app is maintained in a separate worktree from the mobile targets.
 - Validation for this change is tracked separately from historical evidence below. Live cloud backup, store delivery, and native Mac UI acceptance are not established by source or build checks.
 
