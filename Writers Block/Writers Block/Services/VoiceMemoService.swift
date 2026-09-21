@@ -279,6 +279,11 @@ final class VoiceMemoService {
     // MARK: - Permission
 
     func requestPermissionIfNeeded() async -> Bool {
+        #if os(macOS)
+        let granted = await AVCaptureDevice.requestAccess(for: .audio)
+        permissionDenied = !granted
+        return granted
+        #else
         if #available(iOS 17.0, *) {
             switch AVAudioApplication.shared.recordPermission {
             case .granted: return true
@@ -302,6 +307,7 @@ final class VoiceMemoService {
                 }
             }
         }
+        #endif
     }
 
     // MARK: - Record
@@ -315,14 +321,16 @@ final class VoiceMemoService {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = Self.newMemoURL(for: projectId)
 
-        let session = AVAudioSession.sharedInstance()
+        #if !os(macOS)
+        let recordingSession = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-            try session.setActive(true)
+            try recordingSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            try recordingSession.setActive(true)
         } catch {
-            failToStartRecording(session: session)
+            failToStartRecording()
             return
         }
+        #endif
 
         // AAC in an MPEG-4 container matches the Android MediaRecorder output
         // format (.m4a / AAC_ADTS) for cross-platform parity.
@@ -337,7 +345,7 @@ final class VoiceMemoService {
         do {
             recorder = try AVAudioRecorder(url: url, settings: settings)
         } catch {
-            failToStartRecording(session: session)
+            failToStartRecording()
             return
         }
 
@@ -349,7 +357,7 @@ final class VoiceMemoService {
         recorder.isMeteringEnabled = true
         guard recorder.record() else {
             recorder.stop()
-            failToStartRecording(session: session)
+            failToStartRecording()
             return
         }
 
@@ -400,10 +408,12 @@ final class VoiceMemoService {
         averagePowerNormalized = 0
 
         // Deactivate so other apps (Music, Podcast) can resume their sessions.
+        #if !os(macOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 
-    private func failToStartRecording(session: AVAudioSession) {
+    private func failToStartRecording() {
         audioRecorder?.stop()
         audioRecorder = nil
         elapsedTimer?.invalidate()
@@ -415,7 +425,9 @@ final class VoiceMemoService {
         isRecording = false
         recordingElapsed = 0
         averagePowerNormalized = 0
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        #if !os(macOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
         lastError = "Couldn't start recording. Check the microphone and try again."
     }
 
@@ -431,6 +443,7 @@ final class VoiceMemoService {
     }
 
     private func playMemo(url: URL) {
+        #if !os(macOS)
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .default)
@@ -438,9 +451,12 @@ final class VoiceMemoService {
         } catch {
             return
         }
+        #endif
 
         guard let player = try? AVAudioPlayer(contentsOf: url) else {
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            #if !os(macOS)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
             return
         }
 
@@ -460,7 +476,9 @@ final class VoiceMemoService {
         activePlayURL = nil
         delegateForwarder = nil
         isPlaying = false
+        #if !os(macOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 
     // MARK: - Delete
@@ -547,7 +565,9 @@ final class VoiceMemoService {
         isPlaying = false
         activePlayURL = nil
         delegateForwarder = nil
+        #if !os(macOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 
     // MARK: - Cleanup

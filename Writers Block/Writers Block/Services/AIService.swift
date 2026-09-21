@@ -150,7 +150,7 @@ struct AIService {
             }
 
             // Apple Intelligence fallback.
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, macOS 26.0, *) {
                 let parsed = try await callLocal(prompt: localPrompt, limit: Self.suggestionCount)
                 guard let filter else { return parsed }
                 let ranked = filter.rank(parsed, want: Self.suggestionCount)
@@ -159,7 +159,7 @@ struct AIService {
                 }
                 return ranked
             }
-            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
+            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or macOS 26 or later.")
         }
 
         guard !apiKey.isEmpty else {
@@ -902,7 +902,7 @@ struct AIService {
         return prompt
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func callLocal(prompt: String, limit: Int) async throws -> [String] {
         let model = SystemLanguageModel.default
         guard model.isAvailable else {
@@ -921,7 +921,7 @@ struct AIService {
         return parsed
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func describe(_ availability: SystemLanguageModel.Availability) -> String {
         switch availability {
         case .available:
@@ -1196,14 +1196,14 @@ struct AIService {
                 if let ggufRoute {
                     return try await callGGUF(prompt: prompt, route: ggufRoute)
                 }
-                if #available(iOS 26.0, *) {
+                if #available(iOS 26.0, macOS 26.0, *) {
                     return try await callLocalRaw(
                         prompt: prompt,
                         instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object."
                     )
                 }
                 throw AIServiceError.localModelUnavailable(
-                    reason: "Apple Intelligence synonyms require iOS 26 or later."
+                    reason: "Apple Intelligence synonyms require iOS 26 or macOS 26 or later."
                 )
             }
             return try await callCloudText(
@@ -1274,7 +1274,7 @@ struct AIService {
         }
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func callLocalRaw(prompt: String, instructions: String) async throws -> String {
         let model = SystemLanguageModel.default
         guard model.isAvailable else {
@@ -1287,7 +1287,7 @@ struct AIService {
     /// Unbounded on-device generation can ramble until it overflows the 4k
     /// context window (observed: a 55s harder-rhyme rewrite dying at 4089
     /// tokens). Capping the response keeps latency and the window in check.
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private static func localGenerationOptions(maxTokens: Int) -> GenerationOptions {
         GenerationOptions(maximumResponseTokens: maxTokens)
     }
@@ -1325,7 +1325,7 @@ struct AIService {
             }
 
             // Apple Intelligence fallback.
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, macOS 26.0, *) {
                 return try await callLocalRewrite(
                     action: action,
                     lyrics: fullLyrics,
@@ -1336,7 +1336,7 @@ struct AIService {
                     useWholeSongContext: useWholeSongContext
                 )
             }
-            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence rewrites require iOS 26 or later.")
+            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence rewrites require iOS 26 or macOS 26 or later.")
         }
 
         guard !apiKey.isEmpty else {
@@ -1511,7 +1511,7 @@ struct AIService {
         return "https://generativelanguage.googleapis.com/v1beta"
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func callLocalRewrite(
         action: RewriteAction,
         lyrics: String,
@@ -1613,11 +1613,21 @@ struct AIService {
 
     /// Surfaces on-device guardrail refusals as the recognized safety error
     /// instead of a raw FoundationModels failure.
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private static func mapLocalGenerationError(_ error: Error) -> Error {
-        if let generationError = error as? LanguageModelSession.GenerationError,
-           case .guardrailViolation = generationError {
-            return AIServiceError.blockedResponse
+        #if compiler(>=6.4)
+        if #available(iOS 27.0, macOS 27.0, *), let modelError = error as? LanguageModelError {
+            switch modelError {
+            case .guardrailViolation, .refusal: return AIServiceError.blockedResponse
+            default: break
+            }
+        }
+        #endif
+        if let generationError = error as? LanguageModelSession.GenerationError {
+            switch generationError {
+            case .guardrailViolation, .refusal: return AIServiceError.blockedResponse
+            default: break
+            }
         }
         return error
     }

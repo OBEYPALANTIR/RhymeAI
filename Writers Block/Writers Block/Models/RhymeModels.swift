@@ -165,3 +165,13 @@ struct RhymeContext {
         )
     }
 }
+
+func suggestionRhymeBadgeLabel(rhymeTier: Int, isHookRepeat: Bool) -> String? {
+    if isHookRepeat { return "hook" }
+    switch rhymeTier {
+    case 3: return "slant"
+    case 2: return "perfect"
+    case 1: return "near"
+    default: return nil
+    }
+}

@@ -158,6 +158,72 @@ nonisolated enum GGUFModelCatalog {
         }
     }
 
+    static let maximumCustomImportBytes: Int64 = 8 * 1_024 * 1_024 * 1_024
+    static let customImportFreeSpaceReserve: Int64 = 750 * 1_024 * 1_024
+
+    static func importCustomFile(
+        at source: URL,
+        into directory: URL? = nil,
+        maximumBytes: Int64 = maximumCustomImportBytes,
+        freeSpaceReserve: Int64 = customImportFreeSpaceReserve
+    ) throws -> GGUFCustomModel {
+        guard maximumBytes >= 24, freeSpaceReserve >= 0 else {
+            throw AIServiceError.localModelUnavailable(reason: "The model import limits are invalid.")
+        }
+        try validateCustomFile(at: source)
+        let directory = try directory ?? modelsDirectory(create: true)
+        let attributes = try FileManager.default.attributesOfFileSystem(forPath: directory.path)
+        guard let freeBytes = (attributes[.systemFreeSize] as? NSNumber)?.int64Value,
+              freeBytes > freeSpaceReserve else {
+            throw AIServiceError.localModelUnavailable(reason: "Free more storage before importing a model. Keep at least 750 MiB available after the import.")
+        }
+        let resource = try source.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+        guard resource.isRegularFile == true else {
+            throw AIServiceError.localModelUnavailable(reason: "Choose a regular GGUF model file.")
+        }
+        let reportedBytes = Int64(resource.fileSize ?? 0)
+        guard reportedBytes <= maximumBytes else {
+            throw AIServiceError.localModelUnavailable(reason: "The GGUF model exceeds the 8 GiB import limit.")
+        }
+        guard reportedBytes <= freeBytes - freeSpaceReserve else {
+            throw AIServiceError.localModelUnavailable(reason: "There is not enough free storage to import this model and retain 750 MiB of free space.")
+        }
+        let id = UUID().uuidString
+        let fileName = "custom-\(id).gguf"
+        let partial = directory.appendingPathComponent(".import-\(id).partial")
+        let destination = directory.appendingPathComponent(fileName)
+        guard FileManager.default.createFile(atPath: partial.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { try? FileManager.default.removeItem(at: partial) }
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+        let output = try FileHandle(forWritingTo: partial)
+        defer { try? output.close() }
+        var copied: Int64 = 0
+        while true {
+            try Task.checkCancellation()
+            let chunk = try input.read(upToCount: Int(min(1_048_576, maximumBytes - copied + 1))) ?? Data()
+            if chunk.isEmpty { break }
+            copied += Int64(chunk.count)
+            guard copied <= maximumBytes, copied <= freeBytes - freeSpaceReserve else {
+                throw AIServiceError.localModelUnavailable(reason: "The model exceeds the import size or free-storage limit.")
+            }
+            let current = try FileManager.default.attributesOfFileSystem(forPath: directory.path)
+            guard let remaining = (current[.systemFreeSize] as? NSNumber)?.int64Value,
+                  remaining - Int64(chunk.count) >= freeSpaceReserve else {
+                throw AIServiceError.localModelUnavailable(reason: "Storage filled during model import. Free space and try again.")
+            }
+            try output.write(contentsOf: chunk)
+        }
+        try output.synchronize()
+        try output.close()
+        try validateCustomFile(at: partial)
+        try Task.checkCancellation()
+        try FileManager.default.moveItem(at: partial, to: destination)
+        return GGUFCustomModel(id: id, displayName: source.deletingPathExtension().lastPathComponent, fileName: fileName)
+    }
+
     static func validateCustomFile(at url: URL) throws {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
@@ -404,6 +470,13 @@ actor GGUFLlamaService: LocalGGUFRunner {
     nonisolated var isLoaded: Bool { loadedFlag.get() }
 
     func loadModel(filePath: String) async throws {
+        await acquireTransaction()
+        defer { releaseTransaction() }
+        try Task.checkCancellation()
+        try await loadModelWithinTransaction(filePath: filePath)
+    }
+
+    private func loadModelWithinTransaction(filePath: String) async throws {
         // Idempotent: reloading the same file is a no-op so callers can call
         // this unconditionally before each request.
         if loadedPath == filePath, model != nil { return }
@@ -421,6 +494,7 @@ actor GGUFLlamaService: LocalGGUFRunner {
             throw AIServiceError.localModelUnavailable(reason: "This GGUF model is not registered with RhymeAI.")
         }
 
+        try Task.checkCancellation()
         var modelParams = llama_model_default_params()
 #if targetEnvironment(simulator)
         // The simulator Metal device corrupts Gemma4 output; its CPU backend is verified.
@@ -468,6 +542,13 @@ actor GGUFLlamaService: LocalGGUFRunner {
     }
 
     func generate(prompt: String) async throws -> String {
+        await acquireTransaction()
+        defer { releaseTransaction() }
+        try Task.checkCancellation()
+        return try await generateWithinTransaction(prompt: prompt)
+    }
+
+    private func generateWithinTransaction(prompt: String) async throws -> String {
         guard let ctx = context, let model = model, let promptFormat else {
             throw AIServiceError.localModelUnavailable(
                 reason: "No GGUF model loaded. Download a Gemma model in Settings."
@@ -544,9 +625,9 @@ actor GGUFLlamaService: LocalGGUFRunner {
         await acquireTransaction()
         defer { releaseTransaction() }
         try Task.checkCancellation()
-        try await loadModel(filePath: filePath)
+        try await loadModelWithinTransaction(filePath: filePath)
         try Task.checkCancellation()
-        return try await generate(prompt: prompt)
+        return try await generateWithinTransaction(prompt: prompt)
     }
 
     func unload() async {

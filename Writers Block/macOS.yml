@@ -1,0 +1,71 @@
+name: Writers Block Mac
+options:
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  LlamaFramework:
+    path: LlamaFramework
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    ENABLE_HARDENED_RUNTIME: YES
+    ENABLE_APP_SANDBOX: YES
+    CODE_SIGN_STYLE: Automatic
+    PRODUCT_MODULE_NAME: Writers_Block
+    PRODUCT_BUNDLE_IDENTIFIER: ShaydeTree.Writers-Block.macOS
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Writers Block Mac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Mac
+        excludes: ["*.entitlements"]
+      - path: Writers Block/Models
+      - path: Writers Block/Services
+      - path: Writers Block/Support
+      - path: Writers Block/ViewModels
+      - path: Writers Block/Resources
+        buildPhase: resources
+    dependencies:
+      - package: LlamaFramework
+        product: llama
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Mac/WritersBlockMac.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Writers Block
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.music
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Record voice memos for your songs.
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+  Writers Block Mac Tests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: MacTests
+      - path: Writers BlockTests
+        excludes:
+          - LyricsTextViewProgrammaticUpdateTests.swift
+          - LyricsDynamicTypeTests.swift
+          - RewriteRippleMotionTests.swift
+          - AnalysisPresentationStyleTests.swift
+          - AppAppearanceTests.swift
+    dependencies:
+      - target: Writers Block Mac
+    settings:
+      base:
+        PRODUCT_MODULE_NAME: Writers_Block_Mac_Tests
+        PRODUCT_BUNDLE_IDENTIFIER: ShaydeTree.Writers-Block.macOS.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Writers Block Mac:
+    build:
+      targets:
+        Writers Block Mac: all
+    test:
+      targets:
+        - Writers Block Mac Tests

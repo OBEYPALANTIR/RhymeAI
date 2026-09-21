@@ -1,5 +1,10 @@
 import Foundation
+#if os(macOS)
+import AppKit
+import CoreText
+#else
 import UIKit
+#endif
 
 enum LyricsExporter {
     private static let jsonEncoder: JSONEncoder = {
@@ -62,6 +67,9 @@ enum LyricsExporter {
     }
 
     private static func buildPdf(_ project: SongProject) -> Data {
+        #if os(macOS)
+        return buildMacPdf(project)
+        #else
         let pageWidth: CGFloat = 612   // 8.5" * 72
         let pageHeight: CGFloat = 792  // 11"  * 72
         let marginX: CGFloat = 54
@@ -152,7 +160,35 @@ enum LyricsExporter {
                 y += drawHeight
             }
         }
+        #endif
     }
+
+    #if os(macOS)
+    private static func buildMacPdf(_ project: SongProject) -> Data {
+        let text = NSMutableAttributedString(string: (project.title.isEmpty ? "Untitled" : project.title) + "\n\n", attributes: [.font: NSFont(name: "Times-Bold", size: 22) ?? NSFont.boldSystemFont(ofSize: 22)])
+        if !project.theme.isEmpty {
+            text.append(NSAttributedString(string: "Theme: \(project.theme)\n\n", attributes: [.font: NSFont.systemFont(ofSize: 11)]))
+        }
+        text.append(NSAttributedString(string: project.lyrics, attributes: [.font: NSFont(name: "Times-Roman", size: 12) ?? NSFont.systemFont(ofSize: 12)]))
+        let data = NSMutableData()
+        var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: data), let context = CGContext(consumer: consumer, mediaBox: &bounds, nil) else { return Data() }
+        let framesetter = CTFramesetterCreateWithAttributedString(text)
+        let path = CGPath(rect: bounds.insetBy(dx: 54, dy: 54), transform: nil)
+        var offset = 0
+        repeat {
+            context.beginPDFPage(nil)
+            let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: offset, length: 0), path, nil)
+            CTFrameDraw(frame, context)
+            let visible = CTFrameGetVisibleStringRange(frame)
+            context.endPDFPage()
+            guard visible.length > 0 else { break }
+            offset += visible.length
+        } while offset < text.length
+        context.closePDF()
+        return data as Data
+    }
+    #endif
 
     private static func trimmingTrailingHorizontalWhitespace(_ value: String) -> String {
         var end = value.endIndex

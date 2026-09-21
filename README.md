@@ -6,7 +6,7 @@ The active targets are:
 
 - Android: `android/`
 - iOS: `Writers Block/`
-- Desktop: planned
+- macOS: `Writers Block/Writers Block Mac.xcodeproj` (native SwiftUI/AppKit)
 
 The old React/Vite web variant has been removed. Shared pronunciation/prosody data stays in `shared/`, with generation tooling in `scripts/`, because Android and iOS both consume those assets.
 
@@ -255,3 +255,37 @@ The smoke passes when Apple Foundation Models either return non-empty suggestion
 or report a user-facing on-device availability reason. It preserves existing
 installations and build outputs. This is an availability check; it does not
 verify loading the accepted GGUF, local inference quality, or the in-app writing flow.
+
+## macOS
+
+Build the native Mac target without launching:
+
+```sh
+./script/build_and_run.sh --build-only
+```
+
+Run `./script/build_and_run.sh` to build and open the local app. Quit an already
+running Mac candidate first; the script preserves existing processes. The app
+uses the same Apple models, ViewModel, Keychain store, AI and analysis services
+as iOS, with an AppKit text editor and native import/export panels. Song data is
+saved in the Mac app sandbox. iCloud synchronization is not enabled in this Mac
+target; Settings shows the available Google Drive backup configuration.
+
+Import a supported Gemma GGUF through Settings → On-Device Models to run local
+generation. TXT, JSON, LRC and multipage PDF exports use the system save panel.
+Command-N creates a song, Command-S saves, Command-Z / Shift-Command-Z undo and
+redo lyrics, and Shift-Command-U requests suggestions.
+
+The build script applies ad-hoc signing with App Sandbox and Hardened Runtime
+for local testing. It does not produce a notarized distribution build.
+`Writers Block/macOS.yml` is the XcodeGen source of the checked-in Mac project;
+regenerate with `xcodegen generate --spec 'Writers Block/macOS.yml'` after changing
+its file membership or settings.
+
+Run the Mac-compatible shared test suites and Mac persistence/export tests:
+
+```sh
+xcodebuild -project 'Writers Block/Writers Block Mac.xcodeproj' \
+  -scheme 'Writers Block Mac' -destination 'platform=macOS' \
+  CODE_SIGN_IDENTITY=- test
+```

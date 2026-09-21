@@ -1,14 +1,5 @@
 import SwiftUI
 
-func suggestionRhymeBadgeLabel(rhymeTier: Int, isHookRepeat: Bool) -> String? {
-    if isHookRepeat { return "hook" }
-    switch rhymeTier {
-    case 3: return "slant"
-    case 2: return "perfect"
-    case 1: return "near"
-    default: return nil
-    }
-}
 
 struct SuggestionCardView: View {
     @Environment(\.appAppearanceStyle) private var appearance

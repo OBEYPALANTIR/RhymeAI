@@ -1,0 +1,762 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		02F55A51AAA5E11A0BC5F5A8 /* SynonymResultPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96EF29AC5EE2786008B795A6 /* SynonymResultPresentation.swift */; };
+		08C37440F52597CBC9519624 /* WordFrequency.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BAC94418F77C227F883767C /* WordFrequency.swift */; };
+		093A3C5A2DA215151C84C359 /* SectionMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5665289EDBB8EBCD97EB25C2 /* SectionMap.swift */; };
+		0A8616D5FEB75596F547F11C /* RhymeConstraint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 278A26A02EE6D3A65D35485C /* RhymeConstraint.swift */; };
+		1127EA331D35B0CC38C653CD /* MacSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E127600BBBA3697BBBB9D20 /* MacSettingsView.swift */; };
+		17833DF18D6A6F020CF88B56 /* GGUFRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0834AEE1C0D4B743D201559 /* GGUFRoutingTests.swift */; };
+		180D077BB831DCCF496E8F2E /* VoiceMemoServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B24B54752D700ED4A7862D1 /* VoiceMemoServiceTests.swift */; };
+		1AD8E5779197F8D31D95176E /* SyncDeletionRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAC34AF1963EDFF20D9A0209 /* SyncDeletionRecord.swift */; };
+		1C08AFCBAF1828EA1FB961FF /* Writers_BlockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1211C22127B3059B6E9F00FE /* Writers_BlockTests.swift */; };
+		1C83BBFEBDA45ED22B36F8F5 /* MacWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7909B193330629FC255E562B /* MacWorkspaceView.swift */; };
+		1DF2EE2B2BE9AF1404C27DC4 /* SyllableCounter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 898AD5A57F1652D178BD5BA9 /* SyllableCounter.swift */; };
+		1EF6AB998FB75AF46AD9788C /* RhymeConstraintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D215C562EA54274323CF83FA /* RhymeConstraintTests.swift */; };
+		21A4C61AF681B8326D0927F2 /* VoiceMemoService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 035458F172DD36B895E78A8B /* VoiceMemoService.swift */; };
+		24AA52FAB472BF8256C4AEEA /* GGUFImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B4053396C6AB04141E8422E /* GGUFImportTests.swift */; };
+		388F167F56135F4A5BBC9BDB /* CodeAuditRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2354A2973A1EE2E89B085C8 /* CodeAuditRegressionTests.swift */; };
+		3912A8D1E06554543C8659B5 /* GoogleDriveBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76503F537BF85FF46EE014A8 /* GoogleDriveBackupService.swift */; };
+		3E24DDAC163166771850AB16 /* cmudict-rhymeai.tsv in Resources */ = {isa = PBXBuildFile; fileRef = D397F377335A632C0EEAC5BE /* cmudict-rhymeai.tsv */; };
+		4252CAD069EBFE4C235AC34F /* llama in Frameworks */ = {isa = PBXBuildFile; productRef = A0CDEC5230398FF26BC75A00 /* llama */; };
+		46E41A34F2FFC8304D342BB5 /* SynonymTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9201854960F8605F32570321 /* SynonymTests.swift */; };
+		489E7E80C5D8298BC5052A10 /* EditHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8932CD8132EA9CC2D421AE8 /* EditHistory.swift */; };
+		49DBCD01AE9E8F5770728853 /* LyricRegex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EC8E322832315CDB6637B44 /* LyricRegex.swift */; };
+		4B90B5EE23BF568831F1AFAF /* SyncRepairContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7976B44BE662B6089ABB9E3A /* SyncRepairContractTests.swift */; };
+		4CCD61C2B787CDCF70DB4D03 /* MacVoiceMemosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1754B5ACA1E4D2AA1A0C3670 /* MacVoiceMemosView.swift */; };
+		4DADA09BF24D14ECC2C9BE81 /* PersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E10F42F3AD56A1622BF0CE6 /* PersistenceTests.swift */; };
+		5090EFFBAE6D0559D1A97148 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DB6C5B048D57BCC4747CC5 /* KeychainStore.swift */; };
+		53C5A1FBAED81DD1D29648AF /* RewriteAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFF53D047BD9CC278CE5609 /* RewriteAction.swift */; };
+		591F8D42DE9DDB10E81034A2 /* UITestFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56BD50C088683FC5A97D593D /* UITestFlags.swift */; };
+		5A4FCF27BF726616A9BC3FA8 /* AIErrorRecoveryActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27B6448E320846B9EC837EDB /* AIErrorRecoveryActionTests.swift */; };
+		5B0C186FA6390250A4E39245 /* AnalysisPresentationStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFF3B691D84FA8BAD0F3D8E7 /* AnalysisPresentationStyle.swift */; };
+		5CDA31C17BC91862DB91A1B2 /* BeatGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2EA9B8F226CA6ECE787A78B /* BeatGrid.swift */; };
+		68EB7DE9A1E502666F2C29D3 /* CloudPrivacyFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1CEDAD4C54514FC25C47697 /* CloudPrivacyFlowTests.swift */; };
+		741F44934E818783D6B91DAB /* SyncBlobCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D45528927B37D8AE543E426 /* SyncBlobCrypto.swift */; };
+		76442009F4071586DBB511F4 /* LyricsExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C02817B6B53736252F0366 /* LyricsExporter.swift */; };
+		7746652EC22C0C7FD1876352 /* EditorUndoRedoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79438F079D2FED004BBFA6DC /* EditorUndoRedoTests.swift */; };
+		78F1991390EC7FDDC0DC0861 /* WordFrequencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42568EC42DACE242F0B4386B /* WordFrequencyTests.swift */; };
+		79D79456ED7DD7456DE8C4E3 /* AIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E86818794DD984C1ABF5F527 /* AIModels.swift */; };
+		8224FA11C57F2165B38A09BA /* SynonymPromptContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 941C2A3DEA26ED903A90E478 /* SynonymPromptContract.swift */; };
+		8C4A8650C554051130A8EC56 /* MacWindowSaveGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 495F738320DB5AA2EB44061D /* MacWindowSaveGuard.swift */; };
+		8FD486BD84F1EB849578ECC0 /* LocalProviderSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11A096AFE9F11475810B510C /* LocalProviderSmokeTests.swift */; };
+		91E75FF80B9C3387E2AA61A0 /* SongProject.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69E0F15A48B76100F7E05771 /* SongProject.swift */; };
+		92DB27C9BEC732E7D6550B61 /* RhymeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804EC0B3BFC6B8330F233172 /* RhymeModels.swift */; };
+		93FB8286BA0023A76A919552 /* MacLyricsTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C600C286376F3DFC86D3AD11 /* MacLyricsTextView.swift */; };
+		98CBE08D88DFDC7DAC91D021 /* WritersBlockMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC2D773AC9473F29B5CF74C3 /* WritersBlockMacApp.swift */; };
+		99B7AEC4DA0D5CD4D581C988 /* CertPinningSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A08FE13E500760C23A8CC8D4 /* CertPinningSmokeTests.swift */; };
+		9CDF49EF96FFC8B662DB4B01 /* ProjectImportData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33AD7D2BECCC5945BA3AA11D /* ProjectImportData.swift */; };
+		C355C0E5D40EC447F66DB348 /* AppAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32C995EB4B9E8214B7532534 /* AppAppearance.swift */; };
+		C793BE61BF08BCA76CCC34BC /* EditHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE19C9307CF4847C068E6D3 /* EditHistoryTests.swift */; };
+		C8334DAACB5DBBCD3752A3DD /* GGUFModelService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D6F9D4676BA7B71EC7DB24 /* GGUFModelService.swift */; };
+		CE485FF2CEC143F29F0F06CC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A7C229E5BE755F62DD3DDBC9 /* Assets.xcassets */; };
+		D337DA7CFCC568C1F2BEE239 /* TrashedSongProject.swift in Sources */ = {isa = PBXBuildFile; fileRef = B76E04B3781C2741E15C371F /* TrashedSongProject.swift */; };
+		D6D9EDE0D3A7DEC116388D89 /* AIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F90262D349A1672A6531336D /* AIService.swift */; };
+		DB048C2B5C49323082B6C4F3 /* BackupCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FB80684FDAB098D3C69A301 /* BackupCoreTests.swift */; };
+		DC52E99B0FCA8CB06AEF34C1 /* AIErrorRecoveryAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4F90A1C1985E792B324F4DE /* AIErrorRecoveryAction.swift */; };
+		DC6A404A31F01ED1F8A5619D /* EditorViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0A97211852B4711593007A /* EditorViewModel.swift */; };
+		DD0D57273F3F55251A67F837 /* SynonymGeneration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7934532DFC16FCA0A277D24D /* SynonymGeneration.swift */; };
+		E03F96570B91A63BC7368A94 /* word-frequency.txt in Resources */ = {isa = PBXBuildFile; fileRef = E6A204608D930865C33CC65B /* word-frequency.txt */; };
+		E0F03DC5814FD6E363EF800D /* RhymePhonetics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92C41FAD780B64045877EDC5 /* RhymePhonetics.swift */; };
+		E4147B143B2FD25F07E49F61 /* LyricsExporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3851CD8270FE9AD55BD48847 /* LyricsExporterTests.swift */; };
+		E4590C79D64D9467760C4D44 /* SyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23CCC34202FE56EA6D0D054C /* SyncModels.swift */; };
+		E937A427336DDC3BE6666485 /* MacPersistenceExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF2897D28994CCB7AE303186 /* MacPersistenceExportTests.swift */; };
+		F29912BD6CA58EF92C68CD22 /* ProsodyAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4111E5EEE7209430C8D35C4E /* ProsodyAnalyzer.swift */; };
+		F7B346DEBB27AF6A60E6B406 /* SongTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D93CF2E3288B66F23F76FF03 /* SongTemplate.swift */; };
+		F9DB2C49B19D0BE37EDAAB64 /* TrashLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4554661F626F9EFFE2FC7254 /* TrashLifecycleTests.swift */; };
+		FFEEE90FA65A31A0CD1C5023 /* ExportFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7C3F2C23F4ECD737F50C4CD /* ExportFormat.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		6A0DD7ACAF15210B4E531462 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3ABAB6C188C3D9BBB44EBBB6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AC3D1D20A6583CDA2847A307;
+			remoteInfo = "Writers Block Mac";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		035458F172DD36B895E78A8B /* VoiceMemoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceMemoService.swift; sourceTree = "<group>"; };
+		11A096AFE9F11475810B510C /* LocalProviderSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalProviderSmokeTests.swift; sourceTree = "<group>"; };
+		1211C22127B3059B6E9F00FE /* Writers_BlockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Writers_BlockTests.swift; sourceTree = "<group>"; };
+		1754B5ACA1E4D2AA1A0C3670 /* MacVoiceMemosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVoiceMemosView.swift; sourceTree = "<group>"; };
+		1D45528927B37D8AE543E426 /* SyncBlobCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBlobCrypto.swift; sourceTree = "<group>"; };
+		23CCC34202FE56EA6D0D054C /* SyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncModels.swift; sourceTree = "<group>"; };
+		278A26A02EE6D3A65D35485C /* RhymeConstraint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RhymeConstraint.swift; sourceTree = "<group>"; };
+		27B6448E320846B9EC837EDB /* AIErrorRecoveryActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIErrorRecoveryActionTests.swift; sourceTree = "<group>"; };
+		2E127600BBBA3697BBBB9D20 /* MacSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsView.swift; sourceTree = "<group>"; };
+		32C995EB4B9E8214B7532534 /* AppAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAppearance.swift; sourceTree = "<group>"; };
+		33AD7D2BECCC5945BA3AA11D /* ProjectImportData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectImportData.swift; sourceTree = "<group>"; };
+		3851CD8270FE9AD55BD48847 /* LyricsExporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsExporterTests.swift; sourceTree = "<group>"; };
+		3E10F42F3AD56A1622BF0CE6 /* PersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTests.swift; sourceTree = "<group>"; };
+		3EC8E322832315CDB6637B44 /* LyricRegex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricRegex.swift; sourceTree = "<group>"; };
+		3FB80684FDAB098D3C69A301 /* BackupCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupCoreTests.swift; sourceTree = "<group>"; };
+		4111E5EEE7209430C8D35C4E /* ProsodyAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProsodyAnalyzer.swift; sourceTree = "<group>"; };
+		42568EC42DACE242F0B4386B /* WordFrequencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordFrequencyTests.swift; sourceTree = "<group>"; };
+		4554661F626F9EFFE2FC7254 /* TrashLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrashLifecycleTests.swift; sourceTree = "<group>"; };
+		495F738320DB5AA2EB44061D /* MacWindowSaveGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWindowSaveGuard.swift; sourceTree = "<group>"; };
+		4A097C4FD8F4A0E46F150C6E /* Writers Block Mac Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Writers Block Mac Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		4B4053396C6AB04141E8422E /* GGUFImportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGUFImportTests.swift; sourceTree = "<group>"; };
+		5665289EDBB8EBCD97EB25C2 /* SectionMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionMap.swift; sourceTree = "<group>"; };
+		56BD50C088683FC5A97D593D /* UITestFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestFlags.swift; sourceTree = "<group>"; };
+		64DB6C5B048D57BCC4747CC5 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		69E0F15A48B76100F7E05771 /* SongProject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongProject.swift; sourceTree = "<group>"; };
+		6B24B54752D700ED4A7862D1 /* VoiceMemoServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceMemoServiceTests.swift; sourceTree = "<group>"; };
+		6EE19C9307CF4847C068E6D3 /* EditHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditHistoryTests.swift; sourceTree = "<group>"; };
+		7106A289869E71373BA7B7C1 /* LlamaFramework */ = {isa = PBXFileReference; lastKnownFileType = folder; name = LlamaFramework; path = LlamaFramework; sourceTree = SOURCE_ROOT; };
+		76503F537BF85FF46EE014A8 /* GoogleDriveBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleDriveBackupService.swift; sourceTree = "<group>"; };
+		7909B193330629FC255E562B /* MacWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceView.swift; sourceTree = "<group>"; };
+		7934532DFC16FCA0A277D24D /* SynonymGeneration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynonymGeneration.swift; sourceTree = "<group>"; };
+		79438F079D2FED004BBFA6DC /* EditorUndoRedoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorUndoRedoTests.swift; sourceTree = "<group>"; };
+		7976B44BE662B6089ABB9E3A /* SyncRepairContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRepairContractTests.swift; sourceTree = "<group>"; };
+		7A0A97211852B4711593007A /* EditorViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorViewModel.swift; sourceTree = "<group>"; };
+		804EC0B3BFC6B8330F233172 /* RhymeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RhymeModels.swift; sourceTree = "<group>"; };
+		898AD5A57F1652D178BD5BA9 /* SyllableCounter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyllableCounter.swift; sourceTree = "<group>"; };
+		9201854960F8605F32570321 /* SynonymTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynonymTests.swift; sourceTree = "<group>"; };
+		92C41FAD780B64045877EDC5 /* RhymePhonetics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RhymePhonetics.swift; sourceTree = "<group>"; };
+		941C2A3DEA26ED903A90E478 /* SynonymPromptContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynonymPromptContract.swift; sourceTree = "<group>"; };
+		96EF29AC5EE2786008B795A6 /* SynonymResultPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynonymResultPresentation.swift; sourceTree = "<group>"; };
+		9BAC94418F77C227F883767C /* WordFrequency.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordFrequency.swift; sourceTree = "<group>"; };
+		A08FE13E500760C23A8CC8D4 /* CertPinningSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CertPinningSmokeTests.swift; sourceTree = "<group>"; };
+		A1CEDAD4C54514FC25C47697 /* CloudPrivacyFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudPrivacyFlowTests.swift; sourceTree = "<group>"; };
+		A2EA9B8F226CA6ECE787A78B /* BeatGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeatGrid.swift; sourceTree = "<group>"; };
+		A4F90A1C1985E792B324F4DE /* AIErrorRecoveryAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIErrorRecoveryAction.swift; sourceTree = "<group>"; };
+		A7C229E5BE755F62DD3DDBC9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AF2897D28994CCB7AE303186 /* MacPersistenceExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPersistenceExportTests.swift; sourceTree = "<group>"; };
+		B1C02817B6B53736252F0366 /* LyricsExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsExporter.swift; sourceTree = "<group>"; };
+		B76E04B3781C2741E15C371F /* TrashedSongProject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrashedSongProject.swift; sourceTree = "<group>"; };
+		C0834AEE1C0D4B743D201559 /* GGUFRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGUFRoutingTests.swift; sourceTree = "<group>"; };
+		C600C286376F3DFC86D3AD11 /* MacLyricsTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLyricsTextView.swift; sourceTree = "<group>"; };
+		C7C3F2C23F4ECD737F50C4CD /* ExportFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportFormat.swift; sourceTree = "<group>"; };
+		CA64ACAC5C7FE152151A5BAC /* Writers Block Mac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Writers Block Mac.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		D215C562EA54274323CF83FA /* RhymeConstraintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RhymeConstraintTests.swift; sourceTree = "<group>"; };
+		D397F377335A632C0EEAC5BE /* cmudict-rhymeai.tsv */ = {isa = PBXFileReference; path = "cmudict-rhymeai.tsv"; sourceTree = "<group>"; };
+		D93CF2E3288B66F23F76FF03 /* SongTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongTemplate.swift; sourceTree = "<group>"; };
+		DDFF53D047BD9CC278CE5609 /* RewriteAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteAction.swift; sourceTree = "<group>"; };
+		DFF3B691D84FA8BAD0F3D8E7 /* AnalysisPresentationStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisPresentationStyle.swift; sourceTree = "<group>"; };
+		E2354A2973A1EE2E89B085C8 /* CodeAuditRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeAuditRegressionTests.swift; sourceTree = "<group>"; };
+		E6A204608D930865C33CC65B /* word-frequency.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "word-frequency.txt"; sourceTree = "<group>"; };
+		E86818794DD984C1ABF5F527 /* AIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModels.swift; sourceTree = "<group>"; };
+		EAC34AF1963EDFF20D9A0209 /* SyncDeletionRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDeletionRecord.swift; sourceTree = "<group>"; };
+		EC2D773AC9473F29B5CF74C3 /* WritersBlockMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritersBlockMacApp.swift; sourceTree = "<group>"; };
+		F1D6F9D4676BA7B71EC7DB24 /* GGUFModelService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGUFModelService.swift; sourceTree = "<group>"; };
+		F8932CD8132EA9CC2D421AE8 /* EditHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditHistory.swift; sourceTree = "<group>"; };
+		F90262D349A1672A6531336D /* AIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIService.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		8882A1AA692176D4EE4C863B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4252CAD069EBFE4C235AC34F /* llama in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2EF0A73D163BD412BA7CA812 /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				A4F90A1C1985E792B324F4DE /* AIErrorRecoveryAction.swift */,
+				DFF3B691D84FA8BAD0F3D8E7 /* AnalysisPresentationStyle.swift */,
+				32C995EB4B9E8214B7532534 /* AppAppearance.swift */,
+				F8932CD8132EA9CC2D421AE8 /* EditHistory.swift */,
+				3EC8E322832315CDB6637B44 /* LyricRegex.swift */,
+				33AD7D2BECCC5945BA3AA11D /* ProjectImportData.swift */,
+				1D45528927B37D8AE543E426 /* SyncBlobCrypto.swift */,
+				23CCC34202FE56EA6D0D054C /* SyncModels.swift */,
+				56BD50C088683FC5A97D593D /* UITestFlags.swift */,
+			);
+			name = Support;
+			path = "Writers Block/Support";
+			sourceTree = "<group>";
+		};
+		31F05E2211703177A8F49521 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				7106A289869E71373BA7B7C1 /* LlamaFramework */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		35D1E40CE5E6F10567B90A75 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				7A0A97211852B4711593007A /* EditorViewModel.swift */,
+			);
+			name = ViewModels;
+			path = "Writers Block/ViewModels";
+			sourceTree = "<group>";
+		};
+		3A80D1C1E6224C9FAE989177 /* Mac */ = {
+			isa = PBXGroup;
+			children = (
+				A7C229E5BE755F62DD3DDBC9 /* Assets.xcassets */,
+				C600C286376F3DFC86D3AD11 /* MacLyricsTextView.swift */,
+				2E127600BBBA3697BBBB9D20 /* MacSettingsView.swift */,
+				1754B5ACA1E4D2AA1A0C3670 /* MacVoiceMemosView.swift */,
+				495F738320DB5AA2EB44061D /* MacWindowSaveGuard.swift */,
+				7909B193330629FC255E562B /* MacWorkspaceView.swift */,
+				EC2D773AC9473F29B5CF74C3 /* WritersBlockMacApp.swift */,
+			);
+			path = Mac;
+			sourceTree = "<group>";
+		};
+		4878447FF958C664C6712D2F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4A097C4FD8F4A0E46F150C6E /* Writers Block Mac Tests.xctest */,
+				CA64ACAC5C7FE152151A5BAC /* Writers Block Mac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		6430D58F9385EE0E04165405 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				F90262D349A1672A6531336D /* AIService.swift */,
+				A2EA9B8F226CA6ECE787A78B /* BeatGrid.swift */,
+				F1D6F9D4676BA7B71EC7DB24 /* GGUFModelService.swift */,
+				76503F537BF85FF46EE014A8 /* GoogleDriveBackupService.swift */,
+				64DB6C5B048D57BCC4747CC5 /* KeychainStore.swift */,
+				B1C02817B6B53736252F0366 /* LyricsExporter.swift */,
+				4111E5EEE7209430C8D35C4E /* ProsodyAnalyzer.swift */,
+				278A26A02EE6D3A65D35485C /* RhymeConstraint.swift */,
+				92C41FAD780B64045877EDC5 /* RhymePhonetics.swift */,
+				5665289EDBB8EBCD97EB25C2 /* SectionMap.swift */,
+				898AD5A57F1652D178BD5BA9 /* SyllableCounter.swift */,
+				7934532DFC16FCA0A277D24D /* SynonymGeneration.swift */,
+				941C2A3DEA26ED903A90E478 /* SynonymPromptContract.swift */,
+				96EF29AC5EE2786008B795A6 /* SynonymResultPresentation.swift */,
+				035458F172DD36B895E78A8B /* VoiceMemoService.swift */,
+				9BAC94418F77C227F883767C /* WordFrequency.swift */,
+			);
+			name = Services;
+			path = "Writers Block/Services";
+			sourceTree = "<group>";
+		};
+		76259566A863A92EF9DCBC76 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				D397F377335A632C0EEAC5BE /* cmudict-rhymeai.tsv */,
+				E6A204608D930865C33CC65B /* word-frequency.txt */,
+			);
+			name = Resources;
+			path = "Writers Block/Resources";
+			sourceTree = "<group>";
+		};
+		B3AD7B019D442CE38F98A03C /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				E86818794DD984C1ABF5F527 /* AIModels.swift */,
+				C7C3F2C23F4ECD737F50C4CD /* ExportFormat.swift */,
+				DDFF53D047BD9CC278CE5609 /* RewriteAction.swift */,
+				804EC0B3BFC6B8330F233172 /* RhymeModels.swift */,
+				69E0F15A48B76100F7E05771 /* SongProject.swift */,
+				D93CF2E3288B66F23F76FF03 /* SongTemplate.swift */,
+				EAC34AF1963EDFF20D9A0209 /* SyncDeletionRecord.swift */,
+				B76E04B3781C2741E15C371F /* TrashedSongProject.swift */,
+			);
+			name = Models;
+			path = "Writers Block/Models";
+			sourceTree = "<group>";
+		};
+		BC5A0F514CB79B13897CE4B6 /* MacTests */ = {
+			isa = PBXGroup;
+			children = (
+				AF2897D28994CCB7AE303186 /* MacPersistenceExportTests.swift */,
+			);
+			path = MacTests;
+			sourceTree = "<group>";
+		};
+		CA265841D60BB5D4BAF84A19 /* Writers BlockTests */ = {
+			isa = PBXGroup;
+			children = (
+				27B6448E320846B9EC837EDB /* AIErrorRecoveryActionTests.swift */,
+				3FB80684FDAB098D3C69A301 /* BackupCoreTests.swift */,
+				A08FE13E500760C23A8CC8D4 /* CertPinningSmokeTests.swift */,
+				A1CEDAD4C54514FC25C47697 /* CloudPrivacyFlowTests.swift */,
+				E2354A2973A1EE2E89B085C8 /* CodeAuditRegressionTests.swift */,
+				6EE19C9307CF4847C068E6D3 /* EditHistoryTests.swift */,
+				79438F079D2FED004BBFA6DC /* EditorUndoRedoTests.swift */,
+				4B4053396C6AB04141E8422E /* GGUFImportTests.swift */,
+				C0834AEE1C0D4B743D201559 /* GGUFRoutingTests.swift */,
+				11A096AFE9F11475810B510C /* LocalProviderSmokeTests.swift */,
+				3851CD8270FE9AD55BD48847 /* LyricsExporterTests.swift */,
+				3E10F42F3AD56A1622BF0CE6 /* PersistenceTests.swift */,
+				D215C562EA54274323CF83FA /* RhymeConstraintTests.swift */,
+				7976B44BE662B6089ABB9E3A /* SyncRepairContractTests.swift */,
+				9201854960F8605F32570321 /* SynonymTests.swift */,
+				4554661F626F9EFFE2FC7254 /* TrashLifecycleTests.swift */,
+				6B24B54752D700ED4A7862D1 /* VoiceMemoServiceTests.swift */,
+				42568EC42DACE242F0B4386B /* WordFrequencyTests.swift */,
+				1211C22127B3059B6E9F00FE /* Writers_BlockTests.swift */,
+			);
+			path = "Writers BlockTests";
+			sourceTree = "<group>";
+		};
+		E40D50D2FA7705E266076945 = {
+			isa = PBXGroup;
+			children = (
+				3A80D1C1E6224C9FAE989177 /* Mac */,
+				BC5A0F514CB79B13897CE4B6 /* MacTests */,
+				B3AD7B019D442CE38F98A03C /* Models */,
+				31F05E2211703177A8F49521 /* Packages */,
+				76259566A863A92EF9DCBC76 /* Resources */,
+				6430D58F9385EE0E04165405 /* Services */,
+				2EF0A73D163BD412BA7CA812 /* Support */,
+				35D1E40CE5E6F10567B90A75 /* ViewModels */,
+				CA265841D60BB5D4BAF84A19 /* Writers BlockTests */,
+				4878447FF958C664C6712D2F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		28776AA21B7CD387473F0A9B /* Writers Block Mac Tests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8BC8FB23BB11EAD9A5AF9F19 /* Build configuration list for PBXNativeTarget "Writers Block Mac Tests" */;
+			buildPhases = (
+				B7B0BA230DAD1ED6968C9CF0 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				83FA60B15245B438DA54F0DA /* PBXTargetDependency */,
+			);
+			name = "Writers Block Mac Tests";
+			packageProductDependencies = (
+			);
+			productName = "Writers Block Mac Tests";
+			productReference = 4A097C4FD8F4A0E46F150C6E /* Writers Block Mac Tests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		AC3D1D20A6583CDA2847A307 /* Writers Block Mac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1F333D541A530790A9752070 /* Build configuration list for PBXNativeTarget "Writers Block Mac" */;
+			buildPhases = (
+				3C7A66610EAC1FA75FF44447 /* Sources */,
+				F170A74285A525A4647B6ED7 /* Resources */,
+				8882A1AA692176D4EE4C863B /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Writers Block Mac";
+			packageProductDependencies = (
+				A0CDEC5230398FF26BC75A00 /* llama */,
+			);
+			productName = "Writers Block Mac";
+			productReference = CA64ACAC5C7FE152151A5BAC /* Writers Block Mac.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		3ABAB6C188C3D9BBB44EBBB6 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					28776AA21B7CD387473F0A9B = {
+						ProvisioningStyle = Automatic;
+					};
+					AC3D1D20A6583CDA2847A307 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = C35D27C3BDB78A01E4560E41 /* Build configuration list for PBXProject "Writers Block Mac" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = E40D50D2FA7705E266076945;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				BB45ABFB3B0E140270B37E58 /* XCLocalSwiftPackageReference "LlamaFramework" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 4878447FF958C664C6712D2F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AC3D1D20A6583CDA2847A307 /* Writers Block Mac */,
+				28776AA21B7CD387473F0A9B /* Writers Block Mac Tests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F170A74285A525A4647B6ED7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CE485FF2CEC143F29F0F06CC /* Assets.xcassets in Resources */,
+				3E24DDAC163166771850AB16 /* cmudict-rhymeai.tsv in Resources */,
+				E03F96570B91A63BC7368A94 /* word-frequency.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3C7A66610EAC1FA75FF44447 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DC52E99B0FCA8CB06AEF34C1 /* AIErrorRecoveryAction.swift in Sources */,
+				79D79456ED7DD7456DE8C4E3 /* AIModels.swift in Sources */,
+				D6D9EDE0D3A7DEC116388D89 /* AIService.swift in Sources */,
+				5B0C186FA6390250A4E39245 /* AnalysisPresentationStyle.swift in Sources */,
+				C355C0E5D40EC447F66DB348 /* AppAppearance.swift in Sources */,
+				5CDA31C17BC91862DB91A1B2 /* BeatGrid.swift in Sources */,
+				489E7E80C5D8298BC5052A10 /* EditHistory.swift in Sources */,
+				DC6A404A31F01ED1F8A5619D /* EditorViewModel.swift in Sources */,
+				FFEEE90FA65A31A0CD1C5023 /* ExportFormat.swift in Sources */,
+				C8334DAACB5DBBCD3752A3DD /* GGUFModelService.swift in Sources */,
+				3912A8D1E06554543C8659B5 /* GoogleDriveBackupService.swift in Sources */,
+				5090EFFBAE6D0559D1A97148 /* KeychainStore.swift in Sources */,
+				49DBCD01AE9E8F5770728853 /* LyricRegex.swift in Sources */,
+				76442009F4071586DBB511F4 /* LyricsExporter.swift in Sources */,
+				93FB8286BA0023A76A919552 /* MacLyricsTextView.swift in Sources */,
+				1127EA331D35B0CC38C653CD /* MacSettingsView.swift in Sources */,
+				4CCD61C2B787CDCF70DB4D03 /* MacVoiceMemosView.swift in Sources */,
+				8C4A8650C554051130A8EC56 /* MacWindowSaveGuard.swift in Sources */,
+				1C83BBFEBDA45ED22B36F8F5 /* MacWorkspaceView.swift in Sources */,
+				9CDF49EF96FFC8B662DB4B01 /* ProjectImportData.swift in Sources */,
+				F29912BD6CA58EF92C68CD22 /* ProsodyAnalyzer.swift in Sources */,
+				53C5A1FBAED81DD1D29648AF /* RewriteAction.swift in Sources */,
+				0A8616D5FEB75596F547F11C /* RhymeConstraint.swift in Sources */,
+				92DB27C9BEC732E7D6550B61 /* RhymeModels.swift in Sources */,
+				E0F03DC5814FD6E363EF800D /* RhymePhonetics.swift in Sources */,
+				093A3C5A2DA215151C84C359 /* SectionMap.swift in Sources */,
+				91E75FF80B9C3387E2AA61A0 /* SongProject.swift in Sources */,
+				F7B346DEBB27AF6A60E6B406 /* SongTemplate.swift in Sources */,
+				1DF2EE2B2BE9AF1404C27DC4 /* SyllableCounter.swift in Sources */,
+				741F44934E818783D6B91DAB /* SyncBlobCrypto.swift in Sources */,
+				1AD8E5779197F8D31D95176E /* SyncDeletionRecord.swift in Sources */,
+				E4590C79D64D9467760C4D44 /* SyncModels.swift in Sources */,
+				DD0D57273F3F55251A67F837 /* SynonymGeneration.swift in Sources */,
+				8224FA11C57F2165B38A09BA /* SynonymPromptContract.swift in Sources */,
+				02F55A51AAA5E11A0BC5F5A8 /* SynonymResultPresentation.swift in Sources */,
+				D337DA7CFCC568C1F2BEE239 /* TrashedSongProject.swift in Sources */,
+				591F8D42DE9DDB10E81034A2 /* UITestFlags.swift in Sources */,
+				21A4C61AF681B8326D0927F2 /* VoiceMemoService.swift in Sources */,
+				08C37440F52597CBC9519624 /* WordFrequency.swift in Sources */,
+				98CBE08D88DFDC7DAC91D021 /* WritersBlockMacApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B7B0BA230DAD1ED6968C9CF0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5A4FCF27BF726616A9BC3FA8 /* AIErrorRecoveryActionTests.swift in Sources */,
+				DB048C2B5C49323082B6C4F3 /* BackupCoreTests.swift in Sources */,
+				99B7AEC4DA0D5CD4D581C988 /* CertPinningSmokeTests.swift in Sources */,
+				68EB7DE9A1E502666F2C29D3 /* CloudPrivacyFlowTests.swift in Sources */,
+				388F167F56135F4A5BBC9BDB /* CodeAuditRegressionTests.swift in Sources */,
+				C793BE61BF08BCA76CCC34BC /* EditHistoryTests.swift in Sources */,
+				7746652EC22C0C7FD1876352 /* EditorUndoRedoTests.swift in Sources */,
+				24AA52FAB472BF8256C4AEEA /* GGUFImportTests.swift in Sources */,
+				17833DF18D6A6F020CF88B56 /* GGUFRoutingTests.swift in Sources */,
+				8FD486BD84F1EB849578ECC0 /* LocalProviderSmokeTests.swift in Sources */,
+				E4147B143B2FD25F07E49F61 /* LyricsExporterTests.swift in Sources */,
+				E937A427336DDC3BE6666485 /* MacPersistenceExportTests.swift in Sources */,
+				4DADA09BF24D14ECC2C9BE81 /* PersistenceTests.swift in Sources */,
+				1EF6AB998FB75AF46AD9788C /* RhymeConstraintTests.swift in Sources */,
+				4B90B5EE23BF568831F1AFAF /* SyncRepairContractTests.swift in Sources */,
+				46E41A34F2FFC8304D342BB5 /* SynonymTests.swift in Sources */,
+				F9DB2C49B19D0BE37EDAAB64 /* TrashLifecycleTests.swift in Sources */,
+				180D077BB831DCCF496E8F2E /* VoiceMemoServiceTests.swift in Sources */,
+				78F1991390EC7FDDC0DC0861 /* WordFrequencyTests.swift in Sources */,
+				1C08AFCBAF1828EA1FB961FF /* Writers_BlockTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		83FA60B15245B438DA54F0DA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AC3D1D20A6583CDA2847A307 /* Writers Block Mac */;
+			targetProxy = 6A0DD7ACAF15210B4E531462 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		05DDFDC02B92A0632F85A52E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Mac/WritersBlockMac.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Writers Block";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record voice memos for your songs.";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		47B5700843C98CB438915596 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-Block.macOS.tests";
+				PRODUCT_MODULE_NAME = Writers_Block_Mac_Tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Writers Block Mac.app/Contents/MacOS/Writers Block Mac";
+			};
+			name = Debug;
+		};
+		565EE105F8957DE414ACB276 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-Block.macOS";
+				PRODUCT_MODULE_NAME = Writers_Block;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		817F5F81466B18C418729A87 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-Block.macOS";
+				PRODUCT_MODULE_NAME = Writers_Block;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		8A16B0CD3546BCB6FE30AB10 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-Block.macOS.tests";
+				PRODUCT_MODULE_NAME = Writers_Block_Mac_Tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Writers Block Mac.app/Contents/MacOS/Writers Block Mac";
+			};
+			name = Release;
+		};
+		B19B2A79615529B563B850BD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Mac/WritersBlockMac.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Writers Block";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record voice memos for your songs.";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1F333D541A530790A9752070 /* Build configuration list for PBXNativeTarget "Writers Block Mac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B19B2A79615529B563B850BD /* Debug */,
+				05DDFDC02B92A0632F85A52E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		8BC8FB23BB11EAD9A5AF9F19 /* Build configuration list for PBXNativeTarget "Writers Block Mac Tests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				47B5700843C98CB438915596 /* Debug */,
+				8A16B0CD3546BCB6FE30AB10 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C35D27C3BDB78A01E4560E41 /* Build configuration list for PBXProject "Writers Block Mac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				817F5F81466B18C418729A87 /* Debug */,
+				565EE105F8957DE414ACB276 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		BB45ABFB3B0E140270B37E58 /* XCLocalSwiftPackageReference "LlamaFramework" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = LlamaFramework;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A0CDEC5230398FF26BC75A00 /* llama */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = llama;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 3ABAB6C188C3D9BBB44EBBB6 /* Project object */;
+}

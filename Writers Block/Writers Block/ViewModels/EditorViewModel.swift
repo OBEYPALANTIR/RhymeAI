@@ -783,13 +783,20 @@ final class EditorViewModel: ObservableObject {
             cursorPosition: Self.characterOffset(forUTF16Offset: range.location, in: fullLyrics)
         )
         let rejectedForRequest = rewriteRejectedCandidates
+        let providerForRequest = selectedProvider
+        let keyForRequest = currentApiKey
+        let modelForRequest = selectedModel.id
+        let wholeSongForRequest = useWholeSongContext
+        let credentialRevision = inspectorCredentialRevisions[providerForRequest.rawValue, default: 0]
 
         rewriteTask = Task { @MainActor in
+            guard !Task.isCancelled, rewriteRequestID == requestID,
+                  inspectorCredentialRevisions[providerForRequest.rawValue, default: 0] == credentialRevision else { return }
             do {
                 let result = try await aiService.getRewrite(
-                    provider: selectedProvider,
-                    apiKey: currentApiKey,
-                    modelId: selectedModel.id,
+                    provider: providerForRequest,
+                    apiKey: keyForRequest,
+                    modelId: modelForRequest,
                     action: action,
                     fullLyrics: fullLyrics,
                     selection: original,
@@ -797,7 +804,7 @@ final class EditorViewModel: ObservableObject {
                     // AIService walks lyrics by Characters; range.location is UTF-16.
                     selectionStart: Self.characterOffset(forUTF16Offset: range.location, in: fullLyrics),
                     rejectedCandidates: rejectedForRequest,
-                    useWholeSongContext: useWholeSongContext
+                    useWholeSongContext: wholeSongForRequest
                 )
                 guard !Task.isCancelled,
                       rewriteRequestID == requestID,
@@ -1540,7 +1547,7 @@ final class EditorViewModel: ObservableObject {
         let projectIdAtTrigger = currentProjectId
         autoSaveTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            guard !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
+            guard currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
                 saveStatus = .idle
                 return
             }
@@ -1552,42 +1559,51 @@ final class EditorViewModel: ObservableObject {
             // The editor switched projects (or cleared) during the debounce —
             // saving now would write into the wrong project or create an empty one.
             guard currentProjectId == projectIdAtTrigger,
-                  !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
+                  currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
                 saveStatus = .idle
                 return
             }
 
-            guard let context = modelContext else {
-                saveStatus = .idle
-                return
-            }
+            _ = saveCurrentProject()
+        }
+    }
 
-            var createdProjectID: String?
-            if let projectId = currentProjectId {
-                let descriptor = FetchDescriptor<SongProject>(
-                    predicate: #Predicate<SongProject> { $0.id == projectId }
-                )
-                if let existing = try? context.fetch(descriptor).first {
-                    existing.title = normalizedProjectTitle()
-                    existing.lyrics = lyrics
-                    existing.theme = theme
-                    existing.updatedAt = Date()
-                }
-            } else {
-                let project = makeUntitledSongProject()
-                context.insert(project)
-                createdProjectID = project.id
-            }
+    @discardableResult
+    func saveCurrentProject() -> Bool {
+        autoSaveTask?.cancel()
+        guard currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return true }
+        guard let context = modelContext else {
+            saveStatus = .idle
+            return false
+        }
 
-            do {
-                try saveModelContext(context)
-                if let createdProjectID { currentProjectId = createdProjectID }
-                saveStatus = .saved
-            } catch {
-                context.rollback()
-                saveStatus = .idle
-                errorMessage = "Couldn't save this song. Your edits remain open."
+        var createdProjectID: String?
+        if let projectId = currentProjectId {
+            let descriptor = FetchDescriptor<SongProject>(
+                predicate: #Predicate<SongProject> { $0.id == projectId }
+            )
+            if let existing = try? context.fetch(descriptor).first {
+                existing.title = normalizedProjectTitle()
+                existing.lyrics = lyrics
+                existing.theme = theme
+                existing.updatedAt = Date()
             }
+        } else {
+            let project = makeUntitledSongProject()
+            context.insert(project)
+            createdProjectID = project.id
+        }
+
+        do {
+            try saveModelContext(context)
+            if let createdProjectID { currentProjectId = createdProjectID }
+            saveStatus = .saved
+            return true
+        } catch {
+            context.rollback()
+            saveStatus = .idle
+            errorMessage = "Couldn't save this song. Your edits remain open."
+            return false
         }
     }
 
@@ -1628,6 +1644,7 @@ final class EditorViewModel: ObservableObject {
             }
             apiKeyPresence[provider.rawValue] = false
             inspectorCredentialRevisions[provider.rawValue, default: 0] &+= 1
+            if provider == selectedProvider { cancelEditorAIWork() }
             return true
         }
         let stored = keychainStore.setKey(provider: provider.rawValue, key: key)
@@ -1636,6 +1653,7 @@ final class EditorViewModel: ObservableObject {
         }
         apiKeyPresence[provider.rawValue] = true
         inspectorCredentialRevisions[provider.rawValue, default: 0] &+= 1
+        if provider == selectedProvider { cancelEditorAIWork() }
         return true
     }
 

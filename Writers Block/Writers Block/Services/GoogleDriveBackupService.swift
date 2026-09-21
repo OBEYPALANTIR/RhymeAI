@@ -2,7 +2,11 @@ import AuthenticationServices
 import CryptoKit
 import Foundation
 import SwiftData
+#if os(macOS)
+import AppKit
+#else
 import UIKit
+#endif
 
 enum BackupError: Error, Equatable {
     case notConfigured
@@ -410,10 +414,14 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if os(macOS)
+        NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? ASPresentationAnchor()
+        #else
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+        #endif
     }
 
     private func authorize(clientID: String, redirectScheme: String) async throws -> OAuthToken {
