@@ -77,8 +77,10 @@ struct MacVoiceMemosView: View {
                         importError = "Couldn't import this recording. Choose a playable M4A, MP3, WAV, or AAC file."
                     }
                 }
-            case .failure:
-                importError = "Couldn't open the recording. Try choosing it again."
+            case .failure(let error):
+                if (error as NSError).code != NSUserCancelledError {
+                    importError = "Couldn't open the recording. Try choosing it again."
+                }
             }
         }
         .task { refresh() }
