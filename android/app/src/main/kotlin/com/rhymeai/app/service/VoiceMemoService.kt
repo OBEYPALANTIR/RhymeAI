@@ -304,9 +304,8 @@ class VoiceMemoService(private val context: Context) {
                 val coroutineContext = currentCoroutineContext()
                 val source = resolver.openInputStream(uri)
                     ?: throw java.io.IOException("Cannot open audio")
-                val file = source.use { input ->
-                    RecordingImportStore.copy(
-                        input = input,
+                val file = RecordingImportStore.copy(
+                        input = source,
                         directory = memoDir(projectId),
                         displayName = name,
                         checkCancellation = { coroutineContext.ensureActive() },
@@ -324,7 +323,6 @@ class VoiceMemoService(private val context: Context) {
                             require(probeAudioDurationMs(candidate) > 0) { "Audio cannot be played" }
                         }
                     )
-                }
                 imported = file
                 memoFromFile(file)
             }
@@ -603,11 +601,27 @@ class VoiceMemoService(private val context: Context) {
          * collapse whitespace, and trim. Returns an empty string if nothing remains
          * after sanitization — the caller must reject empty results.
          */
-        internal fun sanitizeBasename(raw: String): String =
-            raw
+        internal fun sanitizeBasename(raw: String): String {
+            val cleaned = raw
                 .replace(Regex("""[/\\:*?"<>|]"""), "")
                 .replace(Regex("""\s+"""), " ")
+                .replace(Regex("""[\p{Cc}\p{Cf}]"""), "")
                 .trim()
+            // Leave room for the audio extension, duplicate suffix and trash timestamp
+            // on both platforms. Count UTF-8 bytes without splitting a code point.
+            val bounded = StringBuilder()
+            var byteCount = 0
+            val points = cleaned.codePoints().iterator()
+            while (points.hasNext()) {
+                val point = points.nextInt()
+                val character = String(Character.toChars(point))
+                val bytes = character.toByteArray(Charsets.UTF_8).size
+                if (byteCount + bytes > 200) break
+                bounded.append(character)
+                byteCount += bytes
+            }
+            return bounded.toString().trim()
+        }
 
         /**
          * Find a free filename for [base] with [extension] inside [dir]. If that name already

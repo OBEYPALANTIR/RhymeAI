@@ -17,34 +17,40 @@ internal object RecordingImportStore {
         checkCancellation: () -> Unit,
         validate: (File) -> Unit
     ): File {
-        val extension = displayName.substringAfterLast('.', "").lowercase(Locale.ROOT)
-        require(extension in VoiceMemoService.SUPPORTED_AUDIO_EXTENSIONS) { "Unsupported audio format" }
-        val basename = VoiceMemoService.sanitizeBasename(displayName.substringBeforeLast('.'))
-            .take(120).ifBlank { "Imported recording" }
-        if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Cannot create recording folder")
-        val staged = File.createTempFile("import-", ".pending", directory)
+        var staged: File? = null
         try {
-            staged.outputStream().use { output ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var bytesCopied = 0L
-                while (true) {
-                    checkCancellation()
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    bytesCopied += count
-                    require(bytesCopied <= MAX_IMPORT_BYTES) { "Recording exceeds 100 MiB" }
-                    output.write(buffer, 0, count)
+            val (candidate, basename, extension) = input.use { source ->
+                val extension = displayName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                require(extension in VoiceMemoService.SUPPORTED_AUDIO_EXTENSIONS) { "Unsupported audio format" }
+                val basename = VoiceMemoService.sanitizeBasename(displayName.substringBeforeLast('.'))
+                    .ifBlank { "Imported recording" }
+                if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Cannot create recording folder")
+                val temporary = File.createTempFile("import-", ".pending", directory)
+                staged = temporary
+                temporary.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var bytesCopied = 0L
+                    while (true) {
+                        checkCancellation()
+                        val count = source.read(buffer)
+                        if (count < 0) break
+                        bytesCopied += count
+                        require(bytesCopied <= MAX_IMPORT_BYTES) { "Recording exceeds 100 MiB" }
+                        output.write(buffer, 0, count)
+                    }
                 }
+                Triple(temporary, basename, extension)
             }
-            require(staged.length() > 0) { "Empty audio file" }
-            validate(staged)
+            // A provider close failure is still an import failure, before publication.
+            require(candidate.length() > 0) { "Empty audio file" }
+            validate(candidate)
             checkCancellation()
             val destination = VoiceMemoService.resolveCollision(directory, basename, extension)
             // No REPLACE_EXISTING: a concurrent import must never overwrite another take.
-            Files.move(staged.toPath(), destination.toPath())
+            Files.move(candidate.toPath(), destination.toPath())
             return destination
         } finally {
-            staged.delete()
+            staged?.delete()
         }
     }
 }

@@ -79,6 +79,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.ripple
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -178,7 +179,7 @@ private fun rememberExportDocumentLauncher(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
-    var recordingsProjectId by remember { mutableStateOf<String?>(null) }
+    var recordingsProjectId by rememberSaveable { mutableStateOf<String?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
     var lyricsFocused by remember { mutableStateOf(false) }
     var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }

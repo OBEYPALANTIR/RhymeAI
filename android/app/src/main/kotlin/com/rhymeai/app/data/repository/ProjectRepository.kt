@@ -9,6 +9,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -58,6 +60,7 @@ class ProjectRepository(
         val isBeatGridEnabled: Boolean = false
     )
 
+    private val projectSaveMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
 
     val projectsFlow: Flow<List<SongProject>> = context.dataStore.data.map { prefs ->
@@ -74,7 +77,7 @@ class ProjectRepository(
         try { json.decodeFromString<List<TrashedSongProject>>(raw) } catch (_: Exception) { emptyList() }
     }.flowOn(Dispatchers.Default)
 
-    suspend fun saveProjects(projects: List<SongProject>) {
+    suspend fun saveProjects(projects: List<SongProject>) = projectSaveMutex.withLock {
         val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
         context.dataStore.edit { prefs ->
             prefs[PROJECTS_KEY] = encoded

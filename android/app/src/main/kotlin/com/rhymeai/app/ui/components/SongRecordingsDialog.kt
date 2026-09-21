@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -30,7 +31,7 @@ fun SongRecordingsDialog(
     val snackbar = remember { SnackbarHostState() }
     var revision by remember(projectId) { mutableIntStateOf(0) }
     var importing by remember { mutableStateOf(false) }
-    var search by remember(projectId) { mutableStateOf("") }
+    var search by rememberSaveable(projectId) { mutableStateOf("") }
     var selecting by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(emptySet<String>()) }
     var confirmBulkTrash by remember { mutableStateOf(false) }

@@ -48,6 +48,17 @@ class RecordingImportStoreTest {
         assertTrue(song.listFiles().orEmpty().isEmpty())
     }
 
+    @Test fun providerCloseFailureCannotPublishRecording() {
+        val song = temporary.newFolder()
+        val source = object : ByteArrayInputStream(byteArrayOf(1)) {
+            override fun close() { throw IOException("provider close failed") }
+        }
+        assertFailsWith<IOException> {
+            RecordingImportStore.copy(source, song, "take.wav", {}, { fail("Provider must close before validation") })
+        }
+        assertTrue(song.listFiles().orEmpty().isEmpty())
+    }
+
     @Test fun copyFailureRemovesPartialFile() {
         val song = temporary.newFolder()
         val input = object : InputStream() {
@@ -71,6 +82,26 @@ class RecordingImportStoreTest {
         }
         assertFailsWith<IllegalArgumentException> { RecordingImportStore.copy(input, song, "long.wav", {}, {}) }
         assertTrue(song.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test fun unicodeNamesLeaveRoomForDuplicateAndTrashNames() {
+        val song = temporary.newFolder()
+        val name = "曲".repeat(80) + ".wav"
+        val first = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, name, {}, {})
+        val duplicate = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(2)), song, name, {}, {})
+        assertEquals("曲".repeat(66) + ".wav", first.name)
+        assertEquals("曲".repeat(66) + " 2.wav", duplicate.name)
+        assertTrue(("${System.currentTimeMillis()}__${duplicate.name}").toByteArray().size <= 240)
+        assertEquals(2, song.listFiles().orEmpty().size)
+    }
+
+    @Test fun importedNamesRemoveControlsAndRetainWholeUnicodeCharacters() {
+        val song = temporary.newFolder()
+        val imported = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, "verse\u0000\u0001\u200B\nidea.wav", {}, {})
+        assertEquals("verse idea.wav", imported.name)
+        val emoji = VoiceMemoService.sanitizeBasename("🎵".repeat(60))
+        assertEquals("🎵".repeat(50), emoji)
+        assertEquals(200, emoji.toByteArray().size)
     }
 
     @Test fun filenamesCannotEscapeSongAndStagingFilesAreNotRecordings() {

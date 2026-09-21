@@ -1054,20 +1054,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // A recording needs a project folder before any lyrics exist (people hum
     // the melody first). Creates and persists an Untitled project on demand.
     suspend fun ensureProjectForRecording(): String {
-        currentProjectId?.let { return it }
-        val newProject = createUntitledProjectSnapshot()
-        val updatedProjects = listOf(newProject) + projects
-        persistActiveProjectSnapshot(
-            projectId = newProject.id,
-            projectList = updatedProjects,
-            editorTitle = title,
-            editorLyrics = lyrics,
-            editorTheme = theme
-        )
-        projects = updatedProjects
-        currentProjectId = newProject.id
-        showStartMenu = false
-        return newProject.id
+        // Reserve identity before suspending so edits during persistence keep the
+        // same autosave target. Never reinstall a snapshot after navigation.
+        val projectId = currentProjectId ?: createUntitledProjectSnapshot().let { project ->
+            projects = listOf(project) + projects
+            currentProjectId = project.id
+            showStartMenu = false
+            project.id
+        }
+        fun requireSameSong() {
+            if (currentProjectId != projectId) throw kotlinx.coroutines.CancellationException("Song changed")
+        }
+        // Persist on retries too: an earlier storage failure may have reserved an
+        // identity without saving it, and must not admit an orphaned recording.
+        repo.saveProjects(projects)
+        requireSameSong()
+        repo.setCurrentProjectId(projectId)
+        requireSameSong()
+        repo.saveEditorState(title, lyrics, theme)
+        requireSameSong()
+        return projectId
     }
 
     fun triggerAutoSave() {
