@@ -11,16 +11,16 @@ enum SyncValidationError: Error, Equatable {
 }
 
 enum SyncIdentity {
-    static func validateProjectId(_ value: String) throws {
+    nonisolated static func validateProjectId(_ value: String) throws {
         guard !value.isEmpty, value.utf8.count <= 128, value != ".", value != "..",
               !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || "/\\".unicodeScalars.contains($0) }) else {
             throw SyncValidationError.invalidProjectId
         }
     }
 
-    static func validateFileName(_ value: String) throws {
+    nonisolated static func validateFileName(_ value: String) throws {
         let illegal = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
-        guard !value.isEmpty, value.utf8.count <= 240, value.hasSuffix(".m4a"),
+        guard !value.isEmpty, value.utf8.count <= 240, VoiceMemoService.supportedAudioExtensions.contains((value as NSString).pathExtension.lowercased()),
               value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.unicodeScalars.contains(where: { illegal.contains($0) }) else {
             throw SyncValidationError.invalidFileName
@@ -219,7 +219,7 @@ struct SyncRecordingManifestEntry: Codable, Equatable, Sendable {
         try SyncIdentity.validateFileName(fileName)
         guard driveName == RecordingBackupManifest.driveName(projectId: projectId, fileName: fileName),
               !driveName.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || "/\\".unicodeScalars.contains($0) }),
-              driveName.hasSuffix(".m4a.enc") else { throw SyncValidationError.invalidDriveName }
+              driveName.hasSuffix(".enc") else { throw SyncValidationError.invalidDriveName }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -402,10 +402,10 @@ enum RecordingBackupManifest {
     }
 
     static func driveName(projectId: String, fileName: String) -> String {
-        "rec_\(projectId)_\(fileName.dropLast(4)).m4a.enc"
+        "rec_\(projectId)_\(fileName).enc"
     }
 
-    static func projectURL(projectId: String, memosRoot: URL) throws -> URL {
+    nonisolated static func projectURL(projectId: String, memosRoot: URL) throws -> URL {
         try SyncIdentity.validateProjectId(projectId)
         let root = memosRoot.standardizedFileURL.resolvingSymlinksInPath()
         let folder = root.appendingPathComponent(projectId, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
@@ -413,7 +413,7 @@ enum RecordingBackupManifest {
         return folder
     }
 
-    static func localURL(projectId: String, fileName: String, memosRoot: URL) throws -> URL {
+    nonisolated static func localURL(projectId: String, fileName: String, memosRoot: URL) throws -> URL {
         try SyncIdentity.validateFileName(fileName)
         let root = memosRoot.standardizedFileURL.resolvingSymlinksInPath()
         let folder = try projectURL(projectId: projectId, memosRoot: root)
@@ -422,7 +422,7 @@ enum RecordingBackupManifest {
         return url
     }
 
-    private static func requireDescendant(_ url: URL, of root: URL) throws {
+    nonisolated private static func requireDescendant(_ url: URL, of root: URL) throws {
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         guard url.path.hasPrefix(prefix), url.path != root.path else { throw SyncValidationError.pathOutsideMemoRoot }
     }
@@ -437,7 +437,7 @@ enum RecordingBackupManifest {
             ) else { return [] }
 
             return try urls
-                .filter { $0.pathExtension == "m4a" }
+                .filter { VoiceMemoService.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
                 .map { url in
                     let url = try localURL(projectId: projectId, fileName: url.lastPathComponent, memosRoot: memosRoot)
