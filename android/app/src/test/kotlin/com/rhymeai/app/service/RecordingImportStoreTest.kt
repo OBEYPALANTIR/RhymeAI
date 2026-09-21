@@ -84,6 +84,13 @@ class RecordingImportStoreTest {
         assertTrue(song.listFiles().orEmpty().isEmpty())
     }
 
+    @Test fun hiddenImportNamesBecomeVisibleOnBothPlatforms() {
+        val song = temporary.newFolder()
+        val imported = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, ".take.wav", {}, {})
+        assertEquals("Imported recording.wav", imported.name)
+        assertFalse(imported.isHidden)
+    }
+
     @Test fun unicodeNamesLeaveRoomForDuplicateAndTrashNames() {
         val song = temporary.newFolder()
         val name = "曲".repeat(80) + ".wav"

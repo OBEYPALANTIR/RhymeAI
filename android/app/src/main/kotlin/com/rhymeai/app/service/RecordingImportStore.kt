@@ -23,7 +23,7 @@ internal object RecordingImportStore {
                 val extension = displayName.substringAfterLast('.', "").lowercase(Locale.ROOT)
                 require(extension in VoiceMemoService.SUPPORTED_AUDIO_EXTENSIONS) { "Unsupported audio format" }
                 val basename = VoiceMemoService.sanitizeBasename(displayName.substringBeforeLast('.'))
-                    .ifBlank { "Imported recording" }
+                    .takeUnless { it.startsWith(".") }.orEmpty().ifBlank { "Imported recording" }
                 if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Cannot create recording folder")
                 val temporary = File.createTempFile("import-", ".pending", directory)
                 staged = temporary
