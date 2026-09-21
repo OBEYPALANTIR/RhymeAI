@@ -424,7 +424,7 @@ struct SongRecordingsView: View {
     }
 
     private func reloadRecordings() {
-        let items = VoiceMemoService.memos(for: projectId).reversed().map {
+        let items = VoiceMemoService.memos(for: projectId).map {
             RecordingItem(id: $0.absoluteString, url: $0, projectId: projectId, projectTitle: projectTitle)
         }
         recordingFolders = items.isEmpty ? [] : [RecordingFolder(id: projectId, title: projectTitle, items: items)]
