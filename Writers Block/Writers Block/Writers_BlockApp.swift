@@ -205,6 +205,7 @@ struct Writers_BlockApp: App {
         let schema = Schema([
             SongProject.self,
             TrashedSongProject.self,
+            SyncDeletionRecord.self,
         ])
         let logger = Logger(subsystem: "ShaydeTree.Writers-Block", category: "storage")
 

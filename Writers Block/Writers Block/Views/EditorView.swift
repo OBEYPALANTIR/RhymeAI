@@ -91,6 +91,12 @@ struct EditorView: View {
     @State private var assistantSheetDragOffset: CGFloat = EditorViewConstants.AssistantSheet.restingOffset
     @State private var assistantSheetIsDismissing = false
     @State private var assistantSheetLifecycleTask: Task<Void, Never>?
+    @State private var recordingSong: RecordingSong?
+    private struct RecordingSong: Identifiable {
+        let id: String
+        let title: String
+    }
+
     @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
     @State private var fileExporterPresented: Bool = false
     @State private var projectDrawerOpen: Bool = false
@@ -167,6 +173,9 @@ struct EditorView: View {
         }
         .sheet(isPresented: $viewModel.showNotebook) {
             SongNotebookView()
+        }
+        .sheet(item: $recordingSong) { song in
+            SongRecordingsView(projectId: song.id, projectTitle: song.title)
         }
         .fileExporter(
             isPresented: $fileExporterPresented,
@@ -830,6 +839,12 @@ struct EditorView: View {
                         }
                         .disabled(viewModel.hasActiveRewrite)
                         .accessibilityIdentifier("sectionMenuButton")
+                        Button("Song recordings", systemImage: "waveform") {
+                            dismissKeyboard()
+                            guard let id = viewModel.ensureProjectForRecording() else { return }
+                            recordingSong = RecordingSong(id: id, title: viewModel.title.isEmpty ? "Untitled Song" : viewModel.title)
+                        }
+                        .accessibilityIdentifier("songRecordings")
                         Button("Song Notebook", systemImage: "book.closed") {
                             dismissKeyboard()
                             viewModel.showNotebook = true
@@ -1004,5 +1019,5 @@ private struct ScribbleUnderline: View {
 #Preview {
     EditorView()
         .environmentObject(EditorViewModel())
-        .modelContainer(for: [SongProject.self, TrashedSongProject.self], inMemory: true)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self], inMemory: true)
 }

@@ -20,7 +20,7 @@ struct FloatingMicButton: View {
 
     let service: VoiceMemoService
     /// Called at record time to obtain (or lazily create) the project for this recording.
-    let ensureProjectId: () -> String
+    let ensureProjectId: () -> String?
 
     // MARK: - Animation state
 
@@ -91,7 +91,7 @@ struct FloatingMicButton: View {
                     if service.isRecording {
                         service.stopRecording()
                     } else {
-                        let projectId = ensureProjectId()
+                        guard let projectId = ensureProjectId() else { return }
                         Task { await service.startRecording(projectId: projectId) }
                     }
                 } label: {

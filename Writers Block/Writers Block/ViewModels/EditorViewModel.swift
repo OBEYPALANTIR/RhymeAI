@@ -108,6 +108,8 @@ final class EditorViewModel: ObservableObject {
     private var rewriteRange: NSRange?
     private var rewriteTask: Task<Void, Never>?
     private var suggestionsTask: Task<Void, Never>?
+    private var suggestionsRequestID: UUID?
+    private var rewriteRequestID: UUID?
     private var derivedStateTask: Task<Void, Never>?
     private var rewriteRejectedCandidates: Set<String> = []
 
@@ -190,6 +192,7 @@ final class EditorViewModel: ObservableObject {
 
     var modelContext: ModelContext? {
         didSet {
+            applyPersistedDeletions()
             purgeExpiredTrashedProjects()
             seedTrashProjectForUITestsIfNeeded()
             refreshCloudBackupState()
@@ -284,7 +287,10 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Init
 
-    init(keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, companionStore: WritingCompanionStore? = nil) {
+    private let saveModelContext: (ModelContext) throws -> Void
+
+    init(keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, companionStore: WritingCompanionStore? = nil, saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
+        self.saveModelContext = saveModelContext
         let runningUITestInMemory = UITestFlags.isEnabled(UITestFlags.inMemoryStore)
         let resolvedStore: KeychainStore = keychainStore
             ?? (runningUITestInMemory ? InMemoryKeychainStore() : SystemKeychainStore())
@@ -611,6 +617,9 @@ final class EditorViewModel: ObservableObject {
         guard !lyrics.isEmpty else { return }
         let context = rhymeContext
         suggestionsTask?.cancel()
+        let requestID = UUID()
+        suggestionsRequestID = requestID
+        let projectID = currentProjectId
         isLoading = true
         errorMessage = nil
         suggestions = []
@@ -648,22 +657,26 @@ final class EditorViewModel: ObservableObject {
         }()
 
         suggestionsTask = Task { @MainActor in
-            defer { self.isLoading = false }
+            defer {
+                if self.suggestionsRequestID == requestID { self.isLoading = false }
+            }
             do {
                 var emittedSuggestion = false
                 for try await text in stream {
+                    guard !Task.isCancelled, self.suggestionsRequestID == requestID, self.currentProjectId == projectID else { return }
                     emittedSuggestion = true
                     let tier = filter?.tier(of: text) ?? 0
                     let endWord = RhymeConstraint.lineEndWord(text)
                     let isHookRepeat = !firstChorusEndWordSet.isEmpty && firstChorusEndWordSet.contains(endWord)
                     self.suggestions.append(SuggestedLine(text: text, tier: tier, isHookRepeat: isHookRepeat))
                 }
-                if !emittedSuggestion, !Task.isCancelled {
+                if !emittedSuggestion, !Task.isCancelled, self.suggestionsRequestID == requestID, self.currentProjectId == projectID {
                     self.errorMessage = "AI did not return suggestions. Try again."
                 }
             } catch is CancellationError {
                 // expected when cancelSuggestions() is invoked
             } catch {
+                guard self.suggestionsRequestID == requestID, self.currentProjectId == projectID else { return }
                 self.errorMessage = error.localizedDescription
             }
         }
@@ -672,6 +685,7 @@ final class EditorViewModel: ObservableObject {
     func cancelSuggestions() {
         suggestionsTask?.cancel()
         suggestionsTask = nil
+        suggestionsRequestID = nil
         isLoading = false
     }
 
@@ -728,6 +742,9 @@ final class EditorViewModel: ObservableObject {
         rejectedCandidates: Set<String> = []
     ) {
         rewriteTask?.cancel()
+        let requestID = UUID()
+        rewriteRequestID = requestID
+        let projectID = currentProjectId
         rewriteAction = action
         rewriteOriginal = original
         rewriteRange = range
@@ -757,13 +774,13 @@ final class EditorViewModel: ObservableObject {
                     selectionStart: Self.characterOffset(forUTF16Offset: range.location, in: fullLyrics),
                     rejectedCandidates: rejectedForRequest
                 )
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, rewriteRequestID == requestID, currentProjectId == projectID else { return }
                 rewritePreview = result
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, rewriteRequestID == requestID, currentProjectId == projectID else { return }
                 rewriteError = error.localizedDescription
             }
-            rewriteLoading = false
+            if rewriteRequestID == requestID { rewriteLoading = false }
         }
     }
 
@@ -790,6 +807,7 @@ final class EditorViewModel: ObservableObject {
     func dismissRewrite() {
         rewriteTask?.cancel()
         rewriteTask = nil
+        rewriteRequestID = nil
         rewriteAction = nil
         rewriteLoading = false
         rewritePreview = nil
@@ -1039,9 +1057,16 @@ final class EditorViewModel: ObservableObject {
         return range
     }
 
+    private func cancelEditorAIWork() {
+        cancelSuggestions()
+        dismissRewrite()
+        dismissInspector()
+    }
+
     // MARK: - Project Management
 
     func newProject() {
+        cancelEditorAIWork()
         guard flushCurrentDraft(checkpoint: true) else { return }
         autoSaveTask?.cancel()
         title = ""
@@ -1059,6 +1084,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func loadProject(_ project: SongProject) {
+        cancelEditorAIWork()
         guard flushCurrentDraft(checkpoint: true) else { return }
         autoSaveTask?.cancel()
         title = project.title
@@ -1075,72 +1101,159 @@ final class EditorViewModel: ObservableObject {
         resetLyricsHistory()
     }
 
-    func moveProjectToTrash(_ project: SongProject) {
-        if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return }
-        guard let context = modelContext else { return }
+    @discardableResult
+    func moveProjectToTrash(_ project: SongProject) -> Bool {
+        if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
+        guard let context = modelContext else { return false }
         autoSaveTask?.cancel()
 
         let trashedProject = TrashedSongProject(project: project)
         removeExistingTrashEntries(id: project.id, in: context)
         context.insert(trashedProject)
-        if currentProjectId == project.id {
-            clearEditorAfterProjectDelete()
-        }
+        let clearsCurrentEditor = currentProjectId == project.id
         removeExistingProjects(id: project.id, in: context)
-        try? context.save()
+        do {
+            try saveModelContext(context)
+        } catch {
+            context.rollback()
+            errorMessage = "Couldn't move this song to Trash. Your song was kept."
+            return false
+        }
+        if clearsCurrentEditor { clearEditorAfterProjectDelete() }
         scheduleTrashPurge()
+        return true
     }
 
-    func restoreTrashedProject(_ trashedProject: TrashedSongProject) {
-        guard let context = modelContext else { return }
+    @discardableResult
+    func restoreTrashedProject(_ trashedProject: TrashedSongProject) -> Bool {
+        guard let context = modelContext else { return false }
         let restoredProject = trashedProject.restoredProject()
         removeExistingProjects(id: restoredProject.id, in: context)
         context.insert(restoredProject)
         removeExistingTrashEntries(id: restoredProject.id, in: context)
-        try? context.save()
+        do {
+            try saveModelContext(context)
+        } catch {
+            context.rollback()
+            errorMessage = "Couldn't restore this song. It remains in Trash."
+            return false
+        }
         scheduleTrashPurge()
+        return true
     }
 
-    func permanentlyDeleteTrashedProject(_ trashedProject: TrashedSongProject) {
-        guard let context = modelContext else { return }
+    @discardableResult
+    func permanentlyDeleteTrashedProject(_ trashedProject: TrashedSongProject) -> Bool {
+        guard let context = modelContext else { return false }
         let projectId = trashedProject.id
-        context.delete(trashedProject)
-        do { try context.save() }
-        catch {
+        do {
+            try upsertPermanentDeletion(projectId: projectId, in: context)
+            context.delete(trashedProject)
+            try saveModelContext(context)
+        } catch {
             context.rollback()
-            companionError = "Could not delete this song. Its notebook has been kept."
-            return
+            errorMessage = "Couldn't permanently delete this song. It remains in Trash."
+            return false
         }
         // Remove the memo folder so orphaned audio doesn't accumulate on disk.
-        VoiceMemoService.deleteMemosFolder(for: projectId)
+        if !RecordingFiles.deleteMemosFolder(for: projectId) {
+            errorMessage = "This song was permanently deleted, but its local recordings could not be removed. Writers Block will retry cleanup."
+        }
         do { try companionStore.remove(projectId) } catch { companionError = "Could not remove this song’s local notebook." }
         scheduleTrashPurge()
+        return true
     }
 
     func purgeExpiredTrashedProjects() {
         guard let context = modelContext else { return }
         let now = Date()
-        // Trashed recordings expire on their own clock, independent of projects.
-        VoiceMemoService.purgeExpiredTrashedMemos(now: now)
+        let expiredMemos = RecordingFiles.trashedMemos().filter { $0.deleteAfter <= now }
         let descriptor = FetchDescriptor<TrashedSongProject>(
             predicate: #Predicate<TrashedSongProject> { $0.deleteAfter <= now }
         )
-        guard let expiredProjects = try? context.fetch(descriptor), !expiredProjects.isEmpty else {
+        guard let expiredProjects = try? context.fetch(descriptor), !expiredProjects.isEmpty || !expiredMemos.isEmpty else {
             scheduleTrashPurge()
             return
         }
-        let expiredIDs = expiredProjects.map(\.id)
-        for project in expiredProjects {
-            let projectId = project.id
-            context.delete(project)
-            // Remove memo audio alongside the SwiftData row so nothing lingers.
-            VoiceMemoService.deleteMemosFolder(for: projectId)
-        }
+        let projectIDs = expiredProjects.map(\.id)
         do {
-            try context.save()
-            for id in expiredIDs { try companionStore.remove(id) }
-        } catch { companionError = "Could not finish deleting expired songs." }
+            for projectId in projectIDs {
+                try upsertPermanentDeletion(projectId: projectId, deletedAt: now, in: context)
+            }
+            for memo in expiredMemos {
+                try upsertPermanentDeletion(projectId: memo.projectId, fileName: memo.originalName, deletedAt: now, in: context)
+            }
+            expiredProjects.forEach(context.delete)
+            try saveModelContext(context)
+            for projectId in projectIDs where !RecordingFiles.deleteMemosFolder(for: projectId) {
+                errorMessage = "Expired writing was removed, but some local recordings could not be cleaned up. Writers Block will retry."
+            }
+            for projectId in projectIDs { try companionStore.remove(projectId) }
+            for memo in expiredMemos {
+                _ = voiceMemoService.permanentlyDeleteTrashedMemo(memo)
+            }
+        } catch {
+            context.rollback()
+            errorMessage = "Couldn't finish removing expired Trash items. They were kept for the next attempt."
+        }
         scheduleTrashPurge()
+    }
+
+    func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
+        guard let context = modelContext else { return false }
+        do {
+            try upsertPermanentDeletion(projectId: trashed.projectId, fileName: trashed.originalName, in: context)
+            try saveModelContext(context)
+        } catch {
+            context.rollback()
+            voiceMemoService.lastError = "Couldn't permanently delete this recording. It remains in Trash."
+            return false
+        }
+        return voiceMemoService.permanentlyDeleteTrashedMemo(trashed)
+    }
+
+    private func applyPersistedDeletions() {
+        guard let context = modelContext else { return }
+        do {
+            let records = try context.fetch(FetchDescriptor<SyncDeletionRecord>())
+            let deletions = try SyncMerger.mergeDeletions(records.map(\.deletion))
+            guard !deletions.isEmpty else { return }
+            let deletedProjects = Set(deletions.filter { $0.fileName == nil }.map(\.projectId))
+            for project in try context.fetch(FetchDescriptor<SongProject>()) where deletedProjects.contains(project.id) {
+                context.delete(project)
+            }
+            for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) where deletedProjects.contains(project.id) {
+                context.delete(project)
+            }
+            try saveModelContext(context)
+            for projectId in deletedProjects {
+                _ = RecordingFiles.deleteMemosFolder(for: projectId)
+            }
+            for deletion in deletions {
+                guard let fileName = deletion.fileName, !deletedProjects.contains(deletion.projectId) else { continue }
+                voiceMemoService.deletePermanentRecordingFiles(projectId: deletion.projectId, fileName: fileName)
+            }
+        } catch {
+            context.rollback()
+            errorMessage = "Couldn't finish applying permanent deletions. Writers Block will retry."
+        }
+    }
+
+    private func upsertPermanentDeletion(
+        projectId: String,
+        fileName: String? = nil,
+        deletedAt: Date = Date(),
+        in context: ModelContext
+    ) throws {
+        try SyncIdentity.validateProjectId(projectId)
+        if let fileName { try SyncIdentity.validateFileName(fileName) }
+        let timestamp = Int64((deletedAt.timeIntervalSince1970 * 1000).rounded())
+        let records = try context.fetch(FetchDescriptor<SyncDeletionRecord>())
+        if let existing = records.first(where: { $0.projectId == projectId && $0.fileName == fileName }) {
+            existing.deletedAt = max(existing.deletedAt, timestamp)
+        } else {
+            context.insert(SyncDeletionRecord(projectId: projectId, fileName: fileName, deletedAt: timestamp))
+        }
     }
 
     private func scheduleTrashPurge() {
@@ -1154,7 +1267,7 @@ final class EditorViewModel: ObservableObject {
         descriptor.fetchLimit = 1
         let nextProjectExpiry = (try? context.fetch(descriptor).first)?.deleteAfter
         // Already-expired recordings were purged above; only future expiries count.
-        let nextMemoExpiry = VoiceMemoService.nextTrashedMemoExpiry().flatMap { $0 > now ? $0 : nil }
+        let nextMemoExpiry = RecordingFiles.nextTrashedMemoExpiry().flatMap { $0 > now ? $0 : nil }
         guard let nextExpiry = [nextProjectExpiry, nextMemoExpiry].compactMap({ $0 }).min() else { return }
 
         let delay = max(nextExpiry.timeIntervalSinceNow, 0)
@@ -1190,6 +1303,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func clearEditorAfterProjectDelete() {
+        cancelEditorAIWork()
         title = ""
         lyrics = ""
         theme = ""
@@ -1269,12 +1383,19 @@ final class EditorViewModel: ObservableObject {
         showProjectsSheet = false
     }
 
-    func importProject(_ exported: SongProjectExport) {
-        guard flushCurrentDraft(checkpoint: true) else { return }
-        guard let context = modelContext else { return }
+    @discardableResult
+    func importProject(_ exported: SongProjectExport) -> Bool {
+        guard flushCurrentDraft(checkpoint: true) else { return false }
+        guard let context = modelContext else { return false }
         let project = makeImportedProject(from: exported)
         context.insert(project)
-        try? context.save()
+        do { try saveModelContext(context) }
+        catch {
+            context.rollback()
+            errorMessage = "Couldn't save the imported song. The file was not imported."
+            return false
+        }
+        cancelEditorAIWork()
 
         title = project.title
         lyrics = project.lyrics
@@ -1288,6 +1409,7 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showProjectsSheet = false
         resetLyricsHistory()
+        return true
     }
 
     func snapshotForExport() -> SongProject {
@@ -1295,6 +1417,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func applyTemplate(_ template: SongTemplate) {
+        cancelEditorAIWork()
         guard flushCurrentDraft(checkpoint: true) else { return }
         title = "Untitled \(template.name)"
         theme = template.theme
@@ -1319,12 +1442,20 @@ final class EditorViewModel: ObservableObject {
 
     /// A recording needs a project folder before any lyrics exist (people hum
     /// the melody first). Creates and persists an Untitled project on demand.
-    func ensureProjectForRecording() -> String {
+    func ensureProjectForRecording() -> String? {
         if let projectId = currentProjectId { return projectId }
+        guard let context = modelContext else {
+            errorMessage = "Couldn't create a song for this recording."
+            return nil
+        }
         let project = makeUntitledSongProject()
-        if let context = modelContext {
-            context.insert(project)
-            try? context.save()
+        context.insert(project)
+        do {
+            try saveModelContext(context)
+        } catch {
+            context.rollback()
+            errorMessage = "Couldn't create a song for this recording."
+            return nil
         }
         currentProjectId = project.id
         showWelcome = false
@@ -1524,17 +1655,21 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Settings
 
-    func saveApiKey(provider: AIProvider, key: String) {
+    @discardableResult
+    func saveApiKey(provider: AIProvider, key: String) -> Bool {
         if key.isEmpty {
-            keychainStore.deleteKey(provider: provider.rawValue)
+            guard keychainStore.deleteKey(provider: provider.rawValue) else {
+                return false
+            }
             apiKeyPresence[provider.rawValue] = false
-            return
+            return true
         }
         let stored = keychainStore.setKey(provider: provider.rawValue, key: key)
         if !stored {
-            errorMessage = "Couldn't save the \(provider.displayName) API key to the Keychain. Try again after unlocking the device."
+            return false
         }
-        apiKeyPresence[provider.rawValue] = stored
+        apiKeyPresence[provider.rawValue] = true
+        return true
     }
 
     // MARK: - Cloud Backup
@@ -1664,6 +1799,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func saveProvider(_ provider: AIProvider) {
+        cancelEditorAIWork()
         selectedProvider = provider
         UserDefaults.standard.set(provider.rawValue, forKey: "selectedProvider")
         if selectedModel.provider != provider {

@@ -115,7 +115,7 @@ struct EditorUndoRedoTests {
     }
 
     private func makeStoredEditor() throws -> (EditorViewModel, ModelContainer) {
-        let schema = Schema([SongProject.self, TrashedSongProject.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none))
         let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), companionStore: WritingCompanionStore(inMemory: true))
         viewModel.modelContext = ModelContext(container)

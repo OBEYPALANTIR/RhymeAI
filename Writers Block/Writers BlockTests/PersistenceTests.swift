@@ -106,7 +106,7 @@ struct PersistenceTests {
 
     @MainActor
     private static func makeHarness(backupService: CloudBackupServicing? = nil) throws -> Harness {
-        let schema = Schema([SongProject.self, TrashedSongProject.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let viewModel = EditorViewModel(backupService: backupService)

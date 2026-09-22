@@ -51,7 +51,7 @@ struct WritingCompanionTests {
     }
 
     @MainActor @Test func missingProjectStopsSwitch() throws {
-        let schema = Schema([SongProject.self, TrashedSongProject.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
         let context = ModelContext(container)
         let model = EditorViewModel(keychainStore: InMemoryKeychainStore(), companionStore: WritingCompanionStore(inMemory: true))
@@ -66,7 +66,7 @@ struct WritingCompanionTests {
     }
 
     @MainActor @Test func switchingFlushesDraftRestoresPositionAndVersions() throws {
-        let schema = Schema([SongProject.self, TrashedSongProject.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
         let context = ModelContext(container)
         let store = WritingCompanionStore(inMemory: true)

@@ -222,11 +222,115 @@ struct TrashLifecycleTests {
         let trashIds = try Self.fetchTrash(context).map(\.id)
 
         #expect(trashIds == ["retained"])
+        #expect(try Self.fetchDeletions(context).map(\.projectId) == ["expired"])
+    }
+
+    @MainActor
+    @Test func permanentProjectDeletePersistsTombstoneBeforeRemovingTrash() throws {
+        let harness = try Self.makeHarness()
+        let trashed = TrashedSongProject(
+            id: "gone",
+            title: "Gone",
+            lyrics: "private draft",
+            theme: "",
+            updatedAt: Date(timeIntervalSince1970: 100),
+            deletedAt: Date(timeIntervalSince1970: 200)
+        )
+        harness.context.insert(trashed)
+        try harness.context.save()
+
+        #expect(harness.viewModel.permanentlyDeleteTrashedProject(trashed))
+        #expect(try Self.fetchTrash(harness.context).isEmpty)
+        let tombstone = try #require(Self.fetchDeletions(harness.context).first)
+        #expect(tombstone.projectId == "gone")
+        #expect(tombstone.fileName == nil)
+    }
+
+    @MainActor
+    @Test func persistedTombstoneSuppressesStaleProjectOnRelaunch() throws {
+        let harness = try Self.makeHarness()
+        harness.context.insert(SongProject(id: "gone", title: "Stale", lyrics: "stale lyric"))
+        harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 1))
+        try harness.context.save()
+
+        let relaunched = EditorViewModel()
+        relaunched.modelContext = harness.context
+
+        #expect(try Self.fetchProjects(harness.context).isEmpty)
+        #expect(try Self.fetchDeletions(harness.context).map(\.projectId) == ["gone"])
+    }
+
+    @MainActor
+    @Test func permanentRecordingDeleteRejectsSymlinkedTrashParent() throws {
+        let fixture = try RecordingTrashFixture(symlinkedParent: true)
+        defer { fixture.cleanUp() }
+        let service = VoiceMemoService()
+
+        #expect(!service.permanentlyDeleteTrashedMemo(fixture.memo))
+        #expect(FileManager.default.fileExists(atPath: fixture.storedFile.path))
+        #expect(service.lastError != nil)
+    }
+
+    @MainActor
+    @Test func permanentRecordingDeleteRemovesInRootMemo() throws {
+        let fixture = try RecordingTrashFixture(symlinkedParent: false)
+        defer { fixture.cleanUp() }
+        let service = VoiceMemoService()
+
+        #expect(service.permanentlyDeleteTrashedMemo(fixture.memo))
+        #expect(!FileManager.default.fileExists(atPath: fixture.storedFile.path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.projectFolder.path))
+    }
+
+    @MainActor
+    @Test func expiredRecordingPurgeRejectsSymlinkedTrashParent() throws {
+        let deletedAt = Date().addingTimeInterval(-trashRetentionInterval - 60)
+        let fixture = try RecordingTrashFixture(symlinkedParent: true, deletedAt: deletedAt)
+        defer { fixture.cleanUp() }
+        #expect(fixture.memo.url.resolvingSymlinksInPath() == fixture.storedFile.resolvingSymlinksInPath())
+
+        RecordingFiles.purgeExpiredTrashedMemos(now: Date())
+
+        #expect(FileManager.default.fileExists(atPath: fixture.storedFile.path))
+    }
+
+    @MainActor
+    @Test func expiredRecordingPurgeRejectsEnumeratedSymlinkedFile() throws {
+        let deletedAt = Date().addingTimeInterval(-trashRetentionInterval - 60)
+        let fixture = try RecordingTrashFixture(symlinkedParent: false, deletedAt: deletedAt)
+        defer { fixture.cleanUp() }
+        try FileManager.default.createDirectory(at: fixture.scratch, withIntermediateDirectories: true)
+        let outsideFile = fixture.scratch.appendingPathComponent("outside.m4a")
+        try FileManager.default.moveItem(at: fixture.storedFile, to: outsideFile)
+        try FileManager.default.createSymbolicLink(at: fixture.memo.url, withDestinationURL: outsideFile)
+
+        let discovered = RecordingFiles.trashedMemos().contains {
+            $0.url.resolvingSymlinksInPath() == outsideFile.resolvingSymlinksInPath()
+        }
+        #expect(discovered)
+
+        RecordingFiles.purgeExpiredTrashedMemos(now: Date())
+        #expect(FileManager.default.fileExists(atPath: outsideFile.path))
+    }
+
+    @MainActor
+    @Test func tombstoneRecordingCleanupRejectsSymlinkedTrashParent() throws {
+        let fixture = try RecordingTrashFixture(symlinkedParent: true)
+        defer { fixture.cleanUp() }
+        let service = VoiceMemoService()
+
+        service.deletePermanentRecordingFiles(
+            projectId: fixture.memo.projectId,
+            fileName: fixture.memo.originalName
+        )
+
+        #expect(FileManager.default.fileExists(atPath: fixture.storedFile.path))
+        #expect(service.lastError != nil)
     }
 
     @MainActor
     private static func makeHarness() throws -> Harness {
-        let schema = Schema([SongProject.self, TrashedSongProject.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let viewModel = EditorViewModel()
@@ -253,12 +357,69 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
+    private static func fetchDeletions(_ context: ModelContext) throws -> [SyncDeletionRecord] {
+        var descriptor = FetchDescriptor<SyncDeletionRecord>(
+            sortBy: [SortDescriptor(\.projectId)]
+        )
+        descriptor.includePendingChanges = true
+        return try context.fetch(descriptor)
+    }
+
+    @MainActor
     private struct Harness {
         let viewModel: EditorViewModel
         let container: ModelContainer
 
         var context: ModelContext {
             container.mainContext
+        }
+    }
+
+    private struct RecordingTrashFixture {
+        let memo: TrashedVoiceMemo
+        let storedFile: URL
+        let projectFolder: URL
+        let scratch: URL
+
+        init(symlinkedParent: Bool, deletedAt: Date = Date()) throws {
+            let projectId = "trash-\(UUID().uuidString)"
+            let projectFolder = RecordingFiles.trashFolder(for: projectId)
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("TrashLifecycleTests-\(UUID().uuidString)", isDirectory: true)
+            let deletedAtMs = Int(deletedAt.timeIntervalSince1970 * 1000)
+            let storedName = "\(deletedAtMs)\(RecordingFiles.trashNameSeparator)take.m4a"
+
+            try FileManager.default.createDirectory(
+                at: RecordingFiles.memosTrashRoot(),
+                withIntermediateDirectories: true
+            )
+
+            let storedFile: URL
+            if symlinkedParent {
+                let outside = scratch.appendingPathComponent("outside", isDirectory: true)
+                try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+                try FileManager.default.createSymbolicLink(at: projectFolder, withDestinationURL: outside)
+                storedFile = outside.appendingPathComponent(storedName)
+            } else {
+                try FileManager.default.createDirectory(at: projectFolder, withIntermediateDirectories: true)
+                storedFile = projectFolder.appendingPathComponent(storedName)
+            }
+            try Data("private recording".utf8).write(to: storedFile)
+
+            self.memo = TrashedVoiceMemo(
+                url: projectFolder.appendingPathComponent(storedName),
+                projectId: projectId,
+                originalName: "take.m4a",
+                deletedAt: deletedAt
+            )
+            self.storedFile = storedFile
+            self.projectFolder = projectFolder
+            self.scratch = scratch
+        }
+
+        func cleanUp() {
+            try? FileManager.default.removeItem(at: projectFolder)
+            try? FileManager.default.removeItem(at: scratch)
         }
     }
 }

@@ -219,7 +219,7 @@ struct ProjectsView: View {
                 defer { if didStart { url.stopAccessingSecurityScopedResource() } }
                 let data = try Data(contentsOf: url)
                 let exported = try LyricsExporter.decodeJsonExport(data)
-                viewModel.importProject(exported)
+                guard viewModel.importProject(exported) else { return }
                 dismiss()
             } catch {
                 importError = "Could not import this file. Pick a RhymeAI project JSON."
@@ -237,5 +237,5 @@ struct ProjectsView: View {
 #Preview {
     ProjectsView()
         .environmentObject(EditorViewModel())
-        .modelContainer(for: [SongProject.self, TrashedSongProject.self], inMemory: true)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self], inMemory: true)
 }

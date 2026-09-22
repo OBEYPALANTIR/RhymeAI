@@ -328,7 +328,7 @@ struct TrashBinView: View {
     }
 
     private func reloadTrashedMemos() {
-        trashedMemos = VoiceMemoService.trashedMemos()
+        trashedMemos = RecordingFiles.trashedMemos()
         selectedMemoIds.formIntersection(Set(trashedMemos.map(\.id)))
     }
 
@@ -367,7 +367,7 @@ struct TrashBinView: View {
     private func restoreSelected() {
         if activeTab == .projects {
             let projects = selectedProjects
-            projects.forEach(viewModel.restoreTrashedProject)
+            projects.forEach { _ = viewModel.restoreTrashedProject($0) }
         } else {
             selectedMemos.forEach(viewModel.voiceMemoService.restoreTrashedMemo)
             reloadTrashedMemos()
@@ -378,9 +378,9 @@ struct TrashBinView: View {
     private func deleteSelectedForever() {
         if activeTab == .projects {
             let projects = selectedProjects
-            projects.forEach(viewModel.permanentlyDeleteTrashedProject)
+            projects.forEach { _ = viewModel.permanentlyDeleteTrashedProject($0) }
         } else {
-            selectedMemos.forEach(viewModel.voiceMemoService.permanentlyDeleteTrashedMemo)
+            selectedMemos.forEach { _ = viewModel.permanentlyDeleteTrashedMemo($0) }
             reloadTrashedMemos()
         }
         clearSelectionWithFeedback()
@@ -463,5 +463,5 @@ struct TrashBinView: View {
 #Preview {
     TrashBinView()
         .environmentObject(EditorViewModel())
-        .modelContainer(for: [SongProject.self, TrashedSongProject.self], inMemory: true)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self], inMemory: true)
 }
