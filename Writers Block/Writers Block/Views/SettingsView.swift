@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var editingKeys: [String: String] = [:]
     @State private var showKey = false
     @State private var savedConfirmation = false
+    @State private var saveError: String?
     @State private var activeHelp: FeatureHelp?
     @State private var selectedTab: SettingsTab = .general
 
@@ -31,6 +32,16 @@ struct SettingsView: View {
                 }
 
                 Divider()
+
+                if let saveError {
+                    Label(saveError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(appearance.palette.error)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settingsSaveError")
+                        .padding(.horizontal, RhymeAITokens.Spacing.lg)
+                        .padding(.top, RhymeAITokens.Spacing.sm)
+                }
 
                 SettingsSaveBar(saved: savedConfirmation, action: saveAll)
                     .padding(.horizontal, RhymeAITokens.Spacing.lg)
@@ -145,6 +156,31 @@ struct SettingsView: View {
             Text(viewModel.selectedProvider.keyHint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Text(viewModel.cloudAISharingDisclosure)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle(
+                "Allow theme, line, and selection sharing",
+                isOn: Binding(
+                    get: { viewModel.hasCloudAISharingConsent(scope: .selectedContext) },
+                    set: { viewModel.setCloudAISharingConsent($0, scope: .selectedContext) }
+                )
+            )
+            .tint(.indigo)
+            .accessibilityIdentifier("cloudAISelectedContextConsent")
+
+            Toggle(
+                "Allow full lyric sharing",
+                isOn: Binding(
+                    get: { viewModel.hasCloudAISharingConsent(scope: .wholeSong) },
+                    set: { viewModel.setCloudAISharingConsent($0, scope: .wholeSong) }
+                )
+            )
+            .tint(.indigo)
+            .accessibilityIdentifier("cloudAIWholeSongConsent")
         }
         .padding(RhymeAITokens.Spacing.lg)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
@@ -199,9 +235,15 @@ struct SettingsView: View {
     }
 
     private func saveAll() {
+        savedConfirmation = false
+        saveError = nil
         for provider in AIProvider.allCases {
             if let key = editingKeys[provider.rawValue] {
-                viewModel.saveApiKey(provider: provider, key: key)
+                guard viewModel.saveApiKey(provider: provider, key: key) else {
+                    let action = key.isEmpty ? "remove" : "save"
+                    saveError = "Couldn't \(action) the \(provider.displayName) API key in the Keychain. Try again after unlocking the device."
+                    return
+                }
             }
         }
         savedConfirmation = true

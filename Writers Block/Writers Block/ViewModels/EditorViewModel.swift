@@ -25,6 +25,18 @@ extension CloudBackupServicing {
 
 extension BackupService: CloudBackupServicing {}
 
+struct CloudAISharingRequest: Identifiable, Equatable {
+    let id = UUID()
+    let provider: AIProvider
+    let purpose: String
+    let scope: CloudAISharingScope
+}
+
+enum CloudAISharingScope: String {
+    case selectedContext
+    case wholeSong
+}
+
 final class EditorViewModel: ObservableObject {
 
     // MARK: - Editor State
@@ -123,6 +135,7 @@ final class EditorViewModel: ObservableObject {
     @Published var inspectorSynonymsLoading: Bool = false
     @Published var inspectorSynonymsError: String?
     private var inspectorSynonymsTask: Task<Void, Never>?
+    private var inspectorSynonymsRequestID: UUID?
     private var inspectorAnalysisTask: Task<Void, Never>?
 
     var showInspector: Bool { inspectorWord != nil }
@@ -198,7 +211,11 @@ final class EditorViewModel: ObservableObject {
             refreshCloudBackupState()
         }
     }
-    private let aiService = AIService()
+    private let aiService: AIService
+    private let defaults: UserDefaults
+    @Published var cloudAISharingRequest: CloudAISharingRequest?
+    private var pendingCloudAIAction: (() -> Void)?
+    private var pendingCloudAIRequestID: UUID?
     private let keychainStore: KeychainStore
     private let backupService: CloudBackupServicing?
     private let lyricsHistory = EditHistory<LyricsEditState>()
@@ -289,7 +306,9 @@ final class EditorViewModel: ObservableObject {
 
     private let saveModelContext: (ModelContext) throws -> Void
 
-    init(keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, companionStore: WritingCompanionStore? = nil, saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
+    init(aiService: AIService = AIService(), keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, companionStore: WritingCompanionStore? = nil, defaults: UserDefaults = .standard, saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
+        self.aiService = aiService
+        self.defaults = defaults
         self.saveModelContext = saveModelContext
         let runningUITestInMemory = UITestFlags.isEnabled(UITestFlags.inMemoryStore)
         let resolvedStore: KeychainStore = keychainStore
@@ -308,18 +327,31 @@ final class EditorViewModel: ObservableObject {
         #endif
 
         if runningUITestInMemory {
-            // Stray provider/model defaults can outlive the app container
-            // (cfprefsd caching, or a simulator-level preference domain written
-            // via `simctl spawn defaults write`) and silently reroute UI tests
-            // to another provider. Writing the baseline — not removing — is what
-            // shadows those merged fallback domains.
-            UserDefaults.standard.set(AIProvider.gemini.rawValue, forKey: "selectedProvider")
-            UserDefaults.standard.set(AIModel.default.rawValue, forKey: "selectedModel")
+            let arguments = ProcessInfo.processInfo.arguments
+            func value(after flag: String) -> String? {
+                guard let index = arguments.firstIndex(of: flag),
+                      arguments.indices.contains(index + 1) else { return nil }
+                return arguments[index + 1]
+            }
+            let requestedProvider = value(after: "-selectedProvider")
+                .flatMap(AIProvider.init(rawValue:)) ?? .local
+            let requestedModel = value(after: "-selectedModel")
+                .flatMap(AIModel.init(rawValue:))
+                .flatMap { $0.provider == requestedProvider ? $0 : nil }
+                ?? AIModel.models(for: requestedProvider).first
+                ?? .localModel
+            defaults.set(requestedProvider.rawValue, forKey: "selectedProvider")
+            defaults.set(requestedModel.rawValue, forKey: "selectedModel")
+            for provider in [AIProvider.gemini, .openai, .claude] {
+                for scope in [CloudAISharingScope.selectedContext, .wholeSong] {
+                    defaults.removeObject(forKey: cloudAIConsentKey(provider, scope: scope))
+                }
+            }
         }
 
-        let providerRaw = UserDefaults.standard.string(forKey: "selectedProvider") ?? AIProvider.local.rawValue
+        let providerRaw = defaults.string(forKey: "selectedProvider") ?? AIProvider.local.rawValue
         selectedProvider = AIProvider(rawValue: providerRaw) ?? .local
-        let modelRaw = UserDefaults.standard.string(forKey: "selectedModel") ?? AIModel.default.rawValue
+        let modelRaw = defaults.string(forKey: "selectedModel") ?? AIModel.default.rawValue
         if let savedModel = AIModel(rawValue: modelRaw), savedModel.provider == selectedProvider {
             selectedModel = savedModel
         } else {
@@ -331,18 +363,18 @@ final class EditorViewModel: ObservableObject {
         // isSyllableColoringEnabled — those default true, so we treat a missing key
         // as "never set" and leave the in-memory default in place rather than reading
         // the UserDefaults zero-value.
-        useWholeSongContext = UserDefaults.standard.bool(forKey: "editor.useWholeSongContext")
-        if UserDefaults.standard.object(forKey: "editor.isHighlightEnabled") != nil {
-            isHighlightEnabled = UserDefaults.standard.bool(forKey: "editor.isHighlightEnabled")
+        useWholeSongContext = defaults.bool(forKey: "editor.useWholeSongContext")
+        if defaults.object(forKey: "editor.isHighlightEnabled") != nil {
+            isHighlightEnabled = defaults.bool(forKey: "editor.isHighlightEnabled")
         }
-        if UserDefaults.standard.object(forKey: "editor.isSyllableColoringEnabled") != nil {
-            isSyllableColoringEnabled = UserDefaults.standard.bool(forKey: "editor.isSyllableColoringEnabled")
+        if defaults.object(forKey: "editor.isSyllableColoringEnabled") != nil {
+            isSyllableColoringEnabled = defaults.bool(forKey: "editor.isSyllableColoringEnabled")
         }
-        isStressPreviewEnabled = UserDefaults.standard.bool(forKey: "editor.isStressPreviewEnabled")
-        isRhymeHighlightEnabled = UserDefaults.standard.bool(forKey: "editor.isRhymeHighlightEnabled")
-        isBeatGridEnabled = UserDefaults.standard.bool(forKey: "editor.isBeatGridEnabled")
+        isStressPreviewEnabled = defaults.bool(forKey: "editor.isStressPreviewEnabled")
+        isRhymeHighlightEnabled = defaults.bool(forKey: "editor.isRhymeHighlightEnabled")
+        isBeatGridEnabled = defaults.bool(forKey: "editor.isBeatGridEnabled")
 
-        _ = ApiKeyMigration.apply(legacyDefaults: .standard, secure: resolvedStore)
+        _ = ApiKeyMigration.apply(legacyDefaults: defaults, secure: resolvedStore)
         let secured = resolvedStore.allKeys()
         for provider in AIProvider.allCases {
             apiKeyPresence[provider.rawValue] = (secured[provider.rawValue] ?? "").isEmpty == false
@@ -615,6 +647,13 @@ final class EditorViewModel: ObservableObject {
 
     func getSuggestions() {
         guard !lyrics.isEmpty else { return }
+        guard authorizeCloudAI(purpose: "suggestions", action: { [weak self] in
+            self?.startSuggestions()
+        }) else { return }
+        startSuggestions()
+    }
+
+    private func startSuggestions() {
         let context = rhymeContext
         suggestionsTask?.cancel()
         let requestID = UUID()
@@ -695,10 +734,14 @@ final class EditorViewModel: ObservableObject {
         let range = selectedRangeForRewriteRequest()
         guard range.length > 0 else { return }
         let ns = lyrics as NSString
-        guard range.location + range.length <= ns.length else { return }
+        guard range.location >= 0, range.location + range.length <= ns.length else { return }
         let original = ns.substring(with: range)
         guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        guard authorizeCloudAI(purpose: "rewrite", action: { [weak self] in
+            self?.rewriteRejectedCandidates = []
+            self?.beginRewrite(action: action, range: range, original: original)
+        }) else { return }
         rewriteRejectedCandidates = []
         beginRewrite(action: action, range: range, original: original)
     }
@@ -727,12 +770,16 @@ final class EditorViewModel: ObservableObject {
             return
         }
 
-        beginRewrite(
-            action: action,
-            range: range,
-            original: original,
-            rejectedCandidates: rewritePreview.map { Set([$0]) } ?? []
-        )
+        let rejectedCandidates = rewritePreview.map { Set([$0]) } ?? []
+        guard authorizeCloudAI(purpose: "rewrite", action: { [weak self] in
+            self?.beginRewrite(
+                action: action,
+                range: range,
+                original: original,
+                rejectedCandidates: rejectedCandidates
+            )
+        }) else { return }
+        beginRewrite(action: action, range: range, original: original, rejectedCandidates: rejectedCandidates)
     }
 
     private func beginRewrite(
@@ -762,6 +809,7 @@ final class EditorViewModel: ObservableObject {
 
         rewriteTask = Task { @MainActor in
             do {
+                try Task.checkCancellation()
                 let result = try await aiService.getRewrite(
                     provider: selectedProvider,
                     apiKey: currentApiKey,
@@ -772,7 +820,8 @@ final class EditorViewModel: ObservableObject {
                     currentSection: currentSection,
                     // AIService walks lyrics by Characters; range.location is UTF-16.
                     selectionStart: Self.characterOffset(forUTF16Offset: range.location, in: fullLyrics),
-                    rejectedCandidates: rejectedForRequest
+                    rejectedCandidates: rejectedForRequest,
+                    useWholeSongContext: useWholeSongContext
                 )
                 guard !Task.isCancelled, rewriteRequestID == requestID, currentProjectId == projectID else { return }
                 rewritePreview = result
@@ -855,7 +904,16 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func fetchInspectorSynonyms(word: String, range: NSRange) {
+        guard authorizeCloudAI(purpose: "synonyms", action: { [weak self] in
+            self?.fetchInspectorSynonyms(word: word, range: range)
+        }) else {
+            inspectorSynonymsLoading = false
+            return
+        }
         inspectorSynonymsTask?.cancel()
+        let requestID = UUID()
+        inspectorSynonymsRequestID = requestID
+        let projectID = currentProjectId
         inspectorSynonymsError = nil
         inspectorSynonymsLoading = true
         let lineContext = currentLine(for: range)
@@ -863,8 +921,13 @@ final class EditorViewModel: ObservableObject {
         let apiKey = currentApiKey
         let modelId = selectedModel.id
         inspectorSynonymsTask = Task { @MainActor in
-            defer { self.inspectorSynonymsLoading = false }
+            defer {
+                if self.inspectorSynonymsRequestID == requestID {
+                    self.inspectorSynonymsLoading = false
+                }
+            }
             do {
+                try Task.checkCancellation()
                 let results = try await aiService.getSynonyms(
                     provider: provider,
                     apiKey: apiKey,
@@ -872,12 +935,26 @@ final class EditorViewModel: ObservableObject {
                     word: word,
                     lineContext: lineContext
                 )
-                guard !Task.isCancelled, self.inspectorWord == word else { return }
+                guard !Task.isCancelled,
+                      self.inspectorSynonymsRequestID == requestID,
+                      self.currentProjectId == projectID,
+                      self.inspectorWord == word,
+                      self.inspectorRange == range,
+                      self.selectedProvider == provider,
+                      self.selectedModel.id == modelId,
+                      self.currentLine(for: range) == lineContext else { return }
                 self.inspectorSynonyms = results
             } catch is CancellationError {
                 // ignored
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled,
+                      self.inspectorSynonymsRequestID == requestID,
+                      self.currentProjectId == projectID,
+                      self.inspectorWord == word,
+                      self.inspectorRange == range,
+                      self.selectedProvider == provider,
+                      self.selectedModel.id == modelId,
+                      self.currentLine(for: range) == lineContext else { return }
                 self.inspectorSynonymsError = error.localizedDescription
             }
         }
@@ -928,6 +1005,8 @@ final class EditorViewModel: ObservableObject {
     }
 
     func dismissInspector() {
+        if cloudAISharingRequest?.purpose == "synonyms" { cancelCloudAISharing() }
+        inspectorSynonymsRequestID = nil
         inspectorSynonymsTask?.cancel()
         inspectorSynonymsTask = nil
         inspectorAnalysisTask?.cancel()
@@ -1058,6 +1137,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func cancelEditorAIWork() {
+        cancelCloudAISharing()
         cancelSuggestions()
         dismissRewrite()
         dismissInspector()
@@ -1801,7 +1881,7 @@ final class EditorViewModel: ObservableObject {
     func saveProvider(_ provider: AIProvider) {
         cancelEditorAIWork()
         selectedProvider = provider
-        UserDefaults.standard.set(provider.rawValue, forKey: "selectedProvider")
+        defaults.set(provider.rawValue, forKey: "selectedProvider")
         if selectedModel.provider != provider {
             if let first = AIModel.models(for: provider).first {
                 saveModel(first)
@@ -1810,39 +1890,108 @@ final class EditorViewModel: ObservableObject {
     }
 
     func saveModel(_ model: AIModel) {
+        cancelEditorAIWork()
         selectedModel = model
-        UserDefaults.standard.set(model.rawValue, forKey: "selectedModel")
+        defaults.set(model.rawValue, forKey: "selectedModel")
+    }
+
+    var cloudAISharingDisclosure: String {
+        "Suggestions share your theme, target line, and rhyme settings. Whole Song Context also shares the full lyric. Rewrites share the selected passage and, when Whole Song Context is on, the full lyric. Synonyms share the selected word and its current line. Requests go directly to \(selectedProvider.displayName)."
+    }
+
+    func hasCloudAISharingConsent(
+        for provider: AIProvider? = nil,
+        scope: CloudAISharingScope? = nil
+    ) -> Bool {
+        let provider = provider ?? selectedProvider
+        let scope = scope ?? (useWholeSongContext ? .wholeSong : .selectedContext)
+        return provider == .local || defaults.bool(forKey: cloudAIConsentKey(provider, scope: scope))
+    }
+
+    func setCloudAISharingConsent(
+        _ allowed: Bool,
+        for provider: AIProvider? = nil,
+        scope: CloudAISharingScope? = nil
+    ) {
+        let provider = provider ?? selectedProvider
+        let scope = scope ?? (useWholeSongContext ? .wholeSong : .selectedContext)
+        guard provider != .local else { return }
+        defaults.set(allowed, forKey: cloudAIConsentKey(provider, scope: scope))
+        if !allowed {
+            cancelEditorAIWork()
+        }
+    }
+
+    func approveCloudAISharing(_ request: CloudAISharingRequest) {
+        guard pendingCloudAIRequestID == request.id,
+              selectedProvider == request.provider,
+              cloudAISharingScope(for: request.purpose) == request.scope else {
+            cancelCloudAISharing()
+            return
+        }
+        defaults.set(true, forKey: cloudAIConsentKey(request.provider, scope: request.scope))
+        let action = pendingCloudAIAction
+        pendingCloudAIAction = nil
+        pendingCloudAIRequestID = nil
+        cloudAISharingRequest = nil
+        action?()
+    }
+
+    func cancelCloudAISharing() {
+        pendingCloudAIAction = nil
+        pendingCloudAIRequestID = nil
+        cloudAISharingRequest = nil
+    }
+
+    private func authorizeCloudAI(purpose: String, action: @escaping () -> Void) -> Bool {
+        guard selectedProvider != .local else { return true }
+        let scope = cloudAISharingScope(for: purpose)
+        guard !hasCloudAISharingConsent(scope: scope) else { return true }
+        let request = CloudAISharingRequest(provider: selectedProvider, purpose: purpose, scope: scope)
+        pendingCloudAIAction = action
+        pendingCloudAIRequestID = request.id
+        cloudAISharingRequest = request
+        return false
+    }
+
+    private func cloudAISharingScope(for purpose: String) -> CloudAISharingScope {
+        purpose == "synonyms" || !useWholeSongContext ? .selectedContext : .wholeSong
+    }
+
+    private func cloudAIConsentKey(_ provider: AIProvider, scope: CloudAISharingScope) -> String {
+        "privacy.cloudAISharingConsent.v2.\(provider.rawValue).\(scope.rawValue)"
     }
 
     // MARK: - Editor Toggle Persistence
 
     func saveUseWholeSongContext(_ value: Bool) {
+        cancelEditorAIWork()
         useWholeSongContext = value
-        UserDefaults.standard.set(value, forKey: "editor.useWholeSongContext")
+        defaults.set(value, forKey: "editor.useWholeSongContext")
     }
 
     func saveIsHighlightEnabled(_ value: Bool) {
         isHighlightEnabled = value
-        UserDefaults.standard.set(value, forKey: "editor.isHighlightEnabled")
+        defaults.set(value, forKey: "editor.isHighlightEnabled")
     }
 
     func saveIsSyllableColoringEnabled(_ value: Bool) {
         isSyllableColoringEnabled = value
-        UserDefaults.standard.set(value, forKey: "editor.isSyllableColoringEnabled")
+        defaults.set(value, forKey: "editor.isSyllableColoringEnabled")
     }
 
     func saveIsStressPreviewEnabled(_ value: Bool) {
         isStressPreviewEnabled = value
-        UserDefaults.standard.set(value, forKey: "editor.isStressPreviewEnabled")
+        defaults.set(value, forKey: "editor.isStressPreviewEnabled")
     }
 
     func saveIsRhymeHighlightEnabled(_ value: Bool) {
         isRhymeHighlightEnabled = value
-        UserDefaults.standard.set(value, forKey: "editor.isRhymeHighlightEnabled")
+        defaults.set(value, forKey: "editor.isRhymeHighlightEnabled")
     }
 
     func saveIsBeatGridEnabled(_ value: Bool) {
         isBeatGridEnabled = value
-        UserDefaults.standard.set(value, forKey: "editor.isBeatGridEnabled")
+        defaults.set(value, forKey: "editor.isBeatGridEnabled")
     }
 }

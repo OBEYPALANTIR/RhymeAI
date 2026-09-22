@@ -503,4 +503,3 @@ private struct PlayPauseButton: View {
         .accessibilityLabel(rowIsPlaying ? "Pause recording" : "Play recording")
     }
 }
-

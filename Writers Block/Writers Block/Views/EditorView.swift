@@ -150,6 +150,18 @@ struct EditorView: View {
                 unblockCollapsed = isRecording
             }
         }
+        .alert(item: $viewModel.cloudAISharingRequest) { request in
+            Alert(
+                title: Text("Share with \(request.provider.displayName)?"),
+                message: Text("Before continuing, review the sharing details. \(viewModel.cloudAISharingDisclosure) You can revoke permission in Settings."),
+                primaryButton: .default(Text("Allow and Continue")) {
+                    viewModel.approveCloudAISharing(request)
+                },
+                secondaryButton: .cancel {
+                    viewModel.cancelCloudAISharing()
+                }
+            )
+        }
         .sheet(
             isPresented: $viewModel.showExportSheet,
             onDismiss: {

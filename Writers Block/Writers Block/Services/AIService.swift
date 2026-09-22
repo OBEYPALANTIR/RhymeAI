@@ -10,6 +10,7 @@ enum AIServiceError: LocalizedError {
     case requestTimedOut
     case blockedResponse
     case decodingError
+    case noMatchingRhymes(rhymeType: String)
     case noSafeSingleWordRhyme
 
     var errorDescription: String? {
@@ -30,6 +31,8 @@ enum AIServiceError: LocalizedError {
             return "Provider blocked the response for safety. Try adjusting the lyric or prompt."
         case .decodingError:
             return "Failed to parse AI response."
+        case .noMatchingRhymes(let rhymeType):
+            return "The provider returned lines, but none matched the requested \(rhymeType.lowercased()) rhyme. Try another rhyme type."
         case .noSafeSingleWordRhyme:
             return "No safe rhyme. Select the line."
         }
@@ -37,6 +40,11 @@ enum AIServiceError: LocalizedError {
 }
 
 struct AIService {
+    private let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
 
     // MARK: - Gemma/GGUF shared runner
     //
@@ -276,7 +284,8 @@ struct AIService {
                     try await emitLines(
                         from: tokens,
                         into: continuation,
-                        filter: RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
+                        filter: RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType),
+                        rhymeType: rhymeType
                     )
                     continuation.finish()
                 } catch let error as URLError where error.code == .cancelled {
@@ -297,7 +306,8 @@ struct AIService {
         from tokens: AsyncThrowingStream<String, Error>,
         into continuation: AsyncThrowingStream<String, Error>.Continuation,
         filter: RhymeLineFilter? = nil,
-        excludedKeys: Set<String> = []
+        excludedKeys: Set<String> = [],
+        rhymeType: RhymeType? = nil
     ) async throws {
         var buffer = ""
         var seen = Set<String>()
@@ -349,12 +359,16 @@ struct AIService {
             }
         }
 
-        // Stream is done; top up with the best of the non-rhyming leftovers.
-        if let filter, emitted < Self.suggestionCount {
+        // The local stream retains its fallback ranking; cloud results must match
+        // the requested rhyme before they reach the editor.
+        if let filter, rhymeType == nil, emitted < Self.suggestionCount {
             for line in filter.rank(held, want: Self.suggestionCount - emitted) {
                 continuation.yield(line)
                 emitted += 1
             }
+        }
+        if filter != nil, accepted > 0 || !held.isEmpty, emitted == 0, let rhymeType {
+            throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
         }
     }
 
@@ -408,7 +422,7 @@ struct AIService {
                     for (key, value) in headers {
                         request.setValue(value, forHTTPHeaderField: key)
                     }
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let (bytes, response) = try await session.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw AIServiceError.invalidResponse
                     }
@@ -569,11 +583,13 @@ struct AIService {
             ? "Whole song context enabled; infer the theme from the full lyrics."
             : (theme.isEmpty ? "No specific theme provided" : theme)
 
+        let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
+        let lyricsContext = useWholeSongContext ? lyrics : (targetRhymeLine ?? "")
         let constraintBlock = Self.rhymeConstraintBlock(
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
             currentSection: currentSection,
-            firstChorusEndWords: firstChorusLines.map { Self.endWords(of: $0) }
+            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) }
         )
         // Over-generate 2x when ending words are constrained so the rhyme
         // filter can discard misses and still deliver a full set.
@@ -597,15 +613,15 @@ struct AIService {
         let sectionInstanceHint = Self.sectionInstanceSentence(
             section: currentSection,
             ordinal: sectionOrdinal,
-            firstChorusLines: firstChorusLines
+            firstChorusLines: permittedChorusLines
         )
-        let sectionLabelHint = Self.sectionLabelDirective(
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(
             Self.explicitSectionLabelForSection(
                 in: lyrics,
                 section: currentSection,
                 ordinal: sectionOrdinal
             )
-        )
+        ) : nil
 
         let rhymeAdherence = targetRhymeLine != nil
             ? ", and strictly adhere to the requested rhyme type (\(rhymeType.displayName))"
@@ -619,7 +635,7 @@ struct AIService {
         The user is writing a song with the following theme/context: "\(effectiveTheme)".
         Here are the current lyrics:
         \"""
-        \(lyrics)
+        \(lyricsContext)
         \"""
 
         The user needs a line that follows the current lyrics.
@@ -953,11 +969,13 @@ struct AIService {
         firstChorusLines: [String]? = nil,
         useWholeSongContext: Bool
     ) -> String {
+        let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
+        let lyricsContext = useWholeSongContext ? lyrics : (targetRhymeLine ?? "")
         let constraintBlock = Self.rhymeConstraintBlock(
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
             currentSection: currentSection,
-            firstChorusEndWords: firstChorusLines.map { Self.endWords(of: $0) }
+            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) }
         )
         // Over-generate 2x when ending words are constrained so the rhyme
         // filter can discard misses and still deliver a full set.
@@ -979,15 +997,15 @@ struct AIService {
         let sectionInstanceHint = Self.sectionInstanceSentence(
             section: currentSection,
             ordinal: sectionOrdinal,
-            firstChorusLines: firstChorusLines
+            firstChorusLines: permittedChorusLines
         )
-        let sectionLabelHint = Self.sectionLabelDirective(
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(
             Self.explicitSectionLabelForSection(
                 in: lyrics,
                 section: currentSection,
                 ordinal: sectionOrdinal
             )
-        )
+        ) : nil
 
         let songContextInstruction = useWholeSongContext
             ? "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
@@ -1011,7 +1029,7 @@ struct AIService {
         \(songContextInstruction)
 
         Lyrics so far:
-        \(lyrics)
+        \(lyricsContext)
 
         Reply with exactly \(requestCount) lines, one per line, no numbering, no extra text.
         """
@@ -1137,7 +1155,8 @@ struct AIService {
         selection: String,
         currentSection: SongSection,
         selectionStart: Int?,
-        rejectedCandidates: Set<String>
+        rejectedCandidates: Set<String>,
+        useWholeSongContext: Bool
     ) async throws -> String {
         // Build the same local prompt used for Apple Intelligence — Gemma
         // understands it, and the output is cleaned the same way.
@@ -1150,7 +1169,8 @@ struct AIService {
             selection: selection,
             currentSection: currentSection,
             selectionStart: selectionStart,
-            rejectedCandidates: rejectedCandidates
+            rejectedCandidates: rejectedCandidates,
+            useWholeSongContext: useWholeSongContext
         )
 
         let singleWord = isSingleWordSelection(selection)
@@ -1194,16 +1214,15 @@ struct AIService {
         selection: String,
         currentSection: SongSection = .unknown,
         selectionStart: Int? = nil,
-        rejectedCandidates: Set<String> = []
+        rejectedCandidates: Set<String> = [],
+        useWholeSongContext: Bool = true
     ) -> String {
-        let sectionLabelHint = Self.sectionLabelDirective(
-            Self.explicitSectionLabelAtOffset(
-                in: lyrics,
-                characterOffset: selectionStart
-            )
-        ) ?? ""
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(
+            Self.explicitSectionLabelAtOffset(in: lyrics, characterOffset: selectionStart)
+        ) ?? "" : ""
         let singleWord = isSingleWordSelection(selection)
         let selectedLine = selectionStart.flatMap { lyricLine(at: $0, in: lyrics) }
+        let lyricsContext = useWholeSongContext ? lyrics : (selectedLine ?? selection)
         let rejectedKeys = rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates)
         let rejectedRule = singleWord && !rejectedKeys.isEmpty
             ? "Do not return any of these rejected words: \(rejectedKeys.sorted().joined(separator: ", "))."
@@ -1234,7 +1253,7 @@ struct AIService {
         Instruction: \(action.instruction)
 
         Lyrics so far:
-        \(lyrics)
+        \(lyricsContext)
 
         \(selectedLine.map { "Line containing the selected word:\n\($0)\n" } ?? "")
         Selected passage:
@@ -1254,7 +1273,8 @@ struct AIService {
         selection: String,
         currentSection: SongSection,
         selectionStart: Int?,
-        rejectedCandidates: Set<String>
+        rejectedCandidates: Set<String>,
+        useWholeSongContext: Bool = true
     ) -> String {
         buildGemmaRewritePrompt(
             action: action,
@@ -1262,7 +1282,8 @@ struct AIService {
             selection: selection,
             currentSection: currentSection,
             selectionStart: selectionStart,
-            rejectedCandidates: rejectedCandidates
+            rejectedCandidates: rejectedCandidates,
+            useWholeSongContext: useWholeSongContext
         )
     }
 
@@ -1400,7 +1421,8 @@ struct AIService {
         selection: String,
         currentSection: SongSection = .unknown,
         selectionStart: Int? = nil,
-        rejectedCandidates: Set<String> = []
+        rejectedCandidates: Set<String> = [],
+        useWholeSongContext: Bool = true
     ) async throws -> String {
         guard !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AIServiceError.invalidResponse
@@ -1415,7 +1437,8 @@ struct AIService {
                     selection: selection,
                     currentSection: currentSection,
                     selectionStart: selectionStart,
-                    rejectedCandidates: rejectedCandidates
+                    rejectedCandidates: rejectedCandidates,
+                    useWholeSongContext: useWholeSongContext
                 )
             }
 
@@ -1427,7 +1450,8 @@ struct AIService {
                     selection: selection,
                     currentSection: currentSection,
                     selectionStart: selectionStart,
-                    rejectedCandidates: rejectedCandidates
+                    rejectedCandidates: rejectedCandidates,
+                    useWholeSongContext: useWholeSongContext
                 )
             }
             throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence rewrites require iOS 26 or later.")
@@ -1437,16 +1461,13 @@ struct AIService {
             throw AIServiceError.noApiKey(provider: provider.displayName)
         }
 
-        let sectionLabel = Self.explicitSectionLabelAtOffset(
-            in: fullLyrics,
-            characterOffset: selectionStart
-        )
         let prompt = buildRewritePrompt(
             action: action,
-            lyrics: fullLyrics,
+            lyrics: useWholeSongContext ? fullLyrics : selection,
             selection: selection,
             currentSection: currentSection,
-            currentSectionLabel: sectionLabel
+            useWholeSongContext: useWholeSongContext,
+            currentSectionLabel: useWholeSongContext ? Self.explicitSectionLabelAtOffset(in: fullLyrics, characterOffset: selectionStart) : nil
         )
         let raw = try await callCloudText(
             provider: provider,
@@ -1468,18 +1489,25 @@ struct AIService {
         lyrics: String,
         selection: String,
         currentSection: SongSection = .unknown,
+        useWholeSongContext: Bool = true,
         currentSectionLabel: String? = nil
     ) -> String {
-        let sectionLabelHint = Self.sectionLabelDirective(currentSectionLabel) ?? ""
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(currentSectionLabel) ?? "" : ""
+        let lyricsContext = useWholeSongContext
+            ? """
+              Full lyrics for context:
+              \"""
+              \(lyrics)
+              \"""
+
+              """
+            : ""
         return """
         You are an expert songwriter helping the user rewrite a portion of their song.
 
-        Full lyrics for context:
-        \"""
-        \(lyrics)
-        \"""
+        \(lyricsContext)
 
-        The user has selected the following passage from those lyrics. Rewrite ONLY this passage:
+        The user has selected the following passage. Rewrite ONLY this passage:
         \"""
         \(selection)
         \"""
@@ -1506,16 +1534,15 @@ struct AIService {
         selection: String,
         currentSection: SongSection = .unknown,
         selectionStart: Int? = nil,
-        rejectedCandidates: Set<String> = []
+        rejectedCandidates: Set<String> = [],
+        useWholeSongContext: Bool = true
     ) -> String {
-        let sectionLabelHint = Self.sectionLabelDirective(
-            Self.explicitSectionLabelAtOffset(
-                in: lyrics,
-                characterOffset: selectionStart
-            )
-        ) ?? ""
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(
+            Self.explicitSectionLabelAtOffset(in: lyrics, characterOffset: selectionStart)
+        ) ?? "" : ""
         let singleWord = isSingleWordSelection(selection)
         let selectedLine = selectionStart.flatMap { lyricLine(at: $0, in: lyrics) }
+        let lyricsContext = useWholeSongContext ? lyrics : (selectedLine ?? selection)
         let rejectedKeys = rewriteRejectKeys(selection: selection, rejectedCandidates: rejectedCandidates)
         let rejectedRule = singleWord && !rejectedKeys.isEmpty
             ? "Do not return any of these rejected words: \(rejectedKeys.sorted().joined(separator: ", "))."
@@ -1545,7 +1572,7 @@ struct AIService {
         Instruction: \(Self.localRewriteInstruction(for: action))
 
         Lyrics so far:
-        \(lyrics)
+        \(lyricsContext)
 
         \(selectedLine.map { "Line containing the selected word:\n\($0)\n" } ?? "")
         Selected passage:
@@ -1597,7 +1624,8 @@ struct AIService {
         selection: String,
         currentSection: SongSection,
         selectionStart: Int?,
-        rejectedCandidates: Set<String>
+        rejectedCandidates: Set<String>,
+        useWholeSongContext: Bool
     ) async throws -> String {
         let model = SystemLanguageModel.default
         guard model.isAvailable else {
@@ -1614,7 +1642,9 @@ struct AIService {
                 lyrics: lyrics,
                 selection: selection,
                 currentSection: currentSection,
-                selectionStart: selectionStart
+                selectionStart: selectionStart,
+                rejectedCandidates: rejectedCandidates,
+                useWholeSongContext: useWholeSongContext
             )
             let content: String
             do {
@@ -1639,7 +1669,8 @@ struct AIService {
                 selection: selection,
                 currentSection: currentSection,
                 selectionStart: selectionStart,
-                rejectedCandidates: rejectedKeys
+                rejectedCandidates: rejectedKeys,
+                useWholeSongContext: useWholeSongContext
             )
             let content: String
             do {
@@ -2024,7 +2055,7 @@ struct AIService {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .cancelled {
             throw CancellationError()
         } catch let error as URLError where error.code == .timedOut {
@@ -2140,4 +2171,48 @@ struct AIService {
                 .replacingOccurrences(of: "\\n", with: "\n")
         return normalized.components(separatedBy: .newlines)
     }
+    func buildLocalSuggestionPromptForTest(
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        currentLetter: String,
+        currentSection: SongSection,
+        sectionOrdinal: Int,
+        firstChorusLines: [String]?,
+        useWholeSongContext: Bool
+    ) -> String {
+        buildLocalPrompt(
+            theme: theme,
+            lyrics: lyrics,
+            targetRhymeLine: targetRhymeLine,
+            rhymeType: rhymeType,
+            currentLetter: currentLetter,
+            currentSection: currentSection,
+            sectionOrdinal: sectionOrdinal,
+            firstChorusLines: firstChorusLines,
+            useWholeSongContext: useWholeSongContext
+        )
+    }
+
+    func buildLocalRewritePromptForTest(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection,
+        selectionStart: Int?,
+        rejectedCandidates: Set<String>,
+        useWholeSongContext: Bool
+    ) -> String {
+        buildLocalRewritePrompt(
+            action: action,
+            lyrics: lyrics,
+            selection: selection,
+            currentSection: currentSection,
+            selectionStart: selectionStart,
+            rejectedCandidates: rejectedCandidates,
+            useWholeSongContext: useWholeSongContext
+        )
+    }
+
 }
