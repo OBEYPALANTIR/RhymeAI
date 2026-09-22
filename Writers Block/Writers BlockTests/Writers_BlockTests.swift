@@ -256,6 +256,34 @@ struct Writers_BlockTests {
         #expect(defaults.string(forKey: "apiKey_GEMINI") == nil)
     }
 
+    @Test func migrationPreservesLegacyKeyWhenSecureWriteFails() {
+        let suiteName = "rhymeai.test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("still-needed", forKey: "apiKey_GEMINI")
+        let store = RejectingKeychainStore()
+
+        let migrated = ApiKeyMigration.apply(legacyDefaults: defaults, secure: store)
+
+        #expect(!migrated)
+        #expect(store.getKey(provider: "GEMINI").isEmpty)
+        #expect(defaults.string(forKey: "apiKey_GEMINI") == "still-needed")
+    }
+
+    @MainActor
+    @Test func failedSettingsKeychainDeletePreservesEditorErrorAndKnownKeyPresence() {
+        let store = RejectingKeychainStore(seed: [AIProvider.gemini.rawValue: "existing"])
+        let viewModel = EditorViewModel(keychainStore: store)
+        viewModel.errorMessage = "Existing editor error"
+
+        let removed = viewModel.saveApiKey(provider: .gemini, key: "")
+
+        #expect(!removed)
+        #expect(viewModel.hasApiKey(for: .gemini))
+        #expect(store.getKey(provider: AIProvider.gemini.rawValue) == "existing")
+        #expect(viewModel.errorMessage == "Existing editor error")
+    }
+
     @Test func suggestionParserSanitizesProviderLineResponses() {
         let raw = """
         1. "Yellow lights keep pulling me home"
@@ -1364,4 +1392,18 @@ struct Writers_BlockTests {
         #expect(displayTitle == "Untitled Song")
     }
 
+}
+
+private final class RejectingKeychainStore: KeychainStore {
+    private var storage: [String: String]
+
+    init(seed: [String: String] = [:]) {
+        storage = seed
+    }
+
+    func getKey(provider: String) -> String { storage[provider] ?? "" }
+    func setKey(provider: String, key: String) -> Bool { false }
+    func deleteKey(provider: String) -> Bool { false }
+    func allKeys() -> [String: String] { storage }
+    func clear() {}
 }
