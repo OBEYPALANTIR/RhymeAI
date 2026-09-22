@@ -1066,8 +1066,8 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Project Management
 
     func newProject() {
-        cancelEditorAIWork()
         guard flushCurrentDraft(checkpoint: true) else { return }
+        cancelEditorAIWork()
         autoSaveTask?.cancel()
         title = ""
         lyrics = ""
@@ -1084,8 +1084,8 @@ final class EditorViewModel: ObservableObject {
     }
 
     func loadProject(_ project: SongProject) {
-        cancelEditorAIWork()
         guard flushCurrentDraft(checkpoint: true) else { return }
+        cancelEditorAIWork()
         autoSaveTask?.cancel()
         title = project.title
         lyrics = project.lyrics
@@ -1417,8 +1417,8 @@ final class EditorViewModel: ObservableObject {
     }
 
     func applyTemplate(_ template: SongTemplate) {
-        cancelEditorAIWork()
         guard flushCurrentDraft(checkpoint: true) else { return }
+        cancelEditorAIWork()
         title = "Untitled \(template.name)"
         theme = template.theme
         lyrics = template.lyrics
