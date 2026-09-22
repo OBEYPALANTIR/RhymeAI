@@ -57,10 +57,12 @@ fun TemplatesDialog(
     fun finishClose() {
         if (didFinish) return
         didFinish = true
-        (pendingAction ?: onDismiss)()
+        // Unmount independently of the host's asynchronous save/apply result.
+        onDismiss()
+        pendingAction?.invoke()
     }
 
-    fun closeSheet(afterClose: () -> Unit = onDismiss) {
+    fun closeSheet(afterClose: (() -> Unit)? = null) {
         if (isClosing || didFinish) return
         pendingAction = afterClose
         isClosing = true

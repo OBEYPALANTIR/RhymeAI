@@ -56,7 +56,7 @@ class TemplatesSheetUiTest {
         composeRule.waitForIdle()
         composeRule.runOnIdle {
             assertEquals(1, selections)
-            assertEquals(0, dismissals)
+            assertEquals(1, dismissals)
         }
         composeRule.onNodeWithText("Choose a Template").assertDoesNotExist()
     }

@@ -119,8 +119,6 @@ object DesignTokens {
         const val dismissMillis = 160
         const val disclosureMillis = 200
         const val standardMillis = 260
-        const val dialogMillis = 260
-        const val assistantPresentMillis = 260
         const val sheetPresentMillis = 260
         const val drawerPresentMillis = 260
 
