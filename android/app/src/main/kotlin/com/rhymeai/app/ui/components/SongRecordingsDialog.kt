@@ -9,16 +9,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.style.TextOverflow
 import com.rhymeai.app.service.VoiceMemo
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.appWritingSurface
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /** A library bound to the song that opened it, including while the picker is away. */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SongRecordingsDialog(
     projectId: String,
@@ -29,6 +30,32 @@ fun SongRecordingsDialog(
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var isClosing by remember { mutableStateOf(false) }
+    var didFinish by remember { mutableStateOf(false) }
+    var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    fun finishClose() {
+        if (didFinish) return
+        didFinish = true
+        onDismiss()
+        pendingAction?.invoke()
+    }
+
+    fun closeSheet(afterClose: (() -> Unit)? = null) {
+        if (isClosing || didFinish) return
+        pendingAction = afterClose
+        isClosing = true
+        scope.launch {
+            try {
+                sheetState.hide()
+            } finally {
+                if (!sheetState.isVisible) finishClose()
+                else isClosing = false
+            }
+        }
+    }
+
     var revision by remember(projectId) { mutableIntStateOf(0) }
     var importing by remember { mutableStateOf(false) }
     var search by rememberSaveable(projectId) { mutableStateOf("") }
@@ -77,69 +104,68 @@ fun SongRecordingsDialog(
             dismissButton = { TextButton(onClick = { confirmBulkTrash = false }) { Text("Cancel") } }
         )
     }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(
-            modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().fillMaxHeight(0.9f)
-                .padding(DesignTokens.Spacing.lg),
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column(Modifier.padding(DesignTokens.Spacing.lg).imePadding()) {
-                Text("Recordings", style = MaterialTheme.typography.headlineSmall)
-                Text(songTitle, style = MaterialTheme.typography.titleMedium)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(onClick = { picker.launch(arrayOf("audio/*")) }, enabled = !importing) {
-                        Text(if (importing) "Importing…" else "Import recording")
-                    }
-                    TextButton(onClick = onRecord, enabled = !service.isRecording && !importing) { Text("Record") }
+    ModalBottomSheet(
+        onDismissRequest = ::finishClose,
+        sheetState = sheetState,
+        sheetMaxWidth = DesignTokens.Drawer.expandedWidth,
+        shape = RoundedCornerShape(topStart = DesignTokens.Radius.sheet, topEnd = DesignTokens.Radius.sheet),
+        containerColor = MaterialTheme.colorScheme.background
+    ) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(0.9f).appWritingSurface().padding(DesignTokens.Spacing.lg)) {
+            Text("Recordings", style = MaterialTheme.typography.headlineSmall)
+            Text(songTitle, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                TextButton(onClick = { picker.launch(arrayOf("audio/*")) }, enabled = !importing && !isClosing) {
+                    Text(if (importing) "Importing…" else "Import recording")
                 }
-                OutlinedTextField(
-                    value = search, onValueChange = { search = it },
-                    label = { Text("Search recordings") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    if (selecting) {
-                        TextButton(onClick = { confirmBulkTrash = true }, enabled = selected.isNotEmpty()) {
-                            Text("Delete (${selected.size})")
-                        }
-                    }
-                    TextButton(onClick = { selecting = !selecting; selected = emptySet() }, enabled = !memos.isNullOrEmpty()) {
-                        Text(if (selecting) "Cancel selection" else "Select")
+                TextButton(onClick = { closeSheet(onRecord) }, enabled = !service.isRecording && !importing && !isClosing) { Text("Record") }
+            }
+            OutlinedTextField(
+                value = search, onValueChange = { search = it },
+                label = { Text("Search recordings") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                if (selecting) {
+                    TextButton(onClick = { confirmBulkTrash = true }, enabled = selected.isNotEmpty()) {
+                        Text("Delete (${selected.size})")
                     }
                 }
-                LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                    val visible = memos.orEmpty().filter { VoiceMemoService.displayName(it.file).contains(search.trim(), ignoreCase = true) }
-                    if (memos == null) item { CircularProgressIndicator() }
-                    else if (visible.isEmpty()) item {
-                        Text(if (search.isBlank()) "No recordings yet. Record or import audio for this song." else "No recordings match your search.")
-                    }
-                    items(visible, key = { it.file.absolutePath }) { memo ->
-                        RecordingMemoRow(
-                            memo = memo, service = service, isSelecting = selecting,
-                            isSelected = memo.file.absolutePath in selected, snackbarHostState = snackbar,
-                            onSelectionChanged = { checked ->
-                                selected = if (checked) selected + memo.file.absolutePath else selected - memo.file.absolutePath
-                            },
-                            onMemoListChanged = { revision++ },
-                            onTrashRequest = { target ->
-                                scope.launch {
-                                    val trashed = service.trashMemo(target)
+                TextButton(onClick = { selecting = !selecting; selected = emptySet() }, enabled = !memos.isNullOrEmpty()) {
+                    Text(if (selecting) "Cancel selection" else "Select")
+                }
+            }
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                val visible = memos.orEmpty().filter { VoiceMemoService.displayName(it.file).contains(search.trim(), ignoreCase = true) }
+                if (memos == null) item { CircularProgressIndicator() }
+                else if (visible.isEmpty()) item {
+                    Text(if (search.isBlank()) "No recordings yet. Record or import audio for this song." else "No recordings match your search.")
+                }
+                items(visible, key = { it.file.absolutePath }) { memo ->
+                    RecordingMemoRow(
+                        memo = memo, service = service, isSelecting = selecting,
+                        isSelected = memo.file.absolutePath in selected, snackbarHostState = snackbar,
+                        onSelectionChanged = { checked ->
+                            selected = if (checked) selected + memo.file.absolutePath else selected - memo.file.absolutePath
+                        },
+                        onMemoListChanged = { revision++ },
+                        onTrashRequest = { target ->
+                            scope.launch {
+                                val trashed = service.trashMemo(target)
+                                revision++
+                                if (trashed == null) snackbar.showSnackbar("Could not move recording to Trash.")
+                                else if (snackbar.showSnackbar("Recording moved to Trash", "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
+                                    val restored = service.restoreTrashedMemo(trashed)
                                     revision++
-                                    if (trashed == null) snackbar.showSnackbar("Could not move recording to Trash.")
-                                    else if (snackbar.showSnackbar("Recording moved to Trash", "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
-                                        val restored = service.restoreTrashedMemo(trashed)
-                                        revision++
-                                        if (!restored) snackbar.showSnackbar("Could not restore recording.")
-                                    }
+                                    if (!restored) snackbar.showSnackbar("Could not restore recording.")
                                 }
                             }
-                        )
-                    }
+                        }
+                    )
                 }
-                SnackbarHost(snackbar)
-                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Done") }
             }
+            SnackbarHost(snackbar)
+            TextButton(onClick = { closeSheet() }, modifier = Modifier.fillMaxWidth()) { Text("Done") }
         }
     }
 }
