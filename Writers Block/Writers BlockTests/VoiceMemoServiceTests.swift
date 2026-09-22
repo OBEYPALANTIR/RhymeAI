@@ -9,19 +9,19 @@ struct VoiceMemoServiceTests {
     // MARK: - File Naming
 
     @Test func newMemoURLHasMp4aExtension() {
-        let url = VoiceMemoService.newMemoURL(for: "song-abc")
+        let url = RecordingFiles.newMemoURL(for: "song-abc")
         #expect(url.pathExtension == "m4a")
     }
 
     @Test func newMemoURLIsUnderProjectFolder() {
         let projectId = "song-xyz"
-        let url = VoiceMemoService.newMemoURL(for: projectId)
-        let folder = VoiceMemoService.memoFolder(for: projectId)
+        let url = RecordingFiles.newMemoURL(for: projectId)
+        let folder = RecordingFiles.memoFolder(for: projectId)
         #expect(url.deletingLastPathComponent() == folder)
     }
 
     @Test func newMemoURLFilenameIsNumericTimestamp() {
-        let url = VoiceMemoService.newMemoURL(for: "song-1")
+        let url = RecordingFiles.newMemoURL(for: "song-1")
         let stem = url.deletingPathExtension().lastPathComponent
         // Filename is milliseconds since epoch — all digits.
         #expect(Int64(stem) != nil)
@@ -30,9 +30,9 @@ struct VoiceMemoServiceTests {
 
     @Test func consecutiveURLsHaveDifferentFilenames() async throws {
         // Two calls must not collide — we sleep 2ms to advance the ms clock.
-        let first = VoiceMemoService.newMemoURL(for: "song-1")
+        let first = RecordingFiles.newMemoURL(for: "song-1")
         try await Task.sleep(for: .milliseconds(2))
-        let second = VoiceMemoService.newMemoURL(for: "song-1")
+        let second = RecordingFiles.newMemoURL(for: "song-1")
         #expect(first.lastPathComponent != second.lastPathComponent)
     }
 
@@ -40,120 +40,178 @@ struct VoiceMemoServiceTests {
 
     @Test func memoFolderIsInsideMemosRoot() {
         let projectId = "song-42"
-        let folder = VoiceMemoService.memoFolder(for: projectId)
-        let root = VoiceMemoService.memosRoot()
+        let folder = RecordingFiles.memoFolder(for: projectId)
+        let root = RecordingFiles.memosRoot()
         // folder must be a direct child of root
         #expect(folder.deletingLastPathComponent() == root)
         #expect(folder.lastPathComponent == projectId)
     }
 
-    // MARK: - Listing sorted by name (= creation date)
+    // MARK: - File-date ordering
 
-    @Test func memosReturnsSortedByFilename() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("VoiceMemoTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        // Write three files with timestamps in non-sequential write order.
-        let names = ["1000.m4a", "3000.m4a", "2000.m4a"]
-        for name in names {
-            FileManager.default.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data())
+    @Test @MainActor func memosReturnNewestFirstAndRenamePreservesDateOrder() throws {
+        let projectId = "memo-date-order-" + UUID().uuidString
+        let folder = RecordingFiles.memoFolder(for: projectId)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { RecordingFiles.deleteMemosFolder(for: projectId) }
+        let oldest = folder.appendingPathComponent("Zulu.m4a")
+        let middle = folder.appendingPathComponent("1700000000000.wav")
+        let newest = folder.appendingPathComponent("Alpha.mp3")
+        for (url, timestamp) in [(oldest, 1_700_000_000.0), (middle, 1_700_000_100.0), (newest, 1_700_000_200.0)] {
+            try Data([1, 2, 3]).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: timestamp)], ofItemAtPath: url.path)
         }
-
-        // Stub: temporarily redirect memosRoot isn't possible without DI, so
-        // test the sort logic directly against the raw FileManager call that
-        // memos(for:) mirrors.
-        let items = try FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: nil,
-            options: .skipsHiddenFiles
-        )
-        .filter { $0.pathExtension == "m4a" }
-        .sorted { $0.lastPathComponent < $1.lastPathComponent }
-
-        let sorted = items.map { $0.deletingPathExtension().lastPathComponent }
-        #expect(sorted == ["1000", "2000", "3000"])
+        #expect(RecordingFiles.memos(for: projectId) == [newest, middle, oldest])
+        let originalDate = try newest.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        let service = VoiceMemoService()
+        let renamed = try service.renameMemo(at: newest, to: "Zzz renamed")
+        #expect(try renamed.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == originalDate)
+        #expect(RecordingFiles.memos(for: projectId) == [renamed, middle, oldest])
     }
 
-    @Test func memosSkipsNonM4aFiles() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("VoiceMemoTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        for name in ["1000.m4a", "readme.txt", "2000.wav", "3000.m4a"] {
-            FileManager.default.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data())
+    @Test @MainActor func memosUseStableFilenameOrderWhenDatesMatch() throws {
+        let projectId = "memo-date-tie-" + UUID().uuidString
+        let folder = RecordingFiles.memoFolder(for: projectId)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { RecordingFiles.deleteMemosFolder(for: projectId) }
+        for name in ["Zulu.m4a", "Middle.wav", "Alpha.mp3"] {
+            let url = folder.appendingPathComponent(name)
+            try Data([1, 2, 3]).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)], ofItemAtPath: url.path)
         }
+        #expect(RecordingFiles.memos(for: projectId).map(\.lastPathComponent) == ["Alpha.mp3", "Middle.wav", "Zulu.m4a"])
+    }
 
-        let items = try FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: nil,
-            options: .skipsHiddenFiles
-        )
-        .filter { $0.pathExtension == "m4a" }
-
-        #expect(items.count == 2)
+    @Test @MainActor func memosSkipsUnsupportedAndHiddenFiles() throws {
+        let projectId = "memo-filter-" + UUID().uuidString
+        let folder = RecordingFiles.memoFolder(for: projectId)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { RecordingFiles.deleteMemosFolder(for: projectId) }
+        for name in ["take.m4a", "take.mp3", "take.wav", "take.aac", "notes.txt", ".staging.wav"] {
+            try Data([1, 2, 3]).write(to: folder.appendingPathComponent(name))
+        }
+        #expect(Set(RecordingFiles.memos(for: projectId).map(\.lastPathComponent)) == ["take.m4a", "take.mp3", "take.wav", "take.aac"])
     }
 
     @Test func memosForAbsentProjectReturnsEmpty() {
         // Non-existent directory — must return [] without throwing.
-        let memos = VoiceMemoService.memos(for: "nonexistent-project-\(UUID().uuidString)")
+        let memos = RecordingFiles.memos(for: "nonexistent-project-\(UUID().uuidString)")
         #expect(memos.isEmpty)
     }
 
     // MARK: - Purge
 
     @Test func deleteMemosFolderRemovesDirectory() throws {
-        // Use a temp dir as a stand-in for the real Application Support path
-        // so the test is hermetic and doesn't pollute the simulator sandbox.
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("purge-test-\(UUID().uuidString)", isDirectory: true)
-        let projectFolder = tmp.appendingPathComponent("project-1", isDirectory: true)
-        try FileManager.default.createDirectory(at: projectFolder, withIntermediateDirectories: true)
-        let file = projectFolder.appendingPathComponent("1000.m4a")
-        FileManager.default.createFile(atPath: file.path, contents: Data())
+        let projectId = "memo-delete-" + UUID().uuidString
+        let folders = [RecordingFiles.memoFolder(for: projectId), RecordingFiles.trashFolder(for: projectId)]
+        defer { RecordingFiles.deleteMemosFolder(for: projectId) }
+        for folder in folders {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data([1]).write(to: folder.appendingPathComponent("1000.m4a"))
+        }
+        #expect(RecordingFiles.deleteMemosFolder(for: projectId))
+        #expect(folders.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+    }
 
-        #expect(FileManager.default.fileExists(atPath: projectFolder.path))
+    @Test func checkedPathsRetainValidationAndSymlinkContainment() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: outside) }
+        for projectId in ["", "..", "../escape", "bad/id"] {
+            #expect(throws: SyncValidationError.invalidProjectId) {
+                try RecordingFiles.projectURL(projectId: projectId, memosRoot: root)
+            }
+        }
+        for fileName in ["../take.m4a", "bad\\take.mp3", "bad.wav/", "take.txt"] {
+            #expect(throws: SyncValidationError.invalidFileName) {
+                try RecordingFiles.localURL(projectId: "song", fileName: fileName, memosRoot: root)
+            }
+        }
+        let protected = outside.appendingPathComponent("take.m4a")
+        try Data([4, 5, 6]).write(to: protected)
+        let link = root.appendingPathComponent("escape", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        #expect(throws: SyncValidationError.pathOutsideMemoRoot) {
+            try RecordingFiles.localURL(projectId: "escape", fileName: "take.m4a", memosRoot: root)
+        }
+        #expect(throws: SyncValidationError.pathOutsideMemoRoot) {
+            try RecordingFiles.removeItemIfPresent(at: link.appendingPathComponent("take.m4a"), within: root)
+        }
+        #expect(try Data(contentsOf: protected) == Data([4, 5, 6]))
+    }
 
-        // We can't call deleteMemosFolder(for:) here because it hardcodes
-        // Application Support. Instead test the underlying FileManager.removeItem
-        // call that the static method delegates to — same one-liner path.
-        try FileManager.default.removeItem(at: projectFolder)
+    @Test @MainActor func liveTrashManifestPathsAndRestoreCollisionsPreserveBytes() throws {
+        let projectId = "memo-path-parity-" + UUID().uuidString
+        let folder = RecordingFiles.memoFolder(for: projectId)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { RecordingFiles.deleteMemosFolder(for: projectId) }
+        let service = VoiceMemoService()
+        for ext in RecordingFiles.supportedAudioExtensions.sorted() {
+            let name = "take." + ext
+            let source = folder.appendingPathComponent(name)
+            try Data([1, 2, 3]).write(to: source)
+            #expect(try RecordingFiles.localURL(projectId: projectId, fileName: name, memosRoot: RecordingFiles.memosRoot()) == source)
+            let trashed = try #require(service.trashMemo(at: source, projectId: projectId))
+            #expect(trashed.url.deletingLastPathComponent() == RecordingFiles.trashFolder(for: projectId))
+            try Data([9]).write(to: source)
+            service.restoreTrashedMemo(trashed)
+            #expect(service.lastError == nil)
+            #expect(try Data(contentsOf: source) == Data([9]))
+            #expect(try Data(contentsOf: folder.appendingPathComponent("take 2." + ext)) == Data([1, 2, 3]))
+        }
+        try Data([0]).write(to: folder.appendingPathComponent(".staging.wav"))
+        try Data([0]).write(to: folder.appendingPathComponent("notes.txt"))
+        let visible = RecordingFiles.memos(for: projectId)
+        let manifest = try RecordingBackupManifest.scan(projectIds: [projectId])
+        #expect(visible.count == 8)
+        #expect(Set(manifest.map(\.localURL)) == Set(visible))
+    }
 
-        #expect(!FileManager.default.fileExists(atPath: projectFolder.path))
+    @Test @MainActor func renameCollapsesUnicodeWhitespaceWithoutChangingBytes() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("take.wav")
+        let bytes = Data([1, 2, 3])
+        try bytes.write(to: source)
+        let renamed = try VoiceMemoService().renameMemo(at: source, to: "  Café\tverse\nchorus\u{00A0}終 /\u{0000}  ")
+        #expect(renamed.lastPathComponent == "Café verse chorus 終.wav")
+        #expect(try Data(contentsOf: renamed) == bytes)
+        #expect(!FileManager.default.fileExists(atPath: source.path))
     }
 
     @Test func deleteMemosFolderIsSilentWhenFolderAbsent() {
         // Must not throw/crash when the folder never existed.
-        VoiceMemoService.deleteMemosFolder(for: "ghost-project-\(UUID().uuidString)")
+        RecordingFiles.deleteMemosFolder(for: "ghost-project-\(UUID().uuidString)")
     }
 
     // MARK: - sanitizeName
 
     @Test func sanitizeNameTrimsWhitespace() {
-        #expect(VoiceMemoService.sanitizeName("  Hello  ") == "Hello")
+        #expect(RecordingFiles.sanitizeName("  Hello  ") == "Hello")
     }
 
     @Test func sanitizeNameStripsSlash() {
-        #expect(VoiceMemoService.sanitizeName("my/memo") == "mymemo")
+        #expect(RecordingFiles.sanitizeName("my/memo") == "mymemo")
     }
 
     @Test func sanitizeNameStripsColon() {
-        #expect(VoiceMemoService.sanitizeName("verse:chorus") == "versechorus")
+        #expect(RecordingFiles.sanitizeName("verse:chorus") == "versechorus")
     }
 
     @Test func sanitizeNameCollapsesInternalWhitespace() {
-        #expect(VoiceMemoService.sanitizeName("hello   world") == "hello world")
+        #expect(RecordingFiles.sanitizeName("hello   world") == "hello world")
     }
 
     @Test func sanitizeNameReturnsEmptyForBlankInput() {
-        #expect(VoiceMemoService.sanitizeName("   ") == "")
+        #expect(RecordingFiles.sanitizeName("   ") == "")
     }
 
     @Test func sanitizeNamePreservesNormalName() {
         let name = "Verse 1 - Hook"
-        #expect(VoiceMemoService.sanitizeName(name) == name)
+        #expect(RecordingFiles.sanitizeName(name) == name)
     }
 
     // MARK: - renameMemo

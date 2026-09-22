@@ -221,6 +221,8 @@ struct BackupCoreTests {
 
         let blobEnvelope = try #require(harness.drive.content(named: SyncBlob.driveFileName))
         let blob = try SyncBlobCrypto.openManifest(blobEnvelope, passphrase: passphrase)
+        #expect(blobEnvelope.prefix(4) == Data("RAI3".utf8))
+        #expect(blob.version == 3)
         #expect(blob.projects.map(\.id) == ["project-1"])
         #expect(blob.recordings.map(\.driveName) == ["rec_project-1_take 1.m4a.enc"])
         #expect(String(data: try SyncJSON.encoder.encode(blob), encoding: .utf8)?.contains("apiKey") == false)
@@ -290,6 +292,26 @@ struct BackupCoreTests {
             try await harness.service.backupNow(modelContext: harness.context)
         }
         #expect(harness.drive.content(named: SyncBlob.driveFileName) == corruptEnvelope)
+    }
+
+    @MainActor
+    @Test func futureManifestVersionsRequestUpdateWithoutOverwritingRemote() async throws {
+        for envelope in [
+            try SyncRepairContractChecks.rawEnvelope(Data(#"{"version":4,"deletions":[]}"#.utf8), magic: "RAI4"),
+            try SyncRepairContractChecks.rawEnvelope(Data(#"{"version":4,"deletions":[]}"#.utf8), magic: "RAI3")
+        ] {
+            let harness = try makeHarness()
+            harness.drive.seed(name: SyncBlob.driveFileName, content: envelope)
+            try harness.service.updatePassphrase(passphrase)
+            await #expect(throws: BackupError.newerAppVersion) {
+                try await harness.service.backupNow(modelContext: harness.context)
+            }
+            await #expect(throws: BackupError.newerAppVersion) {
+                try await harness.service.restoreNow(modelContext: harness.context)
+            }
+            #expect(harness.drive.content(named: SyncBlob.driveFileName) == envelope)
+            #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        }
     }
 
     @MainActor

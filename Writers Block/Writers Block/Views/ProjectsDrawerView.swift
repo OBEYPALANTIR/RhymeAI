@@ -606,7 +606,7 @@ struct ProjectsDrawerView: View {
     }
 
     /// True when the stem is a pure millisecond-epoch timestamp (all digits,
-    /// 13 chars — matches the `VoiceMemoService.newMemoURL` naming scheme).
+    /// 13 chars — matches the `RecordingFiles.newMemoURL` naming scheme).
     private func isTimestampStem(_ stem: String) -> Bool {
         stem.count == 13 && stem.allSatisfy(\.isNumber)
     }
@@ -642,7 +642,7 @@ struct ProjectsDrawerView: View {
         // Snapshot SwiftData-backed project titles on the main actor before
         // doing file-system work in a detached task.
         let titleMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) })
-        let root = VoiceMemoService.memosRoot()
+        let root = RecordingFiles.memosRoot()
 
         Task {
             let folders = await Task.detached(priority: .userInitiated) { () -> [RecordingFolder] in
@@ -657,7 +657,7 @@ struct ProjectsDrawerView: View {
                 var folders: [RecordingFolder] = []
                 for folder in subfolders {
                     let projectId = folder.lastPathComponent
-                    let memos = VoiceMemoService.memos(for: projectId)
+                    let memos = RecordingFiles.memos(for: projectId)
                     guard !memos.isEmpty else { continue }
                     let title = titleMap[projectId] ?? "Deleted song"
                     let items = memos

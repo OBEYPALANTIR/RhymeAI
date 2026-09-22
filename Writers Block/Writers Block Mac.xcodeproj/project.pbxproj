@@ -66,6 +66,7 @@
 		E0F03DC5814FD6E363EF800D /* RhymePhonetics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92C41FAD780B64045877EDC5 /* RhymePhonetics.swift */; };
 		E4147B143B2FD25F07E49F61 /* LyricsExporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3851CD8270FE9AD55BD48847 /* LyricsExporterTests.swift */; };
 		E4590C79D64D9467760C4D44 /* SyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23CCC34202FE56EA6D0D054C /* SyncModels.swift */; };
+		A728D88973A44868AA0A998B /* RecordingFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1530AB35198940838850AF0E /* RecordingFiles.swift */; };
 		E937A427336DDC3BE6666485 /* MacPersistenceExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF2897D28994CCB7AE303186 /* MacPersistenceExportTests.swift */; };
 		F29912BD6CA58EF92C68CD22 /* ProsodyAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4111E5EEE7209430C8D35C4E /* ProsodyAnalyzer.swift */; };
 		F7B346DEBB27AF6A60E6B406 /* SongTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D93CF2E3288B66F23F76FF03 /* SongTemplate.swift */; };
@@ -90,6 +91,7 @@
 		1754B5ACA1E4D2AA1A0C3670 /* MacVoiceMemosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVoiceMemosView.swift; sourceTree = "<group>"; };
 		1D45528927B37D8AE543E426 /* SyncBlobCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBlobCrypto.swift; sourceTree = "<group>"; };
 		23CCC34202FE56EA6D0D054C /* SyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncModels.swift; sourceTree = "<group>"; };
+		1530AB35198940838850AF0E /* RecordingFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingFiles.swift; sourceTree = "<group>"; };
 		278A26A02EE6D3A65D35485C /* RhymeConstraint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RhymeConstraint.swift; sourceTree = "<group>"; };
 		27B6448E320846B9EC837EDB /* AIErrorRecoveryActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIErrorRecoveryActionTests.swift; sourceTree = "<group>"; };
 		2E127600BBBA3697BBBB9D20 /* MacSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsView.swift; sourceTree = "<group>"; };
@@ -175,6 +177,7 @@
 				33AD7D2BECCC5945BA3AA11D /* ProjectImportData.swift */,
 				1D45528927B37D8AE543E426 /* SyncBlobCrypto.swift */,
 				23CCC34202FE56EA6D0D054C /* SyncModels.swift */,
+				1530AB35198940838850AF0E /* RecordingFiles.swift */,
 				56BD50C088683FC5A97D593D /* UITestFlags.swift */,
 			);
 			name = Support;
@@ -452,6 +455,7 @@
 				741F44934E818783D6B91DAB /* SyncBlobCrypto.swift in Sources */,
 				1AD8E5779197F8D31D95176E /* SyncDeletionRecord.swift in Sources */,
 				E4590C79D64D9467760C4D44 /* SyncModels.swift in Sources */,
+				A728D88973A44868AA0A998B /* RecordingFiles.swift in Sources */,
 				DD0D57273F3F55251A67F837 /* SynonymGeneration.swift in Sources */,
 				8224FA11C57F2165B38A09BA /* SynonymPromptContract.swift in Sources */,
 				02F55A51AAA5E11A0BC5F5A8 /* SynonymResultPresentation.swift in Sources */,
