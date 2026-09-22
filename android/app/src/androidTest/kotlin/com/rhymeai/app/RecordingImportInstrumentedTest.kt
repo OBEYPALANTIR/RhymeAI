@@ -1,5 +1,6 @@
 package com.rhymeai.app
 
+import com.rhymeai.app.data.recording.RecordingFiles
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.core.content.FileProvider
@@ -62,7 +63,7 @@ class RecordingImportInstrumentedTest {
                 // Some platform extractors report invalid containers as I/O errors.
             }
             assertTrue(service.memosForProject("song").isEmpty())
-            assertTrue(VoiceMemoService.memoDirectory(owned, "song").listFiles().orEmpty().isEmpty())
+            assertTrue(RecordingFiles.memoDirectory(owned, "song").listFiles().orEmpty().isEmpty())
         } finally {
             service.release()
             owned.deleteRecursively()

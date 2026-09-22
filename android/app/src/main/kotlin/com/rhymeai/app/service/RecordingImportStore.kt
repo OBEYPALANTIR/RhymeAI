@@ -1,5 +1,6 @@
 package com.rhymeai.app.service
 
+import com.rhymeai.app.data.recording.RecordingFiles
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -21,8 +22,8 @@ internal object RecordingImportStore {
         try {
             val (candidate, basename, extension) = input.use { source ->
                 val extension = displayName.substringAfterLast('.', "").lowercase(Locale.ROOT)
-                require(extension in VoiceMemoService.SUPPORTED_AUDIO_EXTENSIONS) { "Unsupported audio format" }
-                val basename = VoiceMemoService.sanitizeBasename(displayName.substringBeforeLast('.'))
+                require(extension in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) { "Unsupported audio format" }
+                val basename = RecordingFiles.sanitizeBasename(displayName.substringBeforeLast('.'))
                     .takeUnless { it.startsWith(".") }.orEmpty().ifBlank { "Imported recording" }
                 if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Cannot create recording folder")
                 val temporary = File.createTempFile("import-", ".pending", directory)
@@ -45,7 +46,7 @@ internal object RecordingImportStore {
             require(candidate.length() > 0) { "Empty audio file" }
             validate(candidate)
             checkCancellation()
-            val destination = VoiceMemoService.resolveCollision(directory, basename, extension)
+            val destination = RecordingFiles.resolveCollision(directory, basename, extension)
             // No REPLACE_EXISTING: a concurrent import must never overwrite another take.
             Files.move(candidate.toPath(), destination.toPath())
             return destination

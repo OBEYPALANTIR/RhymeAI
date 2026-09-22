@@ -1,5 +1,6 @@
 package com.rhymeai.app.service
 
+import com.rhymeai.app.data.recording.RecordingFiles
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.InputStream
@@ -23,7 +24,7 @@ class RecordingImportStoreTest {
         assertEquals("original", existing.readText())
         assertEquals("other song", untouched.readText())
         assertContentEquals(byteArrayOf(1, 2, 3), imported.readBytes())
-        assertTrue(VoiceMemoService.isMemoFile(imported))
+        assertTrue(RecordingFiles.isMemoFile(imported))
     }
 
     @Test fun invalidAudioAndEmptyInputLeaveNoFile() {
@@ -106,7 +107,7 @@ class RecordingImportStoreTest {
         val song = temporary.newFolder()
         val imported = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, "verse\u0000\u0001\u200B\nidea.wav", {}, {})
         assertEquals("verse idea.wav", imported.name)
-        val emoji = VoiceMemoService.sanitizeBasename("🎵".repeat(60))
+        val emoji = RecordingFiles.sanitizeBasename("🎵".repeat(60))
         assertEquals("🎵".repeat(50), emoji)
         assertEquals(200, emoji.toByteArray().size)
     }
@@ -116,7 +117,7 @@ class RecordingImportStoreTest {
         val result = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, "../outside.wav", {}, {})
         assertEquals(song.canonicalFile, result.canonicalFile.parentFile)
         val pending = File(song, "import.pending").apply { writeText("partial") }
-        assertFalse(VoiceMemoService.isMemoFile(pending))
+        assertFalse(RecordingFiles.isMemoFile(pending))
         assertFailsWith<IllegalArgumentException> {
             RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, "video.mp4", {}, {})
         }
