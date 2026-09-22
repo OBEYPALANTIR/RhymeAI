@@ -1241,7 +1241,7 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         // Remove the memo folder so orphaned audio doesn't accumulate on disk.
-        if !VoiceMemoService.deleteMemosFolder(for: projectId) {
+        if !RecordingFiles.deleteMemosFolder(for: projectId) {
             errorMessage = "This song was permanently deleted, but its local recordings could not be removed. Writers Block will retry cleanup."
         }
         scheduleTrashPurge()
@@ -1265,7 +1265,7 @@ final class EditorViewModel: ObservableObject {
     func purgeExpiredTrashedProjects() {
         guard let context = modelContext else { return }
         let now = Date()
-        let expiredMemos = VoiceMemoService.trashedMemos().filter { $0.deleteAfter <= now }
+        let expiredMemos = RecordingFiles.trashedMemos().filter { $0.deleteAfter <= now }
         let descriptor = FetchDescriptor<TrashedSongProject>(
             predicate: #Predicate<TrashedSongProject> { $0.deleteAfter <= now }
         )
@@ -1283,7 +1283,7 @@ final class EditorViewModel: ObservableObject {
             }
             expiredProjects.forEach(context.delete)
             try saveModelContext(context)
-            for projectId in projectIDs where !VoiceMemoService.deleteMemosFolder(for: projectId) {
+            for projectId in projectIDs where !RecordingFiles.deleteMemosFolder(for: projectId) {
                 errorMessage = "Expired writing was removed, but some local recordings could not be cleaned up. Writers Block will retry."
             }
             for memo in expiredMemos {
@@ -1311,7 +1311,7 @@ final class EditorViewModel: ObservableObject {
             }
             try saveModelContext(context)
             for projectId in deletedProjects {
-                _ = VoiceMemoService.deleteMemosFolder(for: projectId)
+                _ = RecordingFiles.deleteMemosFolder(for: projectId)
             }
             for deletion in deletions {
                 guard let fileName = deletion.fileName, !deletedProjects.contains(deletion.projectId) else { continue }
@@ -1351,7 +1351,7 @@ final class EditorViewModel: ObservableObject {
         descriptor.fetchLimit = 1
         let nextProjectExpiry = (try? context.fetch(descriptor).first)?.deleteAfter
         // Already-expired recordings were purged above; only future expiries count.
-        let nextMemoExpiry = VoiceMemoService.nextTrashedMemoExpiry().flatMap { $0 > now ? $0 : nil }
+        let nextMemoExpiry = RecordingFiles.nextTrashedMemoExpiry().flatMap { $0 > now ? $0 : nil }
         guard let nextExpiry = [nextProjectExpiry, nextMemoExpiry].compactMap({ $0 }).min() else { return }
 
         let delay = max(nextExpiry.timeIntervalSinceNow, 0)

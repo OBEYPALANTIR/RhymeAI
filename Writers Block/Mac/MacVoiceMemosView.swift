@@ -58,7 +58,7 @@ struct MacVoiceMemosView: View {
             }.frame(maxHeight: 240)
         }.padding(24).frame(width: 410)
         .fileImporter(isPresented: $showingImporter,
-                      allowedContentTypes: VoiceMemoService.supportedAudioExtensions.sorted().compactMap { UTType(filenameExtension: $0) }) { result in
+                      allowedContentTypes: RecordingFiles.supportedAudioExtensions.sorted().compactMap { UTType(filenameExtension: $0) }) { result in
             switch result {
             case .success(let source):
                 guard let projectId = importProjectId ?? editor.ensureProjectForRecording() else { return }
@@ -95,5 +95,5 @@ struct MacVoiceMemosView: View {
         }
         .onChange(of: editor.voiceMemoService.isRecording) { refresh() }
     }
-    private func refresh() { recordings = editor.currentProjectId.map { VoiceMemoService.memos(for: $0) } ?? [] }
+    private func refresh() { recordings = editor.currentProjectId.map { RecordingFiles.memos(for: $0) } ?? [] }
 }

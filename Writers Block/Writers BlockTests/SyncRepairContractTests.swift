@@ -86,8 +86,8 @@ enum SyncRepairContractChecks {
         try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("escape"), withDestinationURL: outside)
-        try rejects("symlink escaped memo root") { _ = try RecordingBackupManifest.localURL(projectId: "escape", fileName: "take.m4a", memosRoot: root) }
-        let safe = try RecordingBackupManifest.localURL(projectId: "good", fileName: "take 1.m4a", memosRoot: root)
+        try rejects("symlink escaped memo root") { _ = try RecordingFiles.localURL(projectId: "escape", fileName: "take.m4a", memosRoot: root) }
+        let safe = try RecordingFiles.localURL(projectId: "good", fileName: "take 1.m4a", memosRoot: root)
         try require(safe.path.hasSuffix("/memos/good/take 1.m4a"), "valid legacy basename changed")
     }
 
