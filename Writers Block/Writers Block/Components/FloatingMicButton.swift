@@ -132,7 +132,7 @@ struct FloatingMicButton: View {
         .frame(width: interpolatedWidth, height: pillHeight)
         // React to service state changes with a spring animation.
         .onChange(of: service.isRecording) { _, isRecording in
-            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
+            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.recording) {
                 progress = isRecording ? 1 : 0
             }
         }

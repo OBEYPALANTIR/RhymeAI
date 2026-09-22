@@ -179,7 +179,7 @@ struct ProjectsDrawerView: View {
         }
         .onAppear {
             DispatchQueue.main.async {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.14)) {
+                withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.feedback) {
                     drawerVisible = true
                 }
             }
@@ -466,7 +466,7 @@ struct ProjectsDrawerView: View {
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .contentShape(Rectangle())
         .onTapGesture {
-            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
+            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.state) {
                 if expandedFolders.contains(folder.id) {
                     expandedFolders.remove(folder.id)
                 } else {
@@ -725,7 +725,7 @@ struct ProjectsDrawerView: View {
     private func closeDrawer() {
         guard !isClosing else { return }
         isClosing = true
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.14), completionCriteria: .removed) {
+        withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.feedback, completionCriteria: .removed) {
             drawerVisible = false
         } completion: {
             isPresented = false

@@ -190,7 +190,7 @@ struct AssistantPanelView: View {
             // current tuning visible while collapsed.
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
                 Button {
-                    withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
+                    withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.state) {
                         rhymeOptionsExpanded.toggle()
                     }
                 } label: {
@@ -451,20 +451,11 @@ struct AssistantPanelView: View {
 }
 
 private struct SuggestionSkeletonRow: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pulse = false
-
     var body: some View {
         RoundedRectangle(cornerRadius: RhymeAITokens.Radius.lg, style: .continuous)
             .fill(Color.secondary.opacity(0.18))
             .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
-            .opacity(reduceMotion ? 0.6 : (pulse ? 0.85 : 0.45))
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
-                    pulse = true
-                }
-            }
+            .opacity(0.6)
             .accessibilityHidden(true)
     }
 }

@@ -531,7 +531,7 @@ struct LyricsTextView: UIViewRepresentable {
             guard abs(boundedOffset - scrollView.contentOffset.y) > 0.5 else { return }
             scrollView.setContentOffset(
                 CGPoint(x: scrollView.contentOffset.x, y: boundedOffset),
-                animated: animated
+                animated: animated && !UIAccessibility.isReduceMotionEnabled
             )
         }
 

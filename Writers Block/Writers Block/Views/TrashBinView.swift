@@ -393,7 +393,6 @@ struct TrashBinView: View {
                 .background(
                     Circle()
                         .fill(Color.indigo)
-                        .scaleEffect(selected ? 1 : 0.72)
                         .opacity(selected ? 1 : 0)
                 )
 
@@ -401,7 +400,7 @@ struct TrashBinView: View {
                 Image(systemName: "checkmark")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.white)
-                    .transition(.scale(scale: 0.72).combined(with: .opacity))
+                    .transition(.opacity)
             }
         }
         .frame(width: 26, height: 26)

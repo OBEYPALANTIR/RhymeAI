@@ -137,7 +137,7 @@ struct EditorView: View {
             viewModel.clearInsertionFeedback()
         }
         .onChange(of: viewModel.voiceMemoService.isRecording) { _, isRecording in
-            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
+            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.recording) {
                 unblockWordmarkOpacity = isRecording ? EditorViewConstants.UnBlockChrome.hiddenWordmarkOpacity : EditorViewConstants.UnBlockChrome.visibleWordmarkOpacity
                 unblockButtonWidth = isRecording ? RhymeAITokens.Touch.comfortable : EditorViewConstants.UnBlockChrome.expandedButtonWidth
                 unblockWordmarkWidth = isRecording ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : EditorViewConstants.UnBlockChrome.expandedWordmarkWidth
@@ -259,12 +259,6 @@ struct EditorView: View {
             }
         }
         .rhymeAnimation(RhymeAITokens.Motion.presentation, value: inlineAssistantVisible)
-        .rhymeAnimation(
-            viewModel.voiceMemoService.isRecording
-                ? RhymeAITokens.Motion.dismiss
-                : RhymeAITokens.Motion.state,
-            value: viewModel.voiceMemoService.isRecording
-        )
     }
 
     // MARK: - iPhone Layout (FAB + sheet)
@@ -292,14 +286,6 @@ struct EditorView: View {
                 .zIndex(EditorViewConstants.EditorLayout.assistantSheetZIndex)
         }
         .rhymeAnimation(assistantSheetTransitionAnimation, value: viewModel.showAssistantSheet)
-        .rhymeAnimation(RhymeAITokens.Motion.state, value: keyboardIsVisible)
-        .rhymeAnimation(RhymeAITokens.Motion.state, value: lyricsEditorIsFocused)
-        .rhymeAnimation(
-            viewModel.voiceMemoService.isRecording
-                ? RhymeAITokens.Motion.dismiss
-                : RhymeAITokens.Motion.state,
-            value: viewModel.voiceMemoService.isRecording
-        )
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
@@ -360,7 +346,7 @@ struct EditorView: View {
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .padding(.bottom, RhymeAITokens.Spacing.md)
             }
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .transition(.identity)
         }
     }
 
@@ -385,7 +371,7 @@ struct EditorView: View {
                          ? keyboardHeight + RhymeAITokens.Spacing.sm
                          : RhymeAITokens.Spacing.md)
             }
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .transition(.identity)
         }
     }
 
@@ -619,7 +605,7 @@ struct EditorView: View {
                         onCancel: { viewModel.dismissRewrite() },
                         onRetry: { viewModel.retryRewrite() }
                     )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(.identity)
                 } else if shouldShowRewriteChipBar {
                     RewriteChipBar(
                         onAction: { viewModel.requestRewrite($0) },
@@ -627,12 +613,10 @@ struct EditorView: View {
                             ? { viewModel.openInspectorForSelection() }
                             : nil
                     )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(.identity)
                 }
             }
         }
-        .rhymeAnimation(RhymeAITokens.Motion.state, value: shouldShowRewriteChipBar)
-        .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.hasActiveRewrite)
         .background {
             GeometryReader { proxy in
                 Color.clear
@@ -686,7 +670,6 @@ struct EditorView: View {
                     .accessibilityIdentifier("editorStats")
                     .opacity(isFocusMode ? 0 : 1)
                     .accessibilityHidden(isFocusMode)
-                    .animation(reduceMotion ? nil : RhymeAITokens.Motion.feedback, value: isFocusMode)
 
                 // Lyrics Editor
                 ZStack(alignment: .topLeading) {
@@ -883,7 +866,6 @@ struct EditorView: View {
                 }
             }
             .frame(width: RhymeAITokens.Touch.minimum * 2 + RhymeAITokens.Spacing.xxs, height: RhymeAITokens.Touch.minimum)
-            .animation(reduceMotion ? nil : RhymeAITokens.Motion.feedback, value: isFocusMode)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.xs)
         .padding(.vertical, RhymeAITokens.Spacing.xs)
