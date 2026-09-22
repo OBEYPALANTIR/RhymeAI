@@ -1,6 +1,7 @@
 package com.rhymeai.app.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -61,7 +62,6 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.appWritingSurface
 import com.rhymeai.app.util.RhymeMatches
 import com.rhymeai.app.util.WordProsody
-import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -79,22 +79,17 @@ fun WordInspectorSheet(
     val colorScheme = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
-    var visible by remember { mutableStateOf(false) }
-    var hasEntered by remember { mutableStateOf(false) }
+    val visibility = remember { MutableTransitionState(false).apply { targetState = true } }
+    var isClosing by remember { mutableStateOf(false) }
 
     fun requestDismiss() {
-        if (!visible) return
-        visible = false
+        if (isClosing) return
+        isClosing = true
+        visibility.targetState = false
     }
 
-    LaunchedEffect(Unit) {
-        visible = true
-        hasEntered = true
-    }
-
-    LaunchedEffect(visible) {
-        if (hasEntered && !visible) {
-            delay(DesignTokens.Motion.dismissMillis.toLong())
+    LaunchedEffect(visibility.isIdle, visibility.currentState, isClosing) {
+        if (isClosing && visibility.isIdle && !visibility.currentState) {
             onDismiss()
         }
     }
@@ -113,7 +108,7 @@ fun WordInspectorSheet(
                 .padding(horizontal = DesignTokens.Spacing.lg)
         ) {
             AnimatedVisibility(
-                visible = visible,
+                visibleState = visibility,
                 enter = fadeIn(
                     animationSpec = tween(
                         durationMillis = DesignTokens.Motion.standardMillis,

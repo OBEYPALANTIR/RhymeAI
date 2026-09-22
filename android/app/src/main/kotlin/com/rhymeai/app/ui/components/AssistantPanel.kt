@@ -172,8 +172,8 @@ fun AssistantPanel(
 
             AnimatedVisibility(
                 visible = contextExpanded,
-                enter = if (animationsEnabled) expandVertically(tween(160), expandFrom = Alignment.Top) else EnterTransition.None,
-                exit = if (animationsEnabled) shrinkVertically(tween(120), shrinkTowards = Alignment.Top) else ExitTransition.None
+                enter = if (animationsEnabled) expandVertically(tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing), expandFrom = Alignment.Top) else EnterTransition.None,
+                exit = if (animationsEnabled) shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top) else ExitTransition.None
             ) {
                 OutlinedTextField(
                     value = viewModel.theme,
@@ -311,7 +311,7 @@ fun AssistantPanel(
                 AnimatedVisibility(
                     visible = rhymeOptionsExpanded,
                     enter = if (animationsEnabled) {
-                        expandVertically(animationSpec = DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
+                        expandVertically(animationSpec = tween(DesignTokens.Motion.disclosureMillis, easing = DesignTokens.Motion.standardEasing), expandFrom = Alignment.Top)
                     } else {
                         EnterTransition.None
                     },

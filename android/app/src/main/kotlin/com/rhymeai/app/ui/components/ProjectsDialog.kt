@@ -130,7 +130,6 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -167,7 +166,7 @@ fun ProjectsDrawer(
     val animationsEnabled = LocalAnimationsEnabled.current
     var isClosing by remember { mutableStateOf(false) }
     var showTrashBin by remember { mutableStateOf(false) }
-    var trashBinVisible by remember { mutableStateOf(false) }
+    val trashTransition = remember { MutableTransitionState(false) }
     var isTrashBinClosing by remember { mutableStateOf(false) }
     // 0 = Songs, 1 = Recordings
     var selectedTab by remember { mutableStateOf(0) }
@@ -176,15 +175,17 @@ fun ProjectsDrawer(
     fun openTrashBin() {
         isTrashBinClosing = false
         showTrashBin = true
-        trashBinVisible = true
+        trashTransition.targetState = true
     }
 
     fun closeTrashBin() {
         if (!showTrashBin || isTrashBinClosing) return
         isTrashBinClosing = true
-        trashBinVisible = false
-        scope.launch {
-            if (animationsEnabled) delay(DrawerDismissMillis.toLong())
+        trashTransition.targetState = false
+    }
+
+    LaunchedEffect(trashTransition.isIdle, trashTransition.currentState, isTrashBinClosing) {
+        if (isTrashBinClosing && trashTransition.isIdle && !trashTransition.currentState) {
             showTrashBin = false
             isTrashBinClosing = false
         }
@@ -258,10 +259,10 @@ fun ProjectsDrawer(
     val density = LocalDensity.current
     val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
     val trashRevealProgress by animateFloatAsState(
-        targetValue = if (trashBinVisible) 1f else 0f,
+        targetValue = if (trashTransition.targetState) 1f else 0f,
         animationSpec = if (!animationsEnabled) {
             snap()
-        } else if (trashBinVisible) {
+        } else if (trashTransition.targetState) {
             tween(DrawerAnimationMillis, easing = DesignTokens.Motion.standardEasing)
         } else {
             tween(DrawerDismissMillis, easing = DesignTokens.Motion.exitEasing)
@@ -549,7 +550,7 @@ fun ProjectsDrawer(
             // entirely (the page used to just appear). Kept in composition,
             // the slide-in runs; content is only materialized while visible.
             AnimatedVisibility(
-                visible = trashBinVisible,
+                visibleState = trashTransition,
                 enter = slideInHorizontally(
                     animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing),
                     initialOffsetX = { it }
@@ -814,11 +815,11 @@ private fun RecordingsTab(
                         AnimatedVisibility(
                             visible = folderExpanded,
                             enter = expandVertically(
-                                animationSpec = DesignTokens.Motion.expressiveSpring(),
+                                animationSpec = tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing),
                                 expandFrom = Alignment.Top
                             ) + fadeIn(animationSpec = tween(DesignTokens.Motion.feedbackMillis)),
                             exit = shrinkVertically(
-                                animationSpec = DesignTokens.Motion.expressiveSpring(),
+                                animationSpec = tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing),
                                 shrinkTowards = Alignment.Top
                             ) + fadeOut(animationSpec = tween(DesignTokens.Motion.feedbackMillis))
                         ) {
@@ -885,7 +886,7 @@ private fun FolderHeaderRow(
     val colorScheme = MaterialTheme.colorScheme
     val arrowRotation by animateFloatAsState(
         targetValue = if (isExpanded) 180f else 0f,
-        animationSpec = DesignTokens.Motion.expressiveSpring()
+        animationSpec = tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing)
     )
     Card(
         onClick = onToggle,

@@ -1,6 +1,7 @@
 package com.rhymeai.app.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
@@ -49,7 +50,6 @@ import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.ExportFormat
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.appWritingSurface
-import kotlinx.coroutines.delay
 
 @Composable
 fun ExportSheet(
@@ -57,24 +57,19 @@ fun ExportSheet(
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    var visible by remember { mutableStateOf(false) }
-    var hasEntered by remember { mutableStateOf(false) }
+    val visibility = remember { MutableTransitionState(false).apply { targetState = true } }
+    var isClosing by remember { mutableStateOf(false) }
     var pendingPick by remember { mutableStateOf<ExportFormat?>(null) }
 
     fun requestDismiss(format: ExportFormat? = null) {
-        if (!visible) return
+        if (isClosing) return
+        isClosing = true
         pendingPick = format
-        visible = false
+        visibility.targetState = false
     }
 
-    LaunchedEffect(Unit) {
-        visible = true
-        hasEntered = true
-    }
-
-    LaunchedEffect(visible) {
-        if (hasEntered && !visible) {
-            delay(DesignTokens.Motion.dismissMillis.toLong())
+    LaunchedEffect(visibility.isIdle, visibility.currentState, isClosing) {
+        if (isClosing && visibility.isIdle && !visibility.currentState) {
             pendingPick?.let(onPick) ?: onDismiss()
         }
     }
@@ -93,7 +88,7 @@ fun ExportSheet(
                 .padding(horizontal = DesignTokens.Spacing.lg)
         ) {
             AnimatedVisibility(
-                visible = visible,
+                visibleState = visibility,
                 enter = fadeIn(
                     animationSpec = tween(
                         durationMillis = DesignTokens.Motion.standardMillis,

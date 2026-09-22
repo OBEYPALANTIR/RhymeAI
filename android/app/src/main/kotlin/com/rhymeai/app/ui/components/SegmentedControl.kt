@@ -1,6 +1,5 @@
 package com.rhymeai.app.ui.components
 
-import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -19,7 +18,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -31,10 +29,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.rhymeai.app.ui.theme.DesignTokens
-import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.ui.unit.lerp
-import kotlin.math.abs
 
 private val VisibleTrackHeight = 42.dp
 
@@ -54,7 +48,6 @@ fun SlidingSegmentedControl(
     if (labels.isEmpty()) return
     val colorScheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(DesignTokens.Radius.pill)
-    val animationsEnabled = LocalAnimationsEnabled.current
     val density = LocalDensity.current
     var trackWidthPx by remember { mutableIntStateOf(0) }
     val segmentWidth = if (trackWidthPx > 0) {
@@ -62,36 +55,10 @@ fun SlidingSegmentedControl(
     } else {
         0.dp
     }
-    // Animate only for user-driven selection changes. On (re)mount — e.g. a tab
-    // switch recomposing the page — the highlight must appear already in place
-    // instead of flying in from the first segment.
-    var hasSettled by remember { mutableStateOf(false) }
-    val initialIndex = remember { selectedIndex }
-    if (!hasSettled && (selectedIndex != initialIndex)) hasSettled = true
-    val targetOffset = segmentWidth * selectedIndex
-    val pillOffset by animateDpAsState(
-        targetValue = targetOffset,
-        animationSpec = if (animationsEnabled && hasSettled) DesignTokens.Motion.standardSpring() else snap(),
-        label = "segmentedPillOffset"
-    )
-
-    // The highlight is a cell fill, not a floating pill: at rest it takes the
-    // exact shape of its segment box — flat against the interior dividers, and
-    // curved only on an outer edge when it occupies the first or last segment
-    // (following the track's rounded ends). While traveling it rounds up, then
-    // settles flat into the destination box.
-    val travel = targetOffset - pillOffset
-    val morph = if (segmentWidth > 0.dp) {
-        (abs(travel.value) / segmentWidth.value).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-    val trackRadius = DesignTokens.Radius.pill
-    val travelRadius = 12.dp
-    val restStart = if (selectedIndex == 0) trackRadius else 0.dp
-    val restEnd = if (selectedIndex == labels.lastIndex) trackRadius else 0.dp
-    val startRadius = lerp(restStart, travelRadius, morph)
-    val endRadius = lerp(restEnd, travelRadius, morph)
+    // Frequent controls, including keyboard selection, update as one immediate state.
+    val pillOffset = segmentWidth * selectedIndex
+    val startRadius = if (selectedIndex == 0) DesignTokens.Radius.pill else 0.dp
+    val endRadius = if (selectedIndex == labels.lastIndex) DesignTokens.Radius.pill else 0.dp
     val pillShape = RoundedCornerShape(
         topStart = startRadius,
         bottomStart = startRadius,
