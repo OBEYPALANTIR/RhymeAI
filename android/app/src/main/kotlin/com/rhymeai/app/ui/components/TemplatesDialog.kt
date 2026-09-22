@@ -31,8 +31,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,10 +79,10 @@ fun TemplatesDialog(
         onDismissRequest = ::finishClose,
         sheetState = sheetState,
         sheetMaxWidth = DesignTokens.Drawer.expandedWidth,
-        modifier = Modifier.clip(RoundedCornerShape(topStart = DesignTokens.Radius.sheet, topEnd = DesignTokens.Radius.sheet)).appWritingSurface(),
-        containerColor = Color.Transparent
+        shape = RoundedCornerShape(topStart = DesignTokens.Radius.sheet, topEnd = DesignTokens.Radius.sheet),
+        containerColor = colorScheme.background
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxWidth().appWritingSurface()) {
             // Header
             Row(
                 modifier = Modifier
