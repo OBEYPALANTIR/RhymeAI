@@ -2,6 +2,14 @@
 
 This tracks behavior that must stay aligned between Android and iOS. Source contracts are distinct from verification evidence; current acceptance must name its exact source and artifact.
 
+## Model setup return path and contrast (2026-09-22)
+
+- Android preserves the mounted UnBlock panel beneath Settings. Close and system Back return to the same panel, including expanded controls; Settings opened from the song returns to the song. The theme supplies a semantic default foreground so model status remains readable in Graphite.
+- iOS already presents model setup as a child sheet. A new UI regression verifies Done returns to Assistant in Graphite, Paper, and Ink, then closing Assistant returns to the editor.
+- Android: two regression tests passed on the phone, 1.3 font scale with animations disabled, and an expanded-size emulator profile. Tests exercise ready/setup display states, rendered light model-status pixels, both return paths, and preserved expansion. These display-state tests do not prove model inference. Build, 338 unit tests (five skipped), and lint (zero errors, 84 warnings) passed.
+- iOS: the appearance round-trip test passed on the existing iPhone simulator at default and accessibility-large text with increased contrast. Testing used a command-line iOS 18 deployment-target override because the test target otherwise defaults to iOS 27; project settings were unchanged.
+- Local evidence: `~/.agents/artifacts/2026-09-22/model-navigation/`. Targeted emulator/simulator evidence only; full accessibility, iPad, physical-device, provider, and store-release qualification remain outside this check.
+
 ## Song recordings
 
 - Open the recording library from the active song's editor. The song selector contains songs only; recording trash remains in Trash Bin.

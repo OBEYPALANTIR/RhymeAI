@@ -1286,6 +1286,31 @@ final class Writers_BlockUITests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testModelSetupReturnsToAssistantInEveryAppearance() throws {
+        let app = isolatedUITestApp(arguments: [
+            "--ui-test-seed-prosody-song", "--ui-test-open-assistant",
+            "-selectedProvider", "local"
+        ])
+        app.launch()
+        for appearance in ["Graphite", "Paper", "Ink"] {
+            let setup = app.buttons["Local model setup"]
+            XCTAssertTrue(setup.waitForExistence(timeout: 5))
+            for _ in 0..<5 where !setup.isHittable { app.swipeUp() }
+            setup.tap()
+            XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+            app.buttons[appearance].tap()
+            attachScreenshot(app, name: "model-settings-\(appearance)")
+            app.buttons["Done"].tap()
+            XCTAssertTrue(setup.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Close Assistant"].exists)
+            attachScreenshot(app, name: "model-return-\(appearance)")
+        }
+        app.buttons["Close Assistant"].tap()
+        XCTAssertTrue(app.buttons["unblockButton"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews["lyricsEditor"].exists)
+    }
+
     private func isolatedUITestApp(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-in-memory-store"] + arguments
