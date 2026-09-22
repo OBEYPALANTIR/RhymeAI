@@ -15,6 +15,39 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AIServicePromptTest {
+    @Test
+    fun reducedPayloadsExcludePrivateLyricsForEveryCloudProvider() {
+        val service = AIService()
+        val privateText = "PRIVATE_VERSE_SENTINEL"
+        val chorusText = "PRIVATE_CHORUS_SENTINEL"
+        val song = "[Verse]\n$privateText\n\n[Chorus]\n$chorusText"
+        for (wholeSong in listOf(false, true)) {
+            val suggestions = service.buildPrompt(
+                "allowed theme", song, "ALLOWED_TARGET", RhymeType.PERFECT, "AABB", "A",
+                SongSection.CHORUS, RhymeComplexity.MODERATE, wholeSong,
+                sectionRef = com.rhymeai.app.util.SectionRef(SongSection.CHORUS, 2, "Chorus", 3 until 5)
+            )
+            val rewrite = service.buildRewritePrompt(
+                RewriteAction.entries.first(), song, "ALLOWED_SELECTION", SongSection.VERSE, wholeSong
+            )
+            for (prompt in listOf(suggestions, rewrite)) {
+                // Gemini SDK receives this exact prompt; the other providers serialize it here.
+                for (stream in listOf(false, true)) {
+                    val payloads = listOf(
+                        prompt,
+                        service.buildOpenAIChatRequestBody("fixture", prompt, 0.7, stream).toString(),
+                        service.buildClaudeMessagesRequestBody("fixture", prompt, stream).toString()
+                    )
+                    payloads.forEach { payload ->
+                        assertEquals(wholeSong, payload.contains(privateText))
+                        assertEquals(wholeSong, payload.contains(chorusText))
+                        assertContains(payload, "ALLOWED_")
+                    }
+                }
+            }
+        }
+    }
+
     private val rhymeDictionary = PronunciationDictionary.fromLines(
         sequenceOf(
             "road\tR OW1 D",
@@ -50,7 +83,7 @@ class AIServicePromptTest {
         )
 
         assertContains(immediatePrompt, "late-night resolve")
-        assertContains(immediatePrompt, "Prioritize the immediate writing context")
+        assertContains(immediatePrompt, "Prioritize the target line")
         assertContains(immediatePrompt, "MUST end with a **Perfect Rhyme**")
         assertContains(immediatePrompt, "Current song section: Verse.")
         assertContains(immediatePrompt, "Complexity level: Moderate")
@@ -291,7 +324,7 @@ class AIServicePromptTest {
             currentLetter = "A",
             currentSection = SongSection.VERSE,
             complexity = RhymeComplexity.MODERATE,
-            useWholeSongContext = false,
+            useWholeSongContext = true,
             constraint = constraint
         )
         assertContains(prompt, "This is Verse 2.")
@@ -323,7 +356,7 @@ class AIServicePromptTest {
             currentLetter = "A",
             currentSection = SongSection.BRIDGE,
             complexity = RhymeComplexity.MODERATE,
-            useWholeSongContext = false,
+            useWholeSongContext = true,
             constraint = constraint
         )
         assertContains(prompt, "This is the bridge — introduce a contrasting rhyme sound and cadence; avoid the chorus's ending words.")
@@ -355,7 +388,7 @@ class AIServicePromptTest {
             currentLetter = "A",
             currentSection = SongSection.CHORUS,
             complexity = RhymeComplexity.MODERATE,
-            useWholeSongContext = false,
+            useWholeSongContext = true,
             constraint = constraint
         )
         assertContains(prompt, "This is the chorus (instance 2). Keep hook language and ending words consistent with the established chorus:")

@@ -46,7 +46,24 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+
+enum class CloudAISharingScope(val label: String) { SELECTED_CONTEXT("Selected context"), WHOLE_SONG("Whole song") }
+
+data class CloudAISharingRequest(
+    val provider: AIProvider,
+    val scope: CloudAISharingScope,
+    val purpose: String,
+    val id: String = java.util.UUID.randomUUID().toString()
+)
+
+internal data class EditorAIContext(
+    val projectId: String?, val title: String, val lyrics: String, val theme: String,
+    val selection: TextRange, val provider: AIProvider, val model: AIModel,
+    val wholeSong: Boolean, val rhymeType: RhymeType, val scheme: String,
+    val complexity: RhymeComplexity, val word: String?, val wordRange: TextRange?
+)
 
 enum class SaveStatus { IDLE, SAVING, SAVED }
 
@@ -154,12 +171,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     private var suggestionInsertionRevision = 0L
     var isLoading by mutableStateOf(false)
-    var rhymeType by mutableStateOf(RhymeType.PERFECT)
-    var rhymeScheme by mutableStateOf(RhymeScheme.AABB)
-    var customRhymeScheme by mutableStateOf("")
-    var rhymeComplexity by mutableStateOf(RhymeComplexity.MODERATE)
+    private var _rhymeType by mutableStateOf(RhymeType.PERFECT)
+    var rhymeType: RhymeType
+        get() = _rhymeType
+        set(value) {
+            if (_rhymeType == value) return
+            cancelEditorAIWork()
+            _rhymeType = value
+        }
+    private var _rhymeScheme by mutableStateOf(RhymeScheme.AABB)
+    var rhymeScheme: RhymeScheme
+        get() = _rhymeScheme
+        set(value) {
+            if (_rhymeScheme == value) return
+            cancelEditorAIWork()
+            _rhymeScheme = value
+        }
+    private var _customRhymeScheme by mutableStateOf("")
+    var customRhymeScheme: String
+        get() = _customRhymeScheme
+        set(value) {
+            if (_customRhymeScheme == value) return
+            cancelEditorAIWork()
+            _customRhymeScheme = value
+        }
+    private var _rhymeComplexity by mutableStateOf(RhymeComplexity.MODERATE)
+    var rhymeComplexity: RhymeComplexity
+        get() = _rhymeComplexity
+        set(value) {
+            if (_rhymeComplexity == value) return
+            cancelEditorAIWork()
+            _rhymeComplexity = value
+        }
     // Editor toggles — initialized from DataStore in init{}, persisted on every change.
     var useWholeSongContext by mutableStateOf(false)
+        private set
+
+    fun saveUseWholeSongContext(value: Boolean) {
+        if (useWholeSongContext == value) return
+        cancelEditorAIWork()
+        useWholeSongContext = value
+        persistEditorToggles()
+    }
     var isHighlightEnabled by mutableStateOf(true)
     var isSyllableColoringEnabled by mutableStateOf(true)
     var isStressPreviewEnabled by mutableStateOf(false)
@@ -332,9 +385,146 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = _analysisPresentation
     var appearanceLoaded by mutableStateOf(false)
         private set
-    var selectedProvider by mutableStateOf(AIProvider.LOCAL)
-    var selectedModel by mutableStateOf(AIModel.LOCAL_MODEL)
+    private var _selectedProvider by mutableStateOf(AIProvider.LOCAL)
+    var selectedProvider: AIProvider
+        get() = _selectedProvider
+        set(value) {
+            if (_selectedProvider == value) return
+            cancelEditorAIWork()
+            _selectedProvider = value
+        }
+    private var _selectedModel by mutableStateOf(AIModel.LOCAL_MODEL)
+    var selectedModel: AIModel
+        get() = _selectedModel
+        set(value) {
+            if (_selectedModel == value) return
+            cancelEditorAIWork()
+            _selectedModel = value
+        }
     var showSettingsDialog by mutableStateOf(false)
+    var cloudAISharingRequest by mutableStateOf<CloudAISharingRequest?>(null)
+        private set
+    internal var aiSettingsLoaded by mutableStateOf(false)
+        private set
+    var cloudAIConsentSaving by mutableStateOf(false)
+        private set
+    private var cloudAIConsents by mutableStateOf<Set<String>>(emptySet())
+    private var pendingCloudAIAction: (() -> Unit)? = null
+    private var pendingCloudAIContext: EditorAIContext? = null
+    private val cloudAIConsentMutex = kotlinx.coroutines.sync.Mutex()
+    private val cloudAIConsentVersions = mutableMapOf<String, Long>()
+    private var suggestionsRevision = 0L
+    private var rewriteRevision = 0L
+    private var synonymsRevision = 0L
+
+    internal fun editorAIContext() = EditorAIContext(
+        currentProjectId, title, lyrics, theme, lyricsFieldValue.selection, selectedProvider,
+        selectedModel, useWholeSongContext, rhymeType, activeRhymeScheme, rhymeComplexity,
+        inspectorWord, inspectorRange
+    )
+
+    internal fun isCurrentAIContext(context: EditorAIContext) = context == editorAIContext()
+
+    fun hasCloudAISharingConsent(provider: AIProvider, scope: CloudAISharingScope): Boolean =
+        provider == AIProvider.LOCAL || "${provider.name}.${scope.name}" in cloudAIConsents
+
+    fun setCloudAISharingConsent(provider: AIProvider, scope: CloudAISharingScope, allowed: Boolean) {
+        if (provider == AIProvider.LOCAL) return
+        val key = "${provider.name}.${scope.name}"
+        if (!allowed) {
+            cloudAIConsents = cloudAIConsents - key
+            cancelEditorAIWork()
+        }
+        val version = (cloudAIConsentVersions[key] ?: 0L) + 1L
+        cloudAIConsentVersions[key] = version
+        viewModelScope.launch { persistCloudAIConsent(key, allowed, version) }
+    }
+
+    private suspend fun persistCloudAIConsent(
+        key: String, allowed: Boolean, version: Long, isCurrent: () -> Boolean = { true }
+    ): Boolean = cloudAIConsentMutex.withLock {
+            if (cloudAIConsentVersions[key] != version || (allowed && !isCurrent())) return@withLock false
+            try {
+                // Publish grants only after durable storage succeeds.
+                repo.saveCloudAIConsent(key, allowed)
+                if (cloudAIConsentVersions[key] != version) return@withLock false
+                if (allowed && !isCurrent()) {
+                    repo.saveCloudAIConsent(key, false)
+                    cloudAIConsents = cloudAIConsents - key
+                    return@withLock false
+                }
+                cloudAIConsents = if (allowed) cloudAIConsents + key else cloudAIConsents - key
+                true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                cloudAIConsents = cloudAIConsents - key
+                cancelEditorAIWork()
+                errorMessage = "Sharing permission could not be saved. Review it again before using cloud AI."
+                false
+            }
+        }
+
+    private fun sharingScope(purpose: String) =
+        if (purpose != "synonyms" && useWholeSongContext) CloudAISharingScope.WHOLE_SONG
+        else CloudAISharingScope.SELECTED_CONTEXT
+
+    private fun authorizeCloudAI(purpose: String, action: () -> Unit): Boolean {
+        val scope = sharingScope(purpose)
+        if (hasCloudAISharingConsent(selectedProvider, scope)) return true
+        cloudAISharingRequest = CloudAISharingRequest(selectedProvider, scope, purpose)
+        pendingCloudAIContext = editorAIContext()
+        pendingCloudAIAction = action
+        return false
+    }
+
+    fun approveCloudAISharing(request: CloudAISharingRequest) {
+        if (cloudAIConsentSaving) return
+        val context = pendingCloudAIContext
+        if (cloudAISharingRequest != request || context == null || !isCurrentAIContext(context) ||
+            request.scope != sharingScope(request.purpose)) {
+            cancelCloudAISharing()
+            return
+        }
+        val action = pendingCloudAIAction
+        val key = "${request.provider.name}.${request.scope.name}"
+        val version = (cloudAIConsentVersions[key] ?: 0L) + 1L
+        cloudAIConsentVersions[key] = version
+        cloudAIConsentSaving = true
+        viewModelScope.launch {
+            try {
+                val saved = persistCloudAIConsent(key, true, version) {
+                    cloudAISharingRequest == request && isCurrentAIContext(context)
+                }
+                if (saved && cloudAISharingRequest == request && isCurrentAIContext(context)) {
+                    cancelCloudAISharing()
+                    action?.invoke()
+                }
+            } finally {
+                cloudAIConsentSaving = false
+            }
+        }
+    }
+
+    fun cancelCloudAISharing() {
+        cloudAISharingRequest = null
+        pendingCloudAIAction = null
+        pendingCloudAIContext = null
+    }
+
+    private fun cancelEditorAIWork() {
+        cancelCloudAISharing()
+        cancelSuggestions()
+        suggestions = emptyList()
+        errorMessage = null
+        dismissRewrite()
+        synonymsRevision++
+        inspectorSynonymsJob?.cancel()
+        inspectorSynonymsJob = null
+        inspectorSynonyms = emptyList()
+        inspectorSynonymsLoading = false
+        inspectorSynonymsError = null
+    }
     /**
      * Surfaces whether each provider has any key stored. The actual key values
      * never live in observable state — they are pulled from the secure store on
@@ -348,8 +538,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * EncryptedSharedPreferences hits the Android Keystore on first read, which can
      * take tens of milliseconds — resolve off the main thread inside request coroutines.
      */
-    private suspend fun resolveApiKey(): String =
-        withContext(Dispatchers.IO) { apiKey(selectedProvider) }
+    internal suspend fun resolveApiKey(provider: AIProvider): String =
+        withContext(Dispatchers.IO) { apiKey(provider) }
 
     fun apiKey(provider: AIProvider): String {
         val storedKey = repo.getApiKey(provider.name)
@@ -657,6 +847,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // have a non-empty key so the UI can show a "configured" badge.
             repo.ensureApiKeysMigrated()
             apiKeyPresence = repo.apiKeySnapshot().mapValues { it.value.isNotEmpty() }
+            cloudAIConsents = repo.cloudAIConsentsFlow.first()
             val savedProvider = repo.selectedProviderFlow.first()
             selectedProvider = AIProvider.fromName(savedProvider)
             val savedModelId = repo.modelIdFlow.first()
@@ -680,6 +871,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             isRhymeHighlightEnabled = toggles.isRhymeHighlightEnabled
             isBeatGridEnabled = toggles.isBeatGridEnabled
 
+            aiSettingsLoaded = true
             // Always show start menu on fresh launch
             showStartMenu = true
 
@@ -722,37 +914,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             errorMessage = if (localModelLoading) "Wait for your local model to finish loading." else "Choose a local model in Settings to get suggestions."
             return
         }
+        if (!authorizeCloudAI("suggestions", ::getSuggestions)) return
         val context = computeRhymeContext()
-        suggestionsJob?.cancel()
+        cancelSuggestions()
+        val revision = suggestionsRevision
+        val requestContext = editorAIContext()
+        val provider = selectedProvider
+        val modelId = selectedModel.id
+        val wholeSong = useWholeSongContext
+        val requestLyrics = if (provider == AIProvider.LOCAL || wholeSong) lyrics else context.targetLine.orEmpty()
+        val requestTheme = theme
+        val requestRhymeType = rhymeType
+        val requestScheme = activeRhymeScheme
+        val requestComplexity = rhymeComplexity
+        val sectionRef = if (provider == AIProvider.LOCAL || wholeSong) context.currentSectionRef else null
         suggestions = emptyList()
         errorMessage = null
         isLoading = true
         suggestionsJob = viewModelScope.launch {
             try {
+                val key = resolveApiKey(provider)
+                if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@launch
                 var emittedSuggestion = false
                 aiService.streamSuggestions(
-                    selectedProvider, resolveApiKey(), selectedModel.id, theme, lyrics, context.targetLine,
-                    rhymeType, activeRhymeScheme, context.currentLetter, context.currentSection,
-                    rhymeComplexity, useWholeSongContext, context.currentSectionRef, lyrics
+                    provider, key, modelId, requestTheme, requestLyrics, context.targetLine,
+                    requestRhymeType, requestScheme, context.currentLetter, context.currentSection,
+                    requestComplexity, wholeSong, sectionRef, requestLyrics
                 ).collect { line ->
+                    if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@collect
                     emittedSuggestion = true
                     suggestions = suggestions + line
                 }
-                if (!emittedSuggestion) {
+                if (revision == suggestionsRevision && isCurrentAIContext(requestContext) && !emittedSuggestion) {
                     errorMessage = "AI did not return suggestions. Try again."
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                suggestions = emptyList()
-                errorMessage = e.message ?: "Failed to get suggestions"
+                if (revision == suggestionsRevision && isCurrentAIContext(requestContext)) errorMessage = e.message ?: "Failed to get suggestions"
             } finally {
-                isLoading = false
+                if (revision == suggestionsRevision) isLoading = false
             }
         }
     }
 
     fun cancelSuggestions() {
+        suggestionsRevision++
         suggestionsJob?.cancel()
         suggestionsJob = null
         isLoading = false
@@ -834,6 +1041,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         original: String,
         rejectedCandidates: Set<String> = emptySet()
     ) {
+        rewriteRevision++
         rewriteJob?.cancel()
         pendingRewriteRange = null
         rewriteAction = action
@@ -842,29 +1050,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rewriteRejectedCandidates = rewriteRejectedCandidates + rejectedCandidates + original
         rewritePreview = null
         rewriteError = null
+        rewriteLoading = false
+        if (selectedProvider == AIProvider.LOCAL && !localReady) {
+            rewriteError = if (localModelLoading) "Wait for your local model to finish loading." else "Choose a local model in Settings to rewrite."
+            return
+        }
+        if (!authorizeCloudAI("rewrite") { beginRewrite(action, range, original, rejectedCandidates) }) return
         rewriteLoading = true
+        val revision = rewriteRevision
+        val requestContext = editorAIContext()
+        val provider = selectedProvider
+        val modelId = selectedModel.id
+        val wholeSong = useWholeSongContext
         val fullLyrics = lyrics
         val currentSection = currentSongSection(fullLyrics, range.min)
         val rejectedForRequest = rewriteRejectedCandidates
 
         rewriteJob = viewModelScope.launch {
             try {
+                val key = resolveApiKey(provider)
+                if (revision != rewriteRevision || !isCurrentAIContext(requestContext)) return@launch
                 val result = aiService.getRewrite(
-                    provider = selectedProvider,
-                    apiKey = resolveApiKey(),
-                    modelId = selectedModel.id,
+                    provider = provider,
+                    apiKey = key,
+                    modelId = modelId,
                     action = action,
-                    fullLyrics = fullLyrics,
+                    fullLyrics = if (provider == AIProvider.LOCAL || wholeSong) fullLyrics else original,
                     selection = original,
                     currentSection = currentSection,
-                    selectionStart = range.min,
-                    rejectedCandidates = rejectedForRequest
+                    selectionStart = if (provider == AIProvider.LOCAL || wholeSong) range.min else 0,
+                    rejectedCandidates = rejectedForRequest,
+                    useWholeSongContext = wholeSong
                 )
-                rewritePreview = result
+                if (revision == rewriteRevision && isCurrentAIContext(requestContext)) rewritePreview = result
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                rewriteError = e.message ?: "Rewrite failed"
+                if (revision == rewriteRevision && isCurrentAIContext(requestContext)) rewriteError = e.message ?: "Rewrite failed"
             } finally {
-                rewriteLoading = false
+                if (revision == rewriteRevision) rewriteLoading = false
             }
         }
     }
@@ -967,6 +1191,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dismissRewrite() {
+        rewriteRevision++
+        if (cloudAISharingRequest?.purpose == "rewrite") cancelCloudAISharing()
         rewriteJob?.cancel()
         rewriteJob = null
         pendingRewriteRange = null
@@ -1002,11 +1228,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         inspectorSynonyms = emptyList()
         inspectorSynonymsError = null
 
+        val inspectorContext = editorAIContext()
         viewModelScope.launch {
             val prosodyResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.analyzeWord(word) }
             val matchesResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.findRhymes(word) }
-            inspectorProsody = prosodyResult
-            inspectorMatches = matchesResult
+            if (isCurrentAIContext(inspectorContext)) {
+                inspectorProsody = prosodyResult
+                inspectorMatches = matchesResult
+            }
         }
 
         fetchInspectorSynonyms(word, range)
@@ -1019,26 +1248,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun fetchInspectorSynonyms(word: String, range: TextRange) {
+        synonymsRevision++
         inspectorSynonymsJob?.cancel()
         inspectorSynonymsError = null
+        inspectorSynonymsLoading = false
+        if (!authorizeCloudAI("synonyms") { fetchInspectorSynonyms(word, range) }) return
         inspectorSynonymsLoading = true
+        val revision = synonymsRevision
+        val requestContext = editorAIContext()
+        val provider = selectedProvider
+        val modelId = selectedModel.id
         val lineContext = currentLineForRange(range)
         inspectorSynonymsJob = viewModelScope.launch {
             try {
+                val key = resolveApiKey(provider)
+                if (revision != synonymsRevision || !isCurrentAIContext(requestContext)) return@launch
                 val results = aiService.getSynonyms(
-                    provider = selectedProvider,
-                    apiKey = resolveApiKey(),
-                    modelId = selectedModel.id,
+                    provider = provider,
+                    apiKey = key,
+                    modelId = modelId,
                     word = word,
                     lineContext = lineContext
                 )
-                inspectorSynonyms = results
+                if (revision == synonymsRevision && isCurrentAIContext(requestContext)) inspectorSynonyms = results
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                inspectorSynonymsError = e.message ?: "Failed to load synonyms"
+                if (revision == synonymsRevision && isCurrentAIContext(requestContext)) inspectorSynonymsError = e.message ?: "Failed to load synonyms"
             } finally {
-                inspectorSynonymsLoading = false
+                if (revision == synonymsRevision) inspectorSynonymsLoading = false
             }
         }
     }
@@ -1068,6 +1306,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dismissInspector() {
+        synonymsRevision++
+        if (cloudAISharingRequest?.purpose == "synonyms") cancelCloudAISharing()
         inspectorSynonymsJob?.cancel()
         inspectorSynonymsJob = null
         inspectorWord = null
@@ -1487,6 +1727,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onTitleChanged(newTitle: String) {
+        cancelEditorAIWork()
         title = newTitle
         triggerAutoSave()
     }
@@ -1498,6 +1739,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (hasActiveRewrite) return
         val previousText = lyricsFieldValue.text
         val nextValue = newValue.withValidRanges()
+        if (nextValue.text != previousText || nextValue.selection != lyricsFieldValue.selection) cancelEditorAIWork()
         if (nextValue.text != previousText) {
             suggestionInsertion = null
             pendingRewriteRange = null
@@ -1547,6 +1789,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun applyAtomicLyricsEdit(nextValue: TextFieldValue) {
+        cancelEditorAIWork()
         suggestionInsertion = null
         val safeValue = nextValue.withValidRanges()
         lyricsHistory.recordAtomicEdit(previous = lyricsFieldValue, current = safeValue)
@@ -1555,6 +1798,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun applyHistoryState(state: TextFieldValue) {
+        cancelEditorAIWork()
         suggestionInsertion = null
         dismissRewrite()
         dismissInspector()
@@ -1565,6 +1809,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun resetLyricsHistory() {
+        cancelEditorAIWork()
         suggestionInsertion = null
         lyricsHistory.reset()
         updateLyricsHistoryAvailability()
@@ -1584,6 +1829,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onThemeChanged(newTheme: String) {
+        cancelEditorAIWork()
         theme = newTheme
         triggerAutoSave()
     }
@@ -1612,9 +1858,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveApiKey(provider: AIProvider, key: String) {
+        cancelEditorAIWork()
         apiKeyPresence = apiKeyPresence + (provider.name to key.isNotEmpty())
         viewModelScope.launch {
             repo.saveApiKey(provider.name, key)
+            cancelEditorAIWork()
         }
     }
 
@@ -1623,12 +1871,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         model: AIModel,
         keys: Map<AIProvider, String>
     ): Result<Unit> {
+        cancelEditorAIWork()
         return try {
             withContext(Dispatchers.IO) {
                 keys.forEach { (keyProvider, key) -> repo.saveApiKey(keyProvider.name, key) }
                 repo.saveSelectedProvider(provider.name)
                 repo.saveModelId(model.id)
             }
+            cancelEditorAIWork()
             selectedProvider = provider
             selectedModel = model
             apiKeyPresence = apiKeyPresence + keys
@@ -1649,9 +1899,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (selectedModel.provider != provider && models.isNotEmpty()) {
             selectedModel = models.first()
         }
+        val modelId = selectedModel.id
         viewModelScope.launch {
             repo.saveSelectedProvider(provider.name)
-            repo.saveModelId(selectedModel.id)
+            repo.saveModelId(modelId)
         }
     }
 

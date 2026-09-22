@@ -48,7 +48,7 @@ class SongAnalysisInteractionUiTest {
                     lyrics = TEST_LYRICS,
                     selection = TextRange(cursorInSecondLine())
                 )
-                useWholeSongContext = false
+                saveUseWholeSongContext(false)
                 isStressPreviewEnabled = false
                 isHighlightEnabled = true
                 isSyllableColoringEnabled = true

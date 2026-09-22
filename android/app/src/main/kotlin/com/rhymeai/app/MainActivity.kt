@@ -173,6 +173,22 @@ class MainActivity : ComponentActivity() {
                         modifier = navModifier
                     )
 
+                    viewModel.cloudAISharingRequest?.let { request ->
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = viewModel::cancelCloudAISharing,
+                            title = { androidx.compose.material3.Text("Share ${request.scope.label.lowercase()} with ${request.provider.displayName}?") },
+                            text = {
+                                androidx.compose.material3.Text(
+                                    "For ${request.purpose}, suggestions share the target line, theme and rhyme settings; rewrites share the selected passage; synonyms share the selected word and current line. " +
+                                    (if (request.scope == CloudAISharingScope.WHOLE_SONG) "This request also shares your full lyric. " else "") +
+                                    "Your API key is sent directly to ${request.provider.displayName} for authentication. Permission applies to this provider and scope. You can revoke it in Settings."
+                                )
+                            },
+                            confirmButton = { androidx.compose.material3.TextButton(onClick = { viewModel.approveCloudAISharing(request) }, enabled = !viewModel.cloudAIConsentSaving) { androidx.compose.material3.Text("Allow sharing") } },
+                            dismissButton = { androidx.compose.material3.TextButton(onClick = viewModel::cancelCloudAISharing) { androidx.compose.material3.Text("Cancel") } }
+                        )
+                    }
+
                     viewModel.persistenceError?.let { message ->
                         androidx.compose.material3.AlertDialog(
                             onDismissRequest = { viewModel.persistenceError = null },
@@ -267,6 +283,8 @@ class MainActivity : ComponentActivity() {
                             savedLocalModels = viewModel.savedLocalModels,
                             selectedLocalModelId = viewModel.selectedLocalModelId,
                             onApplyAISettings = viewModel::applyAISettings,
+                            hasCloudAISharingConsent = viewModel::hasCloudAISharingConsent,
+                            onCloudAISharingConsentChange = viewModel::setCloudAISharingConsent,
                             onSaveProvider = { viewModel.saveProvider(it) },
                             onSaveModel = { viewModel.saveModel(it) },
                             onRegisterLocalModel = { path, name ->
@@ -292,7 +310,7 @@ class MainActivity : ComponentActivity() {
                             onRestoreNow = { viewModel.triggerRestore() },
                             // Editor toggles — each change is persisted via viewModel.persistEditorToggles().
                             useWholeSongContext = viewModel.useWholeSongContext,
-                            onWholeSongContextChange = { viewModel.useWholeSongContext = it; viewModel.persistEditorToggles() },
+                            onWholeSongContextChange = viewModel::saveUseWholeSongContext,
                             isStressPreviewEnabled = viewModel.isStressPreviewEnabled,
                             onStressPreviewChange = { viewModel.isStressPreviewEnabled = it; viewModel.persistEditorToggles() },
                             isHighlightEnabled = viewModel.isHighlightEnabled,

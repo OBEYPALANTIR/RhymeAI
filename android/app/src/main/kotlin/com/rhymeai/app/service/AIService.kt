@@ -280,17 +280,22 @@ class AIService {
         constraint: SuggestionRhymeConstraint? = null,
         sectionRef: SectionRef? = constraint?.sectionRef
     ): String {
+        val providerLyrics = if (useWholeSongContext) lyrics else targetRhymeLine.orEmpty()
+        val providerSection = sectionRef.takeIf { useWholeSongContext }
+        val providerConstraint = if (useWholeSongContext) constraint else constraint?.let {
+            suggestionRhymeConstraint(targetRhymeLine, rhymeType, it.dictionary)
+        }
         val rhymeInstruction = if (targetRhymeLine != null) {
             "Crucially, the new line MUST end with a **${rhymeType.displayName}** to this specific line: \"$targetRhymeLine\"."
         } else {
             "Since this is a new rhyme sound (\"$currentLetter\"), the new line should introduce a new end-rhyme that fits the meter and theme."
         }
-        val constraintBlock = constraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
-        val requestCount = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        val constraintBlock = providerConstraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
+        val requestCount = if (providerConstraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
         val songContextInstruction = if (useWholeSongContext) {
             "Analyze the whole song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary. Make each suggestion feel connected to the entire song while still fitting the immediate target line and rhyme scheme."
         } else {
-            "Prioritize the immediate writing context, current stanza, target line, rhyme scheme, and provided theme/context."
+            "Prioritize the target line, rhyme scheme, and provided theme/context."
         }
 
         val effectiveTheme = if (useWholeSongContext) {
@@ -299,14 +304,14 @@ class AIService {
             theme.ifEmpty { "No specific theme provided" }
         }
 
-        val sectionDirective = buildSectionDirective(sectionRef, lyrics)
+        val sectionDirective = buildSectionDirective(providerSection, providerLyrics)
 
         return """
 You are an expert songwriter and lyricist.
 The user is writing a song with the following theme/context: "$effectiveTheme".
 Here are the current lyrics:
 ${"\"\"\""}
-$lyrics
+$providerLyrics
 ${"\"\"\""}
 
 The user needs a line that follows the current lyrics.
@@ -348,9 +353,10 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
-        val chorusEnds = firstChorusEndWords(fullLyrics)
+        val includeSong = provider == AIProvider.LOCAL || useWholeSongContext
+        val chorusEnds = if (includeSong) firstChorusEndWords(fullLyrics) else emptySet()
         val constraint = suggestionRhymeConstraint(
-            targetRhymeLine, rhymeType, sectionRef = sectionRef, chorusEndWords = chorusEnds
+            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds
         )
         return if (provider == AIProvider.LOCAL) {
             val localPrompt = buildLocalPrompt(
@@ -409,9 +415,10 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
-        val chorusEnds = firstChorusEndWords(fullLyrics)
+        val includeSong = provider == AIProvider.LOCAL || useWholeSongContext
+        val chorusEnds = if (includeSong) firstChorusEndWords(fullLyrics) else emptySet()
         val constraint = suggestionRhymeConstraint(
-            targetRhymeLine, rhymeType, sectionRef = sectionRef, chorusEndWords = chorusEnds
+            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds
         )
         if (provider == AIProvider.LOCAL) {
             val service = localModelService
@@ -504,7 +511,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         emitLinesFromTokens(tokens, constraint)
     }
 
-    private fun buildOpenAIChatRequestBody(
+    internal fun buildOpenAIChatRequestBody(
         modelId: String,
         prompt: String,
         temperature: Double,
@@ -545,7 +552,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 ?.get("content")?.jsonPrimitive?.content
         }.getOrNull()
 
-    private fun buildClaudeMessagesRequestBody(
+    internal fun buildClaudeMessagesRequestBody(
         modelId: String,
         prompt: String,
         stream: Boolean = false
@@ -868,7 +875,8 @@ Rules:
         selection: String,
         currentSection: SongSection = SongSection.UNKNOWN,
         selectionStart: Int? = null,
-        rejectedCandidates: Set<String> = emptySet()
+        rejectedCandidates: Set<String> = emptySet(),
+        useWholeSongContext: Boolean = false
     ): String {
         if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
@@ -891,7 +899,8 @@ Rules:
                 action,
                 fullLyrics,
                 selection,
-                currentSection
+                currentSection,
+                useWholeSongContext
             )
             val raw = callCloudRaw(provider, apiKey, modelId, prompt)
             extractRewriteField(raw)?.takeIf { it.isNotBlank() }
@@ -903,14 +912,15 @@ Rules:
         action: RewriteAction,
         lyrics: String,
         selection: String,
-        currentSection: SongSection = SongSection.UNKNOWN
+        currentSection: SongSection = SongSection.UNKNOWN,
+        useWholeSongContext: Boolean = false
     ): String =
         """
 You are an expert songwriter helping the user rewrite a portion of their song.
 
-Full lyrics for context:
+${if (useWholeSongContext) "Full lyrics for context:" else "Selected passage context:"}
 ${"\"\"\""}
-$lyrics
+${if (useWholeSongContext) lyrics else selection}
 ${"\"\"\""}
 
 The user has selected the following passage from those lyrics. Rewrite ONLY this passage:

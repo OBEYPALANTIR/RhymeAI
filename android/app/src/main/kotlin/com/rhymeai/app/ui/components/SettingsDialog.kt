@@ -128,6 +128,8 @@ internal fun SettingsDialog(
     savedLocalModels: List<SavedLocalModel>,
     selectedLocalModelId: String?,
     onApplyAISettings: suspend (AIProvider, AIModel, Map<AIProvider, String>) -> Result<Unit>,
+    hasCloudAISharingConsent: (AIProvider, com.rhymeai.app.CloudAISharingScope) -> Boolean = { _, _ -> false },
+    onCloudAISharingConsentChange: (AIProvider, com.rhymeai.app.CloudAISharingScope, Boolean) -> Unit = { _, _, _ -> },
     onSaveProvider: (AIProvider) -> Unit,
     onSaveModel: (AIModel) -> Unit,
     onRegisterLocalModel: (String, String) -> Unit,
@@ -465,6 +467,25 @@ internal fun SettingsDialog(
                 ) {
                 Column(Modifier.fillMaxWidth()) {
                 Spacer(Modifier.height(DesignTokens.Spacing.sm))
+                if (selectedProvider != AIProvider.LOCAL) {
+                    Text("Sharing with ${selectedProvider.displayName}", fontWeight = FontWeight.Medium, color = colorScheme.onSurface)
+                    Text(
+                        "Suggestions send your target line, theme and rhyme settings. Rewrites send the selected passage. Synonyms send the selected word and its current line. Whole Song Context also sends the full lyric for suggestions and rewrites. API keys are stored encrypted on this device and sent to the selected provider for authentication. You can revoke sharing below.",
+                        color = colorScheme.onSurfaceVariant,
+                        fontSize = DesignTokens.Typography.caption
+                    )
+                    com.rhymeai.app.CloudAISharingScope.entries.forEach { scope ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Allow ${scope.label.lowercase()}", modifier = Modifier.weight(1f), color = colorScheme.onSurface)
+                            Switch(
+                                checked = hasCloudAISharingConsent(selectedProvider, scope),
+                                onCheckedChange = { onCloudAISharingConsentChange(selectedProvider, scope, it) },
+                                modifier = Modifier.semantics { contentDescription = "Allow ${scope.label.lowercase()} with ${selectedProvider.displayName}" }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(DesignTokens.Spacing.md))
+                }
                 Text("AI Provider", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
 
@@ -1087,7 +1108,7 @@ internal fun SettingsDialog(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Your songs and recordings are included in Android's automatic backup. Only the optional Google Drive backup is encrypted with your passphrase. API keys never leave this device.",
+                    "Your songs and recordings are included in Android's automatic backup. Only the optional Google Drive backup is encrypted with your passphrase. API keys are stored encrypted on this device and sent directly to the selected provider to authenticate requests.",
                     fontSize = 12.sp,
                     color = subtleColor,
                     lineHeight = 16.sp

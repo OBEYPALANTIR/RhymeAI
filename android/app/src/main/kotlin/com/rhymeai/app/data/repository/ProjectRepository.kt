@@ -235,6 +235,18 @@ class ProjectRepository internal constructor(
         }
     }
 
+    val cloudAIConsentsFlow: Flow<Set<String>> = dataStore.data.map { prefs ->
+        prefs[androidx.datastore.preferences.core.stringSetPreferencesKey("cloud_ai_consent_v1")] ?: emptySet()
+    }
+
+    suspend fun saveCloudAIConsent(key: String, allowed: Boolean) {
+        dataStore.edit { prefs ->
+            val consentKey = androidx.datastore.preferences.core.stringSetPreferencesKey("cloud_ai_consent_v1")
+            val current = prefs[consentKey] ?: emptySet()
+            prefs[consentKey] = if (allowed) current + key else current - key
+        }
+    }
+
     val modelIdFlow: Flow<String> = dataStore.data.map { prefs ->
         prefs[GEMINI_MODEL_KEY] ?: ""
     }
