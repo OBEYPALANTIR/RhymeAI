@@ -1,0 +1,9 @@
+PASS import, source retained, decoder: m4a
+PASS import, source retained, decoder: mp3
+PASS import, source retained, decoder: wav
+PASS import, source retained, decoder: aac
+PASS duplicate preservation and two-song isolation
+PASS MP3 rename/trash/restore and four-format backup manifest round trip
+PASS invalid/empty/unsupported rejection and staging cleanup
+PASS Mac whitespace import and rename preserve word boundaries and audio bytes
+PASS all actual-service runtime checks; isolated project folders cleaned on exit
