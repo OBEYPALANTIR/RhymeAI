@@ -54,18 +54,22 @@ class RecordingEditorInstrumentedTest {
 
     @Test fun navigationDuringRecordingSongSaveDoesNotRestoreOldIdentity() {
         lateinit var saving: Deferred<String>
+        lateinit var reservedId: String
         compose.runOnIdle {
             saving = viewModel.viewModelScope.async(start = CoroutineStart.UNDISPATCHED) {
                 viewModel.ensureProjectForRecording()
             }
-            assertNotNull(viewModel.currentProjectId)
-            viewModel.newProject()
-            viewModel.onLyricsChanged(TextFieldValue("New song after navigation"))
+            reservedId = requireNotNull(viewModel.currentProjectId)
+            viewModel.newProject {
+                viewModel.onLyricsChanged(TextFieldValue("New song after navigation"))
+            }
         }
         runBlocking { saving.join() }
-        assertTrue(saving.isCancelled)
         compose.waitUntil(5_000) { viewModel.projects.any { it.lyrics == "New song after navigation" } }
-        compose.runOnIdle { assertEquals("New song after navigation", viewModel.lyrics) }
+        compose.runOnIdle {
+            assertEquals("New song after navigation", viewModel.lyrics)
+            assertNotEquals(reservedId, viewModel.currentProjectId)
+        }
     }
 
     @Test fun recordingLibrarySurvivesActivityRecreation() {

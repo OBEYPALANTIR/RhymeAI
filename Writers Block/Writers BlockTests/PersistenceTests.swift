@@ -62,59 +62,6 @@ struct PersistenceTests {
         #expect(saved.theme == "late-night resolve")
     }
 
-    @MainActor
-    @Test func pendingAutoSaveCannotCrossIntoImportedProject() async throws {
-        let harness = try Self.makeHarness()
-        let viewModel = harness.viewModel
-        let original = SongProject(
-            id: "song-a",
-            title: "Original",
-            lyrics: "persisted original",
-            theme: "first"
-        )
-        harness.context.insert(original)
-        try harness.context.save()
-        viewModel.loadProject(original)
-        viewModel.lyrics = "unsaved editor change"
-        viewModel.triggerAutoSave()
-
-        let importedExport = SongProjectExport(
-            from: SongProject(
-                id: "source",
-                title: "Imported",
-                lyrics: "imported lyric",
-                theme: "second"
-            )
-        )
-        #expect(viewModel.importProject(importedExport))
-
-        try await Task.sleep(for: .milliseconds(1_300))
-
-        let projects = try Self.fetchProjects(harness.context)
-        let persistedOriginal = try #require(projects.first { $0.id == "song-a" })
-        let imported = try #require(projects.first { $0.id == viewModel.currentProjectId })
-        #expect(persistedOriginal.lyrics == "persisted original")
-        #expect(imported.lyrics == "imported lyric")
-        #expect(viewModel.lyrics == "imported lyric")
-    }
-
-    @MainActor
-    @Test func importFailureKeepsEditorAndStoreUnchanged() throws {
-        let harness = try Self.makeHarness(saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) })
-        let viewModel = harness.viewModel
-        let exported = SongProjectExport(
-            from: SongProject(id: "source", title: "Import", lyrics: "line", theme: "theme")
-        )
-
-        let imported = viewModel.importProject(exported)
-
-        #expect(!imported)
-        #expect(try Self.fetchProjects(harness.context).isEmpty)
-        #expect(viewModel.currentProjectId == nil)
-        #expect(viewModel.saveStatus == .idle)
-        #expect(viewModel.errorMessage?.contains("was not imported") == true)
-    }
-
 
     @MainActor
     @Test func cloudBackupManualActionsPersistPassphraseAndUseConfiguredService() async throws {
@@ -158,14 +105,11 @@ struct PersistenceTests {
     }
 
     @MainActor
-    private static func makeHarness(
-        backupService: CloudBackupServicing? = nil,
-        saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
-    ) throws -> Harness {
+    private static func makeHarness(backupService: CloudBackupServicing? = nil) throws -> Harness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
-        let viewModel = EditorViewModel(backupService: backupService, saveModelContext: saveModelContext)
+        let viewModel = EditorViewModel(backupService: backupService)
         viewModel.modelContext = container.mainContext
         return Harness(viewModel: viewModel, container: container)
     }

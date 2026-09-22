@@ -53,6 +53,54 @@ final class LocalProviderSmokeTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testGGUFOnPhysicalAppleHardware() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["RUN_GGUF_DEVICE_SMOKE"] == "1")
+        #if targetEnvironment(simulator)
+        throw XCTSkip("This gate requires physical Apple GPU hardware")
+        #else
+        let manager = GGUFDownloadManager.shared
+        while manager.isRestoringDownloads {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let option = GGUFDownloadCatalog.options[0]
+        manager.start(option)
+        let deadline = Date().addingTimeInterval(120)
+        while manager.activeDownloadID != nil && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        XCTAssertTrue(manager.installedModelFiles.contains(option.fileName), manager.errorMessage ?? "Model not installed")
+        let path = try XCTUnwrap(AIService.firstGGUFPath())
+        let runner = makeLocalGGUFRunner()
+        try await runner.loadModel(filePath: path)
+        let output = try await runner.generate(prompt: "Write one short lyric line about rain. Return only the lyric.")
+        XCTAssertFalse(output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        let attachment = XCTAttachment(string: "Synthetic prompt output: \(output)")
+        attachment.name = "Apple GGUF live output"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        #if canImport(llama)
+        if let native = runner as? GGUFLlamaService { await native.unload() }
+        #endif
+        let suggestions = try await AIService().getSuggestions(
+            provider: .local, apiKey: "", modelId: AIModel.localModel.id,
+            theme: "late-night writing", lyrics: "[Verse]\nI keep a notebook under neon rain",
+            targetRhymeLine: "I keep a notebook under neon rain", rhymeType: .perfect,
+            rhymeScheme: "AABB", currentLetter: "A", currentSection: .verse,
+            complexity: .moderate, useWholeSongContext: false
+        )
+        XCTAssertFalse(suggestions.isEmpty)
+        XCTAssertTrue(suggestions.allSatisfy { !$0.contains("<end") && !$0.contains("<start") })
+        let suggestionsAttachment = XCTAttachment(string: suggestions.joined(separator: "\n"))
+        suggestionsAttachment.name = "Apple GGUF suggestion flow"
+        suggestionsAttachment.lifetime = .keepAlways
+        add(suggestionsAttachment)
+        #if canImport(llama)
+        if let native = AIService.ggufRunner as? GGUFLlamaService { await native.unload() }
+        #endif
+        #endif
+    }
+
     // MARK: - Local rewrite smoke (Apple Intelligence path)
 
     private static let rewriteLyrics = "[Verse]\nI keep a notebook under neon rain\nEvery margin learns my name"

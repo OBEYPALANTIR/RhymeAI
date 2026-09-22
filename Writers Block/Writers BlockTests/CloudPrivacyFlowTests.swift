@@ -1,8 +1,10 @@
 import Foundation
+import SwiftData
 import Testing
 @testable import Writers_Block
 
 @MainActor
+@Suite(.serialized)
 struct CloudPrivacyFlowTests {
     @Test func localPromptsExcludeUnsharedLyricsAndChorusHintsWhenContextIsOff() throws {
         let service = AIService()
@@ -59,6 +61,7 @@ struct CloudPrivacyFlowTests {
     @Test func providerSerializersExcludeUnsharedLyricsForBufferedAndStreamingSuggestions() async throws {
         let privateSentinel = "PRIVATE_STANZA_7D43"
         let allowedLine = "Keep only this target night"
+        let privateChorus = "PRIVATE_CHORUS_883F"
         let matchingSuggestions = "One clear light\nTwo burn bright\nThree take flight\nFour feel right\nFive hold sight\nSix still might"
 
         for provider in [AIProvider.gemini, .openai, .claude] {
@@ -71,18 +74,22 @@ struct CloudPrivacyFlowTests {
                 apiKey: "synthetic-key",
                 modelId: modelID,
                 theme: "quiet resolve",
-                lyrics: "[Verse]\n\(allowedLine)\n[Bridge]\n\(privateSentinel)",
+                lyrics: "[PRIVATE_SECTION_781D]\n\(allowedLine)\n[Bridge]\n\(privateSentinel)",
                 targetRhymeLine: allowedLine,
                 rhymeType: .perfect,
                 rhymeScheme: "AABB",
                 currentLetter: "A",
-                currentSection: .verse,
+                currentSection: .chorus,
+                sectionOrdinal: 2,
+                firstChorusLines: [privateChorus],
                 complexity: .moderate,
                 useWholeSongContext: false
             )
 
             let bufferedBody = try #require(PrivacyURLProtocol.capturedBodies().first)
             #expect(bufferedBody.contains(allowedLine), "\(provider.rawValue) buffered serializer omitted the allowed target line")
+            #expect(!bufferedBody.contains(privateChorus))
+            #expect(!bufferedBody.contains("PRIVATE_SECTION_781D"))
             #expect(!bufferedBody.contains(privateSentinel), "\(provider.rawValue) buffered serializer leaked unshared lyrics")
 
             PrivacyURLProtocol.reset(suggestionText: matchingSuggestions)
@@ -92,12 +99,14 @@ struct CloudPrivacyFlowTests {
                 apiKey: "synthetic-key",
                 modelId: modelID,
                 theme: "quiet resolve",
-                lyrics: "[Verse]\n\(allowedLine)\n[Bridge]\n\(privateSentinel)",
+                lyrics: "[PRIVATE_SECTION_781D]\n\(allowedLine)\n[Bridge]\n\(privateSentinel)",
                 targetRhymeLine: allowedLine,
                 rhymeType: .perfect,
                 rhymeScheme: "AABB",
                 currentLetter: "A",
-                currentSection: .verse,
+                currentSection: .chorus,
+                sectionOrdinal: 2,
+                firstChorusLines: [privateChorus],
                 complexity: .moderate,
                 useWholeSongContext: false
             ) {
@@ -107,6 +116,8 @@ struct CloudPrivacyFlowTests {
             let streamingBody = try #require(PrivacyURLProtocol.capturedBodies().first)
             #expect(!streamedLines.isEmpty, "\(provider.rawValue) fixture produced no streamed suggestions")
             #expect(streamingBody.contains(allowedLine), "\(provider.rawValue) streaming serializer omitted the allowed target line")
+            #expect(!streamingBody.contains(privateChorus))
+            #expect(!streamingBody.contains("PRIVATE_SECTION_781D"))
             #expect(!streamingBody.contains(privateSentinel), "\(provider.rawValue) streaming serializer leaked unshared lyrics")
         }
     }
@@ -195,6 +206,16 @@ struct CloudPrivacyFlowTests {
         )
         viewModel.saveProvider(.gemini)
         viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        )
+        defer { withExtendedLifetime(container) {} }
+        let context = ModelContext(container)
+        context.insert(SongProject(id: "song-a", title: "Song A", lyrics: "Song A private draft"))
+        try context.save()
+        viewModel.modelContext = context
         viewModel.currentProjectId = "song-a"
         viewModel.lyrics = "Song A private draft"
 
@@ -252,6 +273,136 @@ struct CloudPrivacyFlowTests {
         #expect(await Self.waitUntil { !emptyViewModel.isLoading && emptyViewModel.errorMessage != nil })
         #expect(emptyViewModel.suggestions.isEmpty)
         #expect(emptyViewModel.errorMessage == "AI did not return suggestions. Try again.")
+    }
+
+    @Test func providerRewriteSerializersRespectSelectedAndWholeSongScopes() async throws {
+        let selectedPassage = "Replace this phrase"
+        let privateSentinel = "PRIVATE_REWRITE_STANZA_421C"
+        for provider in [AIProvider.gemini, .openai, .claude] {
+            let service = AIService(session: Self.makeSession())
+            let modelID = try #require(AIModel.models(for: provider).first?.id)
+            for wholeSong in [false, true] {
+                PrivacyURLProtocol.reset()
+                _ = try await service.getRewrite(
+                    provider: provider,
+                    apiKey: "synthetic-key",
+                    modelId: modelID,
+                    action: .rephrase,
+                    fullLyrics: "[Verse]\n\(selectedPassage)\n[Bridge]\n\(privateSentinel)",
+                    selection: selectedPassage,
+                    currentSection: .verse,
+                    selectionStart: 8,
+                    useWholeSongContext: wholeSong
+                )
+                let body = try #require(PrivacyURLProtocol.capturedBodies().first)
+                #expect(body.contains(selectedPassage))
+                #expect(body.contains(privateSentinel) == wholeSong,
+                        "\(provider.rawValue) rewrite must serialize only its permitted scope")
+            }
+        }
+    }
+
+    @Test func pendingConsentCannotSurviveCancellationOrProviderScopeAndSongChanges() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        PrivacyURLProtocol.reset()
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: InMemoryKeychainStore(),
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.lyrics = "A private unfinished line"
+        viewModel.getSuggestions()
+        let cancelled = try #require(viewModel.cloudAISharingRequest)
+        viewModel.cancelCloudAISharing()
+        viewModel.approveCloudAISharing(cancelled)
+        #expect(!viewModel.hasCloudAISharingConsent(scope: .selectedContext))
+
+        viewModel.getSuggestions()
+        let oldProvider = try #require(viewModel.cloudAISharingRequest)
+        viewModel.saveProvider(.openai)
+        viewModel.approveCloudAISharing(oldProvider)
+        #expect(!viewModel.hasCloudAISharingConsent(for: .gemini, scope: .selectedContext))
+
+        viewModel.getSuggestions()
+        let oldScope = try #require(viewModel.cloudAISharingRequest)
+        viewModel.saveUseWholeSongContext(true)
+        viewModel.approveCloudAISharing(oldScope)
+        #expect(!viewModel.hasCloudAISharingConsent(scope: .selectedContext))
+        #expect(!viewModel.hasCloudAISharingConsent(scope: .wholeSong))
+
+        viewModel.getSuggestions()
+        let oldSong = try #require(viewModel.cloudAISharingRequest)
+        viewModel.newProject()
+        viewModel.approveCloudAISharing(oldSong)
+        #expect(viewModel.cloudAISharingRequest == nil)
+        #expect(!viewModel.hasCloudAISharingConsent(scope: .wholeSong))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(PrivacyURLProtocol.capturedBodies().isEmpty)
+    }
+
+    @Test func rewriteAndSynonymActionsRequireTheirOwnAllowedContext() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        PrivacyURLProtocol.reset()
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.lyrics = "Replace this phrase\nPRIVATE_VM_REWRITE_514A"
+        viewModel.selectedRange = NSRange(location: 0, length: 7)
+        viewModel.requestRewrite(.rephrase)
+        let rewriteRequest = try #require(viewModel.cloudAISharingRequest)
+        #expect(rewriteRequest.purpose == "rewrite")
+        #expect(rewriteRequest.scope == .selectedContext)
+        #expect(PrivacyURLProtocol.capturedBodies().isEmpty)
+        viewModel.approveCloudAISharing(rewriteRequest)
+        #expect(await Self.waitUntil { viewModel.rewritePreview != nil })
+        let rewriteBody = try #require(PrivacyURLProtocol.capturedBodies().first)
+        #expect(!rewriteBody.contains("PRIVATE_VM_REWRITE_514A"))
+
+        viewModel.setCloudAISharingConsent(false, scope: .selectedContext)
+        viewModel.setCloudAISharingConsent(true, scope: .wholeSong)
+        viewModel.saveUseWholeSongContext(true)
+        viewModel.openInspector(word: "Replace", range: NSRange(location: 0, length: 7))
+        let synonymRequest = try #require(viewModel.cloudAISharingRequest)
+        #expect(synonymRequest.purpose == "synonyms")
+        #expect(synonymRequest.scope == .selectedContext)
+        #expect(PrivacyURLProtocol.capturedBodies().count == 1)
+        viewModel.cancelCloudAISharing()
+        viewModel.dismissInspector()
+    }
+
+    @Test func supersededSynonymTaskCannotClearReplacementLoadingOrPublishAfterSwitch() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        PrivacyURLProtocol.reset(delay: 0.25)
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.lyrics = "Quiet words in the night"
+        viewModel.openInspector(word: "Quiet", range: NSRange(location: 0, length: 5))
+        #expect(await Self.waitUntil { PrivacyURLProtocol.capturedBodies().count == 1 })
+        viewModel.retryInspectorSynonyms()
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(viewModel.inspectorSynonymsLoading)
+        viewModel.saveProvider(.openai)
+        try await Task.sleep(for: .milliseconds(550))
+        #expect(viewModel.inspectorWord == nil)
+        #expect(viewModel.inspectorSynonyms.isEmpty)
+        #expect(viewModel.inspectorSynonymsError == nil)
+        #expect(!viewModel.inspectorSynonymsLoading)
     }
 
     private static func makeSession() -> URLSession {

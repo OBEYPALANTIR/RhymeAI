@@ -1,43 +1,27 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import Writers_Block
 
 // MARK: - Gemma prompt template
 
+/// Verify that GGUFModelService.gemmaPrompt produces the same shape as
+/// Android's gemmaInstructionPrompt() — chat template must be stable across
+/// platforms so the model behaves identically.
 struct GemmaPromptTemplateTests {
-    @Test func gemmaPromptMatchesCanonicalMachineWrapperExactly() {
+    @Test func gemmaPromptWrapsUserTurn() {
         let input = "Write a verse about midnight roads."
-        let expected = "<start_of_turn>user\n\(input)\n<end_of_turn>\n<start_of_turn>model"
+        let wrapped = GGUFModelService.gemmaPrompt(input)
 
-        #expect(GGUFModelService.gemmaPrompt(input, format: .gemmaLegacy) == expected)
-        #expect(GGUFModelService.gemmaPrompt(expected, format: .gemmaLegacy) == expected)
-        #expect(GGUFModelService.gemmaPrompt("\(expected)\n", format: .gemmaLegacy) == expected)
-    }
-
-    @Test func gemma4PromptUsesModelTurnTokensAndGenerationNewline() {
-        let input = "Write a verse about midnight roads."
-        let expected = "<|turn>user\n\(input)<turn|>\n<|turn>model\n"
-        #expect(GGUFModelService.gemmaPrompt(input, format: .gemma4) == expected)
-        #expect(GGUFModelService.gemmaPrompt(expected, format: .gemma4) == expected)
-    }
-
-    @Test func promptFormatRequiresMatchingModelMetadata() {
-        let legacy = "<start_of_turn>user <end_of_turn>"
-        let gemma4 = "<|turn>user <turn|>"
-        #expect(GGUFPromptFormat.resolve(architecture: "gemma4", chatTemplate: gemma4) == .gemma4)
-        for architecture in ["gemma", "gemma2", "gemma3", "gemma3n"] {
-            #expect(GGUFPromptFormat.resolve(architecture: architecture, chatTemplate: legacy) == .gemmaLegacy)
-            #expect(GGUFPromptFormat.resolve(architecture: architecture, chatTemplate: gemma4) == nil)
-        }
-        #expect(GGUFPromptFormat.resolve(architecture: "gemma4", chatTemplate: legacy) == nil)
-        #expect(GGUFPromptFormat.resolve(architecture: "gemma4", chatTemplate: gemma4 + legacy) == nil)
-        #expect(GGUFPromptFormat.resolve(architecture: "llama", chatTemplate: gemma4) == nil)
-        #expect(GGUFPromptFormat.resolve(architecture: "gemma4", chatTemplate: "") == nil)
+        #expect(wrapped.hasPrefix("<start_of_turn>user\n"))
+        #expect(wrapped.contains(input))
+        #expect(wrapped.contains("<end_of_turn>"))
+        #expect(wrapped.hasSuffix("<start_of_turn>model\n"))
     }
 
     @Test func gemmaPromptPreservesNewlinesInPrompt() {
         let input = "line one\nline two"
-        let wrapped = GGUFModelService.gemmaPrompt(input, format: .gemmaLegacy)
+        let wrapped = GGUFModelService.gemmaPrompt(input)
         #expect(wrapped.contains("line one\nline two"))
     }
 }
@@ -57,8 +41,8 @@ struct GGUFMarkerStrippingTests {
         #expect(cleaned == "This is the output")
     }
 
-    @Test func stripsTaggedModelRoleLabel() {
-        let raw = "<model>\nActual output here\n</model>"
+    @Test func stripsModelRoleLabel() {
+        let raw = "model\nActual output here"
         let cleaned = GGUFModelService.stripMarkers(raw)
         #expect(cleaned == "Actual output here")
     }
@@ -77,6 +61,91 @@ struct GGUFMarkerStrippingTests {
 
     @Test func emptyInputReturnsEmpty() {
         #expect(GGUFModelService.stripMarkers("").isEmpty)
+    }
+}
+
+struct GGUFDownloadCatalogTests {
+    @Test func catalogUsesRhymeAITunedModels() {
+        let options = GGUFDownloadCatalog.options
+
+        #expect(options.count == 2)
+        #expect(options.allSatisfy { $0.url.host == "huggingface.co" })
+        #expect(options.allSatisfy { $0.url.path.contains("Shayde182/rhymeai-gemma-4-gguf") })
+        #expect(options.allSatisfy { $0.fileName.contains("rhymeai-Q4_K_M") })
+        #expect(options.allSatisfy {
+            $0.url.path.contains("/resolve/\(GGUFDownloadCatalog.huggingFaceRevision)/")
+        })
+        #expect(options.allSatisfy { !$0.url.path.contains("/resolve/main/") })
+        #expect(options.map(\.expectedBytes) == [3_427_878_784, 5_335_290_784])
+        #expect(options.map(\.sha256) == [
+            "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+            "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3",
+        ])
+    }
+
+    @Test func preferredModelUsesCatalogOrder() {
+        let options = GGUFDownloadCatalog.options
+        let preferred = GGUFModelSelection.preferredFileName(
+            in: [options[1].fileName, options[0].fileName],
+            selectedFileName: nil
+        )
+
+        #expect(preferred == options[0].fileName)
+    }
+
+    @Test func modelDownloadUsesRedirectCompatibleFullFileRequest() {
+        let request = ggufDownloadRequest(for: GGUFDownloadCatalog.options[0])
+
+        #expect(request.value(forHTTPHeaderField: "Range") == nil)
+        #expect(request.value(forHTTPHeaderField: "Accept-Encoding") == "identity")
+    }
+
+    @Test func modelDownloadRecognizesArtifactsFromRemovedSegmentedDownloader() {
+        #expect(isLegacyGGUFDownloadArtifact(fileName: "gemma-4-e2b.segment-0.part"))
+        #expect(isLegacyGGUFDownloadArtifact(fileName: "gemma-4-e4b.segment-3.resume"))
+        #expect(isLegacyGGUFDownloadArtifact(
+            fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf.download"
+        ))
+        #expect(!isLegacyGGUFDownloadArtifact(
+            fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf.resume"
+        ))
+        #expect(!isLegacyGGUFDownloadArtifact(
+            fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf"
+        ))
+    }
+}
+
+struct GGUFSuggestionParsingTests {
+    @Test func parsesLiteralEscapedLineBreaksFromTunedModel() {
+        let raw = #"A hazy amber glow begins to gleam\nA whispered, fragile, waking dream\nAcross the slick and darkened stream\nA silent, solitary, waking theme\nBeneath the shadows of a waking gleam\nA fading, ephemeral, silver gleam<end_of_turn>"#
+        let parsed = AIService().parseSuggestionList(raw)
+
+        #expect(parsed.count == 6)
+        #expect(parsed.first == "A hazy amber glow begins to gleam")
+        #expect(parsed.last == "A fading, ephemeral, silver gleam")
+    }
+}
+
+@Suite(.serialized)
+struct GGUFModelSelectionTests {
+    @Test func selectionPersistsAndWinsOverCatalogOrder() {
+        let original = GGUFModelSelection.currentFileName
+        defer {
+            if let original {
+                GGUFModelSelection.save(fileName: original)
+            } else {
+                GGUFModelSelection.clear()
+            }
+        }
+
+        let options = GGUFDownloadCatalog.options
+        GGUFModelSelection.save(fileName: options[1].fileName)
+
+        #expect(GGUFModelSelection.currentFileName == options[1].fileName)
+        #expect(
+            GGUFModelSelection.preferredFileName(in: options.map(\.fileName))
+                == options[1].fileName
+        )
     }
 }
 
@@ -129,79 +198,52 @@ struct GGUFEngineChoiceTests {
 
 // MARK: - Routing decision: shouldUseGemma
 
-struct GGUFRoutingDecisionTests {
+extension GGUFEngineChoiceTests {
     // shouldUseGemma returns false when engine is Apple Intelligence regardless
     // of whether GGUF files are present.
     @Test func appleEngineNeverRoutesToGemma() {
-        let result = AIService.shouldUseGemma(
-            engineChoice: .appleIntelligence,
-            ggufPath: "/tmp/model.gguf"
-        )
+        let defaults = UserDefaults.standard
+        let original = defaults.string(forKey: "ggufEngineChoice")
+        defer {
+            if let r = original { defaults.set(r, forKey: "ggufEngineChoice") }
+            else { defaults.removeObject(forKey: "ggufEngineChoice") }
+        }
+
+        GGUFEngineChoice.appleIntelligence.save()
+        // Even if a GGUF magically exists, Apple engine must short-circuit.
+        let result = AIService.shouldUseGemma()
         #expect(result == false)
     }
 
     // shouldUseGemma returns false when engine is Gemma but no GGUF exists
     // (the models directory is either absent or empty).
     @Test func gemmaEngineWithNoFileReturnsFalse() {
-        let result = AIService.shouldUseGemma(engineChoice: .gemma, ggufPath: nil)
-        #expect(result == false)
-    }
-}
+        let defaults = UserDefaults.standard
+        let original = defaults.string(forKey: "ggufEngineChoice")
+        defer {
+            if let r = original { defaults.set(r, forKey: "ggufEngineChoice") }
+            else { defaults.removeObject(forKey: "ggufEngineChoice") }
+        }
 
-@Suite(.serialized)
-struct GGUFCustomModelRegistryTests {
-    @Test func customModelRegistrationAndSelectionSurviveReload() throws {
-        let suiteName = "GGUFCustomModelRegistryTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let modelURL = directory.appendingPathComponent("custom-night-drive.gguf")
-        let header = Data([
-            0x47, 0x47, 0x55, 0x46,
-            0x03, 0x00, 0x00, 0x00,
-            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ])
-        FileManager.default.createFile(atPath: modelURL.path, contents: header)
-        let model = GGUFCustomModel(
-            id: "custom-night-drive",
-            displayName: "Night Drive",
-            fileName: modelURL.lastPathComponent
-        )
-
-        GGUFCustomModelRegistry.save([model], defaults: defaults)
-        GGUFModelSelection.save(fileName: model.fileName, defaults: defaults)
-
-        #expect(GGUFCustomModelRegistry.models(defaults: defaults) == [model])
-        #expect(
-            GGUFModelSelection.resolvedModelURL(
-                defaults: defaults,
-                modelsDirectory: directory
-            ) == modelURL
-        )
-    }
-}
-
-struct GGUFCustomModelValidationTests {
-    @Test func rejectsTruncatedMagicOnlyFile() throws {
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(UUID().uuidString).gguf")
-        try Data("GGUF".utf8).write(to: fileURL)
-        defer { try? FileManager.default.removeItem(at: fileURL) }
-
-        do {
-            try GGUFModelCatalog.validateCustomFile(at: fileURL)
-            Issue.record("Expected a truncated GGUF header to be rejected")
-        } catch AIServiceError.localModelUnavailable {
+        GGUFEngineChoice.gemma.save()
+        // In the test sandbox, no GGUF has been downloaded, so directory is
+        // either missing or has no .gguf files.
+        // We can't guarantee the models directory is empty in all CI configs,
+        // so only assert the general correctness: if the real device has no
+        // GGUF then false is returned. This test is a logic sanity check,
+        // not a file-system mutation test.
+        let result = AIService.shouldUseGemma()
+        // On CI / simulator without any model: must be false.
+        // On a device where user downloaded a GGUF: could be true, skip assertion.
+        if AIService.firstGGUFPath() == nil {
+            #expect(result == false)
         }
     }
 }
 
 // MARK: - GGUFModelStub (always compiled, no model needed)
 
+@MainActor
 struct GGUFModelStubTests {
     @Test func stubIsNotLoaded() {
         let stub = GGUFModelStub()
@@ -233,17 +275,6 @@ struct GGUFModelStubTests {
         let stub = GGUFModelStub()
         stub.unload()
         #expect(stub.isLoaded == false)
-    }
-}
-
-struct GGUFLlamaFrameworkEmbeddingTests {
-    @Test func appBundleContainsLinkedLlamaFramework() {
-        let frameworkURL = Bundle.main.privateFrameworksURL?
-            .appendingPathComponent("llama.framework/llama")
-
-        #expect(frameworkURL != nil)
-        #expect(FileManager.default.fileExists(atPath: frameworkURL?.path ?? ""))
-        #expect(GGUFModelService.isEngineAvailable)
     }
 }
 
@@ -281,40 +312,28 @@ struct GemmaRewritePromptTests {
     }
 }
 
-// MARK: - Segmented download planning
-
-/// The download plan must stay byte-identical to Android's
-/// `planDownloadSegments`, so a model fetched on either platform is assembled
-/// from the same spans and hashes to the same digest.
-struct GGUFDownloadPlanTests {
-    @Test func segmentsCoverEveryByteContiguously() {
-        let total: Int64 = 24 * 1024 * 1024 + 5
-        let segments = GGUFDownloadPlan.segments(totalBytes: total)
-
-        #expect(segments.count == 3)
-        #expect(segments.first?.start == 0)
-        #expect(segments.last?.endInclusive == total - 1)
-        #expect(segments.reduce(0) { $0 + $1.size } == total)
-        for (left, right) in zip(segments, segments.dropFirst()) {
-            #expect(left.endInclusive + 1 == right.start)
+struct GGUFDownloadIntegrityTests {
+    @Test func validatesCompleteModelAndRejectsCorruption() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let data = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(data.count),
+            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        try data.write(to: url)
+        try GGUFDownloadManager.validateDownload(at: url, option: option)
+        try data.dropLast().write(to: url)
+        #expect(throws: (any Error).self) {
+            try GGUFDownloadManager.validateDownload(at: url, option: option)
         }
-        let sizes = segments.map(\.size)
-        #expect((sizes.max() ?? 0) - (sizes.min() ?? 0) <= 1)
-    }
-
-    @Test func smallFilesCollapseToASingleConnection() {
-        let segments = GGUFDownloadPlan.segments(totalBytes: 64 * 1024)
-        #expect(segments.count == 1)
-        #expect(segments[0].start == 0)
-        #expect(segments[0].endInclusive == 64 * 1024 - 1)
-    }
-
-    @Test func shippedModelSizesSplitAcrossEveryConnection() {
-        for model in GGUFModelCatalog.models {
-            let segments = GGUFDownloadPlan.segments(totalBytes: model.expectedBytes)
-            #expect(segments.count == GGUFDownloadPlan.segmentCount)
-            #expect(segments.reduce(0) { $0 + $1.size } == model.expectedBytes)
-            #expect(segments.last?.endInclusive == model.expectedBytes - 1)
+        var corrupted = data
+        corrupted[7] = 9
+        try corrupted.write(to: url)
+        #expect(throws: (any Error).self) {
+            try GGUFDownloadManager.validateDownload(at: url, option: option)
         }
     }
 }

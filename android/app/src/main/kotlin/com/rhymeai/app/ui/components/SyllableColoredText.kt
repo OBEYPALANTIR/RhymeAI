@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalDensity
@@ -23,9 +24,14 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.isSystemInDarkTheme
+import com.rhymeai.app.data.model.AnalysisPresentation
+import com.rhymeai.app.ui.theme.InkUnderlinePattern
+import com.rhymeai.app.ui.theme.LocalAnalysisPresentation
+import com.rhymeai.app.ui.theme.LocalAppAppearance
+import com.rhymeai.app.ui.theme.analysisFontWeight
 import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.LyricTokenizer
+import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
 
 private val wordPattern = LyricTokenizer.alphanumericWordPattern
@@ -34,9 +40,24 @@ fun buildSyllableWordColorAnnotatedString(
     text: String,
     baseTextColor: Color,
     isDark: Boolean
+): AnnotatedString = buildSyllableWordAnnotatedString(
+    text = text,
+    baseTextColor = baseTextColor,
+    isDark = isDark,
+    presentation = AnalysisPresentation.COLOR
+)
+
+fun buildSyllableWordAnnotatedString(
+    text: String,
+    baseTextColor: Color,
+    isDark: Boolean,
+    presentation: AnalysisPresentation
 ): AnnotatedString = buildAnnotatedString {
+    val headerRanges = SectionMap.headerRanges(text)
     var cursor = 0
-    for (match in wordPattern.findAll(text)) {
+    for (match in wordPattern.findAll(text).filterNot { word ->
+        SectionMap.intersectsHeader(word.range, headerRanges)
+    }) {
         val start = match.range.first
         val end = match.range.last + 1
         if (start > cursor) {
@@ -44,12 +65,18 @@ fun buildSyllableWordColorAnnotatedString(
                 append(text.substring(cursor, start))
             }
         }
-        withStyle(
-            SpanStyle(
-                color = syllableColor(SyllableCounter.count(match.value), isDark),
+        val syllableCount = SyllableCounter.count(match.value)
+        val wordStyle = when (presentation) {
+            AnalysisPresentation.COLOR -> SpanStyle(
+                color = syllableColor(syllableCount, isDark),
                 fontWeight = FontWeight.SemiBold
             )
-        ) {
+            AnalysisPresentation.INK_MARKS -> SpanStyle(
+                color = baseTextColor,
+                fontWeight = analysisFontWeight(syllableCount)
+            )
+        }
+        withStyle(wordStyle) {
             append(match.value)
         }
         cursor = end
@@ -68,9 +95,15 @@ fun SyllableWordColoredText(
     style: TextStyle = TextStyle.Default
 ) {
     val baseTextColor = MaterialTheme.colorScheme.onBackground
-    val isDark = isSystemInDarkTheme()
-    val annotated = remember(text, baseTextColor, isDark) {
-        buildSyllableWordColorAnnotatedString(text, baseTextColor, isDark)
+    val isDark = LocalAppAppearance.current.isDark
+    val presentation = LocalAnalysisPresentation.current
+    val annotated = remember(text, baseTextColor, isDark, presentation) {
+        buildSyllableWordAnnotatedString(
+            text = text,
+            baseTextColor = baseTextColor,
+            isDark = isDark,
+            presentation = presentation
+        )
     }
 
     Text(
@@ -87,19 +120,48 @@ data class SyllableUnderlineSpan(
     val color: Color
 )
 
-fun buildSyllableUnderlineSpans(text: String, enabled: Boolean, isDark: Boolean): List<SyllableUnderlineSpan> {
+@Immutable
+data class SyllableUnderlineAnalysis(
+    val start: Int,
+    val endExclusive: Int,
+    val syllableCount: Int
+)
+
+fun analyzeSyllableUnderlines(text: String, enabled: Boolean): List<SyllableUnderlineAnalysis> {
     if (!enabled || text.isEmpty()) return emptyList()
 
+    val headerRanges = SectionMap.headerRanges(text)
     return wordPattern.findAll(text)
+        .filterNot { match ->
+            SectionMap.intersectsHeader(match.range, headerRanges)
+        }
         .map { match ->
-            SyllableUnderlineSpan(
+            SyllableUnderlineAnalysis(
                 start = match.range.first,
                 endExclusive = match.range.last + 1,
-                color = syllableColor(SyllableCounter.count(match.value), isDark)
+                syllableCount = SyllableCounter.count(match.value)
             )
         }
         .toList()
 }
+
+fun colorSyllableUnderlines(
+    analysis: List<SyllableUnderlineAnalysis>,
+    isDark: Boolean
+): List<SyllableUnderlineSpan> = analysis.map { token ->
+    SyllableUnderlineSpan(
+        start = token.start,
+        endExclusive = token.endExclusive,
+        color = syllableColor(token.syllableCount, isDark)
+    )
+}
+
+fun buildSyllableUnderlineSpans(
+    text: String,
+    enabled: Boolean,
+    isDark: Boolean
+): List<SyllableUnderlineSpan> =
+    colorSyllableUnderlines(analyzeSyllableUnderlines(text, enabled), isDark)
 
 @Composable
 fun SyllableColoredText(
@@ -109,12 +171,13 @@ fun SyllableColoredText(
     style: TextStyle = TextStyle.Default
 ) {
     val baseTextColor = MaterialTheme.colorScheme.onBackground
-    val isDark = isSystemInDarkTheme()
+    val isDark = LocalAppAppearance.current.isDark
     var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     val density = LocalDensity.current
     val strokeWidth = with(density) { 3.dp.toPx() }
     val underlineGap = with(density) { 2.dp.toPx() }
-    val spans = remember(text, enabled, isDark) { buildSyllableUnderlineSpans(text, enabled, isDark) }
+    val analysis = remember(text, enabled) { analyzeSyllableUnderlines(text, enabled) }
+    val spans = remember(analysis, isDark) { colorSyllableUnderlines(analysis, isDark) }
 
     Text(
         text = text,
@@ -147,7 +210,31 @@ fun Modifier.syllableUnderlines(
             endExclusive = span.endExclusive,
             color = span.color,
             underlineGap = underlineGap,
-            strokeWidth = strokeWidth
+            strokeWidth = strokeWidth,
+            pattern = InkUnderlinePattern.SOLID
+        )
+    }
+}
+
+fun Modifier.rhymeUnderlines(
+    spans: List<RhymeUnderlineSpan>,
+    textLayoutResult: TextLayoutResult?,
+    underlineGap: Float,
+    strokeWidth: Float
+): Modifier = drawBehind {
+    val layout = textLayoutResult ?: return@drawBehind
+    if (spans.isEmpty()) return@drawBehind
+
+    spans.forEach { span ->
+        if (span.endExclusive > layout.layoutInput.text.length) return@forEach
+        drawWordUnderline(
+            layout = layout,
+            start = span.start,
+            endExclusive = span.endExclusive,
+            color = span.color,
+            underlineGap = underlineGap,
+            strokeWidth = strokeWidth,
+            pattern = span.pattern
         )
     }
 }
@@ -158,7 +245,8 @@ private fun DrawScope.drawWordUnderline(
     endExclusive: Int,
     color: Color,
     underlineGap: Float,
-    strokeWidth: Float
+    strokeWidth: Float,
+    pattern: InkUnderlinePattern
 ) {
     if (start >= endExclusive) return
 
@@ -168,13 +256,13 @@ private fun DrawScope.drawWordUnderline(
     for (offset in (start + 1) until endExclusive) {
         val line = layout.getLineForOffset(offset)
         if (line != segmentLine) {
-            drawUnderlineSegment(layout, segmentStart, offset, color, underlineGap, strokeWidth)
+            drawUnderlineSegment(layout, segmentStart, offset, color, underlineGap, strokeWidth, pattern)
             segmentStart = offset
             segmentLine = line
         }
     }
 
-    drawUnderlineSegment(layout, segmentStart, endExclusive, color, underlineGap, strokeWidth)
+    drawUnderlineSegment(layout, segmentStart, endExclusive, color, underlineGap, strokeWidth, pattern)
 }
 
 private fun DrawScope.drawUnderlineSegment(
@@ -183,7 +271,8 @@ private fun DrawScope.drawUnderlineSegment(
     endExclusive: Int,
     color: Color,
     underlineGap: Float,
-    strokeWidth: Float
+    strokeWidth: Float,
+    pattern: InkUnderlinePattern
 ) {
     val safeEnd = (endExclusive - 1).coerceAtLeast(start)
     val startBox = layout.getBoundingBox(start)
@@ -199,6 +288,20 @@ private fun DrawScope.drawUnderlineSegment(
         start = Offset(left, y),
         end = Offset(right, y),
         strokeWidth = strokeWidth,
-        cap = StrokeCap.Round
+        cap = StrokeCap.Round,
+        pathEffect = pattern.pathEffect(strokeWidth)
+    )
+}
+
+private fun InkUnderlinePattern.pathEffect(strokeWidth: Float): PathEffect? = when (this) {
+    InkUnderlinePattern.SOLID -> null
+    InkUnderlinePattern.DASHED -> PathEffect.dashPathEffect(
+        floatArrayOf(4 * strokeWidth, 3 * strokeWidth)
+    )
+    InkUnderlinePattern.DOTTED -> PathEffect.dashPathEffect(
+        floatArrayOf(strokeWidth, 2.5f * strokeWidth)
+    )
+    InkUnderlinePattern.DASH_DOT -> PathEffect.dashPathEffect(
+        floatArrayOf(4 * strokeWidth, 2 * strokeWidth, strokeWidth, 2 * strokeWidth)
     )
 }

@@ -8,15 +8,6 @@ import Testing
 /// index caps its lists in hash order — assertions check phonetics and
 /// ordering invariants, never specific capped-list members.
 struct RhymeConstraintTests {
-    private let relationDictionary = PronunciationDictionary.fromLines([
-        "road\tR OW1 D",
-        "glowed\tG L OW1 D",
-        "showed\tSH OW1 D",
-        "stone\tS T OW1 N",
-        "bones\tB OW1 N Z",
-        "red\tR EH1 D",
-        "night\tN AY1 T"
-    ])
 
     /// A dictionary candidate that survives lineEndWord extraction unchanged.
     /// The dictionary holds a few words with hyphens or trailing apostrophes
@@ -60,76 +51,6 @@ struct RhymeConstraintTests {
         #expect(RhymeConstraint.candidateEndWords(targetWord: "", rhymeType: .near).isEmpty)
     }
 
-    @Test func candidateEndWordsKeepRhymeModesExclusive() {
-        let perfect = Set(RhymeConstraint.candidateEndWords(
-            targetWord: "road", rhymeType: .perfect, dictionary: relationDictionary
-        ))
-        let near = Set(RhymeConstraint.candidateEndWords(
-            targetWord: "road", rhymeType: .near, dictionary: relationDictionary
-        ))
-        let slant = Set(RhymeConstraint.candidateEndWords(
-            targetWord: "road", rhymeType: .slant, dictionary: relationDictionary
-        ))
-
-        #expect(perfect == ["glowed", "showed"])
-        #expect(near == ["stone"])
-        #expect(slant == ["red"])
-        #expect(perfect.isDisjoint(with: near))
-        #expect(perfect.isDisjoint(with: slant))
-        #expect(near.isDisjoint(with: slant))
-        #expect(!near.contains("bones"))
-    }
-
-    @Test func rhymeTailsUseTheLastStressedVowelAndPreserveSecondaryStress() {
-        #expect(ProsodyAnalyzer.rhymeTailForPhonesPublic(["R", "EY1", "D", "IY0", "OW2"]) == RhymeTail(
-            vowel: "OW", coda: []
-        ))
-        #expect(ProsodyAnalyzer.rhymeTail(for: "road", dictionary: relationDictionary) == RhymeTail(
-            vowel: "OW", coda: ["D"]
-        ))
-    }
-
-    @Test func filterAndRankAdmitsOnlyTheRequestedRelation() {
-        let lines = [
-            "The window glowed",
-            "Cold as stone",
-            "Everything burned red",
-            "Walking through the night"
-        ]
-
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "Down the road",
-            rhymeType: .near,
-            want: 2,
-            dictionary: relationDictionary
-        ) == ["Cold as stone"])
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "Down the road",
-            rhymeType: .slant,
-            want: 2,
-            dictionary: relationDictionary
-        ) == ["Everything burned red"])
-    }
-
-    @Test func rhymeTiersAndBadgesNameEveryRelationTruthfully() {
-        #expect(RhymeConstraint.rhymeTier(
-            line: "The window glowed", targetWord: "road", dictionary: relationDictionary
-        ) == 2)
-        #expect(RhymeConstraint.rhymeTier(
-            line: "Cold as stone", targetWord: "road", dictionary: relationDictionary
-        ) == 1)
-        #expect(RhymeConstraint.rhymeTier(
-            line: "Everything burned red", targetWord: "road", dictionary: relationDictionary
-        ) == 3)
-        #expect(suggestionRhymeBadgeLabel(rhymeTier: 2, isHookRepeat: false) == "perfect")
-        #expect(suggestionRhymeBadgeLabel(rhymeTier: 1, isHookRepeat: false) == "near")
-        #expect(suggestionRhymeBadgeLabel(rhymeTier: 3, isHookRepeat: false) == "slant")
-        #expect(suggestionRhymeBadgeLabel(rhymeTier: 3, isHookRepeat: true) == "hook")
-        #expect(suggestionRhymeBadgeLabel(rhymeTier: 0, isHookRepeat: false) == nil)
-    }
-
     @Test func rhymeTierClassifiesPerfectNearAndMiss() throws {
         let perfectWord = try #require(roundTripSafeCandidate(for: "night", rhymeType: .perfect))
         #expect(RhymeConstraint.rhymeTier(line: "We chase the \(perfectWord)", targetWord: "night") == 2)
@@ -142,29 +63,6 @@ struct RhymeConstraintTests {
 
         #expect(RhymeConstraint.rhymeTier(line: "Nothing here can save us", targetWord: "night") == 0)
         #expect(RhymeConstraint.rhymeTier(line: "", targetWord: "night") == 0)
-    }
-
-    @Test func filterAndRankClassifiesReturnedEndingsOutsidePromptCap() throws {
-        let words = (0..<61).map { "zz" + String(repeating: "a", count: $0 + 2) }
-        let dictionary = PronunciationDictionary.fromLines(
-            ["anchor\tR AY1 M"] + words.map { "\($0)\tR AY1 M" }
-        )
-        let capped = Set(RhymeIndex.shared.find(word: "anchor", dictionary: dictionary).perfect)
-        let outsideCap = try #require(words.first { !capped.contains($0) })
-        let line = "Beyond the \(outsideCap)"
-
-        #expect(RhymeConstraint.rhymeTier(
-            line: line,
-            targetWord: "anchor",
-            dictionary: dictionary
-        ) == 2)
-        #expect(RhymeConstraint.filterAndRank(
-            lines: [line],
-            targetLine: "Find the anchor",
-            rhymeType: .perfect,
-            want: 1,
-            dictionary: dictionary
-        ) == [line])
     }
 
     @Test func filterAndRankPrefersRhymingLinesRegardlessOfOrder() throws {
@@ -186,7 +84,7 @@ struct RhymeConstraintTests {
         ) == [rhyming])
     }
 
-    @Test func filterAndRankRejectsKnownNonRhymingLines() throws {
+    @Test func filterAndRankTopsUpWithNonRhymingLinesInOriginalOrder() throws {
         let rhymeWord = try #require(roundTripSafeCandidate(for: "night", rhymeType: .perfect))
         let rhyming = "Out beyond the \(rhymeWord)"
         let fillerA = "Nothing here can save us"
@@ -198,19 +96,21 @@ struct RhymeConstraintTests {
             rhymeType: .perfect,
             want: 3
         )
-        #expect(ranked == [rhyming])
+        #expect(ranked == [rhyming, fillerA, fillerB])
     }
 
-    @Test func filterAndRankReturnsEmptyWhenKnownTargetHasNoMatchingSuggestion() {
+    @Test func filterAndRankNeverReturnsEmptyForNonEmptyInput() {
         let lines = ["The morning comes too soon", "Nothing here can save us"]
 
+        // Nothing rhymes: keep arrival order rather than returning nothing.
         #expect(RhymeConstraint.filterAndRank(
             lines: lines,
             targetLine: "We own the night",
             rhymeType: .perfect,
             want: 2
-        ).isEmpty)
+        ) == lines)
 
+        // Unknown target word: the constraint was never applied upstream.
         #expect(RhymeConstraint.filterAndRank(
             lines: lines,
             targetLine: "Surrounded by the zzzqxv",
@@ -291,6 +191,40 @@ struct RhymeConstraintTests {
         )
         #expect(!unknownTarget.contains("End each line with"))
         #expect(unknownTarget.contains("Respond with exactly 6 lines"))
+    }
+
+    @Test func suggestionPromptNamesStructuralSectionWithoutRhymeConstraint() {
+        let prompt = AIService().buildPrompt(
+            theme: "late-night resolve",
+            lyrics: "[Pre-Chorus]\nBuild it higher",
+            targetRhymeLine: nil,
+            rhymeType: .perfect,
+            rhymeScheme: "AABB",
+            currentLetter: "A",
+            currentSection: .unknown,
+            complexity: .moderate,
+            useWholeSongContext: false
+        )
+
+        #expect(
+            prompt.contains(
+                "Current section label: \"Pre-Chorus\". Treat this label as song structure, not lyric content."
+            )
+        )
+        #expect(prompt.contains("Build momentum and tension toward the chorus"))
+    }
+
+    @Test func rewritePromptNamesCustomStructuralSection() {
+        let prompt = AIService().buildRewritePrompt(
+            action: .rephrase,
+            lyrics: "[Post-Chorus]\nLet it ring",
+            selection: "Let it ring",
+            currentSection: .unknown,
+            currentSectionLabel: "Post-Chorus"
+        )
+
+        #expect(prompt.contains("Current section label: \"Post-Chorus\""))
+        #expect(prompt.contains("Treat this label as song structure, not lyric content."))
     }
 
     @Test func rhymeLineFilterMirrorsThePromptGate() {

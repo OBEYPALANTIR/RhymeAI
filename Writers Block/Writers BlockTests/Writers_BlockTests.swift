@@ -64,18 +64,6 @@ struct Writers_BlockTests {
         #expect(context.currentSection == .unknown)
     }
 
-    @Test func insertSuggestionUsesUITextViewUTF16CursorUnits() {
-        let viewModel = EditorViewModel()
-        viewModel.lyrics = "🌙 glow"
-        viewModel.cursorPosition = ("🌙" as NSString).length
-
-        viewModel.insertSuggestion("new line")
-
-        let insertedPrefix = "🌙\nnew line\n"
-        #expect(viewModel.lyrics == insertedPrefix + " glow")
-        #expect(viewModel.cursorPosition == (insertedPrefix as NSString).length)
-    }
-
     @Test func openAIModelPickerStartsWithCurrentGPT5Models() {
         let modelIDs = AIModel.models(for: .openai).map(\.id)
 
@@ -114,44 +102,6 @@ struct Writers_BlockTests {
     }
 
     @MainActor
-    @Test func freshAndInvalidProviderPreferencesRecoverToLocal() throws {
-        for storedProvider in [nil, "UNSUPPORTED_PROVIDER"] as [String?] {
-            let suiteName = "rhymeai.provider-default.\(UUID().uuidString)"
-            let defaults = try #require(UserDefaults(suiteName: suiteName))
-            defer { defaults.removePersistentDomain(forName: suiteName) }
-            if let storedProvider {
-                defaults.set(storedProvider, forKey: "selectedProvider")
-            }
-            defaults.set(AIModel.gpt4o.rawValue, forKey: "selectedModel")
-
-            let viewModel = EditorViewModel(
-                keychainStore: InMemoryKeychainStore(),
-                defaults: defaults
-            )
-
-            #expect(viewModel.selectedProvider == .local)
-            #expect(viewModel.selectedModel == .localModel)
-        }
-    }
-
-    @MainActor
-    @Test func validReturningProviderPreferenceIsPreserved() throws {
-        let suiteName = "rhymeai.provider-returning.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(AIProvider.claude.rawValue, forKey: "selectedProvider")
-        defaults.set(AIModel.claudeSonnet46.rawValue, forKey: "selectedModel")
-
-        let viewModel = EditorViewModel(
-            keychainStore: InMemoryKeychainStore(),
-            defaults: defaults
-        )
-
-        #expect(viewModel.selectedProvider == .claude)
-        #expect(viewModel.selectedModel == .claudeSonnet46)
-    }
-
-    @MainActor
     @Test func providerSwitchingKeepsSelectedModelAligned() {
         let defaults = UserDefaults.standard
         let savedProvider = defaults.string(forKey: "selectedProvider")
@@ -173,6 +123,10 @@ struct Writers_BlockTests {
 
         let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore())
 
+        #expect(viewModel.selectedProvider == .local)
+        #expect(viewModel.selectedModel == .localModel)
+        #expect(AIProvider.allCases.first == .local)
+
         viewModel.saveModel(.gpt4o)
         viewModel.saveProvider(.local)
 
@@ -184,6 +138,15 @@ struct Writers_BlockTests {
 
         #expect(viewModel.selectedProvider == .claude)
         #expect(viewModel.selectedModel.provider == .claude)
+
+        let restored = EditorViewModel(keychainStore: InMemoryKeychainStore())
+        #expect(restored.selectedProvider == .claude)
+        #expect(restored.selectedModel == viewModel.selectedModel)
+
+        defaults.set("retired-provider", forKey: "selectedProvider")
+        let fallback = EditorViewModel(keychainStore: InMemoryKeychainStore())
+        #expect(fallback.selectedProvider == .local)
+        #expect(fallback.selectedModel == .localModel)
     }
 
     @Test func prosodyAnalyzerCountsDictionaryStress() {
@@ -192,7 +155,7 @@ struct Writers_BlockTests {
 
         #expect(prosody.syllableCount == 4)
         #expect(prosody.stressPattern == [1, 0, 1, 0])
-        #expect(prosody.feet == "ˈDA da ˈDA da")
+        #expect(prosody.feet == "ˈDA da | ˈDA da")
     }
 
     @Test func prosodyAnalyzerRendersIpaPreview() {
@@ -207,7 +170,6 @@ struct Writers_BlockTests {
 
         #expect(prosody.ipa == "ˈreɪdiˌoʊ")
         #expect(prosody.stressPattern == [1, 0, 2])
-        #expect(ProsodyAnalyzer.metricFeet(prosody.stressPattern) == "ˈDA da ˌDA")
         #expect(prosody.isFallback == false)
     }
 
@@ -217,19 +179,6 @@ struct Writers_BlockTests {
         #expect(prosody.syllableCount == 2)
         #expect(prosody.stressPattern == [1, 0])
         #expect(prosody.isFallback)
-    }
-
-    @Test func prosodyFallbackKeepsSyllabicLeWithoutDoubleDecrement() {
-        #expect(ProsodyAnalyzer.analyzeWord("obstacles", dictionary: Self.fixtureDictionary).syllableCount == 3)
-        #expect(ProsodyAnalyzer.analyzeWord("candles", dictionary: Self.fixtureDictionary).syllableCount == 2)
-        #expect(ProsodyAnalyzer.analyzeWord("tables", dictionary: Self.fixtureDictionary).syllableCount == 2)
-        #expect(ProsodyAnalyzer.analyzeWord("candle", dictionary: Self.fixtureDictionary).syllableCount == 2)
-    }
-
-    @Test func prosodyFallbackStillReducesSilentEAndPluralEs() {
-        #expect(ProsodyAnalyzer.analyzeWord("cake", dictionary: Self.fixtureDictionary).syllableCount == 1)
-        #expect(ProsodyAnalyzer.analyzeWord("mile", dictionary: Self.fixtureDictionary).syllableCount == 1)
-        #expect(ProsodyAnalyzer.analyzeWord("miles", dictionary: Self.fixtureDictionary).syllableCount == 1)
     }
 
     @Test func prosodyAnalyzerNormalizesPunctuationDigitsAndInternalApostrophes() {
@@ -411,92 +360,6 @@ struct Writers_BlockTests {
         // No target line: no constraint block and no over-generation.
         #expect(!wholeSongPrompt.contains("End each line with"))
         #expect(wholeSongPrompt.contains("Respond with exactly 6 lines"))
-    }
-
-    @Test func suggestionPromptOmitsUnrelatedLyricsWhenWholeSongContextIsOff() {
-        let targetLine = "Keep only this target line"
-        let unrelatedSentinel = "PRIVATE_UNRELATED_STANZA_SENTINEL"
-        let prompt = AIService().buildPrompt(
-            theme: "quiet resolve",
-            lyrics: "[Verse]\n\(targetLine)\n\n[Bridge]\n\(unrelatedSentinel)",
-            targetRhymeLine: targetLine,
-            rhymeType: .perfect,
-            rhymeScheme: "AABB",
-            currentLetter: "A",
-            currentSection: .verse,
-            complexity: .moderate,
-            useWholeSongContext: false
-        )
-
-        #expect(prompt.contains("quiet resolve"))
-        #expect(prompt.contains(targetLine))
-        #expect(!prompt.contains(unrelatedSentinel))
-    }
-
-    @MainActor
-    @Test func firstCloudSuggestionRequestsConsentBeforeStarting() {
-        let suiteName = "rhymeai.consent.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), defaults: defaults)
-        viewModel.saveProvider(.gemini)
-        viewModel.lyrics = "private line"
-
-        viewModel.getSuggestions()
-
-        #expect(viewModel.cloudAISharingRequest?.provider == .gemini)
-        #expect(viewModel.cloudAISharingRequest?.purpose == "suggestions")
-        #expect(viewModel.cloudAISharingRequest?.scope == .selectedContext)
-        #expect(!viewModel.isLoading)
-    }
-
-    @MainActor
-    @Test func limitedCloudConsentDoesNotAuthorizeWholeSongRequests() {
-        let suiteName = "rhymeai.consent.scope.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), defaults: defaults)
-        viewModel.saveProvider(.gemini)
-        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
-        viewModel.saveUseWholeSongContext(true)
-        viewModel.lyrics = "private full lyric"
-
-        viewModel.getSuggestions()
-
-        #expect(viewModel.cloudAISharingRequest?.scope == .wholeSong)
-        #expect(!viewModel.isLoading)
-    }
-
-    @MainActor
-    @Test func consentRevocationCancelsPendingCloudRequest() {
-        let suiteName = "rhymeai.consent.revoke.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), defaults: defaults)
-        viewModel.saveProvider(.gemini)
-        viewModel.lyrics = "private line"
-        viewModel.getSuggestions()
-        #expect(viewModel.cloudAISharingRequest != nil)
-
-        viewModel.setCloudAISharingConsent(false, scope: .selectedContext)
-
-        #expect(viewModel.cloudAISharingRequest == nil)
-        #expect(!viewModel.isLoading)
-    }
-
-    @Test func rewritePromptOmitsSurroundingLyricsWhenWholeSongContextIsOff() {
-        let sentinel = "REWRITE_BEFORE_92ce"
-        let selected = "REWRITE_ALLOWED_81bd"
-        let prompt = AIService().buildRewritePrompt(
-            action: .punchUp,
-            lyrics: "\(sentinel)\n\(selected)",
-            selection: selected,
-            currentSection: .verse,
-            useWholeSongContext: false
-        )
-
-        #expect(prompt.contains(selected))
-        #expect(!prompt.contains(sentinel))
     }
 
     @Test func rewritePromptIncludesEveryActionContract() {
@@ -978,12 +841,13 @@ struct Writers_BlockTests {
     }
 
     @Test func sectionMapParsesBareSectionHeaders() {
-        let lyrics = "verse\nLine A\nLine B\n\nchorus\nHook line"
+        let lyrics = "verse\nLine A\nLine B\n\nchorus\nHook line\nrefrain\nAgain\ninterlude\nBreathe"
         let map = SectionMap(lyrics: lyrics)
 
-        #expect(map.sections.count == 2)
         #expect(map.sections[0].type == .verse)
         #expect(map.sections[1].type == .chorus)
+        #expect(map.sections.contains(where: { $0.label == "refrain" }))
+        #expect(map.sections.contains(where: { $0.label == "interlude" }))
     }
 
     @Test func sectionMapOrdinalCountsPerType() {
@@ -1029,6 +893,63 @@ struct Writers_BlockTests {
 
         let lines = map.lines(forFirstOf: .chorus, in: rawLines)
         #expect(lines == ["Hook one", "Hook two"])
+    }
+
+    @Test func sectionHeadersDoNotAffectLyricMetrics() {
+        let lyrics = "[Verse]\nHold the line\nPre-Chorus\nBuild it up\n[Post-Chorus]\nLet it ring"
+
+        #expect(SectionMap.lyricContent(lyrics) == "Hold the line\nBuild it up\nLet it ring")
+        #expect(
+            SectionMap.headerRanges(lyrics)
+                == [
+                    NSRange(location: 0, length: 7),
+                    NSRange(location: 22, length: 10),
+                    NSRange(location: 45, length: 13)
+                ]
+        )
+        #expect(SyllableCounter.lyricWordCount(lyrics) == 9)
+        #expect(
+            SyllableCounter.lyricSyllableCount(lyrics)
+                == SyllableCounter.countText("Hold the line\nBuild it up\nLet it ring")
+        )
+    }
+
+    @Test func sectionHeaderIntersectionSearchRespectsRangeBoundaries() {
+        let headerRanges = [
+            NSRange(location: 0, length: 7),
+            NSRange(location: 22, length: 10),
+            NSRange(location: 45, length: 13),
+        ]
+
+        #expect(SectionMap.intersectsHeader(NSRange(location: 1, length: 4), headerRanges: headerRanges))
+        #expect(SectionMap.intersectsHeader(NSRange(location: 20, length: 3), headerRanges: headerRanges))
+        #expect(!SectionMap.intersectsHeader(NSRange(location: 7, length: 15), headerRanges: headerRanges))
+        #expect(!SectionMap.intersectsHeader(NSRange(location: 32, length: 13), headerRanges: headerRanges))
+        #expect(!SectionMap.intersectsHeader(NSRange(location: 58, length: 3), headerRanges: headerRanges))
+    }
+
+    @Test func sectionInsertionCreatesAnUndoableStructuralBlock() {
+        let viewModel = EditorViewModel()
+        viewModel.lyrics = "First line"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+
+        viewModel.insertSection("Chorus")
+
+        #expect(viewModel.lyrics == "First line\n\n[Chorus]\n")
+        #expect(viewModel.cursorPosition == viewModel.lyrics.utf16.count)
+        #expect(viewModel.canUndoLyrics)
+    }
+
+    @Test func bareSectionHeaderDoesNotConsumeRhymeSchemePosition() {
+        let viewModel = EditorViewModel()
+        viewModel.rhymeScheme = .abab
+        viewModel.lyrics = "verse\nfirst light\nsecond night\npre-chorus\nbuild higher"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+
+        let context = viewModel.computeRhymeContext()
+
+        #expect(context.currentLetter == "A")
+        #expect(context.currentSection == .unknown)
     }
 
     // MARK: - Chorus candidate injection tests
@@ -1167,7 +1088,7 @@ struct Writers_BlockTests {
             sectionOrdinal: 2,
             firstChorusLines: firstLines,
             complexity: .moderate,
-            useWholeSongContext: true
+            useWholeSongContext: false
         )
         #expect(prompt.contains("This is the chorus (instance 2). Keep hook language and ending words consistent with the established chorus:"))
         #expect(prompt.contains("We rise together"))

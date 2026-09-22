@@ -38,6 +38,10 @@ final class VoiceMemoService {
     @ObservationIgnored private var recordingStartTime: Date?
     @ObservationIgnored private var activePlayURL: URL?
     @ObservationIgnored private var delegateForwarder: VoiceMemoDelegate?
+    nonisolated private static let audioSessionQueue = DispatchQueue(
+        label: "com.rhymeai.audio-session",
+        qos: .userInitiated
+    )
 
     nonisolated static let maximumImportBytes = 100 * 1024 * 1024
 
@@ -210,6 +214,17 @@ final class VoiceMemoService {
     // MARK: - Record
 
     func startRecording(projectId: String) async {
+        #if DEBUG
+        if UITestFlags.isEnabled(UITestFlags.fakeVoiceRecording) {
+            stopPlayback()
+            recordingStartTime = Date()
+            recordingElapsed = 3
+            averagePowerNormalized = 0.55
+            isRecording = true
+            return
+        }
+        #endif
+
         guard await requestPermissionIfNeeded() else { return }
 
         stopPlayback()
@@ -218,12 +233,10 @@ final class VoiceMemoService {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = RecordingFiles.newMemoURL(for: projectId)
 
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-            try session.setActive(true)
+            try await Self.activateRecordingSession()
         } catch {
-            failToStartRecording(session: session)
+            failToStartRecording()
             return
         }
 
@@ -240,7 +253,7 @@ final class VoiceMemoService {
         do {
             recorder = try AVAudioRecorder(url: url, settings: settings)
         } catch {
-            failToStartRecording(session: session)
+            failToStartRecording()
             return
         }
 
@@ -252,7 +265,7 @@ final class VoiceMemoService {
         recorder.isMeteringEnabled = true
         guard recorder.record() else {
             recorder.stop()
-            failToStartRecording(session: session)
+            failToStartRecording()
             return
         }
 
@@ -290,6 +303,7 @@ final class VoiceMemoService {
     }
 
     func stopRecording() {
+        let shouldDeactivateSession = audioRecorder != nil
         audioRecorder?.stop()
         audioRecorder = nil
         elapsedTimer?.invalidate()
@@ -303,10 +317,12 @@ final class VoiceMemoService {
         averagePowerNormalized = 0
 
         // Deactivate so other apps (Music, Podcast) can resume their sessions.
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if shouldDeactivateSession {
+            Self.deactivateAudioSession()
+        }
     }
 
-    private func failToStartRecording(session: AVAudioSession) {
+    private func failToStartRecording() {
         audioRecorder?.stop()
         audioRecorder = nil
         elapsedTimer?.invalidate()
@@ -318,8 +334,36 @@ final class VoiceMemoService {
         isRecording = false
         recordingElapsed = 0
         averagePowerNormalized = 0
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        Self.deactivateAudioSession()
         lastError = "Couldn't start recording. Check the microphone and try again."
+    }
+
+    nonisolated private static func activateRecordingSession() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            audioSessionQueue.async {
+                do {
+                    let session = AVAudioSession.sharedInstance()
+                    try session.setCategory(
+                        .playAndRecord,
+                        mode: .default,
+                        options: [.defaultToSpeaker]
+                    )
+                    try session.setActive(true)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    nonisolated private static func deactivateAudioSession() {
+        audioSessionQueue.async {
+            try? AVAudioSession.sharedInstance().setActive(
+                false,
+                options: .notifyOthersOnDeactivation
+            )
+        }
     }
 
     // MARK: - Playback
@@ -343,7 +387,7 @@ final class VoiceMemoService {
         }
 
         guard let player = try? AVAudioPlayer(contentsOf: url) else {
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            Self.deactivateAudioSession()
             return
         }
 
@@ -363,7 +407,7 @@ final class VoiceMemoService {
         activePlayURL = nil
         delegateForwarder = nil
         isPlaying = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        Self.deactivateAudioSession()
     }
 
     // MARK: - Delete

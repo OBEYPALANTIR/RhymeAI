@@ -1,113 +1,105 @@
-# Repository Guidelines
+# RhymeAI Repository Guide
 
-## Project Overview
+## Mission and Sources of Truth
 
-RhymeAI is a native songwriting assistant for writing lyrics, managing song projects, analyzing rhyme context, counting syllables, previewing stress/IPA, and generating AI rewrite/rhyme suggestions. The active app surfaces are the native Android Jetpack Compose app in `android/` and the native SwiftUI iOS app in `Writers Block/`. A desktop variant is planned, but the React/Vite web variant has been removed.
+RhymeAI (the shipped app name is Writers Block) is a native songwriting workspace for drafting lyrics, organizing songs, understanding rhyme and prosody, and requesting AI-assisted suggestions or rewrites without taking authorship away from the writer.
 
-## Architecture & Data Flow
+- Read `docs/PRODUCT_DNA.md` before greenfield planning, architecture selection, major UX or design-system decisions, positioning or launch work, monetization or growth work, and cross-product standardization. An unrelated small fix does not require loading it.
+- Read `DESIGN.md` before changing appearance, layout, motion, typography, components, or responsive behavior.
+- Read `PARITY.md` before changing behavior present on Android and iOS.
+- Read `README.md` and the relevant script before running a build, test, release, or live-provider gate.
+- Treat this checkout as an independent working copy. Inspect its branch, status, files, and tool state; never assume another RhymeAI checkout is synchronized.
 
-- **Android:** `MainViewModel.kt` is the single source of truth for editor, project, settings, AI provider/model, suggestions, rewrite previews, trash state, prosody previews, and save status. Compose screens read/write ViewModel `mutableStateOf` properties directly. `ProjectRepository.kt` persists projects, current editor state, trash state, and provider/model choice in Preferences DataStore, and routes API keys through `SecureKeyStore`/EncryptedSharedPreferences. `AIService.kt` dispatches to Gemini, OpenAI, Claude, or a local GGUF model.
-- **iOS:** `Writers_BlockApp.swift` creates the `EditorViewModel` and SwiftData `ModelContainer`. `ContentView.swift` injects the ViewModel into SwiftUI via `@EnvironmentObject`. `EditorViewModel.swift` owns editor/project/settings state, debounced autosave, trash state, rhyme context, prosody previews, and rewrite flow. `AIService.swift` handles Gemini/OpenAI/Claude/Apple Intelligence calls.
-- **Common flow:** lyrics + cursor position -> stanza/rhyme-context parsing -> section-aware prompt shaping -> AI suggestion/rewrite response -> UI preview/application -> debounced persistence. Android persists to DataStore; iOS persists projects with SwiftData and settings/API keys with `UserDefaults`.
-- **Shared prosody assets:** `shared/pronunciation/` contains source fixtures and generated pronunciation data. `scripts/generate-pronunciation-assets.mjs` refreshes native assets for Android and iOS.
+## One Coordinated Team
 
-## Key Directories
+Work as one coordinated product team, even when tasks run in parallel. Name one owner for each file or responsibility, share discoveries that affect another platform, and reconcile cross-platform contracts before declaring completion. Preserve unrelated and uncommitted work. Do not revert, reformat, commit, push, publish, upload, or change release/signing state unless the task explicitly authorizes it.
 
-- `android/app/src/main/kotlin/com/rhymeai/app/` — Android app source.
-  - `ui/` — Compose screens/components/theme/navigation.
-  - `service/` — cloud and local AI services.
-  - `data/model/` — serializable app models/enums.
-  - `data/repository/` — DataStore persistence.
-  - `util/` — rhyme, syllable, prosody, and export helpers.
-- `android/app/src/main/res/` — Android manifest resources, icons, XML file paths, values.
-- `Writers Block/Writers Block/` — iOS SwiftUI app.
-  - `Views/`, `Components/`, `ViewModels/`, `Services/`, `Models` map to their names.
-- `Writers Block/Writers BlockTests/` — iOS unit tests using Swift Testing.
-- `Writers Block/Writers BlockUITests/` — iOS UI/launch tests using XCTest.
-- `shared/` — cross-platform pronunciation/prosody source data.
-- `scripts/` — repository scripts for generating native shared assets.
-- `DESIGN.md` — design tokens and product styling contract; consult before UI changes.
+Lead with the smallest complete change. Investigate the real mechanism, test the affected user journey, and report observed evidence rather than inferred success. A platform-specific implementation is acceptable only when the platform requires it; user-visible behavior should remain aligned.
 
-## Development Commands
+Select only the relevant product, iOS, Android, AI/data, design/accessibility, QA/performance, security/privacy, release, marketing/growth, or advisory perspectives. Activate marketing and growth only for user-facing, onboarding, monetization, analytics, launch, store, or positioning work, and never invent proof or capabilities.
 
-Run Android commands from `android/`:
+## Native Product Architecture
 
-- `./gradlew :app:assembleDebug` — build a debug APK.
-- `./gradlew :app:compileDebugKotlin` — fastest Kotlin compile check.
-- `./gradlew :app:testDebugUnitTest` — run JVM unit tests.
-- `./gradlew :app:lintDebug` — run Android lint for the debug variant.
-- `./gradlew :app:connectedDebugAndroidTest` — run instrumented tests when a device or emulator is attached.
+- Android lives in `android/` and uses Kotlin, Jetpack Compose, Material 3, a ViewModel-owned state model, coroutines, Preferences DataStore, and native services.
+- iOS lives in `Writers Block/` and uses Swift, SwiftUI, SwiftData, CloudKit readiness, `EditorViewModel`, async/await, and native services.
+- Repository pins are Kotlin 2.3.20, Android Gradle Plugin 8.9.1, Gradle 9.0.0 via the wrapper, JVM 17, compile SDK 36, min SDK 26, target SDK 35, Swift 5, and iOS 18.0. Preserve them unless an upgrade is explicitly requested.
+- The native source includes `android/benchmark/` and the vendored llama XCFramework contract in `Writers Block/Frameworks/README.md`; validate those assets in the working checkout rather than borrowing another checkout’s evidence.
+- `shared/pronunciation/` and `scripts/generate-pronunciation-assets.mjs` define shared pronunciation/prosody assets.
+- `finetune/` contains local-model data, evaluation, training, and export work. Do not present an evaluation artifact as a shipped model or a model file as passing quality evidence.
+- The removed React/Vite client is not an active target. Native Mac work is maintained separately in PR #38 and is unfinished; it is not included in this mobile integration or a shipped parity target.
 
-For iOS, use Xcode with `Writers Block/Writers Block.xcodeproj`, or first inspect schemes/destinations with:
+The common writing flow is lyrics and cursor context, then stanza/rhyme parsing, prompt shaping, provider or local inference, suggestion/rewrite review, explicit application, and persistence. Keep section headers, rhyme targets, syllables, stress/IPA, error mapping, export behavior, trash retention, and provider/model choices aligned where both apps expose them.
 
-- `xcodebuild -list -project "Writers Block/Writers Block.xcodeproj"`
-- `xcrun simctl list devices`
+## State, Privacy, and Security Boundaries
 
-Then run `xcodebuild build` or `xcodebuild test` with the confirmed scheme and simulator destination.
+- Android stores projects and non-secret settings in Preferences DataStore. API keys and sync passphrases belong behind `SecureKeyStore` in `EncryptedSharedPreferences`, backed by Android Keystore.
+- iOS stores projects in SwiftData and non-secret preferences/provider selections in `UserDefaults`. API keys, OAuth tokens, and backup secrets belong in Keychain-backed stores.
+- `UserDefaults` is correct for non-secret preferences; it is never the destination for credentials. Legacy plaintext-key code exists only to migrate values into secure storage and remove the plaintext copy.
+- Keep user lyrics local by default. Make network/provider use legible and intentional. Never log keys, tokens, passphrases, full provider bodies, private lyrics, or model download credentials.
+- Keep release builds free of embedded test keys. Respect network security, backup exclusions, file sharing boundaries, and least-privilege platform entitlements.
 
-## Code Conventions & Common Patterns
+## Implementation Conventions
 
-- **General:** keep platform changes focused. Do not mix unrelated Android and iOS edits. Prefer direct code over new abstractions.
-- **Android/Kotlin:** four-space indentation; `PascalCase` classes/composables; `camelCase` functions/properties. Compose UI is Material 3 and ViewModel-driven; async work uses `viewModelScope.launch`, repository/AI calls are `suspend`, and blocking/network work belongs on `Dispatchers.IO`. Repository reads use `Flow` and one-shot `.first()` when needed.
-- **Android state/errors:** UI state is plain Compose mutable state on `MainViewModel`; error fields (`errorMessage`, `rewriteError`, `localModelError`) are set by caught exceptions and observed by UI. There is no Hilt/DI container; services are wired manually in the ViewModel.
-- **Swift/iOS:** SwiftUI views end in `View`, services in `Service`, models are nouns. `EditorViewModel` uses `@Published`, `@MainActor`, async/await, cancellable `Task`s, and 1-second autosave debounce. SwiftUI dependencies flow through `@EnvironmentObject` and `@Environment(\.modelContext)`.
-- **Rhyme context:** both platforms parse lyrics by line/stanza, skip or account for section headers, compute the active rhyme-scheme letter from cursor position, and use that context in prompts. Keep behavior aligned across Android and iOS when changing rhyme logic.
-- **Prosody and syllables:** both platforms should consume the same pronunciation data and algorithmic rules so stress/IPA previews, syllable counts, and near/slant rhyme decisions stay aligned.
-- **Persistence caution:** Android DataStore and iOS `UserDefaults` are not secure storage. API keys belong in `SecureKeyStore`/EncryptedSharedPreferences on Android and Keychain on iOS; do not regress them into plaintext preferences.
+- Match the surrounding language and architecture; avoid introducing a new dependency or abstraction for a local change.
+- Android state normally belongs in `MainViewModel`; blocking/network work belongs on `Dispatchers.IO`; repository/AI calls are `suspend`; Compose UI observes explicit state and exposes meaningful semantics.
+- iOS state normally belongs in `EditorViewModel`; UI work stays on `@MainActor`; cancellable work uses `Task`; SwiftUI dependencies flow through the environment or explicit initializers.
+- Preserve the one-second autosave behavior and test persistence across relaunch when changing editor or project state.
+- Keep shared prompt and parsing contracts deterministic. Provider-specific exceptions must be documented and tested on both sides of the boundary.
+- Comments should explain constraints that code cannot express, not narrate obvious operations.
 
-## Important Files
+## Build and Test Commands
 
-- `android/app/src/main/kotlin/com/rhymeai/app/MainActivity.kt` — Android entry and Compose setup.
-- `android/app/src/main/kotlin/com/rhymeai/app/MainViewModel.kt` — Android app state machine.
-- `android/app/src/main/kotlin/com/rhymeai/app/service/AIService.kt` — Android `AIService`, provider/model enums, prompts, streaming, and API parsing.
-- `android/app/src/main/kotlin/com/rhymeai/app/data/repository/ProjectRepository.kt` — Android DataStore persistence.
-- `android/app/build.gradle.kts` — Android SDKs, Kotlin/Compose config, dependencies, and generated `BuildConfig` version metadata.
-- `Writers Block/Writers Block/Writers_BlockApp.swift` — iOS app entry and SwiftData container.
-- `Writers Block/Writers Block/ViewModels/EditorViewModel.swift` — iOS central state, autosave, project/template/rewrite/trash/prosody logic.
-- `Writers Block/Writers Block/Services/AIService.swift` — iOS multi-provider AI client and prompt parsing.
-- `Writers Block/Writers Block/Services/ProsodyAnalyzer.swift` — iOS stress/IPA preview logic.
-- `Writers Block/Writers Block/Views/EditorView.swift` — iOS main adaptive editor UI.
-- `Writers Block/Writers Block.xcodeproj/project.pbxproj` — Xcode project settings.
-- `shared/pronunciation/` — shared pronunciation fixtures and generated dictionary data.
-- `scripts/generate-pronunciation-assets.mjs` — native pronunciation asset generator.
+Run commands from this checkout unless a command changes directory explicitly.
 
-## Runtime/Tooling Preferences
+```sh
+./scripts/verify.sh
+```
 
-- Use the Gradle wrapper in `android/`; do not assume a globally installed Gradle.
-- Android uses Kotlin 2.3.20, Android Gradle plugin 8.9.1, Gradle 9.0.0, JVM 17, compile SDK 36, min SDK 26, target SDK 35.
-- iOS is SwiftUI/SwiftData under Xcode; a shared `Writers Block` scheme is checked in, but still confirm schemes and simulator destinations before command-line builds.
-- Android `android/local.properties` is local SDK configuration only. Runtime API keys are entered in-app and stored through encrypted storage. Never commit local secret files.
-- Keep native asset generation in `scripts/`; do not reintroduce a root web package just to run the app.
+The default harness builds and tests Android and builds/tests iOS. Override its confirmed simulator with `IOS_DESTINATION`; use `SKIP_ANDROID=1` or `SKIP_IOS=1` only for an intentionally scoped run and report that reduced scope.
 
-## Testing & QA
+```sh
+cd android
+./gradlew :app:assembleDebug
+./gradlew :app:compileDebugKotlin
+./gradlew :app:testDebugUnitTest
+./gradlew :app:lintDebug
+./gradlew :app:connectedDebugAndroidTest
+```
 
-- Android unit and instrumented tests live under `android/app/src/test/` and `android/app/src/androidTest/`.
-- iOS unit tests in `Writers BlockTests/` use Swift Testing (`@Test`, `#expect`) and cover rhyme context/model-picker behavior.
-- iOS UI tests in `Writers BlockUITests/` use XCTest/XCUIApplication and cover assistant sheet gestures, keyboard overlap, button state, launch, iPad layout, and launch performance.
-- Add tests for risky behavior and regressions: rhyme-context parsing, autosave/persistence, trash restore/delete, provider/model selection, rewrite application, export formatting, prosody previews, and error handling. Do not add trivial getter tests.
-- UI changes should be checked against `DESIGN.md`; include screenshots for PRs when visual behavior changes.
+```sh
+xcodebuild -list -project "Writers Block/Writers Block.xcodeproj"
+xcrun simctl list devices available
+xcodebuild build -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination '<confirmed destination>'
+xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination '<confirmed destination>' -only-testing:"Writers BlockTests"
+```
 
-## RhymeAI UI Polish Pass — Agent Conventions
+Regenerate shared native pronunciation assets with `node scripts/generate-pronunciation-assets.mjs`, then review both platform outputs and run their affected tests.
 
-- Working branch: `chore/ui-polish-2026-05`.
-- Design contract: `/Users/tylermanring/Documents/RhymeAI/DESIGN.md`.
-- Required commands:
-  - `./gradlew check`
-  - `./gradlew lint`
-  - `./gradlew detekt` — if configured; else skip silently.
-  - `./gradlew spotlessApply` — if configured; else skip silently.
-  - `./gradlew recordRoborazziDebug` — if Roborazzi is/becomes wired in.
-  - `./gradlew connectedDebugAndroidTest` — only if an emulator is available.
-- Commit messages: Conventional Commits with scopes `feat(ui)`, `fix(ui)`, `refactor(ui)`, `chore(ui)`, `test(ui)`, `style(ui)`.
-- Anti-patterns:
-  - Decorative blur outside chrome layers.
-  - Glass on solid content.
-  - Animations longer than 500 ms for utilitarian transitions.
-  - Spring damping < 0.3 outside explicit celebratory feedback.
-  - Custom buttons / switches / sliders duplicating stock Material 3.
-  - Stacked elevation > 3 layers.
-  - Gradients with > 3 stops.
-  - Text on glass without heavier text weight or scrim support.
-  - `contentDescription` equal to visible text.
-  - Skipping edge-to-edge via `WindowCompat.setDecorFitsSystemWindows(window, false)`.
-  - Mixing M2 fixed elevation/shadows on every card with M3 tonal surfaces.
+## End-to-End and Release Gates
+
+- Android: `./scripts/android-release-smoke.sh`, `./scripts/android-release-walkthrough.sh`, and `./scripts/android-release-visual-audit.sh`.
+- iOS: `./scripts/ios-release-smoke.sh`, `./scripts/ios-release-walkthrough.sh`, `./scripts/ios-release-visual-walkthrough.sh`, and `./scripts/ios-release-visual-audit.sh`.
+- Live dependencies: `./scripts/provider-live-smoke.sh`, `LOCAL_GGUF_PATH=/absolute/model.gguf ./scripts/android-local-model-smoke.sh`, and `./scripts/ios-cloudkit-readiness.sh`.
+- Overall readiness: `./scripts/final-signoff-status.sh`. A recorded or static gate does not substitute for a required live provider, device, inference, sync, signing, store, or upload observation.
+
+Release scripts may build signed artifacts using existing local configuration. Changing certificates, entitlements, provisioning, keystores, store records, versioning, or external release state requires explicit approval. Publishing, uploading, or destructive cleanup always requires action-time confirmation and an exact target inventory.
+
+For time-sensitive iOS, Android, App Store, Google Play, privacy, SDK, or publishing requirements, verify the current official Apple or Google documentation at execution time instead of freezing a volatile rule here.
+
+## Accessibility and Visual QA
+
+For user-interface work, verify the real surface on a phone first, then the relevant tablet/iPad size. Exercise portrait and landscape where supported, keyboard shown/hidden, light/dark authored appearances, large text or font scale, screen-reader labels, focus order, touch targets, contrast, increased contrast/transparency settings, and reduced motion. Preserve safe areas and gesture/navigation bars. Screenshots support visual review but do not prove interaction, accessibility, persistence, or inference.
+
+## Completion and Evidence
+
+Add focused regression tests for rhyme context, prosody, provider parsing/errors, cancellation, autosave, trash, secure migration, export, or adaptive UI when those behaviors change. Do not add tests that only repeat implementation details.
+
+Every completion report must name:
+
+1. the exact user scenario exercised;
+2. the exact invocation and checkout;
+3. the binary observable that passed or failed (exit code, process alive, UI state, persisted value, artifact signature/hash, or live response);
+4. the captured artifact path (log, screenshot, report, test result, APK/AAB, archive, or checksum);
+5. the target environment and any skipped or blocked dimension.
+
+Do not say “parity,” “release-ready,” “accessible,” “secure,” “live,” or “shipped” from a compile alone. Update `PARITY.md`, release notes, or sign-off records only with current evidence and keep known gaps explicit.

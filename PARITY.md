@@ -1,6 +1,6 @@
 # Parity Matrix
 
-This tracks behavior that must stay aligned between Android and iOS.
+This tracks behavior that must stay aligned between Android and iOS. Source contracts are distinct from verification evidence; current acceptance must name its exact source and artifact.
 
 ## Song recordings
 
@@ -11,6 +11,18 @@ This tracks behavior that must stay aligned between Android and iOS.
 - Apple backup manifests use schema 3 / authenticated RAI3 and require an updated Apple app; legacy RAI1/v1 and RAI2/v2 reads remain supported. Android still uses RAI1 and cannot read Apple RAI2/RAI3 backups; the existing cross-platform protocol gap is tracked separately in PR #36. Older Apple apps also cannot read Android backups containing the newly imported formats.
 - Native Mac follows the same import contract in its existing song-level library; that unfinished app is maintained in a separate worktree from the mobile targets.
 - Validation for this change is tracked separately from historical evidence below. Live cloud backup, store delivery, and native Mac UI acceptance are not established by source or build checks.
+
+## Writing and motion contract
+
+- Local is the initial provider and first setup option. Preserve valid saved provider/model choices; missing local weights open local setup rather than falling back to cloud.
+- Suggestion text is passive. Use line explicitly inserts; Keep for later does not edit the song. Insertion offers Undo without reversing subsequent unrelated typing.
+- Focus temporarily hides secondary controls and the assistant, then restores their prior visibility and preferences.
+- Templates use native bottom-origin sheets. Frequent writing, selection, keyboard, and provider-form changes are immediate. Rewrite targets stay highlighted without shimmer or waves; one progress indicator conveys loading.
+- Motion exists to explain feedback, state, or spatial origin. Reduced Motion removes app-owned travel and scale. Real recording amplitude and native direct manipulation remain useful feedback.
+
+## Historical verification boundary
+
+The checks below retain earlier evidence, including July and September 2026 work. They do not certify this combined candidate or establish current live provider, sync, store, or release acceptance. The recording contract above supersedes older statements implying universal backup-envelope compatibility.
 
 ## Provider and key handling
 
@@ -88,7 +100,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 ## Open parity checks
 
-- Local model live/inference path: Android has current emulator evidence for GGUF load and nonblank generation through `scripts/android-local-model-smoke.sh`; iOS local provider has a simulator/device smoke gate that passes when Apple Foundation Models either return text or surface an on-device availability reason.
+- Local model live/inference path: Android has historical emulator evidence for GGUF load and nonblank generation through `scripts/android-local-model-smoke.sh`; iOS local provider has a simulator/device smoke gate that passes when Apple Foundation Models either return text or surface an on-device availability reason.
 - CloudKit live sync matrix: Static readiness is scriptable, but create/edit/concurrent edit/offline/delete/trash propagation still needs the live iCloud-signed-in two-simulator/device matrix in `docs/CLOUDKIT_SYNC_CHECKLIST.md`.
 - Release walkthrough: iOS has a Release-configuration UI gate for create/save/export surface/graceful no-key AI/rewrite/relaunch persistence through `scripts/ios-release-walkthrough.sh`, a visual walkthrough screenshot gate for welcome, populated editor, export, assistant, and no-key AI/rewrite error states through `scripts/ios-release-visual-walkthrough.sh`, and a light/dark iPhone/iPad screenshot gate through `scripts/ios-release-visual-audit.sh`; Android has passing minified release APK walkthroughs for create/save/export surface/graceful no-key suggestion/force-stop/relaunch persistence through `scripts/android-release-walkthrough.sh`, live Gemini suggestion/rewrite preview through `scripts/android-release-live-gemini.sh`, and phone/tablet light/dark/large-font populated-surface screenshot coverage through `scripts/android-release-visual-audit.sh`.
 - OpenAI/Claude happy paths: `scripts/provider-live-smoke.sh` is wired for BYO-key suggestion, rewrite, and streaming checks on both platforms; the live run is pending supplied keys. No-key/status/error messages are unit-verified.

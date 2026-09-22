@@ -7,7 +7,11 @@
     <string name="editor_saved">Saved</string>
     <string name="editor_open_songs_drawer">Open songs drawer</string>
     <string name="editor_export">Export</string>
+    <string name="editor_share">Share</string>
     <string name="editor_settings">Settings</string>
+    <string name="editor_song_actions">Song actions</string>
+    <string name="editor_undo">Undo last edit</string>
+    <string name="editor_redo">Redo last edit</string>
     <string name="editor_untitled">Untitled</string>
     <string name="editor_placeholder">Start writing your lyrics here…</string>
 
@@ -16,6 +20,7 @@
     <string name="assistant_suggestions_caveat">AI-generated · review before use</string>
     <string name="assistant_suggest_next_line">Suggest Next Line</string>
     <string name="assistant_stop">Stop</string>
+    <string name="assistant_set_up_model">Set up model</string>
     <string name="assistant_underline_colors">Underline colors</string>
     <string name="assistant_rhyme_colors">Rhyme colors</string>
     <string name="assistant_rhyme_colors_caption">Matching colors belong to the same rhyme family. New rhyme families get the next available color.</string>

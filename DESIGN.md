@@ -1,143 +1,220 @@
 ---
-version: "alpha"
+version: "2026-08-04"
 name: "Writers Block"
-description: "A dark, lyric-first mobile design system for a songwriting assistant with Material You adaptation on Android and Liquid Glass depth on iOS."
-colors:
-  primary: "#4F46E5"
-  on-primary: "#FFFFFF"
-  primary-container: "#6366F1"
-  on-primary-container: "#FFFFFF"
-  primary-soft: "#818CF8"
-  secondary: "#C084FC"
-  on-secondary: "#FFFFFF"
-  tertiary: "#6EE7B7"
-  on-tertiary: "#003824"
-  tertiary-container: "#005235"
-  on-tertiary-container: "#90F7C4"
-  background: "#0A0A0A"
-  on-background: "#FFFFFF"
-  surface: "#0A0A0A"
-  surface-container-low: "#111111"
-  surface-container: "#1A1A1A"
-  surface-container-high: "#222222"
-  surface-container-highest: "#333333"
-  on-surface: "#FFFFFF"
-  on-surface-muted: "#B3B3B3"
-  on-surface-subtle: "#666666"
-  outline: "#333333"
-  outline-bright: "#FFFFFF"
-  inverse-surface: "#FFFFFF"
-  inverse-on-surface: "#0A0A0A"
-  error: "#FFB4AB"
-  on-error: "#690005"
-  success: "#6EE7B7"
-  warning: "#FFA000"
-  app-icon-coral: "#FF7A73"
-  app-icon-burgundy: "#4A000B"
-  app-icon-light: "#FFFFFF"
-  app-icon-ink: "#050505"
-  android-dynamic-background: "#2B0008"
-  android-dynamic-primary: "#FF8982"
-  android-dynamic-on-primary: "#4B000B"
-  ios-glass-surface: "#252837"
-  ios-glass-border: "#50577A"
-  ios-glass-icon-fill: "#303556"
-  syllable-1: "#6EE7B7"
-  syllable-2: "#93C5FD"
-  syllable-3: "#D8B4FE"
-  syllable-4-plus: "#FDA4AF"
-  rhyme-01: "#FCA5A5"
-  rhyme-02: "#FCD34D"
-  rhyme-03: "#86EFAC"
-  rhyme-04: "#7DD3FC"
-  rhyme-05: "#C4B5FD"
-  rhyme-06: "#F9A8D4"
-  rhyme-07: "#FDBA74"
-  rhyme-08: "#67E8F9"
-  rhyme-09: "#A7F3D0"
-  rhyme-10: "#E9D5FF"
-  rhyme-11: "#FEF08A"
-  rhyme-12: "#BEF264"
-  light-background: "#FBFBFE"
-  light-surface: "#FBFBFE"
-  light-surface-container: "#F0F0F5"
-  light-on-surface: "#1B1B1F"
-  light-on-surface-muted: "#46464F"
-  light-outline: "#767680"
-  light-outline-variant: "#C6C5D0"
+description: "A lyric-first, ink-and-paper mobile design system with three authored monochrome appearances."
+default-appearance: "ink"
+appearance:
+  storage-values:
+    ink: "Ink Editorial"
+    paper: "Paper Notebook"
+    graphite: "Graphite Night"
+  palettes:
+    ink:
+      color-scheme: "light"
+      background: "#FCFCF8"
+      on-background: "#050505"
+      surface: "#FCFCF8"
+      surface-container-low: "#F7F7F2"
+      surface-container: "#EFEFE9"
+      surface-container-high: "#E5E5DE"
+      surface-container-highest: "#DADAD2"
+      on-surface: "#050505"
+      on-surface-muted: "#4D4D48"
+      on-surface-subtle: "#666660"
+      outline: "#B5B5AD"
+      outline-strong: "#5E5E58"
+      action: "#050505"
+      on-action: "#FCFCF8"
+      caret: "#050505"
+      placeholder: "#5E5E58"
+      selection: "#DADAD2"
+      scrim: "rgba(5, 5, 5, 0.42)"
+    paper:
+      color-scheme: "light"
+      background: "#F3EEDF"
+      on-background: "#302E2A"
+      surface: "#F8F3E6"
+      surface-container-low: "#EFE8D7"
+      surface-container: "#E8E0CE"
+      surface-container-high: "#DDD4BF"
+      surface-container-highest: "#D2C8B0"
+      on-surface: "#302E2A"
+      on-surface-muted: "#5D574E"
+      on-surface-subtle: "#6E675C"
+      outline: "#B7AC94"
+      outline-strong: "#696257"
+      action: "#302E2A"
+      on-action: "#FFF9EB"
+      caret: "#302E2A"
+      placeholder: "#5D574E"
+      selection: "#D8CDB4"
+      scrim: "rgba(48, 46, 42, 0.42)"
+    graphite:
+      color-scheme: "dark"
+      background: "#171716"
+      on-background: "#F6F2E8"
+      surface: "#1C1C1B"
+      surface-container-low: "#20201E"
+      surface-container: "#232321"
+      surface-container-high: "#2B2B28"
+      surface-container-highest: "#343430"
+      on-surface: "#F6F2E8"
+      on-surface-muted: "#C4BEB3"
+      on-surface-subtle: "#9B968C"
+      outline: "#484843"
+      outline-strong: "#7B766D"
+      action: "#F6F2E8"
+      on-action: "#171716"
+      caret: "#F6F2E8"
+      placeholder: "#AAA49A"
+      selection: "#41413D"
+      scrim: "rgba(0, 0, 0, 0.55)"
+semantic-colors:
+  status-light:
+    error: "#B3261E"
+    on-error: "#FFFFFF"
+    success: "#047857"
+    on-success: "#FFFFFF"
+    warning: "#92400E"
+    on-warning: "#FFFFFF"
+    recording: "#B3261E"
+    on-recording: "#FFFFFF"
+  status-dark:
+    error: "#FFB4AB"
+    on-error: "#690005"
+    success: "#6EE7B7"
+    on-success: "#003824"
+    warning: "#FFB95B"
+    on-warning: "#4A2800"
+    recording: "#FF8A80"
+    on-recording: "#4A0006"
+  syllable-light:
+    one: "#047857"
+    two: "#0369A1"
+    three: "#7E22CE"
+    four-plus: "#B91C1C"
+  syllable-dark:
+    one: "#6EE7B7"
+    two: "#93C5FD"
+    three: "#D8B4FE"
+    four-plus: "#FDA4AF"
+  rhyme-light:
+    - "#B91C1C"
+    - "#92400E"
+    - "#166534"
+    - "#0369A1"
+    - "#6D28D9"
+    - "#BE185D"
+    - "#9A3412"
+    - "#155E75"
+    - "#047857"
+    - "#7E22CE"
+    - "#854D0E"
+    - "#3F6212"
+  rhyme-dark:
+    - "#FCA5A5"
+    - "#FCD34D"
+    - "#86EFAC"
+    - "#7DD3FC"
+    - "#C4B5FD"
+    - "#F9A8D4"
+    - "#FDBA74"
+    - "#67E8F9"
+    - "#A7F3D0"
+    - "#E9D5FF"
+    - "#FEF08A"
+    - "#BEF264"
 typography:
   display-lg:
-    fontFamily: "System Serif"
-    fontSize: 44px
-    fontWeight: "700"
-    lineHeight: 52px
-    letterSpacing: 0em
+    font-family: "System Serif"
+    font-size: 44px
+    font-weight: 700
+    line-height: 52px
   display-md:
-    fontFamily: "System Serif"
-    fontSize: 40px
-    fontWeight: "700"
-    lineHeight: 48px
-    letterSpacing: 0em
+    font-family: "System Serif"
+    font-size: 40px
+    font-weight: 700
+    line-height: 48px
   headline-lg:
-    fontFamily: "System Serif"
-    fontSize: 32px
-    fontWeight: "700"
-    lineHeight: 40px
-    letterSpacing: 0em
+    font-family: "System Serif"
+    font-size: 34px
+    font-weight: 700
+    line-height: 42px
   headline-md:
-    fontFamily: "System Serif"
-    fontSize: 28px
-    fontWeight: "700"
-    lineHeight: 36px
-    letterSpacing: 0em
+    font-family: "System Serif"
+    font-size: 28px
+    font-weight: 700
+    line-height: 36px
   title-lg:
-    fontFamily: "System Sans"
-    fontSize: 20px
-    fontWeight: "500"
-    lineHeight: 28px
-    letterSpacing: 0em
+    font-family: "System Sans"
+    font-size: 20px
+    font-weight: 500
+    line-height: 28px
   title-md:
-    fontFamily: "System Sans"
-    fontSize: 16px
-    fontWeight: "600"
-    lineHeight: 24px
-    letterSpacing: 0em
+    font-family: "System Sans"
+    font-size: 16px
+    font-weight: 600
+    line-height: 24px
   body-lg:
-    fontFamily: "System Sans"
-    fontSize: 16px
-    fontWeight: "400"
-    lineHeight: 24px
-    letterSpacing: 0em
+    font-family: "System Sans"
+    font-size: 16px
+    font-weight: 400
+    line-height: 24px
   lyric-body:
-    fontFamily: "System Sans"
-    fontSize: 16px
-    fontWeight: "400"
-    lineHeight: 28px
-    letterSpacing: 0em
+    font-family: "System Sans"
+    font-size: 17px
+    font-weight: 400
+    line-height: 27px
+  lyric-metadata:
+    font-family: "System Sans"
+    font-size: 13px
+    font-weight: 400
+    line-height: 16px
   body-md:
-    fontFamily: "System Sans"
-    fontSize: 14px
-    fontWeight: "400"
-    lineHeight: 20px
-    letterSpacing: 0em
+    font-family: "System Sans"
+    font-size: 14px
+    font-weight: 400
+    line-height: 20px
   body-sm:
-    fontFamily: "System Sans"
-    fontSize: 12px
-    fontWeight: "400"
-    lineHeight: 16px
-    letterSpacing: 0em
+    font-family: "System Sans"
+    font-size: 12px
+    font-weight: 400
+    line-height: 16px
   label-md:
-    fontFamily: "System Sans"
-    fontSize: 12px
-    fontWeight: "500"
-    lineHeight: 16px
-    letterSpacing: 0em
+    font-family: "System Sans"
+    font-size: 12px
+    font-weight: 500
+    line-height: 16px
   caption-mono:
-    fontFamily: "System Monospace"
-    fontSize: 12px
-    fontWeight: "400"
-    lineHeight: 16px
-    letterSpacing: 0em
+    font-family: "System Monospace"
+    font-size: 12px
+    font-weight: 400
+    line-height: 16px
+spacing:
+  unit: 4px
+  xs: 4px
+  sm: 8px
+  md: 12px
+  lg: 16px
+  xl: 20px
+  xxl: 24px
+  xxxl: 32px
+  jumbo: 48px
+  phi-rhythm:
+    tight: 8px
+    related: 13px
+    standard: 21px
+    section: 34px
+    primary: 55px
+  screen-horizontal: 24px
+  editor-horizontal: 21px
+  settings-horizontal: 21px
+  drawer-horizontal: 16px
+  assistant-panel: 20px
+  card-gap: 12px
+  section-gap: 16px
+  sheet-handle-area: 64px
+  editor-bottom-rest: 300px
 rounded:
   none: 0px
   xs: 6px
@@ -150,494 +227,253 @@ rounded:
   sheet: 22px
   pill: 28px
   app-icon: 22px
-  app-icon-shell: 30px
   full: 9999px
-spacing:
-  unit: 4px
-  xs: 4px
-  sm: 8px
-  md: 12px
-  lg: 16px
-  xl: 20px
-  xxl: 24px
-  xxxl: 32px
-  jumbo: 48px
-  screen-horizontal: 24px
-  editor-horizontal: 20px
-  drawer-horizontal: 16px
-  assistant-panel: 20px
-  card-gap: 12px
-  section-gap: 16px
-  sheet-handle-area: 64px
-  editor-bottom-rest: 300px
-proportion:
-  phi: 1.618
-  inverse-phi: 0.618
-  rhythm: "8px, 12/13px, 20/21px, 32/34px, 52/55px"
-  editor-assistant-drawer: "Size major editor, assistant, and drawer relationships with inverse-phi proportions before rounding to platform-friendly pixels."
-  exceptions: "Minimum touch targets and keyboard/safe-area offsets override phi: 48px web, 48dp Android, 44pt iOS."
-opacity:
-  disabled: 0.40
-  placeholder: 0.20
-  subtle-text: 0.50
-  muted-text: 0.60
-  outline-variant: 0.10
-  glass-border: 0.12
-  glass-tint-low: 0.05
-  glass-tint-medium: 0.08
-  glass-tint-strong: 0.35
-  scrim: 0.42
-  rhyme-text: 0.90
-elevation:
-  flat: 0px
-  android-icon-tonal: 4px
-  android-icon-shadow: 6px
-  drawer-tonal: 8px
-  ios-brand-glow-radius: 22px
-  ios-brand-glow-y: 10px
-  ios-drawer-shadow-radius: 26px
-  ios-drawer-shadow-x: 10px
-  fab-shadow-radius: 12px
-  fab-shadow-y: 4px
-shadows:
-  ios-brand-glow: "0px 10px 22px rgba(79, 70, 229, 0.32)"
-  ios-drawer: "10px 0px 26px rgba(0, 0, 0, 0.35)"
-  ios-primary-action: "0px 4px 12px rgba(79, 70, 229, 0.26)"
-  android-surface-resting: "0px 6px 12px rgba(0, 0, 0, 0.24)"
+texture:
+  authored-static-only: true
+  paper: "Flat warm-ivory color with no rules, fibers, grain, or other texture."
+  graphite-grain-opacity-max: 0.025
+  redraw-rule: "Compose Graphite grain once per resolved size from cached deterministic drawing primitives or low-opacity gradients only; never use raster texture, or any texture bitmap, at runtime or as an asset; typing must not regenerate texture."
+  adaptive-rule: "Remove texture under reduced transparency or increased contrast."
 motion:
   fast: "160ms"
+  disclosure: "200ms"
   standard: "260ms"
-  provider-expand: "260ms"
-  assistant-present: "260ms"
-  assistant-settle: "420ms"
-  rewrite-chip: "260ms"
-  easing-standard: "ease-in-out"
-  spring-standard: "response 260ms, damping 0.88"
+  settle: "420ms"
+  easing-standard: "cubic-bezier(0.23, 1, 0.32, 1)"
   spring-settle: "response 420ms, damping 0.80"
-  spring-expressive: "response 400ms, damping 0.76"
-  purpose:
-    phi-ladder: "Fast, standard/present, and settle tiers use a golden-ratio ladder: 160ms ×φ ≈260ms ×φ ≈420ms."
-    feedback-dismiss: "160ms for immediate feedback, press states, and dismissals."
-    state-dialog: "260ms for ordinary state changes, settings growth, dialogs, assistant panels, sheets, drawers, and rewrite chips."
-    drag-settle: "420ms for drag release and spring settle with damping 0.80; expressive mic choreography preserves damping 0.76."
-    avoid: "Avoid decorative hover motion and staggered choreography that does not clarify state or origin."
-effects:
-  ios-glass-material: "ultra-thin translucent material"
-  ios-glass-border-width: 1px
-  android-outline-width: 1px
-  underline-stroke: 3px
-  unblock-scribble-stroke: 1.6px
+  reduced-motion: "Remove app-owned travel and scale; honor live system changes."
+  reading: "Typing, selection actions, provider-form changes, and keyboard changes are immediate; keep text stationary."
+  loading: "Use one progress indicator and a static selection highlight; no shimmer, waves, or repeated skeleton pulses."
 components:
-  app-screen:
-    backgroundColor: "{colors.background}"
-    textColor: "{colors.on-background}"
-    typography: "{typography.body-lg}"
-  welcome-title:
-    backgroundColor: "transparent"
-    textColor: "{colors.primary}"
-    typography: "{typography.display-lg}"
-  welcome-subtitle:
-    backgroundColor: "transparent"
-    textColor: "{colors.on-surface-muted}"
-    typography: "{typography.body-lg}"
-  android-welcome-card:
-    backgroundColor: "{colors.surface-container-low}"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.xxl}"
-    padding: 20px 16px
-  ios-glass-card:
-    backgroundColor: "rgba(255, 255, 255, 0.06)"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  icon-tile:
-    backgroundColor: "rgba(79, 70, 229, 0.15)"
-    textColor: "{colors.primary-soft}"
-    rounded: "{rounded.md}"
-    size: 44px
-  top-bar:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.on-surface-muted}"
-    typography: "{typography.label-md}"
-    height: 64px
-    titleRule: "Editor top bar persistently shows the current song name, or \"Untitled Song\" when empty, with save status as a compact adjacent indicator; the large in-scroll title field remains the editor."
-  editor-title-field:
-    backgroundColor: "transparent"
-    textColor: "{colors.on-background}"
-    typography: "{typography.headline-lg}"
-  lyric-editor:
-    backgroundColor: "transparent"
-    textColor: "{colors.on-background}"
-    typography: "{typography.lyric-body}"
-  primary-action-fab:
-    backgroundColor: "{colors.primary}"
-    textColor: "{colors.on-primary}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.pill}"
-    height: 56px
-    padding: 14px 20px
-  assistant-sheet:
-    backgroundColor: "{colors.surface-container-low}"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.none}"
-  assistant-primary-button:
-    backgroundColor: "{colors.primary}"
-    textColor: "{colors.on-primary}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.lg}"
-    height: 48px
-    padding: 14px
-  drawer-panel:
-    backgroundColor: "{colors.surface-container-low}"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.none}"
-    width: 360px
-  drawer-row:
-    backgroundColor: "{colors.surface-container}"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 12px 14px
-  drawer-row-active:
-    backgroundColor: "rgba(79, 70, 229, 0.18)"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 12px 14px
-  search-field:
-    backgroundColor: "{colors.surface-container-low}"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    height: 46px
-    padding: 0px 12px
-  settings-card:
-    backgroundColor: "rgba(255, 255, 255, 0.06)"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.sheet}"
-    padding: 16px
-  compact-info-pill:
-    backgroundColor: "{colors.surface-container-high}"
-    textColor: "{colors.on-surface-muted}"
-    typography: "{typography.caption-mono}"
-    rounded: "{rounded.xs}"
-    padding: 4px 8px
-  primary-container-surface:
-    backgroundColor: "{colors.primary-container}"
-    textColor: "{colors.app-icon-ink}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  primary-container-label-on-dark:
-    backgroundColor: "{colors.background}"
-    textColor: "{colors.on-primary-container}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  secondary-action:
-    backgroundColor: "{colors.secondary}"
-    textColor: "{colors.inverse-on-surface}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.lg}"
-    height: 48px
-    padding: 14px
-  secondary-label-on-dark:
-    backgroundColor: "{colors.background}"
-    textColor: "{colors.on-secondary}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  tertiary-status:
-    backgroundColor: "{colors.tertiary}"
-    textColor: "{colors.on-tertiary}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  tertiary-container-status:
-    backgroundColor: "{colors.tertiary-container}"
-    textColor: "{colors.on-tertiary-container}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.lg}"
-    padding: 12px
-  high-surface-panel:
-    backgroundColor: "{colors.surface-container-highest}"
-    textColor: "{colors.on-surface-muted}"
-    typography: "{typography.body-sm}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  subtle-text-on-light:
-    backgroundColor: "{colors.inverse-surface}"
-    textColor: "{colors.on-surface-subtle}"
-    typography: "{typography.body-sm}"
-  divider:
-    backgroundColor: "{colors.outline}"
-    textColor: "{colors.on-surface-muted}"
-    height: 1px
-  glass-edge:
-    backgroundColor: "{colors.outline-bright}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 1px
-  inverse-toast:
-    backgroundColor: "{colors.inverse-surface}"
-    textColor: "{colors.inverse-on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 12px 16px
-  error-banner:
-    backgroundColor: "{colors.error}"
-    textColor: "{colors.on-error}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.lg}"
-    padding: 12px
-  success-pill:
-    backgroundColor: "{colors.success}"
-    textColor: "{colors.on-tertiary}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  warning-pill:
-    backgroundColor: "{colors.warning}"
-    textColor: "{colors.inverse-on-surface}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  app-icon-android:
-    backgroundColor: "{colors.app-icon-coral}"
-    textColor: "{colors.app-icon-burgundy}"
-    rounded: "{rounded.app-icon}"
-    size: 80px
-  app-icon-ios:
-    backgroundColor: "{colors.app-icon-light}"
-    textColor: "{colors.app-icon-ink}"
-    rounded: "{rounded.app-icon}"
-    size: 82px
-  android-dynamic-screen:
-    backgroundColor: "{colors.android-dynamic-background}"
-    textColor: "{colors.android-dynamic-primary}"
-    typography: "{typography.body-lg}"
-  android-dynamic-fab:
-    backgroundColor: "{colors.android-dynamic-primary}"
-    textColor: "{colors.android-dynamic-on-primary}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.pill}"
-    height: 56px
-    padding: 14px 20px
-  ios-glass-panel:
-    backgroundColor: "{colors.ios-glass-surface}"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  ios-glass-panel-edge:
-    backgroundColor: "{colors.ios-glass-border}"
-    textColor: "{colors.on-surface}"
-    height: 1px
-  ios-glass-icon-tile:
-    backgroundColor: "{colors.ios-glass-icon-fill}"
-    textColor: "{colors.on-surface}"
-    rounded: "{rounded.xxl}"
-    size: 44px
-  syllable-one-underline:
-    backgroundColor: "{colors.syllable-1}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 3px
-  syllable-two-underline:
-    backgroundColor: "{colors.syllable-2}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 3px
-  syllable-three-underline:
-    backgroundColor: "{colors.syllable-3}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 3px
-  syllable-four-plus-underline:
-    backgroundColor: "{colors.syllable-4-plus}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 3px
-  rhyme-swatch-01:
-    backgroundColor: "{colors.rhyme-01}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-02:
-    backgroundColor: "{colors.rhyme-02}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-03:
-    backgroundColor: "{colors.rhyme-03}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-04:
-    backgroundColor: "{colors.rhyme-04}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-05:
-    backgroundColor: "{colors.rhyme-05}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-06:
-    backgroundColor: "{colors.rhyme-06}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-07:
-    backgroundColor: "{colors.rhyme-07}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-08:
-    backgroundColor: "{colors.rhyme-08}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-09:
-    backgroundColor: "{colors.rhyme-09}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-10:
-    backgroundColor: "{colors.rhyme-10}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-11:
-    backgroundColor: "{colors.rhyme-11}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-12:
-    backgroundColor: "{colors.rhyme-12}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  light-screen:
-    backgroundColor: "{colors.light-background}"
-    textColor: "{colors.light-on-surface}"
-    typography: "{typography.body-lg}"
-  light-card:
-    backgroundColor: "{colors.light-surface}"
-    textColor: "{colors.light-on-surface-muted}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  light-container:
-    backgroundColor: "{colors.light-surface-container}"
-    textColor: "{colors.light-on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  light-divider:
-    backgroundColor: "{colors.light-outline}"
-    textColor: "{colors.app-icon-ink}"
-    height: 1px
-  light-subtle-divider:
-    backgroundColor: "{colors.light-outline-variant}"
-    textColor: "{colors.light-on-surface}"
-    height: 1px
+  shared-writing-surface:
+    appearances: "Ink is crisp; Paper is flat warm ivory; Graphite uses static grain."
+    states: "default, reduced-transparency, increased-contrast"
+  opaque-bordered-surface:
+    fill: "appearance.surface or appearance.surface-container"
+    border: "appearance.outline, 1dp Android / 1pt iOS"
+    states: "rest, raised, focused, pressed, disabled"
+  appearance-selector:
+    options: "Ink, Paper, Graphite"
+    geometry: "42dp visible track inside a 48dp minimum touch target on Android"
+    states: "unselected, selected, pressed, focused, disabled"
+  primary-action:
+    fill: "appearance.action"
+    foreground: "appearance.on-action"
+    height: "55dp Android"
+    states: "enabled, pointer-hover, pressed, focused, disabled, loading"
+  writers-marks:
+    elements: "UnBlock scribble, focused-title underline, saved flourish"
+    rule: "Deterministic monochrome paths tied to real focus, save, or press state; omit transient motion when animations are disabled."
+  analysis-color-exception:
+    palettes: "semantic-colors rhyme-light/rhyme-dark and syllable-light/syllable-dark"
+    states: "off, light-appearance, dark-appearance"
 ---
 
-## Overview
+## 1. Product direction
 
-Writers Block is a dark, focused songwriting workspace. The interface should feel like a quiet writing room with a powerful assistant close at hand: black canvas, soft luminous accents, large serif song titles, restrained controls, and color only where it helps the writer understand rhythm, rhyme, or action.
+Writers Block is a focused songwriting workspace whose visual identity comes from ink, paper, and the shipped black-and-white WB icon. The interface should feel like a quiet writing desk: clear editorial hierarchy, restrained neutral chrome, readable lyric text, and a powerful assistant close at hand.
 
-The product is shared across Android and iOS, but each platform speaks its native language. Android uses Material 3 structure and can harmonize with Material You dynamic colors. iOS uses a glass-forward visual model with translucent panels, soft borders, and native-feeling depth. The shared identity is not a rigid color match; it is a shared hierarchy, rhythm, and lyric-first mood.
+The visual system has three authored appearances. Ink Editorial is the default and the canonical app identity. Paper Notebook adds a warm paper-and-pencil character. Graphite Night is the low-glare dark counterpart. Missing or invalid stored values always resolve to Ink Editorial.
 
-## Colors
+Ordinary navigation, cards, controls, selected states, focus treatment, and primary actions use only the active appearance's neutral ink and paper tokens. Chroma is reserved for rhyme, syllable, success, warning, error, and active-recording meaning. A semantic color must never be reused as brand decoration.
 
-The canonical palette is near-black with indigo, purple, and emerald accents. Black is the dominant working surface. Indigo is the main action color, purple supports brand expression, emerald marks successful or local states, and a coral app-icon family provides warmth when dynamic color or brand imagery is present.
+The pencil icon, low UnBlock scribble, focused-title underline, and saved flourish form one restrained hand-made signature. Standard icons, the WB logo, text, and controls remain crisp. Do not add handwriting fonts, hand-drawn replicas of native controls, or ornamental sketch marks disconnected from interaction state.
 
-Android enables Material You dynamic color by default in `Theme.kt`, so the authored indigo, purple, and emerald palette is the non-dynamic baseline; on Android 12+ it can be replaced by the user's wallpaper palette. When that happens, keep the same tonal relationships: a very dark canvas, a high-contrast primary action, subdued card outlines, and muted secondary text.
+## 2. Appearance and color
 
-iOS should bias toward black, indigo, purple, and translucent blue-gray glass. Glass surfaces should be visible through border, tint, blur, and shadow rather than through solid fill. Avoid opaque cards on iOS unless the content is modal and needs firm legibility.
+### Ink Editorial
 
-Rhyme and syllable colors are functional tokens, not decoration. Syllable underlines use four stable colors by syllable count. Rhyme colors cycle through a broader palette so matching colors imply matching rhyme families. When Rhyme Highlight is on, syllable cues render as underlines beneath each word; when Rhyme Highlight is off, Syllable Coloring instead tints each whole word (semibold) by its syllable count, mirroring rhyme highlight's word coloring so the foreground color is never double-claimed.
+Ink Editorial uses paper white (#FCFCF8), near-black ink (#050505), grayscale containers, thin neutral rules, square-to-soft geometry, serif song identity, and solid near-black actions. It is light, crisp, and closest to the WB icon. It is the launch and fallback appearance.
 
-## Typography
+### Paper Notebook
 
-The typographic voice pairs expressive serif display text with plain system sans text. Song titles, welcome headlines, and large editor placeholders use bold serif type to make writing feel personal and editorial. Controls, labels, settings, metadata, and assistant content use system sans for scan speed and platform familiarity.
+Paper Notebook uses a flat warm ivory (#F3EEDF), graphite text (#302E2A), and opaque warm surfaces. It has no rules, fibers, grain, or other texture. Controls remain native and precisely drawn.
 
-Lyric text needs more breathing room than standard body copy. Use a 16px size with a 28px line height for writing and highlighted lyric overlays. This keeps colored rhyme and syllable cues readable without making the editor feel crowded.
+### Graphite Night
 
-Secondary and support text — dialog captions, sheet metadata, and inline labels — sits at a 13px caption size. This is the upper half of the 12/13px caption tier in the φ-rounded rhythm above, kept one step below the 14px control text so supporting copy reads as quieter without dropping to the 12px fine-print rung.
+Graphite Night uses soft black paper (#171716), chalk-white text and actions (#F6F2E8), opaque charcoal surfaces, neutral borders, and restrained authored static grain. It is dark without becoming glossy or blue-tinted.
 
-Letter spacing stays neutral. Do not tighten display text; the heavy serif forms already carry enough character.
+### Analysis presentation and semantic color
 
-## Layout
+Ink Editorial and Paper Notebook use the semantic light palettes. Graphite Night uses the semantic dark palettes. The effective app appearance, never the operating-system theme by itself, selects the analysis, status, system-bar, caret, and selection contrast variant.
 
-The welcome screen is centered and calm. It should lead with the app icon, then the Writers Block wordmark, then a short explanation, then three large actions. On compact screens, vertical spacing can compress, but the page should still feel centered rather than packed.
+Analysis has two presentation styles. Color is the compatibility default: rhyme colors identify matching sound families, while syllable colors communicate counts of one, two, three, and four-or-more. Ink Marks is hue-independent: deterministic solid, dashed, dotted, and dash-dot underlines identify rhyme families, while regular, medium, semibold, and bold word weights communicate syllable counts. The two Ink Marks encodings coexist when both analyses are enabled, and text without an active analysis cue retains the normal lyric-body treatment.
 
-The editor is the primary workspace. It uses a fixed top toolbar, a full-screen dark writing area, 20px to 24px side padding, a large title field, and a long bottom rest area so the last lyric line can settle comfortably above controls and keyboards.
+Settings and help copy use presentation-neutral feature names such as Rhyme Families and Syllable Guide, then explain the currently selected Color or Ink Marks encoding. Success, warning, error, and recording colors continue to communicate state. These functional exceptions to monochrome chrome must remain stable across Android and iOS.
 
-Assistant controls live in a bottom sheet on phones and a persistent side panel on large screens. The sheet should feel like it rises from the working surface, not like a separate page. The drawer for projects enters from the left, covers the full height, and contains search first, new song second, then recent songs.
+In Color mode, when Rhyme Families is on, rhyme-family color owns the word foreground and a simultaneous syllable cue uses an underline. When Rhyme Families is off and Syllable Guide is on, the syllable token may own the semibold word foreground. Never assign two competing semantic foreground colors to one word.
 
-Spacing should follow a 4px base with 8px, 12px, 16px, 20px, 24px, 32px, and 48px as the normal visible rhythm. Avoid odd one-off gaps unless they solve a specific safe-area or keyboard problem.
+## 3. Typography, layout, and shape
 
-The spacing table describes relative rhythm, not exact per-platform pixels; shipped values live in Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt` and iOS `RhymeAITokens` in `Writers Block/Writers Block/Views/LiquidGlassSupport.swift`, with dp/pt scales tuned independently.
+Song titles, welcome headlines, and major writing identity use the native system serif. Lyrics and controls use the native system sans. Technical metadata and compact measurements use the native system monospace. No bundled display or handwriting font is part of this system.
 
-Major structure should use φ=1.618 as a practical proportion rule, especially the relationship between the lyric editor and assistant or drawer surfaces. Size supporting panels with inverse-φ relationships to the editor, then round to the shared visible rhythm: 8px, 12/13px, 20/21px, 32/34px, and 52/55px. This ratio is a hierarchy tool, not a rigid grid; minimum touch targets and system geometry override it: 48px on web, 48dp on Android, 44pt on iOS, plus any keyboard or safe-area offsets needed to keep writing usable.
+Lyric text starts at the lyric-body token and keeps generous line height. The platform text-size setting is authoritative: type tokens are starting metrics, not fixed caps. Supporting text should remain one clear hierarchy step below controls without dropping below platform-readable sizes.
 
-## Elevation & Depth
+The editor is the primary workspace. It uses a fixed top toolbar, a full writing surface, 20px to 24px horizontal inset, a large title field, and a long bottom rest area so the last lyric line can settle above controls and keyboards. Assistant controls rise from the bottom on phones and persist beside the editor at regular iPad widths. At 1100pt and wider, iPad uses a collapsible 320pt songs sidebar, flexible editor, and 380pt assistant column. Narrower regular-width iPad layouts collapse the songs sidebar while preserving the editor and assistant; compact multitasking widths use the phone flow. The project drawer enters from the left and remains full height.
 
-Depth is subtle. Android surfaces mostly use Material tonal elevation, 1px outlines, and dark containers. iOS surfaces use material blur, translucent tint, a 1px light border, and soft shadows.
+Spacing follows the 4px base and the visible 8, 12, 16, 20, 24, 32, and 48px rhythm. Major editor, assistant, and drawer relationships may use the inverse golden ratio before rounding to platform-friendly values. Safe areas, keyboards, readable measure, and minimum touch targets override proportional geometry.
 
-On iOS 26+, native `.glassEffect` renders Liquid Glass with its own edge; the explicit 1px light border applies to the pre-iOS-26 `.ultraThinMaterial` fallback in `LiquidGlassSurfaceModifier`, while soft shadows remain part of the broader iOS surface treatment where callers apply them.
+The shape language is editorial and square-to-soft, not bubbly. Inner controls use 6px to 12px radii, repeated rows and cards use 12px to 16px, grouped sheets may use 18px to 22px, and floating actions may use the 28px pill. Drawers remain square to the screen edge.
 
-The app icon can glow. Primary action buttons can cast a small accent shadow. Drawers can cast a directional shadow to reinforce lateral motion. Standard editor content should remain flat so the lyric text stays dominant.
+Android dp and iOS pt values may differ where native feel requires it. Shipped platform token files define that unit conversion; they must preserve the relative hierarchy in this document.
 
-Scrims should be dark and functional. Use them to explain modality, not to create a separate dramatic layer.
+## 4. Material, texture, depth, and motion
 
-## Motion
+App-owned content surfaces are opaque. Large panels, cards, sheets, drawers, and settings groups use the active surface fill plus a one-unit neutral border. Depth comes from tonal separation, the border, and at most one restrained neutral shadow. Do not use decorative blur, translucent tint, accent glow, or stacked elevation on content.
 
-Motion must explain cause, state, or spatial origin. Use 180ms for immediate feedback and dismissals, 260ms for ordinary state changes and dialogs, 340ms when assistant panels, sheets, or drawers present from their physical origin, and 420ms for drag release settle. Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
+Graphite Night may use authored static procedural grain only. Generate it exclusively from cached drawing primitives or low-opacity gradients, cached by resolved size and appearance. Do not use raster texture, or any texture bitmap, at runtime or as an asset. Do not use random values, timers, animated grain, or per-frame noise. Typing and caret movement must not invalidate texture generation.
 
-## Shapes
+Ink Editorial and Paper Notebook remain flat and untextured. Graphite grain stays at or below 2.5%. Texture is a background layer, clipped to its surface, and never overlays text or interactive content.
 
-The shape language is soft but not bubbly. Cards and rows use 16px corners. Settings and glass grouped surfaces can use 18px to 22px. Floating actions use a 28px pill. App icon artwork keeps a 22px inner corner with a 30px glass shell on iOS.
+Motion must explain feedback, state, or spatial origin. Use the shared 160ms feedback/dismissal and 260ms occasional-surface tiers with ease-out timing. Native sheets retain platform timing, focus management, and gestures. Templates rise from the bottom and dismiss toward the bottom. Complete an exit before removing its surface; do not approximate completion with a fixed wall-clock delay. Appearance selection applies immediately.
 
-The rounded table describes shape intent, not exact per-platform pixels; shipped radii live in Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt` and iOS `RhymeAITokens` in `Writers Block/Writers Block/Views/LiquidGlassSupport.swift`, with platform-specific dp/pt tuning.
+Frequent writing controls, selection actions, provider-form swaps, and keyboard-driven changes apply immediately. Reading text stays stationary. A static highlight identifies the rewrite target; one progress indicator conveys loading. Do not add shimmer, waves, repeated skeleton pulses, or celebratory scale. Real recording amplitude, progress, and direct manipulation remain useful state feedback. Reduced Motion removes app-owned travel and scale and takes effect when the system setting changes. Texture never moves.
 
-Drawers are squared to the screen edge. Bottom sheets are full-width and full-height when active, with the drag handle carrying the affordance instead of a rounded container edge.
+## 5. Components
 
-## Components
+These shared primitives are the required styling seams. Product screens must consume them instead of creating screen-local palettes, textures, borders, selectors, or action treatments.
 
-Component dimensions and radii below express relative rhythm and intent, not exact per-platform pixels. Shipped per-platform values are authoritative in Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt` and iOS `RhymeAITokens` in `Writers Block/Writers Block/Views/LiquidGlassSupport.swift`, and their dp/pt scales intentionally differ where native feel requires it.
+### Shared writing surface
 
-Welcome cards are large repeated actions. Android cards are outlined Material surfaces. iOS cards are translucent glass surfaces with tinted icon tiles. Both should share the same information order: icon, title, supporting text, and an optional trailing affordance.
+Use the shared writing surface for the editor, Welcome, Settings, assistant full-screen surfaces, Projects and Trash, Templates, and other large sheets.
 
-The UnBlock action uses a pencil icon and a scribble underline under the word "UnBlock." It should read as a creative writing action, not as a magic or automation action. The scribble is part of the brand vocabulary and should stay low, thin, and hand-marked.
+- Default: fill the entire surface with appearance.background and place any Graphite texture draw behind content.
+- Ink Editorial: render only the crisp base.
+- Paper Notebook: render only the flat warm-ivory base color.
+- Graphite Night: render cached, nonrandom low-opacity grain.
+- Reduced Transparency or Increased Contrast: remove texture and retain the solid base.
+- Text-size changes, typing, selection, caret movement, and scrolling must not regenerate the texture.
 
-Assistant panels are dense operational surfaces. Use segmented controls for density, sliders for complexity, switches for feature toggles, help buttons for explanations, and a single strong primary action for suggestions. Keep each control aligned with its label so the panel feels practical rather than decorative.
+### Opaque bordered surface
 
-Project drawers should be utilitarian and stable. Search is the first control. Create New Song is the second control. Recent Songs is the main content area. Import belongs at the bottom. The drawer slides in from the left and dismisses back to the left.
+This primitive is the single seam for cards, grouped settings, suggestion surfaces, rewrite surfaces, assistant panels, drawers, and sheets. The historical iOS liquidGlassSurface helper may remain as an API name, but for these appearances it must resolve to this opaque primitive.
 
-Settings use grouped glass or outlined containers with smooth content growth when provider-specific sections change. Provider switching should feel like a panel expanding in place, not like the whole dialog snaps to a new size after content appears.
+- Rest: appearance.surface or appearance.surface-container with a one-unit appearance.outline border. Interactive control boundaries use appearance.outline-strong so they retain at least 3:1 contrast.
+- Raised: move one tonal step toward surface-container-high and add at most one neutral shadow.
+- Focused: preserve the native focus indicator and strengthen the border to appearance.outline-strong where the platform calls for it.
+- Pressed: use the native pressed treatment or a neutral 8% to 12% state overlay; do not introduce a semantic hue.
+- Disabled: retain structure, reduce emphasis using platform-native disabled opacity, and keep text readable.
 
-## Do's and Don'ts
+System-owned chrome may keep its native neutral material behavior when legibility requires it. App-owned content never layers translucent material over an authored writing surface.
 
-Do keep the lyric editor visually quiet.
+### Appearance selector
 
-Do preserve platform-native behavior: Material 3 and dynamic color on Android, Liquid Glass and native sheets on iOS.
+The Appearance selector is a native or already-established three-option segmented control labeled Ink, Paper, and Graphite. It is the sole appearance chooser and appears at the top of General settings on Android and near the top of Settings on iOS.
 
-Do use serif type for song identity and sans type for controls.
+- Unselected: neutral transparent or low-container background with readable secondary ink.
+- Selected: appearance.action fill with appearance.on-action text, or the platform's equivalent high-contrast selected segment.
+- Pressed: native pressed feedback without delayed persistence.
+- Focused: visible platform focus treatment; keyboard and switch-control navigation must identify the option.
+- Disabled: use native disabled semantics and retain the selected-value announcement.
 
-Do keep rhyme and syllable colors semantically stable.
+Selection updates the presented Settings surface and the editor behind it in the same transaction. It does not depend on provider credentials or the existing Save Settings action.
 
-Do let actions and panels animate from their physical origin: bottom sheets rise, drawers slide from the left, selected chips emerge from the bottom.
+### Primary action
 
-Don't turn the app into a bright productivity dashboard.
+The primary action primitive is used for UnBlock, suggestion generation, and the highest-priority confirmation in a surface. It uses appearance.action and appearance.on-action.
 
-Don't use decorative gradients or extra glow in the editor.
+- Enabled: solid neutral fill, native label/icon layout, and no accent glow.
+- Pointer hover: apply a neutral 8% state overlay only on pointer-capable devices.
+- Pressed: native pressed feedback or a neutral 12% overlay; preserve the control's dimensions.
+- Focused: keep the native keyboard or switch-control focus indicator visible.
+- Disabled: use the platform disabled state; do not communicate disabled state by color alone.
+- Loading: preserve width and height, expose an accessible progress state, and keep the progress indicator legible on the action fill.
 
-Don't make Android and iOS visually identical at the expense of platform conventions.
+Secondary actions use an outline, a low-container fill, or a text treatment from the same neutral palette. Native Material 3, SwiftUI, and UIKit buttons, switches, sliders, pickers, fields, and sheets remain the implementation base.
 
-Don't use magic-wand imagery for UnBlock or context controls.
+### Analysis presentation
 
-Don't let panel transitions snap, jump, or recenter after content has already appeared.
+The shared analysis primitive owns rhyme and syllable visualization. It is the only content primitive allowed to cycle through multiple hues, and only while Color is selected.
+
+- Off: lyric text uses appearance.on-background with the normal lyric-body weight.
+- Color on a light appearance: use rhyme-light and syllable-light.
+- Color on a dark appearance: use rhyme-dark and syllable-dark.
+- Color with rhyme plus syllable: rhyme owns the foreground; syllable owns the underline.
+- Ink Marks rhyme: use a deterministic solid, dashed, dotted, or dash-dot underline for each rhyme family.
+- Ink Marks syllables: use regular for zero or unknown, then medium, semibold, and bold for increasing syllable buckets.
+- Ink Marks rhyme plus syllables: the underline pattern and word weight render simultaneously; ordinary text stays normal weight.
+- Status: use the corresponding light or dark error, success, warning, or recording pair.
+
+Analysis and status colors never tint navigation, selection chrome, ordinary icons, primary actions, cards, or decorative backgrounds.
+
+### Provider selection
+
+Local is the first provider option and the default when no valid preference is stored. Gemini, OpenAI, and Claude follow it as explicit alternatives. Preserve any valid saved provider and its compatible model. Local setup remains available without an API key; missing local weights must lead to setup rather than an automatic cloud fallback.
+
+### Screen-level mappings
+
+The top bar uses background/surface and muted ink, with the song name and compact save status always readable. The lyric editor uses background, on-background, caret, and placeholder explicitly; UIKit-backed editing must receive those resolved values rather than inherit the device theme. UIKit owns ordinary text-selection fill because it exposes no supported per-text-view selection-background API; app-owned rewrite selection uses the resolved selection token explicitly.
+
+Project rows, Settings groups, suggestion cards, and rewrite chips use the opaque bordered surface. Active rows use a stronger neutral container or border, not a decorative hue. The UnBlock pencil and scribble remain the only hand-marked treatment.
+
+Suggestion text is a passive reading surface. Each result exposes **Use line** and **Keep for later** as separate native actions; keeping a result never edits lyrics. Insertion briefly marks the inserted text using a neutral highlight and offers **Undo**. The insertion feedback expires or clears on the next content edit so its Undo action cannot reverse unrelated typing.
+
+The editor exposes a labeled **Focus** toggle with a clear exit state. Focus temporarily hides secondary controls, analysis markings, and the assistant while preserving their previous preferences and visibility for restoration. It keeps lyrics, selection, save feedback, and the exit control available. The tablet assistant control names its visible open or close action. Focus changes apply immediately. Editor geometry changes directly so lyrics do not travel or animate while reflowing; typing and text decoration remain stationary.
+
+
+## 6. Platform behavior and persistence
+
+### Android
+
+Android uses Material 3 components with three authored ColorSchemes, restrained shared Shapes, and a LocalAppAppearance value at the root. Wallpaper-derived color adaptation is disabled because it would violate the authored monochrome contract.
+
+AppAppearance has enum cases INK, PAPER, and GRAPHITE with stable serialized values ink, paper, and graphite. ProjectRepository persists the value under the Preferences DataStore key app_appearance. This key is appearance-specific and must never reuse CURRENT_THEME_KEY, which stores the song's lyrical theme. Missing or invalid values resolve to INK.
+
+MainViewModel owns the loaded appearance, exposes one immediate setter, and leaves a successfully selected in-memory appearance visible if persistence later fails. RhymeAITheme receives the appearance above the rest of the composition. Runtime system-bar icon brightness follows AppAppearance.isDark. The authored startup splash uses Ink until persisted state is available.
+
+### iOS
+
+iOS uses AppAppearanceStyle raw values ink, paper, and graphite. The app root stores the raw value with @AppStorage under appAppearanceStyle, resolves invalid values to ink, injects the resolved style through the SwiftUI environment, and publishes the binding used by Settings.
+
+Ink Editorial and Paper Notebook request the light color scheme. Graphite Night requests the dark color scheme. UIKit lyric editing receives explicit foreground, caret, and placeholder colors from the same resolved palette; native selection fill remains platform-owned, while app-owned rewrite selection uses the resolved selection token.
+
+SwiftUI and UIKit controls remain native. App-owned panels use the opaque bordered surface. Native platform material may appear only in system-owned chrome, must remain neutral, and must not replace the authored paper or graphite surface.
+
+On both platforms an appearance change is immediate, persistent, offline, and isolated from song data, cloud backup data, provider credentials, and the song-level lyrical theme field.
+
+## 7. Accessibility and adaptive constraints
+
+Accessibility outranks texture and aesthetic preference.
+
+- Contrast: base foreground/background pairs must meet WCAG 2.2 AA: 4.5:1 for normal text, 3:1 for large text, icons, focus indicators, and control boundaries. Validate semantic colors against the effective light or dark base.
+- Increased Contrast: remove texture, use outline-strong for important boundaries, and avoid low-opacity-only states.
+- Reduced Transparency: remove texture and resolve every app-owned surface to its opaque base. No information may depend on translucency.
+- Reduced Motion: remove nonessential travel, spring overshoot, and decorative crossfades. Preserve immediate state feedback and spatial continuity without animation.
+- Text size: support Android font scaling and iOS Dynamic Type through accessibility sizes. Controls and preview cards reflow vertically before truncating labels; fixed heights must not clip text.
+- Touch: preserve at least 48dp targets on Android and 44pt targets on iOS, including segmented options, preview cards, help affordances, and close controls.
+- Screen readers: provide concise control labels, selected values, progress state, and grouping. Do not duplicate visible labels as redundant descriptions.
+- Keyboard and switch access: preserve native traversal order and visible focus for selector options, buttons, fields, sheets, and drawers.
+- Color independence: controls and status messages use text, icons, shape, or state semantics in addition to color. Analysis color overlays never alter the underlying lyric content or reading order.
+- Edge to edge: safe-area and keyboard handling remain intact in every appearance. System bars must retain readable icons against the resolved appearance.
+
+Test the writing flow with low vision, motion sensitivity, large text, screen-reader use, temporary one-handed use, and bright-light or low-light situational constraints. A failure that blocks writing, selecting an appearance, or recovering an error blocks completion unless explicitly accepted as design debt.
+
+## 8. Do, do not, verification, and debt
+
+Do keep the lyric editor visually quiet and let typography carry the hierarchy.
+
+Do use Ink Editorial as the default and fallback.
+
+Do use shared semantic tokens and primitives before screen-specific styling.
+
+Do preserve native behavior and geometry while aligning both platforms to the same authored appearance.
+
+Do keep semantic analysis and status colors stable and contrast-aware.
+
+Do verify immediate switching, relaunch persistence, keyboard/caret contrast, system bars, Settings, assistant, projects, and the editor in all three appearances.
+
+Do not add decorative chroma to ordinary chrome.
+
+Do not enable wallpaper-derived palettes for authored appearances.
+
+Do not put translucent or blurred app content over paper.
+
+Do not use raster paper or graphite texture, or any texture bitmap, at runtime or as an asset. Do not add animated grain, random per-frame noise, or texture above glyphs.
+
+Do not replace native buttons, switches, sliders, pickers, fields, or sheets with hand-drawn replicas.
+
+Do not let appearance state modify a project, provider configuration, cloud data, or the lyrical theme field.
+
+Capture Android and iOS editor and Settings screenshots for Ink Editorial, Paper Notebook, and Graphite Night after the final implementation edit. Visual sign-off requires checking all interaction states, text-size reflow, reduced motion, reduced transparency, increased contrast, semantic colors, and texture placement on the actual built surfaces.
+
+Accepted design debt at contract approval: none. Platform startup constraint: the static launch surface is Ink because persisted appearance state is not available during earliest startup; the runtime surface must adopt the stored appearance as soon as root state resolves.

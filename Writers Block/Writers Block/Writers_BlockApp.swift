@@ -81,15 +81,30 @@ private struct ModelContainerBootstrap {
     let usesCloudBackedStore: Bool
 }
 
+
+final class ModelDownloadAppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        guard identifier == GGUFDownloadManager.backgroundIdentifier else {
+            completionHandler()
+            return
+        }
+        GGUFDownloadManager.shared.backgroundCompletionHandler = completionHandler
+    }
+}
+
 @main
 struct Writers_BlockApp: App {
+    @UIApplicationDelegateAdaptor(ModelDownloadAppDelegate.self) private var downloadDelegate
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppAppearanceStyle.storageKey)
     private var appearanceRawValue = AppAppearanceStyle.ink.rawValue
-    @AppStorage(AnalysisPresentationStyle.storageKey)
-    private var analysisPresentationRawValue = AnalysisPresentationStyle.color.rawValue
     @StateObject private var viewModel = EditorViewModel(backupService: BackupService.shared)
     @StateObject private var persistenceState: AppPersistenceState
+    @StateObject private var ggufDownloadManager = GGUFDownloadManager.shared
 
     private let sharedModelContainer: ModelContainer?
 
@@ -100,18 +115,10 @@ struct Writers_BlockApp: App {
     private var appearanceBinding: Binding<AppAppearanceStyle> {
         Binding(
             get: { appearance },
-            set: { appearanceRawValue = $0.rawValue }
-        )
-    }
-
-    private var analysisPresentation: AnalysisPresentationStyle {
-        AnalysisPresentationStyle.resolve(analysisPresentationRawValue)
-    }
-
-    private var analysisPresentationBinding: Binding<AnalysisPresentationStyle> {
-        Binding(
-            get: { analysisPresentation },
-            set: { analysisPresentationRawValue = $0.rawValue }
+            set: { newAppearance in
+                guard newAppearance != appearance else { return }
+                appearanceRawValue = newAppearance.rawValue
+            }
         )
     }
 
@@ -150,18 +157,15 @@ struct Writers_BlockApp: App {
             }
             .environmentObject(viewModel)
             .environmentObject(persistenceState)
+            .environmentObject(ggufDownloadManager)
             .environment(\.appAppearanceStyle, appearance)
             .environment(\.appAppearanceBinding, appearanceBinding)
-            .environment(\.analysisPresentationStyle, analysisPresentation)
-            .environment(\.analysisPresentationBinding, analysisPresentationBinding)
             .preferredColorScheme(appearance.preferredColorScheme)
             .tint(appearance.palette.action)
-            .modifier(UITestDynamicTypeSizeModifier())
             .safeAreaInset(edge: .top) {
                 persistenceDegradedBanner
             }
             .task {
-                UITestFlags.seedCustomGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
             }
             .onChange(of: scenePhase) { _, phase in
@@ -192,6 +196,7 @@ struct Writers_BlockApp: App {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+            .foregroundStyle(appearance.palette.primaryInk)
             .background(appearance.palette.surface)
         }
     }
@@ -204,8 +209,7 @@ struct Writers_BlockApp: App {
         ])
         let logger = Logger(subsystem: "ShaydeTree.Writers-Block", category: "storage")
 
-        let isHostedUnitTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-in-memory-store") || isHostedUnitTest {
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-in-memory-store") {
             let inMemory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
             do {
                 return ModelContainerBootstrap(
@@ -272,17 +276,6 @@ struct Writers_BlockApp: App {
                 cloudSyncStatus: AppPersistenceState.initialCloudSyncStatus(usesCloudBackedStore: false),
                 usesCloudBackedStore: false
             )
-        }
-    }
-}
-
-private struct UITestDynamicTypeSizeModifier: ViewModifier {
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if UITestFlags.isEnabled(UITestFlags.accessibilityTextSize) {
-            content.environment(\.dynamicTypeSize, .accessibility3)
-        } else {
-            content
         }
     }
 }

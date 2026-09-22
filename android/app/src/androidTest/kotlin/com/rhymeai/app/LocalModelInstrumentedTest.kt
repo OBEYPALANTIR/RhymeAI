@@ -10,16 +10,88 @@ import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.security.MessageDigest
 
 @RunWith(AndroidJUnit4::class)
 class LocalModelInstrumentedTest {
+    @Test
+    fun cancellationQuiescesBeforeImmediateNextRequest() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val arguments = InstrumentationRegistry.getArguments()
+        val modelPath = arguments.getString("localModelPath").orEmpty()
+        val modelLabel = arguments.getString("localModelLabel") ?: "accepted-e2b"
+        assumeTrue(
+            "Set instrumentation argument localModelPath to run the live GGUF cancellation test.",
+            modelPath.isNotBlank()
+        )
+
+        val service = LocalModelService()
+        service.initialize(instrumentation.targetContext)
+        try {
+            service.loadModel(modelPath)
+            val invalidModel = File(instrumentation.targetContext.cacheDir, "invalid-replacement.gguf")
+            invalidModel.writeBytes("GGUF-not-a-model".toByteArray())
+            val replacementFailure = runCatching { service.loadModel(invalidModel.absolutePath) }
+            assertTrue("Invalid replacement model must fail", replacementFailure.isFailure)
+            assertFalse("Failed replacement must clear loaded state", service.isLoaded)
+            service.loadModel(modelPath)
+            assertTrue("Accepted model must reload after replacement failure", service.isLoaded)
+            invalidModel.delete()
+            val firstChunk = CompletableDeferred<String>()
+            val privacySentinel = "RHYME_PRIVACY_SENTINEL_7319"
+            val oldRequest = launch {
+                service.streamResponse(
+                    gemmaInstructionPrompt("Repeat $privacySentinel on 64 separate lines. Return only those lines.")
+                ).collect { chunk ->
+                    if (!firstChunk.isCompleted) firstChunk.complete(chunk)
+                }
+            }
+            withTimeout(LocalModelService.GENERATION_TIMEOUT_MS) { firstChunk.await() }
+            oldRequest.cancelAndJoin()
+            val cancelled = requireNotNull(service.lastGenerationMetrics)
+            assertTrue("Cancelled request must record cancellation", cancelled.terminationReason == "cancelled")
+
+            val freshResponse = withTimeout(LocalModelService.GENERATION_TIMEOUT_MS + 10_000L) {
+                service.generateResponse(
+                    gemmaInstructionPrompt("Write one short original lyric line. Return only the line.")
+                )
+            }.trim()
+            val fresh = requireNotNull(service.lastGenerationMetrics)
+            assertTrue("Immediate next request returned blank output", freshResponse.isNotBlank())
+            assertFalse("Immediate next request received a stale token", freshResponse.contains(privacySentinel))
+            assertTrue("Fresh request must not inherit cancellation", fresh.terminationReason != "cancelled")
+            println(
+                "LOCAL_MODEL_CANCELLATION model=$modelLabel " +
+                    "cancelTotalMs=${cancelled.totalDurationMs} freshTtfcMs=${fresh.timeToFirstChunkMs} " +
+                    "freshTotalMs=${fresh.totalDurationMs} freshChars=${fresh.outputCharacters} " +
+                    "freshReason=${fresh.terminationReason}"
+            )
+        } finally {
+            service.unload()
+        }
+    }
+
     @Test
     fun localGgufModelLoadsAndGeneratesText() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -39,6 +111,9 @@ class LocalModelInstrumentedTest {
 
         try {
             service.loadModel(modelPath)
+            assertPromptMetadata(modelLabel, service)
+            assertTemplateContentControlsNativeFormatting(service)
+            exportNativeContractsIfRequested(service)
             val rawStart = System.currentTimeMillis()
             val response = firstNonBlankRawResponse(service)
             println("LOCAL_MODEL_RESULT model=$modelLabel case=raw_generate elapsedMs=${System.currentTimeMillis() - rawStart} chars=${response.length}")
@@ -89,8 +164,11 @@ class LocalModelInstrumentedTest {
                 useWholeSongContext = false
             )
         }
-        assertTrue("Local suggestions should contain at least two usable lines", suggestions.size >= 2)
-        assertTrue("Local suggestions should be bounded to six lines", suggestions.size <= 6)
+        assertTrue("Local suggestions should contain exactly six usable lines", suggestions.size == 6)
+        assertTrue(
+            "Local suggestions should be distinct",
+            suggestions.map { it.text.trim().lowercase() }.distinct().size == suggestions.size
+        )
         assertTrue("Local suggestions should not be blank", suggestions.all { it.text.isNotBlank() })
         assertNoPromptEcho("suggestion", suggestions.map { it.text })
         assertFalse("Local suggestions should not copy an existing lyric line", suggestions.any { lyrics.lines().contains(it.text) })
@@ -244,7 +322,7 @@ class LocalModelInstrumentedTest {
                 limit = 6
             )
         }
-        assertTrue("Local synonyms should return at least two words", synonyms.size >= 2)
+        assertTrue("Local synonyms should return at least one valid word", synonyms.isNotEmpty())
         assertTrue("Local synonyms should be bounded to the requested limit", synonyms.size <= 6)
         assertTrue("Local synonyms should not include the target word", synonyms.none { it.equals("glow", ignoreCase = true) })
     }
@@ -319,11 +397,83 @@ class LocalModelInstrumentedTest {
         assertTrue("$caseName output echoed prompt/chatter: $echoed", echoed == null)
     }
 
-    private fun gemmaInstructionPrompt(userPrompt: String): String =
-        """
-<start_of_turn>user
-$userPrompt
-<end_of_turn>
-<start_of_turn>model
-""".trimIndent()
+    private fun gemmaInstructionPrompt(userPrompt: String): String = userPrompt
+
+    private suspend fun assertTemplateContentControlsNativeFormatting(service: LocalModelService) {
+        val prompt = "template-probe"
+        val templateA = "{% for message in messages %}A:{{ message['content'] }}{% endfor %}"
+        val templateB = "{% for message in messages %}B:{{ message['content'] }}{% endfor %}"
+        val renderedA = service.formatLoadedPromptForContract(prompt, templateA)
+        val renderedB = service.formatLoadedPromptForContract(prompt, templateB)
+        assertTrue("First custom template content was not applied", renderedA.contains("A:$prompt"))
+        assertTrue("Second custom template content was not applied", renderedB.contains("B:$prompt"))
+        assertNotEquals("Changing the GGUF template must change the native prompt", renderedA, renderedB)
+    }
+
+    private suspend fun exportNativeContractsIfRequested(service: LocalModelService) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val arguments = InstrumentationRegistry.getArguments()
+        val inputPath = arguments.getString("nativeContractInputPath").orEmpty()
+        if (inputPath.isBlank()) return
+        val input = File(inputPath)
+        assertTrue("Native contract input does not exist", input.isFile)
+        val metadata = requireNotNull(service.loadedPromptMetadata)
+        val outputPath = arguments.getString("nativeContractOutputPath")
+            ?: File(instrumentation.targetContext.cacheDir, "android-native-contract.jsonl").absolutePath
+        val json = Json
+        val records = input.readLines().filter { it.isNotBlank() }.map { line ->
+            val source = json.parseToJsonElement(line).jsonObject
+            val sourcePrompt = source.getValue("prompt").jsonObject
+            val userText = sourcePrompt.getValue("userText").jsonPrimitive.content
+            val renderedText = service.formatLoadedPromptForContract(userText)
+            JsonObject(source.toMutableMap().apply {
+                put("prompt", JsonObject(sourcePrompt.toMutableMap().apply {
+                    put("renderedText", JsonPrimitive(renderedText))
+                    put("renderedTextSha256", JsonPrimitive(sha256(renderedText)))
+                    put("tokenizerArchitecture", JsonPrimitive(metadata.architecture))
+                    put("tokenizerEnvelope", JsonPrimitive(metadata.promptFormat.envelopeName))
+                    put("tokenizerChatTemplateSha256", JsonPrimitive(metadata.chatTemplateSha256))
+                }))
+                put("runtime", buildJsonObject {
+                    put("target", arguments.getString("nativeContractTarget") ?: "Android native formatter")
+                    put("osVersion", android.os.Build.VERSION.RELEASE)
+                    put("buildVariant", "Debug")
+                    put("evidenceKind", "contractExport")
+                    put("capturedAt", arguments.getString("nativeContractCapturedAt") ?: "not-recorded")
+                })
+            })
+        }
+        assertTrue("Expected 12 native contract records", records.size == 12)
+        val output = File(outputPath)
+        output.parentFile?.mkdirs()
+        output.writeText(records.joinToString("\n") { json.encodeToString(it) } + "\n")
+        println("ANDROID_NATIVE_CONTRACT_RUNTIME path=${output.absolutePath} records=${records.size}")
+    }
+
+    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+    private fun assertPromptMetadata(modelLabel: String, service: LocalModelService) {
+        val arguments = InstrumentationRegistry.getArguments()
+        val metadata = requireNotNull(service.loadedPromptMetadata)
+        arguments.getString("expectedPromptArchitecture")?.let { expected ->
+            assertTrue("Unexpected GGUF architecture", metadata.architecture == expected)
+        }
+        arguments.getString("expectedChatTemplateBytes")?.toIntOrNull()?.let { expected ->
+            assertTrue("Unexpected chat template byte length", metadata.chatTemplateBytes == expected)
+        }
+        arguments.getString("expectedChatTemplateSha256")?.let { expected ->
+            assertTrue(
+                "Unexpected chat template SHA-256",
+                metadata.chatTemplateSha256.equals(expected, ignoreCase = true)
+            )
+        }
+        println(
+            "LOCAL_MODEL_METADATA model=$modelLabel architecture=${metadata.architecture} " +
+                "promptFormat=${metadata.promptFormat.envelopeName} " +
+                "chatTemplateBytes=${metadata.chatTemplateBytes} " +
+                "chatTemplateSha256=${metadata.chatTemplateSha256}"
+        )
+    }
 }

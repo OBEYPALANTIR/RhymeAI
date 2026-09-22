@@ -329,7 +329,7 @@ struct SongRecordingsView: View {
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .contentShape(Rectangle())
         .onTapGesture {
-            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
+            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.state) {
                 if expandedFolders.contains(folder.id) {
                     expandedFolders.remove(folder.id)
                 } else {
@@ -503,4 +503,3 @@ private struct PlayPauseButton: View {
         .accessibilityLabel(rowIsPlaying ? "Pause recording" : "Play recording")
     }
 }
-

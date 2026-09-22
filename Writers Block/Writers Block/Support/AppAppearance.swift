@@ -48,6 +48,16 @@ enum AppAppearanceStyle: String, CaseIterable, Hashable, Identifiable {
         ]
     }
 
+    var analysisSyllableHexValues: [UInt32] {
+        if usesDarkAnalysisPalette {
+            return [0x6EE7B7, 0x93C5FD, 0xD8B4FE, 0xFDA4AF]
+        }
+        return [0x047857, 0x0369A1, 0x7E22CE, 0xB91C1C]
+    }
+
+    var editorWordCountHexValue: UInt32 { analysisSyllableHexValues[0] }
+    var editorSyllableCountHexValue: UInt32 { analysisSyllableHexValues[3] }
+
     var statusSuccessHexValue: UInt32 { usesDarkAnalysisPalette ? 0x6EE7B7 : 0x047857 }
     var statusWarningHexValue: UInt32 { usesDarkAnalysisPalette ? 0xFFB95B : 0x92400E }
     var statusErrorHexValue: UInt32 { usesDarkAnalysisPalette ? 0xFFB4AB : 0xB3261E }
@@ -193,9 +203,9 @@ struct AppWritingBackground: View {
         ZStack {
             appearance.palette.canvas
 
-            if textureEnabled {
-                AppearanceTexture(appearance: appearance)
-                    .equatable()
+            if textureEnabled, appearance == .graphite {
+                CachedAppearanceTextureShape(appearance: appearance, layer: .graphiteGrain)
+                    .stroke(appearance.palette.primaryInk.opacity(0.018), lineWidth: 0.75)
             }
         }
         .clipped()
@@ -205,31 +215,7 @@ struct AppWritingBackground: View {
     }
 }
 
-private struct AppearanceTexture: View, Equatable {
-    let appearance: AppAppearanceStyle
-
-    @ViewBuilder
-    var body: some View {
-        switch appearance {
-        case .ink:
-            EmptyView()
-        case .paper:
-            ZStack {
-                CachedAppearanceTextureShape(appearance: appearance, layer: .paperRules)
-                    .stroke(appearance.palette.primaryInk.opacity(0.055), lineWidth: 1)
-                CachedAppearanceTextureShape(appearance: appearance, layer: .paperFibers)
-                    .stroke(appearance.palette.primaryInk.opacity(0.024), lineWidth: 0.5)
-            }
-        case .graphite:
-            CachedAppearanceTextureShape(appearance: appearance, layer: .graphiteGrain)
-                .stroke(appearance.palette.primaryInk.opacity(0.018), lineWidth: 0.75)
-        }
-    }
-}
-
 enum AppearanceTextureLayer: Hashable {
-    case paperRules
-    case paperFibers
     case graphiteGrain
 }
 
@@ -303,45 +289,9 @@ final class AppearanceTexturePathCache: @unchecked Sendable {
 
     private static func makePath(layer: AppearanceTextureLayer, in rect: CGRect) -> CGPath {
         switch layer {
-        case .paperRules:
-            paperRulesPath(in: rect)
-        case .paperFibers:
-            paperFibersPath(in: rect)
         case .graphiteGrain:
             graphiteGrainPath(in: rect)
         }
-    }
-
-    private static func paperRulesPath(in rect: CGRect) -> CGPath {
-        let path = CGMutablePath()
-        var y: CGFloat = 28
-
-        while y < rect.height {
-            path.move(to: CGPoint(x: rect.minX, y: rect.minY + y))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + y))
-            y += 28
-        }
-
-        return path
-    }
-
-    private static func paperFibersPath(in rect: CGRect) -> CGPath {
-        let path = CGMutablePath()
-        var row = 0
-        var y: CGFloat = 13
-
-        while y < rect.height {
-            var x = CGFloat(11 + (row % 4) * 13)
-            while x < rect.width {
-                path.move(to: CGPoint(x: rect.minX + x, y: rect.minY + y))
-                path.addLine(to: CGPoint(x: rect.minX + x + 0.7, y: rect.minY + y + 5))
-                x += 54
-            }
-            row += 1
-            y += 38
-        }
-
-        return path
     }
 
     private static func graphiteGrainPath(in rect: CGRect) -> CGPath {

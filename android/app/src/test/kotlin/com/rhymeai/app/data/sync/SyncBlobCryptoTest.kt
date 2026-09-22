@@ -21,6 +21,13 @@ class SyncBlobCryptoTest {
     }
 
     @Test
+    fun reportedEnvelopeSizeMatchesSealedBytes() {
+        val envelope = SyncBlobCrypto.seal(payload, passphrase)
+
+        assertEquals(envelope.size.toLong(), SyncBlobCrypto.envelopeSizeForPlaintext(payload.size.toLong()))
+    }
+
+    @Test
     fun opensSharedRAI1GoldenFixture() {
         val envelope = Base64.getDecoder().decode(goldenEnvelopeBase64)
         assertArrayEquals(goldenPlaintext, SyncBlobCrypto.open(envelope, passphrase))

@@ -26,6 +26,14 @@ object DesignTokens {
         val golden = 52.dp
     }
 
+    object Rhythm {
+        val tight = 8.dp
+        val related = 13.dp
+        val standard = 21.dp
+        val section = 34.dp
+        val primary = 55.dp
+    }
+
     object Typography {
         // De-facto caption size used across dialogs, sheets, and the editor for
         // secondary/support text — the 13px rung of the φ-rounded 12/13px caption tier.
@@ -42,24 +50,29 @@ object DesignTokens {
     }
 
     object Editor {
-        val horizontalPadding = 24.dp
+        val horizontalPadding = Rhythm.standard
         val bottomRest = 300.dp
         val keyboardOffset = 72.dp
         val estimatedCharacterWidth = 8.5.dp
-        val lyricMeasureLineHeight = 28.dp
-        val lyricFontSize = 16.sp
-        val lyricLineHeight = 28.sp
+        val lyricMeasureLineHeight = 27.dp
+        val lyricFontSize = 17.sp
+        val lyricLineHeight = 27.sp
+        val titleFontSize = 34.sp
+        val titleLineHeight = 42.sp
+        val metadataFontSize = 13.sp
+        val metadataLineHeight = 16.sp
         val syllableUnderlineGap = 2.dp
         val syllableUnderlineWidth = 3.dp
     }
 
     object EditorChrome {
         val saveStatusStrokeWidth = 2.dp
-        val statsEndPadding = 4.dp
-        val fabSize = 56.dp
+        val fabSize = Rhythm.primary
         val micRecordingWidth = 216.dp
-        val unBlockExtendedWidth = 150.dp
-        val unBlockWordmarkWidth = 76.dp
+        val micRecordingRestWidth = fabSize
+        val unBlockExtendedWidth = 144.dp
+        val unBlockScribbleWidth = 68.dp
+        val unBlockHorizontalPadding = Rhythm.standard
         val recordingContentGap = 8.dp
         val recordingContentStartPadding = 16.dp
         val recordingMeterHeight = 24.dp
@@ -100,26 +113,18 @@ object DesignTokens {
     }
 
     object Motion {
-        // Golden-ratio duration ladder: 0.16 ×φ ≈0.26 ×φ ≈0.42 (φ=1.618). Utilitarian tiers ≤0.50s.
+        // Feedback is brief; occasional surfaces preserve spatial origin.
         const val feedbackMillis = 160
+        const val pageFadeMillis = 140
         const val dismissMillis = 160
+        const val disclosureMillis = 200
         const val standardMillis = 260
-        const val dialogMillis = 260
-        const val assistantPresentMillis = 260
         const val sheetPresentMillis = 260
         const val drawerPresentMillis = 260
-        const val dragSettleMillis = 420
-        const val rewriteShimmerMillis = 1200
 
-        val standardEasing: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
-        val emphasizedEasing: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
-        val exitEasing: Easing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
-
-        fun <T> standardSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
-            dampingRatio = 0.88f,
-            stiffness = Spring.StiffnessMediumLow,
-            visibilityThreshold = visibilityThreshold
-        )
+        val standardEasing: Easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
+        val emphasizedEasing: Easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
+        val exitEasing: Easing = standardEasing
 
         fun <T> settleSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
             dampingRatio = 0.80f,
@@ -127,20 +132,6 @@ object DesignTokens {
             visibilityThreshold = visibilityThreshold
         )
 
-        /**
-         * Expressive spring for the mic↔pill choreography AND the UnBlock FAB
-         * fall-down, so both travel on one clock the way iOS does.
-         *
-         * Tuned to match the iOS reference `spring(response: 0.40, dampingFraction: 0.76)`.
-         * SwiftUI's `response` maps to Compose stiffness via stiffness = (2π / response)²
-         * ≈ 247, and `dampingFraction` maps directly to `dampingRatio`. Result is a
-         * ~0.4s glide with a subtle settle — no hard snap — identical in feel to iOS.
-         * (The previous StiffnessMedium = 1500 gave a ~0.16s snap that desynced from iOS.)
-         */
-        fun <T> expressiveSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
-            dampingRatio = 0.76f,
-            stiffness = 247f,
-            visibilityThreshold = visibilityThreshold
-        )
+
     }
 }

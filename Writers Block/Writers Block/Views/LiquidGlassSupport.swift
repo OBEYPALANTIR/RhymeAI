@@ -36,8 +36,6 @@ enum RhymeAITokens {
         static let drawerMinWidth: CGFloat = 300
         static let drawerMaxWidth: CGFloat = 360
         static let drawerHorizontalMargin: CGFloat = 36
-        static let projectSidebarWidth: CGFloat = 320
-        static let threeColumnWorkspaceMinWidth: CGFloat = 1_100
         static let assistantColumnWidth: CGFloat = 380
         static let assistantReadableWidth: CGFloat = 420
         static let assistantSheetHandleArea: CGFloat = 72
@@ -48,25 +46,21 @@ enum RhymeAITokens {
     }
 
     enum Motion {
-        // Golden-ratio duration ladder: 0.16 ×φ ≈0.26 ×φ ≈0.42 (φ=1.618). Utilitarian tiers ≤0.50s.
+        // Keep routine feedback brief; only a released drag needs a settling spring.
         static let feedbackDuration: TimeInterval = 0.16
-        static let stateDuration: TimeInterval = 0.260
+        static let stateDuration: TimeInterval = 0.20
         static let presentationDuration: TimeInterval = 0.26
         static let settleDuration: TimeInterval = 0.420
 
-        static let feedback: Animation = .easeInOut(duration: feedbackDuration)
-        static let dismiss: Animation = .easeInOut(duration: feedbackDuration)
-        static let state: Animation = .easeInOut(duration: stateDuration)
-        static let dialog: Animation = .easeInOut(duration: stateDuration)
-        static let presentation: Animation = .spring(response: presentationDuration, dampingFraction: 0.88)
+        static let feedback: Animation = .timingCurve(0.23, 1, 0.32, 1, duration: feedbackDuration)
+        static let dismiss: Animation = feedback
+        static let state: Animation = .timingCurve(0.23, 1, 0.32, 1, duration: stateDuration)
+        static let dialog: Animation = .timingCurve(0.23, 1, 0.32, 1, duration: presentationDuration)
+        static let presentation: Animation = .timingCurve(0.32, 0.72, 0, 1, duration: presentationDuration)
         static let settle: Animation = .spring(response: settleDuration, dampingFraction: 0.80)
 
-        /// Expressive spring for the mic↔pill choreography and the UnBlock FAB
-        /// fall-down — a ~0.4s glide with a subtle settle (no hard snap). Drives the
-        /// pill stretch, glyph crossfade, and FAB fall on one clock.
-        /// Android equivalent: `DesignTokens.Motion.expressiveSpring()`
-        /// (dampingRatio 0.76, stiffness 247 ≈ (2π / 0.40)²).
-        static let expressive: Animation = .spring(response: 0.40, dampingFraction: 0.76)
+        // The recording control changes shape once to expose its timer and stop action.
+        static let recording: Animation = .timingCurve(0.23, 1, 0.32, 1, duration: presentationDuration)
     }
 }
 
@@ -75,7 +69,7 @@ struct RhymeAIPressButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .opacity(configuration.isPressed ? 0.86 : 1)
             .animation(reduceMotion ? nil : RhymeAITokens.Motion.feedback, value: configuration.isPressed)
     }
@@ -105,7 +99,9 @@ extension View {
 /// `withAnimation` wrapper that honours reduce-motion. Pass the environment value from the call site.
 func withRhymeAnimation<Result>(_ animation: Animation?, reduceMotion: Bool, _ body: () throws -> Result) rethrows -> Result {
     if reduceMotion {
-        return try body()
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        return try withTransaction(transaction, body)
     }
     return try withAnimation(animation, body)
 }
@@ -132,13 +128,6 @@ private struct LiquidGlassSurfaceModifier: ViewModifier {
                 surface,
                 in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             )
-            .overlay {
-                if let tint {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(tint.opacity(fallbackOpacity))
-                        .allowsHitTesting(false)
-                }
-            }
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(border, lineWidth: 1)

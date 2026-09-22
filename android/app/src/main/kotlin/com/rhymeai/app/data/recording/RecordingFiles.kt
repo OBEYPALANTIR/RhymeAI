@@ -1,5 +1,6 @@
 package com.rhymeai.app.data.recording
 
+import com.rhymeai.app.data.sync.SyncIdentity
 import java.io.File
 import java.util.Locale
 
@@ -19,10 +20,29 @@ internal object RecordingFiles {
         File(filesDir, MEMOS_TRASH_ROOT_DIR)
 
     fun memoDirectory(filesDir: File, projectId: String): File =
-        File(memosRoot(filesDir), projectId)
+        safeProjectDirectory(memosRoot(filesDir), projectId)
 
     fun trashDirectory(filesDir: File, projectId: String): File =
-        File(trashRoot(filesDir), projectId)
+        safeProjectDirectory(trashRoot(filesDir), projectId)
+
+    fun memoFile(filesDir: File, projectId: String, fileName: String): File {
+        SyncIdentity.validateFileName(fileName)
+        return requireDescendant(memosRoot(filesDir), File(memoDirectory(filesDir, projectId), fileName))
+    }
+
+    private fun safeProjectDirectory(root: File, projectId: String): File {
+        SyncIdentity.validateProjectId(projectId)
+        return requireDescendant(root, File(root, projectId))
+    }
+
+    private fun requireDescendant(root: File, candidate: File): File {
+        val canonicalRoot = root.canonicalFile.toPath()
+        val canonicalCandidate = candidate.canonicalFile.toPath()
+        require(canonicalCandidate != canonicalRoot && canonicalCandidate.startsWith(canonicalRoot)) {
+            "Recording path is outside its storage root"
+        }
+        return canonicalCandidate.toFile()
+    }
 
     /**
      * Strip characters that are illegal in file paths on Android (FAT32 + ext4),

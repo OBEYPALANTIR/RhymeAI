@@ -13,8 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -32,10 +35,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenuItem
@@ -62,6 +61,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -77,6 +77,10 @@ import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeScheme
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAppAppearance
+import com.rhymeai.app.ui.theme.outlineStrongColorFor
+import com.rhymeai.app.ui.theme.placeholderColorFor
+import com.rhymeai.app.ui.theme.subtleColorFor
 import com.rhymeai.app.util.BeatGrid
 import com.rhymeai.app.util.SyllableCounter
 
@@ -86,21 +90,27 @@ fun AssistantPanel(
     viewModel: MainViewModel,
     rhymeContext: RhymeContext,
     modifier: Modifier = Modifier,
-    onSuggestionInserted: () -> Unit = {}
+    onSuggestionInserted: () -> Unit = {},
+    onModelSetup: () -> Unit = { viewModel.showSettingsDialog = true }
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val appearance = LocalAppAppearance.current
+    val placeholderColor = placeholderColorFor(appearance)
+    val subtleColor = subtleColorFor(appearance)
+    val outlineStrongColor = outlineStrongColorFor(appearance)
     val textFieldColors = OutlinedTextFieldDefaults.colors(
-        unfocusedBorderColor = colorScheme.outlineVariant,
-        focusedBorderColor = colorScheme.primary.copy(alpha = 0.5f),
+        unfocusedBorderColor = outlineStrongColor,
+        focusedBorderColor = colorScheme.primary,
         unfocusedContainerColor = colorScheme.surfaceContainerLow,
         focusedContainerColor = colorScheme.surfaceContainerLow,
         cursorColor = colorScheme.primary,
         unfocusedTextColor = colorScheme.onSurface,
         focusedTextColor = colorScheme.onSurface,
-        unfocusedPlaceholderColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-        focusedPlaceholderColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        unfocusedPlaceholderColor = placeholderColor,
+        focusedPlaceholderColor = placeholderColor
     )
     var activeHelp by remember { mutableStateOf<FeatureHelp?>(null) }
+    var contextExpanded by remember { mutableStateOf(false) }
     var rhymeOptionsExpanded by remember { mutableStateOf(false) }
     val animationsEnabled = com.rhymeai.app.ui.theme.LocalAnimationsEnabled.current
 
@@ -114,9 +124,14 @@ fun AssistantPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
+            .wrapContentWidth(Alignment.CenterHorizontally)
+            .widthIn(max = DesignTokens.Drawer.expandedWidth)
     ) {
-        // Context & Theme Section
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+        ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -124,7 +139,9 @@ fun AssistantPanel(
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .clickable { contextExpanded = !contextExpanded }
+                    .heightIn(min = DesignTokens.Touch.minTarget),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.Default.Edit, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
@@ -137,21 +154,41 @@ fun AssistantPanel(
                     fontSizeSp = 16,
                     fontWeight = FontWeight.Medium
                 )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (viewModel.theme.isBlank()) "Optional" else viewModel.theme,
+                    maxLines = 1,
+                    fontSize = 12.sp,
+                    color = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.widthIn(max = 140.dp)
+                )
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (contextExpanded) "Collapse context and theme" else "Expand context and theme",
+                    tint = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.rotate(if (contextExpanded) 180f else 0f)
+                )
             }
 
-            OutlinedTextField(
-                value = viewModel.theme,
-                onValueChange = { viewModel.onThemeChanged(it) },
-                enabled = !viewModel.useWholeSongContext,
-                placeholder = { Text("What is this song about?", fontSize = DesignTokens.Typography.caption) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp)
-                    .heightIn(min = 100.dp),
-                colors = textFieldColors,
-                shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = DesignTokens.Typography.caption)
-            )
+            AnimatedVisibility(
+                visible = contextExpanded,
+                enter = if (animationsEnabled) expandVertically(tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing), expandFrom = Alignment.Top) else EnterTransition.None,
+                exit = if (animationsEnabled) shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top) else ExitTransition.None
+            ) {
+                OutlinedTextField(
+                    value = viewModel.theme,
+                    onValueChange = { viewModel.onThemeChanged(it) },
+                    enabled = !viewModel.useWholeSongContext,
+                    placeholder = { Text("What is this song about?", fontSize = DesignTokens.Typography.caption) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .heightIn(min = 84.dp),
+                    colors = textFieldColors,
+                    shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = DesignTokens.Typography.caption)
+                )
+            }
         }
 
         // Divider
@@ -204,7 +241,7 @@ fun AssistantPanel(
                         .fillMaxWidth()
                         .background(colorScheme.surfaceContainer, RoundedCornerShape(DesignTokens.Radius.sm))
                         .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.sm))
-                        .padding(DesignTokens.Spacing.lg)
+                        .padding(DesignTokens.Spacing.md)
                 ) {
                     if (rhymeContext.targetLine != null) {
                         Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
@@ -273,8 +310,16 @@ fun AssistantPanel(
 
                 AnimatedVisibility(
                     visible = rhymeOptionsExpanded,
-                    enter = expandVertically(animationSpec = DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top),
-                    exit = shrinkVertically(animationSpec = tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                    enter = if (animationsEnabled) {
+                        expandVertically(animationSpec = tween(DesignTokens.Motion.disclosureMillis, easing = DesignTokens.Motion.standardEasing), expandFrom = Alignment.Top)
+                    } else {
+                        EnterTransition.None
+                    },
+                    exit = if (animationsEnabled) {
+                        shrinkVertically(animationSpec = tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                    } else {
+                        ExitTransition.None
+                    }
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.lg)) {
                     // Rhyme Scheme
@@ -398,7 +443,7 @@ fun AssistantPanel(
                         Text(
                             viewModel.rhymeComplexity.description,
                             fontSize = 12.sp,
-                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            color = subtleColor,
                             modifier = Modifier.padding(top = DesignTokens.Spacing.xs)
                         )
                     }
@@ -416,49 +461,21 @@ fun AssistantPanel(
                 }
             }
 
-            // Suggest button — moved directly after Complexity; turns into Stop while streaming.
-            Button(
-                onClick = {
-                    if (viewModel.isLoading) viewModel.cancelSuggestions()
-                    else viewModel.getSuggestions()
-                },
-                enabled = viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().height(DesignTokens.Touch.minTarget),
-                shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colorScheme.primary,
-                    contentColor = colorScheme.onPrimary,
-                    disabledContainerColor = colorScheme.surfaceVariant,
-                    disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                if (viewModel.isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
-                        color = colorScheme.onPrimary,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.assistant_stop), fontWeight = FontWeight.Medium)
-                } else {
-                    Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.assistant_suggest_next_line), fontWeight = FontWeight.Medium)
+            if (viewModel.selectedProvider == com.rhymeai.app.service.AIProvider.LOCAL) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Local AI · ${viewModel.localReadinessLabel}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    if (viewModel.localReady) {
+                        TextButton(onClick = onModelSetup) { Text("Manage model") }
+                    }
+                }
+                if (viewModel.localModelError != null) {
+                    Text("Your model could not load. Open model setup to retry or choose another.", style = MaterialTheme.typography.bodySmall, color = colorScheme.error)
                 }
             }
 
             // Error message
             viewModel.errorMessage?.let {
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
-            }
-
-            // Skeleton while the first suggestions are generated (the local model
-            // returns all-at-once after several seconds; a frozen panel reads as
-            // broken). Streamed providers replace this as soon as lines arrive.
-            if (viewModel.isLoading && viewModel.suggestions.isEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                    repeat(3) { SuggestionSkeletonRow() }
-                }
             }
 
             // Suggestions
@@ -468,7 +485,7 @@ fun AssistantPanel(
                     Text(
                         stringResource(R.string.assistant_suggestions_caveat),
                         fontSize = 12.sp,
-                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        color = colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic
                     )
                     viewModel.suggestions.forEach { suggestedLine ->
@@ -478,7 +495,9 @@ fun AssistantPanel(
                             isHook = suggestedLine.isHook,
                             highlightRhyme = viewModel.isHighlightEnabled,
                             showProsody = viewModel.isStressPreviewEnabled,
-                            onClick = {
+                            onKeep = { viewModel.keepAlternate(suggestedLine.text) },
+                            isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
+                            onUse = {
                                 viewModel.insertSuggestion(suggestedLine.text)
                                 onSuggestionInserted()
                             }
@@ -529,7 +548,8 @@ fun AssistantPanel(
 
                         // Stepper: decrement
                         TextButton(
-                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm - 1).coerceAtLeast(40) }
+                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm - 1).coerceAtLeast(40) },
+                            modifier = Modifier.semantics { contentDescription = "Decrease BPM" }
                         ) { Text("−", fontSize = 16.sp) }
 
                         Text(
@@ -543,7 +563,8 @@ fun AssistantPanel(
 
                         // Stepper: increment
                         TextButton(
-                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm + 1).coerceAtMost(220) }
+                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm + 1).coerceAtMost(220) },
+                            modifier = Modifier.semantics { contentDescription = "Increase BPM" }
                         ) { Text("+", fontSize = 16.sp) }
                     }
                 }
@@ -558,7 +579,9 @@ fun AssistantPanel(
                         activeTrackColor = colorScheme.primary,
                         inactiveTrackColor = colorScheme.outlineVariant
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "BPM, ${viewModel.beatGridBpm}" }
                 )
 
                 // Per-line beat strip
@@ -570,21 +593,54 @@ fun AssistantPanel(
                 }
             }
 
-            Spacer(Modifier.height(DesignTokens.Spacing.xl))
-
-            // Footer
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    "Build ${com.rhymeai.app.BuildConfig.VERSION_NAME} (${com.rhymeai.app.BuildConfig.VERSION_CODE})  \u2022  Product of Tyler Manring",
-                    fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-            }
-
             Spacer(Modifier.height(DesignTokens.Spacing.lg))
+        }
+        }
+
+        val setupModel = !viewModel.isLoading &&
+            viewModel.selectedProvider == com.rhymeai.app.service.AIProvider.LOCAL &&
+            !viewModel.localReady
+        Button(
+            onClick = {
+                when {
+                    setupModel -> onModelSetup()
+                    viewModel.isLoading -> viewModel.cancelSuggestions()
+                    else -> viewModel.getSuggestions()
+                }
+            },
+            enabled = setupModel || viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.sm)
+                .height(DesignTokens.Touch.minTarget)
+                .testTag("assistantPrimaryAction"),
+            shape = RoundedCornerShape(DesignTokens.Radius.lg),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = colorScheme.primary,
+                contentColor = colorScheme.onPrimary,
+                disabledContainerColor = colorScheme.surfaceVariant,
+                disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            if (viewModel.isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
+                    color = colorScheme.onPrimary,
+                    strokeWidth = 2.dp
+                )
+                Spacer(Modifier.width(8.dp))
+            } else if (!setupModel) {
+                Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(
+                when {
+                    setupModel -> stringResource(R.string.assistant_set_up_model)
+                    viewModel.isLoading -> stringResource(R.string.assistant_stop)
+                    else -> stringResource(R.string.assistant_suggest_next_line)
+                },
+                fontWeight = FontWeight.Medium
+            )
         }
     }
 }
@@ -593,35 +649,4 @@ private fun RhymeType.shortLabel(): String = when (this) {
     RhymeType.PERFECT -> "Perfect"
     RhymeType.NEAR -> "Near"
     RhymeType.SLANT -> "Slant"
-}
-
-@Composable
-private fun SuggestionSkeletonRow() {
-    val colorScheme = MaterialTheme.colorScheme
-    val animationsEnabled = com.rhymeai.app.ui.theme.LocalAnimationsEnabled.current
-    // State (not .value in composition): the pulse repaints in the draw phase
-    // only, instead of recomposing this row ~86 times a second.
-    val alpha: androidx.compose.runtime.State<Float> = if (animationsEnabled) {
-        val transition = rememberInfiniteTransition(label = "suggestionSkeleton")
-        transition.animateFloat(
-            initialValue = 0.45f,
-            targetValue = 0.85f,
-            animationSpec = infiniteRepeatable(
-                animation = androidx.compose.animation.core.tween(700),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "suggestionSkeletonAlpha"
-        )
-    } else {
-        remember { mutableStateOf(0.6f) }
-    }
-    val pulseColor = colorScheme.surfaceContainerHigh
-    val pulseShape = RoundedCornerShape(DesignTokens.Radius.lg)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(52.dp)
-            .clip(pulseShape)
-            .drawBehind { drawRect(pulseColor.copy(alpha = alpha.value)) }
-    )
 }

@@ -6,13 +6,13 @@ The active targets are:
 
 - Android: `android/`
 - iOS: `Writers Block/`
-- Desktop: planned
+- Native Mac work: separate unfinished PR #38; not included in this mobile source.
 
 The old React/Vite web variant has been removed. Shared pronunciation/prosody data stays in `shared/`, with generation tooling in `scripts/`, because Android and iOS both consume those assets.
 
 ## Local verification
 
-Run the default local gate from `/Users/tylermanring/Documents/RhymeAI`:
+Run the default local gate from the repository root:
 
 ```sh
 ./scripts/verify.sh
@@ -55,7 +55,7 @@ leave them unset to use the first two booted iOS simulators.
 
 ## Android
 
-Run from `/Users/tylermanring/Documents/RhymeAI/android`:
+Run from `android/`:
 
 ```sh
 ./gradlew :app:assembleDebug
@@ -81,9 +81,13 @@ Then run:
 ./gradlew :app:bundleRelease
 ```
 
-Without `keystore.properties`, Gradle still builds the minified release APK/AAB for
-R8 verification, but the APK output is unsigned. To run the release gate from the
-repo root:
+CI or an explicit local build may instead supply the complete `RHYMEAI_KEYSTORE_FILE`,
+`RHYMEAI_STORE_PASSWORD`, `RHYMEAI_KEY_ALIAS`, and `RHYMEAI_KEY_PASSWORD` tuple.
+When any of those variables is present, that complete tuple takes precedence over
+`keystore.properties`; partial environment signing material is rejected. Release
+APK/AAB tasks fail before packaging when the selected signing material is incomplete
+or unavailable, so Gradle does not emit an unsigned release fallback. To run the
+release gate from the repo root:
 
 ```sh
 ./scripts/android-release-smoke.sh

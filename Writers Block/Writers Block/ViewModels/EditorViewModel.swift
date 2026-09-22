@@ -4,19 +4,7 @@ import SwiftData
 import SwiftUI
 
 enum SaveStatus {
-    case idle, saving, saved
-}
-
-struct CloudAISharingRequest: Identifiable, Equatable {
-    let id = UUID()
-    let provider: AIProvider
-    let purpose: String
-    let scope: CloudAISharingScope
-}
-
-enum CloudAISharingScope: String {
-    case selectedContext
-    case wholeSong
+    case idle, saving, saved, failed
 }
 
 @MainActor
@@ -37,12 +25,16 @@ extension CloudBackupServicing {
 
 extension BackupService: CloudBackupServicing {}
 
-private struct InspectorSynonymRequestIdentity: Equatable {
+struct CloudAISharingRequest: Identifiable, Equatable {
+    let id = UUID()
     let provider: AIProvider
-    let modelID: String
-    let sourceRevision: Int
-    let credentialRevision: Int
-    let localIdentity: SynonymLocalIdentity?
+    let purpose: String
+    let scope: CloudAISharingScope
+}
+
+enum CloudAISharingScope: String {
+    case selectedContext
+    case wholeSong
 }
 
 final class EditorViewModel: ObservableObject {
@@ -52,6 +44,7 @@ final class EditorViewModel: ObservableObject {
     @Published var title: String = ""
     @Published var lyrics: String = "" {
         didSet {
+            if lyrics != oldValue { clearInsertionFeedback() }
             scheduleDerivedStateRefresh()
         }
     }
@@ -63,6 +56,25 @@ final class EditorViewModel: ObservableObject {
     }
     @Published private(set) var canUndoLyrics: Bool = false
     @Published private(set) var canRedoLyrics: Bool = false
+    @Published private(set) var insertedLineRange: NSRange?
+    @Published private(set) var insertionFeedbackID: UUID?
+    private var insertionFeedbackText: String?
+
+    func clearInsertionFeedback() {
+        guard insertionFeedbackID != nil || insertedLineRange != nil else { return }
+        insertedLineRange = nil
+        insertionFeedbackID = nil
+        insertionFeedbackText = nil
+    }
+
+    func clearInsertionHighlight() {
+        insertedLineRange = nil
+    }
+
+    func undoInsertedLine() {
+        guard insertionFeedbackID != nil, lyrics == insertionFeedbackText else { return }
+        undoLyrics()
+    }
 
     // MARK: - AI State
 
@@ -97,7 +109,9 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Selection / Rewrite
 
-    @Published var selectedRange: NSRange = NSRange(location: 0, length: 0)
+    @Published var selectedRange: NSRange = NSRange(location: 0, length: 0) {
+        didSet { schedulePositionSave() }
+    }
     @Published var rewriteAction: RewriteAction?
     @Published var rewriteLoading: Bool = false
     @Published var rewritePreview: String?
@@ -120,13 +134,9 @@ final class EditorViewModel: ObservableObject {
     @Published var inspectorSynonyms: [String] = []
     @Published var inspectorSynonymsLoading: Bool = false
     @Published var inspectorSynonymsError: String?
-    @Published var inspectorSynonymsRecovery: SynonymRecoveryAction?
     private var inspectorSynonymsTask: Task<Void, Never>?
+    private var inspectorSynonymsRequestID: UUID?
     private var inspectorAnalysisTask: Task<Void, Never>?
-    private var inspectorSynonymsRequestID = UUID()
-    private var inspectorSynonymSourceRevision = 0
-    private var inspectorCredentialRevisions: [String: Int] = [:]
-    private var shouldOpenSettingsAfterInspectorDismissal = false
 
     var showInspector: Bool { inspectorWord != nil }
 
@@ -164,6 +174,15 @@ final class EditorViewModel: ObservableObject {
     @Published var currentProjectId: String?
     @Published var saveStatus: SaveStatus = .idle
 
+    @Published var companion = WritingCompanion()
+    @Published var showNotebook = false
+    @Published var companionError: String?
+    @Published var positionRestoreID = UUID()
+    var editorScrollY: Double = 0
+    private var positionSaveTask: Task<Void, Never>?
+    private let companionStore: WritingCompanionStore
+    private var companionReadable = true
+
     // MARK: - Settings
 
     @Published var selectedProvider: AIProvider = .local
@@ -173,7 +192,6 @@ final class EditorViewModel: ObservableObject {
     /// demand at request time so they cannot leak via heap dumps, SwiftUI
     /// snapshots, or test fixtures.
     @Published private(set) var apiKeyPresence: [String: Bool] = [:]
-    @Published var cloudAISharingRequest: CloudAISharingRequest?
 
     // MARK: - Cloud Backup
 
@@ -194,14 +212,13 @@ final class EditorViewModel: ObservableObject {
         }
     }
     private let aiService: AIService
-    private let synonymService: any SynonymProviding
-    private let keychainStore: KeychainStore
-    private let backupService: CloudBackupServicing?
     private let defaults: UserDefaults
-    private let saveModelContext: (ModelContext) throws -> Void
-    private let lyricsHistory = EditHistory<LyricsEditState>()
+    @Published var cloudAISharingRequest: CloudAISharingRequest?
     private var pendingCloudAIAction: (() -> Void)?
     private var pendingCloudAIRequestID: UUID?
+    private let keychainStore: KeychainStore
+    private let backupService: CloudBackupServicing?
+    private let lyricsHistory = EditHistory<LyricsEditState>()
     private var autoSaveTask: Task<Void, Never>?
     private var trashSchedulerTask: Task<Void, Never>?
     private var didSeedTrashProjectForUITests = false
@@ -287,23 +304,18 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Init
 
-    init(
-        aiService: AIService = AIService(),
-        keychainStore: KeychainStore? = nil,
-        backupService: CloudBackupServicing? = nil,
-        synonymService: any SynonymProviding = AIService(),
-        defaults: UserDefaults = .standard,
-        saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
-    ) {
+    private let saveModelContext: (ModelContext) throws -> Void
+
+    init(aiService: AIService = AIService(), keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, companionStore: WritingCompanionStore? = nil, defaults: UserDefaults = .standard, saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
+        self.aiService = aiService
+        self.defaults = defaults
+        self.saveModelContext = saveModelContext
         let runningUITestInMemory = UITestFlags.isEnabled(UITestFlags.inMemoryStore)
         let resolvedStore: KeychainStore = keychainStore
             ?? (runningUITestInMemory ? InMemoryKeychainStore() : SystemKeychainStore())
-        self.aiService = aiService
+        self.companionStore = companionStore ?? WritingCompanionStore(inMemory: runningUITestInMemory || keychainStore != nil)
         self.keychainStore = resolvedStore
         self.backupService = backupService
-        self.synonymService = synonymService
-        self.defaults = defaults
-        self.saveModelContext = saveModelContext
 
         #if DEBUG
         if runningUITestInMemory,
@@ -339,11 +351,11 @@ final class EditorViewModel: ObservableObject {
 
         let providerRaw = defaults.string(forKey: "selectedProvider") ?? AIProvider.local.rawValue
         selectedProvider = AIProvider(rawValue: providerRaw) ?? .local
-        let modelRaw = defaults.string(forKey: "selectedModel") ?? AIModel.localModel.rawValue
+        let modelRaw = defaults.string(forKey: "selectedModel") ?? AIModel.default.rawValue
         if let savedModel = AIModel(rawValue: modelRaw), savedModel.provider == selectedProvider {
             selectedModel = savedModel
         } else {
-            selectedModel = AIModel.models(for: selectedProvider).first ?? .localModel
+            selectedModel = AIModel.models(for: selectedProvider).first ?? .default
         }
 
         // Restore editor toggle states. Booleans default false when the key is absent,
@@ -379,28 +391,21 @@ final class EditorViewModel: ObservableObject {
             showAssistantSheet = UITestFlags.isEnabled(UITestFlags.openAssistant)
         }
 
-        if UITestFlags.isEnabled(UITestFlags.seedLongTitleSong) {
-            title = "Midnight Letters from the Far Side of the City Lights"
-            lyrics = """
-            [Verse]
-            I trace the signal through the city light
-            A silver echo keeps the windows bright
-            The midnight engines turn a patient wheel
-            While quiet words reveal the way I feel
-            """
-            currentProjectId = "ui-test-long-title-song"
-            saveStatus = .saved
-            isRhymeHighlightEnabled = true
-            isSyllableColoringEnabled = true
-            showWelcome = false
-        }
-
         if UITestFlags.isEnabled(UITestFlags.seedRewriteSelection) {
             let seededLyrics = "yellow music\nfollow music"
             title = "UI Rewrite Song"
             lyrics = seededLyrics
             selectedRange = NSRange(location: 0, length: ("yellow music" as NSString).length)
             cursorPosition = selectedRange.location + selectedRange.length
+            showWelcome = false
+        }
+        if UITestFlags.isEnabled(UITestFlags.seedSuggestions) {
+            title = "UI Suggestion Song"
+            lyrics = "An opening line"
+            cursorPosition = lyrics.utf16.count
+            selectedRange = NSRange(location: cursorPosition, length: 0)
+            suggestions = [SuggestedLine(text: "A quiet light carries me home", tier: 0)]
+            isSyllableColoringEnabled = true
             showWelcome = false
         }
         refreshCloudBackupState()
@@ -422,35 +427,49 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Rhyme Context
 
+    private nonisolated struct LyricsDerivedState: Sendable {
+        let wordCount: Int
+        let syllableCount: Int
+        let rhymeContext: RhymeContext
+    }
+
     private func scheduleDerivedStateRefresh() {
         derivedStateTask?.cancel()
         derivedStateTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled, let self else { return }
-            self.refreshLyricsDerivedState()
+            let lyrics = self.lyrics
+            let cursorPosition = self.cursorPosition
+            let rhymeScheme = self.activeRhymeScheme
+            let derived = await Task.detached(priority: .userInitiated) {
+                LyricsDerivedState(
+                    wordCount: SyllableCounter.lyricWordCount(lyrics),
+                    syllableCount: SyllableCounter.lyricSyllableCount(lyrics),
+                    rhymeContext: Self.computeRhymeContext(
+                        lyrics: lyrics,
+                        cursorPosition: cursorPosition,
+                        activeRhymeScheme: rhymeScheme
+                    )
+                )
+            }.value
+            guard !Task.isCancelled,
+                  self.lyrics == lyrics,
+                  self.cursorPosition == cursorPosition,
+                  self.activeRhymeScheme == rhymeScheme else {
+                return
+            }
+            self.objectWillChange.send()
+            self.wordCount = derived.wordCount
+            self.syllableCount = derived.syllableCount
+            self.rhymeContext = derived.rhymeContext
         }
-    }
-
-    private func refreshLyricsDerivedState() {
-        // wordCount/syllableCount/rhymeContext are deliberately not @Published
-        // (they recompute on a debounce, not per keystroke), so views must be
-        // told explicitly when the batch lands — otherwise counters and the
-        // assistant's target line stay stale until the next unrelated render.
-        objectWillChange.send()
-        wordCount = SyllableCounter.wordCount(lyrics)
-        syllableCount = SyllableCounter.countText(lyrics)
-        refreshRhymeContext()
-    }
-
-    private func refreshRhymeContext() {
-        rhymeContext = computeRhymeContext()
     }
 
     /// `cursorPosition` comes from UITextView in UTF-16 units, but the String
     /// operations in this file count Characters (grapheme clusters). Convert once
     /// at the boundary so emoji/CJK lyrics don't skew offsets; snaps to the nearest
     /// preceding grapheme boundary when the offset lands inside a cluster.
-    static func characterOffset(forUTF16Offset offset: Int, in text: String) -> Int {
+    nonisolated static func characterOffset(forUTF16Offset offset: Int, in text: String) -> Int {
         var clamped = min(max(offset, 0), text.utf16.count)
         while clamped > 0 {
             if let utf16Index = text.utf16.index(text.utf16.startIndex, offsetBy: clamped, limitedBy: text.utf16.endIndex),
@@ -463,6 +482,18 @@ final class EditorViewModel: ObservableObject {
     }
 
     func computeRhymeContext() -> RhymeContext {
+        Self.computeRhymeContext(
+            lyrics: lyrics,
+            cursorPosition: cursorPosition,
+            activeRhymeScheme: activeRhymeScheme
+        )
+    }
+
+    nonisolated private static func computeRhymeContext(
+        lyrics: String,
+        cursorPosition: Int,
+        activeRhymeScheme: String
+    ) -> RhymeContext {
         guard !lyrics.isEmpty else {
             return RhymeContext.emptyContext(currentLetter: String(activeRhymeScheme.first ?? Character("A")))
         }
@@ -540,13 +571,13 @@ final class EditorViewModel: ObservableObject {
         )
     }
 
-    private struct RhymeSectionContext {
+    private nonisolated struct RhymeSectionContext {
         let currentSection: SongSection
         let sectionOrdinal: Int
         let firstChorusLines: [String]?
     }
 
-    private static func sectionContext(
+    nonisolated private static func sectionContext(
         forLineIndex lineIndex: Int,
         sectionMap: SectionMap,
         rawLines: [String]
@@ -568,7 +599,7 @@ final class EditorViewModel: ObservableObject {
         )
     }
 
-    private static func targetLine(
+    nonisolated private static func targetLine(
         in stanzaLines: [String],
         before rawCursorLineIndex: Int,
         matching currentLetter: String,
@@ -591,7 +622,7 @@ final class EditorViewModel: ObservableObject {
         return targetLine
     }
 
-    private static func isSectionHeader(_ line: String) -> Bool {
+    nonisolated private static func isSectionHeader(_ line: String) -> Bool {
         SectionMap.headerTitle(line.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
     }
 
@@ -666,33 +697,25 @@ final class EditorViewModel: ObservableObject {
 
         suggestionsTask = Task { @MainActor in
             defer {
-                if self.suggestionsRequestID == requestID {
-                    self.isLoading = false
-                }
+                if self.suggestionsRequestID == requestID { self.isLoading = false }
             }
             do {
                 var emittedSuggestion = false
                 for try await text in stream {
-                    guard !Task.isCancelled,
-                          self.suggestionsRequestID == requestID,
-                          self.currentProjectId == projectID else { return }
+                    guard !Task.isCancelled, self.suggestionsRequestID == requestID, self.currentProjectId == projectID else { return }
                     emittedSuggestion = true
                     let tier = filter?.tier(of: text) ?? 0
                     let endWord = RhymeConstraint.lineEndWord(text)
                     let isHookRepeat = !firstChorusEndWordSet.isEmpty && firstChorusEndWordSet.contains(endWord)
                     self.suggestions.append(SuggestedLine(text: text, tier: tier, isHookRepeat: isHookRepeat))
                 }
-                if !emittedSuggestion,
-                   !Task.isCancelled,
-                   self.suggestionsRequestID == requestID,
-                   self.currentProjectId == projectID {
+                if !emittedSuggestion, !Task.isCancelled, self.suggestionsRequestID == requestID, self.currentProjectId == projectID {
                     self.errorMessage = "AI did not return suggestions. Try again."
                 }
             } catch is CancellationError {
                 // expected when cancelSuggestions() is invoked
             } catch {
-                guard self.suggestionsRequestID == requestID,
-                      self.currentProjectId == projectID else { return }
+                guard self.suggestionsRequestID == requestID, self.currentProjectId == projectID else { return }
                 self.errorMessage = error.localizedDescription
             }
         }
@@ -786,6 +809,7 @@ final class EditorViewModel: ObservableObject {
 
         rewriteTask = Task { @MainActor in
             do {
+                try Task.checkCancellation()
                 let result = try await aiService.getRewrite(
                     provider: selectedProvider,
                     apiKey: currentApiKey,
@@ -799,14 +823,10 @@ final class EditorViewModel: ObservableObject {
                     rejectedCandidates: rejectedForRequest,
                     useWholeSongContext: useWholeSongContext
                 )
-                guard !Task.isCancelled,
-                      rewriteRequestID == requestID,
-                      currentProjectId == projectID else { return }
+                guard !Task.isCancelled, rewriteRequestID == requestID, currentProjectId == projectID else { return }
                 rewritePreview = result
             } catch {
-                guard !Task.isCancelled,
-                      rewriteRequestID == requestID,
-                      currentProjectId == projectID else { return }
+                guard !Task.isCancelled, rewriteRequestID == requestID, currentProjectId == projectID else { return }
                 rewriteError = error.localizedDescription
             }
             if rewriteRequestID == requestID { rewriteLoading = false }
@@ -862,7 +882,6 @@ final class EditorViewModel: ObservableObject {
         inspectorMatches = nil
         inspectorSynonyms = []
         inspectorSynonymsError = nil
-        inspectorSynonymsRecovery = nil
 
         inspectorAnalysisTask = Task { @MainActor in
             let prosody = await Task.detached(priority: .userInitiated) {
@@ -896,14 +915,11 @@ final class EditorViewModel: ObservableObject {
         inspectorSynonymsRequestID = requestID
         let projectID = currentProjectId
         inspectorSynonymsError = nil
-        inspectorSynonymsRecovery = nil
         inspectorSynonymsLoading = true
         let lineContext = currentLine(for: range)
-        let identity = currentInspectorSynonymIdentity
-        let provider = identity.provider
+        let provider = selectedProvider
         let apiKey = currentApiKey
-        let modelId = identity.modelID
-        let existing = inspectorSynonyms
+        let modelId = selectedModel.id
         inspectorSynonymsTask = Task { @MainActor in
             defer {
                 if self.inspectorSynonymsRequestID == requestID {
@@ -911,32 +927,23 @@ final class EditorViewModel: ObservableObject {
                 }
             }
             do {
-                let results = try await synonymService.getSynonyms(
+                try Task.checkCancellation()
+                let results = try await aiService.getSynonyms(
                     provider: provider,
                     apiKey: apiKey,
                     modelId: modelId,
                     word: word,
-                    lineContext: lineContext,
-                    excluding: existing,
-                    limit: 8
+                    lineContext: lineContext
                 )
                 guard !Task.isCancelled,
                       self.inspectorSynonymsRequestID == requestID,
                       self.currentProjectId == projectID,
                       self.inspectorWord == word,
-                      self.currentInspectorSynonymIdentity == identity else { return }
-                let merged = SynonymSanitizer.extract(
-                    (existing + results).joined(separator: "\n"),
-                    excluding: word,
-                    limit: 8
-                )
-                self.inspectorSynonyms = merged
-                if merged.count < SynonymGenerationPipeline.minimumUsefulCount {
-                    self.inspectorSynonymsError = merged.isEmpty
-                        ? "No safe synonyms were returned. Retry."
-                        : "Only \(merged.count) safe \(merged.count == 1 ? "synonym" : "synonyms") found. Retry for more."
-                    self.inspectorSynonymsRecovery = .retry
-                }
+                      self.inspectorRange == range,
+                      self.selectedProvider == provider,
+                      self.selectedModel.id == modelId,
+                      self.currentLine(for: range) == lineContext else { return }
+                self.inspectorSynonyms = results
             } catch is CancellationError {
                 // ignored
             } catch {
@@ -944,35 +951,13 @@ final class EditorViewModel: ObservableObject {
                       self.inspectorSynonymsRequestID == requestID,
                       self.currentProjectId == projectID,
                       self.inspectorWord == word,
-                      self.currentInspectorSynonymIdentity == identity else { return }
+                      self.inspectorRange == range,
+                      self.selectedProvider == provider,
+                      self.selectedModel.id == modelId,
+                      self.currentLine(for: range) == lineContext else { return }
                 self.inspectorSynonymsError = error.localizedDescription
-                self.inspectorSynonymsRecovery = SynonymResultPresentation.recoveryAction(
-                    resultCount: self.inspectorSynonyms.count,
-                    error: error
-                )
             }
         }
-    }
-
-    func openSettingsFromInspector() {
-        shouldOpenSettingsAfterInspectorDismissal = true
-        dismissInspector()
-    }
-
-    func inspectorDidDismiss() {
-        guard shouldOpenSettingsAfterInspectorDismissal else { return }
-        shouldOpenSettingsAfterInspectorDismissal = false
-        showSettingsSheet = true
-    }
-
-    private var currentInspectorSynonymIdentity: InspectorSynonymRequestIdentity {
-        InspectorSynonymRequestIdentity(
-            provider: selectedProvider,
-            modelID: selectedModel.id,
-            sourceRevision: inspectorSynonymSourceRevision,
-            credentialRevision: inspectorCredentialRevisions[selectedProvider.rawValue, default: 0],
-            localIdentity: AIService.synonymLocalIdentity(provider: selectedProvider)
-        )
     }
 
     private func currentLine(for range: NSRange) -> String {
@@ -1020,9 +1005,10 @@ final class EditorViewModel: ObservableObject {
     }
 
     func dismissInspector() {
+        if cloudAISharingRequest?.purpose == "synonyms" { cancelCloudAISharing() }
+        inspectorSynonymsRequestID = nil
         inspectorSynonymsTask?.cancel()
         inspectorSynonymsTask = nil
-        inspectorSynonymsRequestID = UUID()
         inspectorAnalysisTask?.cancel()
         inspectorAnalysisTask = nil
         inspectorWord = nil
@@ -1032,7 +1018,6 @@ final class EditorViewModel: ObservableObject {
         inspectorSynonyms = []
         inspectorSynonymsLoading = false
         inspectorSynonymsError = nil
-        inspectorSynonymsRecovery = nil
         selectedRange = NSRange(location: selectedRange.location + selectedRange.length, length: 0)
     }
 
@@ -1052,6 +1037,16 @@ final class EditorViewModel: ObservableObject {
             // cursorPosition is a UTF-16 offset (UITextView units).
             cursorPosition: before.utf16.count + insertText.utf16.count
         )
+        insertedLineRange = NSRange(location: before.utf16.count + (needsNewline ? 1 : 0), length: suggestion.utf16.count)
+        insertionFeedbackText = lyrics
+        insertionFeedbackID = UUID()
+        suggestions = []
+        triggerAutoSave()
+    }
+
+    func insertSection(_ label: String) {
+        let insertion = SectionMap.insertHeader(label, in: lyrics, cursor: cursorPosition)
+        applyAtomicLyricsEdit(text: insertion.text, cursorPosition: insertion.cursor)
         suggestions = []
         triggerAutoSave()
     }
@@ -1076,11 +1071,13 @@ final class EditorViewModel: ObservableObject {
     }
 
     func undoLyrics() {
+        clearInsertionFeedback()
         guard let previous = lyricsHistory.undo(current: currentLyricsEditState) else { return }
         applyHistoryState(previous)
     }
 
     func redoLyrics() {
+        clearInsertionFeedback()
         guard let next = lyricsHistory.redo(current: currentLyricsEditState) else { return }
         applyHistoryState(next)
     }
@@ -1094,6 +1091,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func applyAtomicLyricsEdit(text: String, cursorPosition: Int) {
+        clearInsertionFeedback()
         let safeCursor = min(max(cursorPosition, 0), text.utf16.count)
         let next = LyricsEditState(
             text: text,
@@ -1119,6 +1117,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func resetLyricsHistory() {
+        clearInsertionFeedback()
         lyricsHistory.reset()
         updateLyricsHistoryAvailability()
     }
@@ -1137,16 +1136,25 @@ final class EditorViewModel: ObservableObject {
         return range
     }
 
+    private func cancelEditorAIWork() {
+        cancelCloudAISharing()
+        cancelSuggestions()
+        dismissRewrite()
+        dismissInspector()
+    }
+
     // MARK: - Project Management
 
     func newProject() {
-        autoSaveTask?.cancel()
+        guard flushCurrentDraft(checkpoint: true) else { return }
         cancelEditorAIWork()
+        autoSaveTask?.cancel()
         title = ""
         lyrics = ""
         theme = ""
         cursorPosition = 0
         currentProjectId = nil
+        resetCompanionPosition()
         suggestions = []
         errorMessage = nil
         saveStatus = .idle
@@ -1156,13 +1164,15 @@ final class EditorViewModel: ObservableObject {
     }
 
     func loadProject(_ project: SongProject) {
-        autoSaveTask?.cancel()
+        guard flushCurrentDraft(checkpoint: true) else { return }
         cancelEditorAIWork()
+        autoSaveTask?.cancel()
         title = project.title
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = 0
         currentProjectId = project.id
+        restoreCompanionPosition()
         suggestions = []
         errorMessage = nil
         saveStatus = .idle
@@ -1171,17 +1181,9 @@ final class EditorViewModel: ObservableObject {
         resetLyricsHistory()
     }
 
-    private func cancelEditorAIWork() {
-        cancelSuggestions()
-        dismissRewrite()
-        dismissInspector()
-        pendingCloudAIAction = nil
-        pendingCloudAIRequestID = nil
-        cloudAISharingRequest = nil
-    }
-
     @discardableResult
     func moveProjectToTrash(_ project: SongProject) -> Bool {
+        if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
         guard let context = modelContext else { return false }
         autoSaveTask?.cancel()
 
@@ -1237,22 +1239,9 @@ final class EditorViewModel: ObservableObject {
         if !RecordingFiles.deleteMemosFolder(for: projectId) {
             errorMessage = "This song was permanently deleted, but its local recordings could not be removed. Writers Block will retry cleanup."
         }
+        do { try companionStore.remove(projectId) } catch { companionError = "Could not remove this song’s local notebook." }
         scheduleTrashPurge()
         return true
-    }
-
-    @discardableResult
-    func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
-        guard let context = modelContext else { return false }
-        do {
-            try upsertPermanentDeletion(projectId: trashed.projectId, fileName: trashed.originalName, in: context)
-            try saveModelContext(context)
-        } catch {
-            context.rollback()
-            voiceMemoService.lastError = "Couldn't permanently delete this recording. It remains in Trash."
-            return false
-        }
-        return voiceMemoService.permanentlyDeleteTrashedMemo(trashed)
     }
 
     func purgeExpiredTrashedProjects() {
@@ -1279,6 +1268,7 @@ final class EditorViewModel: ObservableObject {
             for projectId in projectIDs where !RecordingFiles.deleteMemosFolder(for: projectId) {
                 errorMessage = "Expired writing was removed, but some local recordings could not be cleaned up. Writers Block will retry."
             }
+            for projectId in projectIDs { try companionStore.remove(projectId) }
             for memo in expiredMemos {
                 _ = voiceMemoService.permanentlyDeleteTrashedMemo(memo)
             }
@@ -1287,6 +1277,19 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't finish removing expired Trash items. They were kept for the next attempt."
         }
         scheduleTrashPurge()
+    }
+
+    func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
+        guard let context = modelContext else { return false }
+        do {
+            try upsertPermanentDeletion(projectId: trashed.projectId, fileName: trashed.originalName, in: context)
+            try saveModelContext(context)
+        } catch {
+            context.rollback()
+            voiceMemoService.lastError = "Couldn't permanently delete this recording. It remains in Trash."
+            return false
+        }
+        return voiceMemoService.permanentlyDeleteTrashedMemo(trashed)
     }
 
     private func applyPersistedDeletions() {
@@ -1380,11 +1383,13 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func clearEditorAfterProjectDelete() {
+        cancelEditorAIWork()
         title = ""
         lyrics = ""
         theme = ""
         cursorPosition = 0
         currentProjectId = nil
+        resetCompanionPosition()
         suggestions = []
         errorMessage = nil
         saveStatus = .idle
@@ -1460,24 +1465,24 @@ final class EditorViewModel: ObservableObject {
 
     @discardableResult
     func importProject(_ exported: SongProjectExport) -> Bool {
+        guard flushCurrentDraft(checkpoint: true) else { return false }
         guard let context = modelContext else { return false }
-        autoSaveTask?.cancel()
-        cancelEditorAIWork()
         let project = makeImportedProject(from: exported)
         context.insert(project)
-        do {
-            try saveModelContext(context)
-        } catch {
+        do { try saveModelContext(context) }
+        catch {
             context.rollback()
             errorMessage = "Couldn't save the imported song. The file was not imported."
             return false
         }
+        cancelEditorAIWork()
 
         title = project.title
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = project.lyrics.utf16.count
         currentProjectId = project.id
+        resetCompanionPosition()
         suggestions = []
         errorMessage = nil
         saveStatus = .saved
@@ -1492,12 +1497,14 @@ final class EditorViewModel: ObservableObject {
     }
 
     func applyTemplate(_ template: SongTemplate) {
+        guard flushCurrentDraft(checkpoint: true) else { return }
         cancelEditorAIWork()
         title = "Untitled \(template.name)"
         theme = template.theme
         lyrics = template.lyrics
         cursorPosition = 0
         currentProjectId = nil
+        resetCompanionPosition()
         suggestions = []
         saveStatus = .idle
         showWelcome = false
@@ -1507,7 +1514,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func goToStartMenu() {
-        cancelEditorAIWork()
+        guard flushCurrentDraft(checkpoint: true) else { return }
         showWelcome = true
     }
 
@@ -1557,38 +1564,146 @@ final class EditorViewModel: ObservableObject {
                 return
             }
 
-            guard let context = modelContext else {
-                saveStatus = .idle
-                return
-            }
+            _ = persistCurrentDraft(checkpoint: false)
+        }
+    }
 
-            var createdProjectID: String?
-            if let projectId = currentProjectId {
-                let descriptor = FetchDescriptor<SongProject>(
-                    predicate: #Predicate<SongProject> { $0.id == projectId }
-                )
-                if let existing = try? context.fetch(descriptor).first {
-                    existing.title = normalizedProjectTitle()
-                    existing.lyrics = lyrics
-                    existing.theme = theme
-                    existing.updatedAt = Date()
+    @discardableResult
+    func flushCurrentDraft(checkpoint: Bool = false) -> Bool {
+        autoSaveTask?.cancel()
+        positionSaveTask?.cancel()
+        return persistCurrentDraft(checkpoint: checkpoint)
+    }
+
+    private func persistCurrentDraft(checkpoint: Bool) -> Bool {
+        guard !showWelcome || currentProjectId != nil,
+              currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return true }
+        guard let context = modelContext else {
+            saveStatus = .failed
+            companionError = "Could not save your draft. Keep this song open and try again."
+            return false
+        }
+        do {
+            if let id = currentProjectId {
+                let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
+                guard let project = try context.fetch(descriptor).first else {
+                    saveStatus = .failed
+                    companionError = "This song is no longer in the library. Keep these lyrics open and export them before leaving."
+                    return false
+                }
+                if project.title != normalizedProjectTitle() || project.lyrics != lyrics || project.theme != theme {
+                    project.title = normalizedProjectTitle()
+                    project.lyrics = lyrics
+                    project.theme = theme
+                    project.updatedAt = Date()
                 }
             } else {
                 let project = makeUntitledSongProject()
                 context.insert(project)
-                createdProjectID = project.id
+                currentProjectId = project.id
             }
-
-            do {
-                try saveModelContext(context)
-                if let createdProjectID { currentProjectId = createdProjectID }
-                saveStatus = .saved
-            } catch {
-                context.rollback()
-                saveStatus = .idle
-                errorMessage = "Couldn't save this song. Your edits remain open."
-            }
+            try context.save()
+            saveStatus = .saved
+            saveCompanion(checkpoint: checkpoint)
+            return true
+        } catch {
+            saveStatus = .failed
+            companionError = "Could not save your draft. Keep this song open and try again."
+            return false
         }
+    }
+
+    func saveCompanion(checkpoint: Bool) {
+        guard companionReadable else { return }
+        guard let id = currentProjectId else { return }
+        var next = companion
+        next.position = WritingPosition(location: selectedRange.location, length: selectedRange.length, scrollY: editorScrollY).clamped(to: lyrics)
+        if !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty {
+            next.checkpoint(title: normalizedProjectTitle(), lyrics: lyrics, theme: theme, force: checkpoint)
+        }
+        persistCompanion(next, id: id)
+    }
+
+    private func persistCompanion(_ next: WritingCompanion, id: String) {
+        guard companionReadable else { return }
+        do {
+            try companionStore.write(next, for: id)
+            companion = next
+            companionError = nil
+        } catch { companionError = "Could not save the song notebook. Your current lyrics are unchanged. Try again." }
+    }
+
+    func schedulePositionSave() {
+        positionSaveTask?.cancel()
+        guard currentProjectId != nil else { return }
+        positionSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, let self else { return }
+            saveCompanion(checkpoint: false)
+        }
+    }
+
+    func updateEditorScroll(_ y: Double) {
+        editorScrollY = max(0, y)
+        schedulePositionSave()
+    }
+
+    private func resetCompanionPosition() {
+        positionSaveTask?.cancel()
+        companion = WritingCompanion()
+        companionReadable = true
+        companionError = nil
+        selectedRange = NSRange(location: 0, length: 0)
+        editorScrollY = 0
+        positionRestoreID = UUID()
+    }
+
+    private func restoreCompanionPosition() {
+        resetCompanionPosition()
+        guard let id = currentProjectId else { return }
+        do { companion = try companionStore.read(id) }
+        catch {
+            companionReadable = false
+            companionError = "Could not read this song’s notebook. Its saved lyrics are still available."
+        }
+        let position = companion.position.clamped(to: lyrics)
+        selectedRange = NSRange(location: position.location, length: position.length)
+        cursorPosition = position.location + position.length
+        editorScrollY = position.scrollY
+        positionRestoreID = UUID()
+    }
+
+    func keepAlternate(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard flushCurrentDraft() else { return }
+        if currentProjectId == nil, modelContext != nil { _ = ensureProjectForRecording() }
+        guard let id = currentProjectId else { return }
+        var next = companion
+        next.keep(trimmed)
+        persistCompanion(next, id: id)
+    }
+
+    var selectedLyrics: String {
+        let position = WritingPosition(location: selectedRange.location, length: selectedRange.length).clamped(to: lyrics)
+        return (lyrics as NSString).substring(with: NSRange(location: position.location, length: position.length))
+    }
+
+    func removeAlternate(_ alternate: KeptLyric) {
+        guard let id = currentProjectId else { return }
+        var next = companion
+        next.alternates.removeAll { $0.id == alternate.id }
+        persistCompanion(next, id: id)
+    }
+
+    func restoreVersion(_ version: DraftVersion) {
+        guard flushCurrentDraft(checkpoint: true), companionError == nil else { return }
+        title = version.title
+        theme = version.theme
+        applyAtomicLyricsEdit(text: version.lyrics, cursorPosition: 0)
+        editorScrollY = 0
+        positionRestoreID = UUID()
+        flushCurrentDraft()
     }
 
     private func normalizedProjectTitle() -> String {
@@ -1627,7 +1742,6 @@ final class EditorViewModel: ObservableObject {
                 return false
             }
             apiKeyPresence[provider.rawValue] = false
-            inspectorCredentialRevisions[provider.rawValue, default: 0] &+= 1
             return true
         }
         let stored = keychainStore.setKey(provider: provider.rawValue, key: key)
@@ -1635,7 +1749,6 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         apiKeyPresence[provider.rawValue] = true
-        inspectorCredentialRevisions[provider.rawValue, default: 0] &+= 1
         return true
     }
 
@@ -1767,7 +1880,6 @@ final class EditorViewModel: ObservableObject {
 
     func saveProvider(_ provider: AIProvider) {
         cancelEditorAIWork()
-        inspectorSynonymSourceRevision &+= 1
         selectedProvider = provider
         defaults.set(provider.rawValue, forKey: "selectedProvider")
         if selectedModel.provider != provider {
@@ -1779,7 +1891,6 @@ final class EditorViewModel: ObservableObject {
 
     func saveModel(_ model: AIModel) {
         cancelEditorAIWork()
-        inspectorSynonymSourceRevision &+= 1
         selectedModel = model
         defaults.set(model.rawValue, forKey: "selectedModel")
     }

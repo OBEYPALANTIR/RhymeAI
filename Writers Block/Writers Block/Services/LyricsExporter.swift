@@ -1,7 +1,101 @@
 import Foundation
+import Darwin
 import UIKit
 
 enum LyricsExporter {
+    // Matches Android document imports; recordings have their own 100 MiB limit.
+    nonisolated static let maximumProjectImportBytes = 10 * 1_024 * 1_024
+
+    enum ImportError: LocalizedError, Equatable {
+        case notARegularFile, fileTooLarge, fileChanged
+
+        var errorDescription: String? {
+            switch self {
+            case .notARegularFile: "The selected item is not a project file."
+            case .fileTooLarge: "This project file is larger than 10 MiB."
+            case .fileChanged: "The selected project file changed while it was being read. Try again."
+            }
+        }
+    }
+
+    nonisolated static func decodeJsonExport(
+        from url: URL,
+        didReadChunk: (@Sendable (Int) async throws -> Void)? = nil
+    ) async throws -> SongProjectExport {
+        try Task.checkCancellation()
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            // Nonblocking open lets us reject FIFOs/devices without waiting for input.
+            let descriptor = url.withUnsafeFileSystemRepresentation { path in
+                path.map { open($0, O_RDONLY | O_NONBLOCK | O_CLOEXEC) } ?? -1
+            }
+            guard descriptor >= 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            defer { try? handle.close() }
+            let opened = try projectImportStatus(descriptor)
+            var data = Data()
+            data.reserveCapacity(Int(opened.st_size))
+            while data.count <= maximumProjectImportBytes {
+                try Task.checkCancellation()
+                let count = min(64 * 1_024, maximumProjectImportBytes + 1 - data.count)
+                guard let chunk = try handle.read(upToCount: count), !chunk.isEmpty else { break }
+                data.append(chunk)
+                guard data.count <= maximumProjectImportBytes else { throw ImportError.fileTooLarge }
+                // A deterministic read checkpoint for concurrent-change/cancellation tests.
+                try await didReadChunk?(data.count)
+            }
+            try Task.checkCancellation()
+            let finished = try projectImportStatus(descriptor)
+            var pathStatus = stat()
+            let result = url.withUnsafeFileSystemRepresentation { path in
+                path.map { fstatat(AT_FDCWD, $0, &pathStatus, 0) } ?? -1
+            }
+            guard result == 0,
+                  stableProjectImport(opened, finished),
+                  stableProjectImport(finished, pathStatus),
+                  finished.st_size == off_t(data.count) else { throw ImportError.fileChanged }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let exported = try decoder.decode(SongProjectExport.self, from: data)
+            try Task.checkCancellation()
+            return exported
+        }
+        return try await withTaskCancellationHandler {
+            let exported = try await worker.value
+            try Task.checkCancellation()
+            return exported
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
+    nonisolated private static func projectImportStatus(_ descriptor: Int32) throws -> stat {
+        var status = stat()
+        guard fstat(descriptor, &status) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard (status.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+            throw ImportError.notARegularFile
+        }
+        guard status.st_size >= 0, status.st_size <= off_t(maximumProjectImportBytes) else {
+            throw ImportError.fileTooLarge
+        }
+        return status
+    }
+
+    nonisolated private static func stableProjectImport(_ before: stat, _ after: stat) -> Bool {
+        before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
+        before.st_size == after.st_size && before.st_mode == after.st_mode &&
+        before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec &&
+        before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec &&
+        before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec &&
+        before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec
+    }
+
     private static let jsonEncoder: JSONEncoder = {
         let e = JSONEncoder()
         e.outputFormatting = [.prettyPrinted, .sortedKeys]

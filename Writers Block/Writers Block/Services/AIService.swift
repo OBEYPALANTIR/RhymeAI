@@ -10,8 +10,8 @@ enum AIServiceError: LocalizedError {
     case requestTimedOut
     case blockedResponse
     case decodingError
-    case noSafeSingleWordRhyme
     case noMatchingRhymes(rhymeType: String)
+    case noSafeSingleWordRhyme
 
     var errorDescription: String? {
         switch self {
@@ -31,10 +31,10 @@ enum AIServiceError: LocalizedError {
             return "Provider blocked the response for safety. Try adjusting the lyric or prompt."
         case .decodingError:
             return "Failed to parse AI response."
-        case .noSafeSingleWordRhyme:
-            return "No safe rhyme. Select the line."
         case .noMatchingRhymes(let rhymeType):
             return "The provider returned lines, but none matched the requested \(rhymeType.lowercased()) rhyme. Try another rhyme type."
+        case .noSafeSingleWordRhyme:
+            return "No safe rhyme. Select the line."
         }
     }
 }
@@ -142,22 +142,14 @@ struct AIService {
             if Self.shouldUseGemma() {
                 let parsed = try await callGGUFSuggestions(prompt: localPrompt, limit: Self.suggestionCount)
                 guard let filter else { return parsed }
-                let ranked = filter.rank(parsed, want: Self.suggestionCount)
-                if ranked.isEmpty, !parsed.isEmpty {
-                    throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
-                }
-                return ranked
+                return filter.rank(parsed, want: Self.suggestionCount)
             }
 
             // Apple Intelligence fallback.
             if #available(iOS 26.0, *) {
                 let parsed = try await callLocal(prompt: localPrompt, limit: Self.suggestionCount)
                 guard let filter else { return parsed }
-                let ranked = filter.rank(parsed, want: Self.suggestionCount)
-                if ranked.isEmpty, !parsed.isEmpty {
-                    throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
-                }
-                return ranked
+                return filter.rank(parsed, want: Self.suggestionCount)
             }
             throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
         }
@@ -212,7 +204,37 @@ struct AIService {
             let task = Task {
                 do {
                     if provider == .local {
-                        // Local model already token-streams internally; needs its own AsyncStream surface (follow-up).
+                        let localPrompt = buildLocalPrompt(
+                            theme: theme,
+                            lyrics: lyrics,
+                            targetRhymeLine: targetRhymeLine,
+                            rhymeType: rhymeType,
+                            currentLetter: currentLetter,
+                            currentSection: currentSection,
+                            sectionOrdinal: sectionOrdinal,
+                            firstChorusLines: firstChorusLines,
+                            useWholeSongContext: useWholeSongContext
+                        )
+                        let filter = RhymeLineFilter(
+                            targetLine: targetRhymeLine,
+                            rhymeType: rhymeType
+                        )
+                        if Self.shouldUseGemma() {
+                            let excludedKeys = Set(
+                                lyrics.components(separatedBy: .newlines)
+                                    .map(normalizeSuggestionKey)
+                                    .filter { !$0.isEmpty }
+                            )
+                            try await emitLines(
+                                from: streamGGUFTokens(prompt: localPrompt),
+                                into: continuation,
+                                filter: filter,
+                                excludedKeys: excludedKeys
+                            )
+                            continuation.finish()
+                            return
+                        }
+
                         let results = try await getSuggestions(
                             provider: provider,
                             apiKey: apiKey,
@@ -284,12 +306,16 @@ struct AIService {
         from tokens: AsyncThrowingStream<String, Error>,
         into continuation: AsyncThrowingStream<String, Error>.Continuation,
         filter: RhymeLineFilter? = nil,
+        excludedKeys: Set<String> = [],
         rhymeType: RhymeType? = nil
     ) async throws {
         var buffer = ""
         var seen = Set<String>()
         var emitted = 0
         var accepted = 0
+        // Tier-0 lines wait here; they only ship if too few verified rhymes arrive.
+        var held: [String] = []
+        // With a filter the prompt over-generated 2x, so read past suggestionCount.
         let rawLimit = filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
 
         streamLoop: for try await chunk in tokens {
@@ -299,9 +325,15 @@ struct AIService {
                 buffer = String(buffer[buffer.index(after: newlineIdx)...])
                 guard let cleaned = cleanSuggestionLine(rawLine) else { continue }
                 let key = normalizeSuggestionKey(cleaned)
-                guard !key.isEmpty, seen.insert(key).inserted else { continue }
+                guard !key.isEmpty,
+                      !excludedKeys.contains(key),
+                      seen.insert(key).inserted else {
+                    continue
+                }
                 accepted += 1
-                if filter?.tier(of: cleaned) != 0 {
+                if let filter, filter.tier(of: cleaned) == 0 {
+                    held.append(cleaned)
+                } else {
                     continuation.yield(cleaned)
                     emitted += 1
                 }
@@ -314,8 +346,12 @@ struct AIService {
             let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
             if !remaining.isEmpty, let cleaned = cleanSuggestionLine(remaining) {
                 let key = normalizeSuggestionKey(cleaned)
-                if !key.isEmpty, seen.insert(key).inserted {
-                    if filter?.tier(of: cleaned) != 0 {
+                if !key.isEmpty,
+                   !excludedKeys.contains(key),
+                   seen.insert(key).inserted {
+                    if let filter, filter.tier(of: cleaned) == 0 {
+                        held.append(cleaned)
+                    } else {
                         continuation.yield(cleaned)
                         emitted += 1
                     }
@@ -323,7 +359,15 @@ struct AIService {
             }
         }
 
-        if filter != nil, accepted > 0, emitted == 0, let rhymeType {
+        // The local stream retains its fallback ranking; cloud results must match
+        // the requested rhyme before they reach the editor.
+        if let filter, rhymeType == nil, emitted < Self.suggestionCount {
+            for line in filter.rank(held, want: Self.suggestionCount - emitted) {
+                continuation.yield(line)
+                emitted += 1
+            }
+        }
+        if filter != nil, accepted > 0 || !held.isEmpty, emitted == 0, let rhymeType {
             throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
         }
     }
@@ -452,6 +496,76 @@ struct AIService {
 
     // MARK: - Prompt Builder
 
+    private static func explicitSectionLabelForSection(
+        in lyrics: String,
+        section: SongSection,
+        ordinal: Int
+    ) -> String? {
+        let rawLines = lyrics.components(separatedBy: "\n")
+        guard let ref = SectionMap(lyrics: lyrics).sections.first(where: {
+            $0.type == section && $0.ordinal == ordinal
+        }),
+        rawLines.indices.contains(ref.lineRange.lowerBound) else {
+            return nil
+        }
+        return SectionMap.headerTitle(
+            rawLines[ref.lineRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    private static func explicitSectionLabelAtOffset(
+        in lyrics: String,
+        characterOffset: Int?
+    ) -> String? {
+        guard let characterOffset else { return nil }
+        let safeOffset = min(max(characterOffset, 0), lyrics.count)
+        let lineIndex = lyrics.prefix(safeOffset).reduce(into: 0) { count, character in
+            if character == "\n" { count += 1 }
+        }
+        let rawLines = lyrics.components(separatedBy: "\n")
+        guard let ref = SectionMap(lyrics: lyrics).sectionAt(lineIndex: lineIndex),
+              rawLines.indices.contains(ref.lineRange.lowerBound) else {
+            return nil
+        }
+        return SectionMap.headerTitle(
+            rawLines[ref.lineRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    private static func sectionLabelDirective(_ label: String?) -> String? {
+        guard let label else { return nil }
+        let safeLabel = label
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\"", with: "'")
+        guard !safeLabel.isEmpty else { return nil }
+
+        let squashed = safeLabel.lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        let role: String
+        if squashed.contains("prechorus") {
+            role = "Build momentum and tension toward the chorus without resolving the hook early."
+        } else if squashed.hasPrefix("intro") {
+            role = "Establish the song's mood, world, or central image while leaving room for the song to open up."
+        } else if squashed.hasPrefix("hook") {
+            role = "Center the shortest, most memorable, repeatable phrase in the song."
+        } else if squashed.hasPrefix("refrain") {
+            role = "Craft a returning line or compact phrase that can recur without becoming a full chorus."
+        } else if squashed.hasPrefix("interlude") {
+            role = "Use this as a sparse transition; keep any lyric minimal and textural."
+        } else if squashed.hasPrefix("outro") {
+            role = "Resolve or echo the song's core idea and create a clear sense of closure."
+        } else {
+            role = "Follow the named section's structural role when shaping the next line."
+        }
+        return """
+        Current section label: "\(safeLabel)". Treat this label as song structure, not lyric content.
+        Section-specific direction: \(role)
+        """
+    }
+
     func buildPrompt(
         theme: String,
         lyrics: String,
@@ -470,6 +584,7 @@ struct AIService {
             : (theme.isEmpty ? "No specific theme provided" : theme)
 
         let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
+        let lyricsContext = useWholeSongContext ? lyrics : (targetRhymeLine ?? "")
         let constraintBlock = Self.rhymeConstraintBlock(
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
@@ -500,6 +615,13 @@ struct AIService {
             ordinal: sectionOrdinal,
             firstChorusLines: permittedChorusLines
         )
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(
+            Self.explicitSectionLabelForSection(
+                in: lyrics,
+                section: currentSection,
+                ordinal: sectionOrdinal
+            )
+        ) : nil
 
         let rhymeAdherence = targetRhymeLine != nil
             ? ", and strictly adhere to the requested rhyme type (\(rhymeType.displayName))"
@@ -507,7 +629,6 @@ struct AIService {
         let songContextInstruction = useWholeSongContext
             ? "Analyze the whole song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary. Make each suggestion feel connected to the entire song while still fitting the immediate target line and rhyme scheme."
             : "Prioritize the immediate writing context, current stanza, target line, rhyme scheme, and provided theme/context."
-        let lyricsContext = useWholeSongContext ? lyrics : (targetRhymeLine ?? "")
 
         var prompt = """
         You are an expert songwriter and lyricist.
@@ -522,6 +643,9 @@ struct AIService {
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
         """
+        if let sectionLabelHint {
+            prompt += "\n" + sectionLabelHint
+        }
         if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
             prompt += "\n" + sectionInstanceHint
         }
@@ -846,6 +970,7 @@ struct AIService {
         useWholeSongContext: Bool
     ) -> String {
         let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
+        let lyricsContext = useWholeSongContext ? lyrics : (targetRhymeLine ?? "")
         let constraintBlock = Self.rhymeConstraintBlock(
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
@@ -874,18 +999,27 @@ struct AIService {
             ordinal: sectionOrdinal,
             firstChorusLines: permittedChorusLines
         )
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(
+            Self.explicitSectionLabelForSection(
+                in: lyrics,
+                section: currentSection,
+                ordinal: sectionOrdinal
+            )
+        ) : nil
 
         let songContextInstruction = useWholeSongContext
             ? "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
             : "Use the immediate stanza, rhyme target, and theme first."
         let themeClause = !useWholeSongContext && !theme.isEmpty ? " about \(theme)" : ""
-        let lyricsContext = useWholeSongContext ? lyrics : (targetRhymeLine ?? "")
 
         var prompt = """
         Write \(requestCount) next lines for this song\(themeClause).
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
         """
+        if let sectionLabelHint {
+            prompt += "\n" + sectionLabelHint
+        }
         if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
             prompt += "\n" + sectionInstanceHint
         }
@@ -942,50 +1076,64 @@ struct AIService {
     /// Returns true when calls should be routed through the Gemma GGUF runner.
     /// Conditions: llama.cpp engine is compiled in, engine choice is .gemma,
     /// and at least one GGUF file exists in the models directory.
-    static func shouldUseGemma(
-        engineChoice: GGUFEngineChoice = GGUFEngineChoice.current,
-        ggufPath: String? = firstGGUFPath()
-    ) -> Bool {
+    static func shouldUseGemma() -> Bool {
         guard GGUFModelService.isEngineAvailable else { return false }
-        return engineChoice == .gemma && ggufPath != nil
+        guard GGUFEngineChoice.current == .gemma else { return false }
+        return firstGGUFPath() != nil
     }
 
+    /// Returns the path to the first available GGUF model file, or nil.
     static func firstGGUFPath() -> String? {
-        GGUFModelSelection.resolvedModelURL()?.path
-    }
-
-    static func synonymLocalIdentity(provider: AIProvider) -> SynonymLocalIdentity? {
-        guard provider == .local else { return nil }
-        let resolvedPath = firstGGUFPath()
-        return SynonymLocalIdentity(
-            engineChoice: GGUFEngineChoice.current,
-            selectedFileName: GGUFModelSelection.currentFileName,
-            resolvedGGUFPath: resolvedPath,
-            revision: SynonymLocalRevision.current()
-        )
-    }
-
-    static func unloadGGUFRunner() async {
-        await ggufRunner.unload()
+        let installed = GGUFModelStorage.installedModelFileNames()
+        guard let fileName = GGUFModelSelection.preferredFileName(in: installed),
+              let directory = try? GGUFModelStorage.modelsDirectory(create: false) else {
+            return nil
+        }
+        return directory.appendingPathComponent(fileName).path
     }
 
     /// Ensure the shared GGUF runner has the correct model loaded, then call
     /// generate(prompt:) and return the raw output.
-    private func callGGUF(
-        prompt: String,
-        route capturedRoute: SynonymGGUFRoute? = nil
-    ) async throws -> String {
-        let route: SynonymGGUFRoute
-        if let capturedRoute {
-            route = capturedRoute
-        } else if let path = Self.firstGGUFPath() {
-            route = SynonymGGUFRoute(filePath: path)
+    private func callGGUF(prompt: String) async throws -> String {
+        let runner = Self.ggufRunner
+        let path: String
+        // Check if loaded path matches available file.
+        if let p = Self.firstGGUFPath() {
+            path = p
         } else {
             throw AIServiceError.localModelUnavailable(
                 reason: "No GGUF model found. Download a Gemma model in Settings."
             )
         }
-        return try await route.generate(prompt: prompt, runner: Self.ggufRunner)
+
+        try await LocalInferenceStatus.shared.load(runner, path: path)
+
+        return try await runner.generate(prompt: prompt)
+    }
+
+    private func streamGGUFTokens(
+        prompt: String
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let path = Self.firstGGUFPath() else {
+                        throw AIServiceError.localModelUnavailable(
+                            reason: "No GGUF model found. Download a Gemma model in Settings."
+                        )
+                    }
+                    let runner = Self.ggufRunner
+                    try await LocalInferenceStatus.shared.load(runner, path: path)
+                    _ = try await runner.generate(prompt: prompt) { token in
+                        continuation.yield(token)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     /// Route a suggestion prompt through Gemma and parse the result.
@@ -1069,6 +1217,9 @@ struct AIService {
         rejectedCandidates: Set<String> = [],
         useWholeSongContext: Bool = true
     ) -> String {
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(
+            Self.explicitSectionLabelAtOffset(in: lyrics, characterOffset: selectionStart)
+        ) ?? "" : ""
         let singleWord = isSingleWordSelection(selection)
         let selectedLine = selectionStart.flatMap { lyricLine(at: $0, in: lyrics) }
         let lyricsContext = useWholeSongContext ? lyrics : (selectedLine ?? selection)
@@ -1097,6 +1248,7 @@ struct AIService {
         \(taskLine)
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
+        \(sectionLabelHint)
         Action: \(action.label).
         Instruction: \(action.instruction)
 
@@ -1135,30 +1287,6 @@ struct AIService {
         )
     }
 
-    func buildLocalSuggestionPromptForTest(
-        theme: String,
-        lyrics: String,
-        targetRhymeLine: String?,
-        rhymeType: RhymeType,
-        currentLetter: String,
-        currentSection: SongSection,
-        sectionOrdinal: Int,
-        firstChorusLines: [String]?,
-        useWholeSongContext: Bool
-    ) -> String {
-        buildLocalPrompt(
-            theme: theme,
-            lyrics: lyrics,
-            targetRhymeLine: targetRhymeLine,
-            rhymeType: rhymeType,
-            currentLetter: currentLetter,
-            currentSection: currentSection,
-            sectionOrdinal: sectionOrdinal,
-            firstChorusLines: firstChorusLines,
-            useWholeSongContext: useWholeSongContext
-        )
-    }
-
     // MARK: - Synonyms
 
     func getSynonyms(
@@ -1167,111 +1295,101 @@ struct AIService {
         modelId: String,
         word: String,
         lineContext: String,
-        excluding existing: [String] = [],
         limit: Int = 8
     ) async throws -> [String] {
         let target = word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else { return [] }
-        guard provider == .local || !apiKey.isEmpty else {
+
+        let prompt = buildSynonymsPrompt(word: target, lineContext: lineContext, limit: limit)
+
+        if provider == .local {
+            let raw: String
+
+            // Gemma engine: route through downloaded GGUF model.
+            if Self.shouldUseGemma() {
+                raw = try await callGGUF(prompt: prompt)
+            } else if #available(iOS 26.0, *) {
+                // Apple Intelligence fallback.
+                raw = try await callLocalRaw(prompt: prompt, instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object.")
+            } else {
+                throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence synonyms require iOS 26 or later.")
+            }
+            return extractSynonyms(raw, exclude: target, limit: limit)
+        }
+
+        guard !apiKey.isEmpty else {
             throw AIServiceError.noApiKey(provider: provider.displayName)
         }
-        let localIdentity = Self.synonymLocalIdentity(provider: provider)
-        let ggufRoute = localIdentity?.ggufRoute
-        let usesGGUF = ggufRoute != nil
-        let format = Self.synonymPromptFormat(provider: provider, usesGGUF: usesGGUF)
 
-        return try await SynonymGenerationPipeline.collect(
-            target: target,
-            limit: limit,
-            accepting: existing
-        ) { exclusions in
-            let prompt = Self.synonymPrompt(
-                word: target,
-                lineContext: lineContext,
-                limit: min(max(limit, SynonymGenerationPipeline.minimumUsefulCount), 10),
-                format: format,
-                excluding: exclusions
-            )
-            if provider == .local {
-                if let ggufRoute {
-                    return try await callGGUF(prompt: prompt, route: ggufRoute)
-                }
-                if #available(iOS 26.0, *) {
-                    return try await callLocalRaw(
-                        prompt: prompt,
-                        instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object."
-                    )
-                }
-                throw AIServiceError.localModelUnavailable(
-                    reason: "Apple Intelligence synonyms require iOS 26 or later."
-                )
-            }
-            return try await callCloudText(
-                provider: provider,
-                apiKey: apiKey,
-                modelId: modelId,
-                prompt: prompt,
-                kind: .rawJSON
-            )
-        }
+        let raw = try await callCloudText(
+            provider: provider,
+            apiKey: apiKey,
+            modelId: modelId,
+            prompt: prompt,
+            kind: .rawJSON
+        )
+        return extractSynonyms(raw, exclude: target, limit: limit)
     }
 
-    static func synonymPromptFormat(provider: AIProvider, usesGGUF: Bool) -> SynonymPromptFormat {
-        provider == .local && usesGGUF ? .newlineList : .jsonObject
-    }
-
-    static func synonymPrompt(
-        word: String,
-        lineContext: String,
-        limit: Int,
-        format: SynonymPromptFormat,
-        excluding exclusions: [String]
-    ) -> String {
-        let maxContextLength = format == .newlineList ? 180 : 240
+    private func buildSynonymsPrompt(word: String, lineContext: String, limit: Int) -> String {
         let trimmedContext = lineContext.trimmingCharacters(in: .whitespacesAndNewlines)
-        let contextLine = String(trimmedContext.prefix(maxContextLength))
+        let contextLine = String(trimmedContext.prefix(240))
         let contextBlock = contextLine.isEmpty ? "(no surrounding line)" : contextLine
-        let exclusionRule = exclusions.isEmpty
-            ? ""
-            : "- Do not include any already accepted words: \(exclusions.joined(separator: ", "))."
+        return """
+        You are RhymeAI's word inspector. Given a target word and the lyric line it appears in, return synonyms that could replace the target while preserving meaning, register, and roughly the same syllable count.
 
-        switch format {
-        case .newlineList:
-            let contract = SynonymPromptContract.render(
-                target: word,
-                context: lineContext,
-                limit: limit,
-                exclusions: exclusions
-            )
-            return """
-            You are RhymeAI's on-device word helper.
+        Target word: "\(word)"
+        Lyric line: "\(contextBlock)"
 
-            \(contract)
+        Rules:
+        - Provide up to \(limit) synonyms.
+        - No multi-word phrases unless they would naturally read as a single concept.
+        - No duplicates. Never include the target word itself.
+        - Match the tone of the line (slang stays slang, formal stays formal).
 
-            Rules:
-            - Return only replacement words, one per line.
-            - No JSON, bullets, numbering, labels, quotes, or commentary.
-            - Follow the structured counts, uniqueness, stop, and exclusion contract.
-            - Prefer words with similar tone and syllable count.
-            """
-        case .jsonObject:
-            return """
-            You are RhymeAI's word inspector. Given a target word and the lyric line it appears in, return synonyms that could replace the target while preserving meaning, register, and roughly the same syllable count.
+        Respond ONLY with a JSON object of the form {"synonyms": ["..."]}. No code fences, no commentary.
+        """
+    }
 
-            Target word: "\(word)"
-            Lyric line: "\(contextBlock)"
+    private func extractSynonyms(_ raw: String, exclude: String, limit: Int) -> [String] {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```json") { cleaned = String(cleaned.dropFirst(7)) }
+        if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
+        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return [] }
+        let excludeKey = exclude.lowercased()
 
-            Rules:
-            - Provide up to \(limit) unique single-word synonyms.
-            - No multi-word phrases.
-            - No duplicates. Never include the target word itself.
-            \(exclusionRule)
-            - Stop early instead of repeating when no more valid words remain.
-            - Match the tone of the line (slang stays slang, formal stays formal).
-
-            Respond ONLY with a JSON object of the form {"synonyms": ["..."]}. No code fences, no commentary.
-            """
+        var collected: [String] = []
+        if let data = cleaned.data(using: .utf8) {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let arr = obj["synonyms"] as? [String] {
+                collected = arr
+            } else if let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
+                collected = arr
+            }
         }
+
+        if collected.isEmpty {
+            collected = cleaned
+                .components(separatedBy: .newlines)
+                .map { line in
+                    line.trimmingCharacters(in: CharacterSet(charactersIn: " \t\"',-*•"))
+                }
+                .filter { !$0.isEmpty }
+        }
+
+        var seen = Set<String>()
+        var result: [String] = []
+        for candidate in collected {
+            let word = candidate.trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
+            guard !word.isEmpty, word.count <= 32 else { continue }
+            let key = word.lowercased()
+            if key == excludeKey || !seen.insert(key).inserted { continue }
+            result.append(word)
+            if result.count >= limit { break }
+        }
+        return result
     }
 
     @available(iOS 26.0, *)
@@ -1348,7 +1466,8 @@ struct AIService {
             lyrics: useWholeSongContext ? fullLyrics : selection,
             selection: selection,
             currentSection: currentSection,
-            useWholeSongContext: useWholeSongContext
+            useWholeSongContext: useWholeSongContext,
+            currentSectionLabel: useWholeSongContext ? Self.explicitSectionLabelAtOffset(in: fullLyrics, characterOffset: selectionStart) : nil
         )
         let raw = try await callCloudText(
             provider: provider,
@@ -1370,8 +1489,10 @@ struct AIService {
         lyrics: String,
         selection: String,
         currentSection: SongSection = .unknown,
-        useWholeSongContext: Bool = true
+        useWholeSongContext: Bool = true,
+        currentSectionLabel: String? = nil
     ) -> String {
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(currentSectionLabel) ?? "" : ""
         let lyricsContext = useWholeSongContext
             ? """
               Full lyrics for context:
@@ -1393,6 +1514,7 @@ struct AIService {
 
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
+        \(sectionLabelHint)
 
         Action: \(action.label)
         Instruction: \(action.instruction)
@@ -1415,6 +1537,9 @@ struct AIService {
         rejectedCandidates: Set<String> = [],
         useWholeSongContext: Bool = true
     ) -> String {
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(
+            Self.explicitSectionLabelAtOffset(in: lyrics, characterOffset: selectionStart)
+        ) ?? "" : ""
         let singleWord = isSingleWordSelection(selection)
         let selectedLine = selectionStart.flatMap { lyricLine(at: $0, in: lyrics) }
         let lyricsContext = useWholeSongContext ? lyrics : (selectedLine ?? selection)
@@ -1442,6 +1567,7 @@ struct AIService {
         \(taskLine)
         Current song section: \(currentSection.displayName).
         \(currentSection.promptHint)
+        \(sectionLabelHint)
         Action: \(action.label).
         Instruction: \(Self.localRewriteInstruction(for: action))
 
@@ -1455,26 +1581,6 @@ struct AIService {
         Rules:
         \(outputRules)
         """
-    }
-
-    func buildLocalRewritePromptForTest(
-        action: RewriteAction,
-        lyrics: String,
-        selection: String,
-        currentSection: SongSection,
-        selectionStart: Int?,
-        rejectedCandidates: Set<String>,
-        useWholeSongContext: Bool
-    ) -> String {
-        buildLocalRewritePrompt(
-            action: action,
-            lyrics: lyrics,
-            selection: selection,
-            currentSection: currentSection,
-            selectionStart: selectionStart,
-            rejectedCandidates: rejectedCandidates,
-            useWholeSongContext: useWholeSongContext
-        )
     }
 
     /// Apple's on-device guardrails reject the cloud punch-up wording
@@ -2058,6 +2164,55 @@ struct AIService {
     }
 
     private func parseLines(_ text: String) -> [String] {
-        text.components(separatedBy: .newlines)
+        let normalized = text.contains("\n")
+            ? text
+            : text
+                .replacingOccurrences(of: "\\r\\n", with: "\n")
+                .replacingOccurrences(of: "\\n", with: "\n")
+        return normalized.components(separatedBy: .newlines)
     }
+    func buildLocalSuggestionPromptForTest(
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        currentLetter: String,
+        currentSection: SongSection,
+        sectionOrdinal: Int,
+        firstChorusLines: [String]?,
+        useWholeSongContext: Bool
+    ) -> String {
+        buildLocalPrompt(
+            theme: theme,
+            lyrics: lyrics,
+            targetRhymeLine: targetRhymeLine,
+            rhymeType: rhymeType,
+            currentLetter: currentLetter,
+            currentSection: currentSection,
+            sectionOrdinal: sectionOrdinal,
+            firstChorusLines: firstChorusLines,
+            useWholeSongContext: useWholeSongContext
+        )
+    }
+
+    func buildLocalRewritePromptForTest(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection,
+        selectionStart: Int?,
+        rejectedCandidates: Set<String>,
+        useWholeSongContext: Bool
+    ) -> String {
+        buildLocalRewritePrompt(
+            action: action,
+            lyrics: lyrics,
+            selection: selection,
+            currentSection: currentSection,
+            selectionStart: selectionStart,
+            rejectedCandidates: rejectedCandidates,
+            useWholeSongContext: useWholeSongContext
+        )
+    }
+
 }

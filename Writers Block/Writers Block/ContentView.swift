@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct ContentView: View {
+    @State private var showSaveIssue = false
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -24,7 +25,17 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 viewModel.purgeExpiredTrashedProjects()
+            } else {
+                viewModel.flushCurrentDraft(checkpoint: true)
             }
+        }
+        .onReceive(viewModel.$companionError) { error in
+            if error != nil { showSaveIssue = true }
+        }
+        .alert("Save issue", isPresented: $showSaveIssue) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(viewModel.companionError ?? "Please try saving again.")
         }
         .sheet(isPresented: $viewModel.showProjectsSheet) {
             ProjectsView()
@@ -46,5 +57,6 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environmentObject(EditorViewModel())
+        .environmentObject(GGUFDownloadManager())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self], inMemory: true)
 }

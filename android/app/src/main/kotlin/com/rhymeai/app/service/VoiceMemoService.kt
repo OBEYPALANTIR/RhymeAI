@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.rhymeai.app.BuildConfig
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CoroutineScope
@@ -108,6 +109,14 @@ class VoiceMemoService(private val context: Context) {
         val amplitude = raw / 32767f
         val db = 20.0 * log10(amplitude.toDouble())
         return (((db + 60.0) / 60.0).toFloat()).coerceIn(0f, 1f)
+    }
+
+    internal fun seedRecordingForTesting() {
+        check(BuildConfig.DEBUG || BuildConfig.BENCHMARK) {
+            "Recording test seeding requires a debug or benchmark build"
+        }
+        recordingElapsedMs = 3_000L
+        isRecording = true
     }
 
     // ---------------------------------------------------------------------------
@@ -453,10 +462,12 @@ class VoiceMemoService(private val context: Context) {
      * when a project is permanently deleted so orphaned audio files do not accumulate.
      */
     suspend fun deleteMemoDirectory(projectId: String) {
-        val dir = RecordingFiles.memoDirectory(context.filesDir, projectId)
-        val trash = RecordingFiles.trashDirectory(context.filesDir, projectId)
+        val (dir, trash) = runCatching {
+            RecordingFiles.memoDirectory(context.filesDir, projectId) to RecordingFiles.trashDirectory(context.filesDir, projectId)
+        }.getOrNull() ?: return
         val playing = playingFile
-        if (playing != null && (playing.path.startsWith(dir.path) || playing.path.startsWith(trash.path))) {
+        val playingPath = playing?.let { runCatching { it.canonicalFile.toPath() }.getOrNull() }
+        if (playingPath != null && (playingPath.startsWith(dir.toPath()) || playingPath.startsWith(trash.toPath()))) {
             stopPlayback()
         }
 
