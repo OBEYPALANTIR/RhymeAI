@@ -13,6 +13,8 @@ import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.SongWorkspace
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -95,6 +97,7 @@ class ProjectRepository internal constructor(
         val isBeatGridEnabled: Boolean = false
     )
 
+    private val projectSaveMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
     private val projectsStore = FailClosedStoredJson("song library") {
         json.decodeFromString<List<SongProject>>(it)
@@ -131,7 +134,7 @@ class ProjectRepository internal constructor(
         }
     }
 
-    suspend fun saveActiveState(projects: List<SongProject>, id: String?, title: String, lyrics: String, theme: String) {
+    suspend fun saveActiveState(projects: List<SongProject>, id: String?, title: String, lyrics: String, theme: String) = projectSaveMutex.withLock {
         val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
         dataStore.edit { prefs ->
             projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")
@@ -143,7 +146,7 @@ class ProjectRepository internal constructor(
         }
     }
 
-    suspend fun saveProjects(projects: List<SongProject>) {
+    suspend fun saveProjects(projects: List<SongProject>) = projectSaveMutex.withLock {
         val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
         dataStore.edit { prefs ->
             projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")

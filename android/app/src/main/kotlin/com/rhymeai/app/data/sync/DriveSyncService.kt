@@ -10,7 +10,7 @@ import com.google.android.gms.common.api.Scope
 import com.rhymeai.app.BuildConfig
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SecureKeyStore
-import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.data.recording.RecordingFiles
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -411,7 +411,7 @@ object RecordingFileStore {
     )
 
     fun targetFile(filesDir: File, projectId: String, fileName: String): File =
-        VoiceMemoService.memoFile(filesDir, projectId, fileName)
+        RecordingFiles.memoFile(filesDir, projectId, fileName)
 
     fun writeAtomically(filesDir: File, entry: RecordingManifestEntry, bytes: ByteArray) {
         val target = targetFile(filesDir, entry.projectId, entry.fileName)
@@ -1344,7 +1344,7 @@ class DriveSyncService(
 
     private fun snapshotLocalRecordingFiles(): List<LocalRecordingFile> {
         RecordingFileStore.recoverInterruptedRestores(context.filesDir)
-        val root = VoiceMemoService.memosRoot(context.filesDir)
+        val root = RecordingFiles.memosRoot(context.filesDir)
         if (!root.exists()) return emptyList()
         return root.listFiles()
             ?.asSequence()
@@ -1352,7 +1352,7 @@ class DriveSyncService(
             ?.flatMap { projectDir ->
                 projectDir.listFiles()
                     ?.asSequence()
-                    ?.filter { it.isFile && it.name.endsWith(VoiceMemoService.MEMO_EXTENSION) }
+                    ?.filter { RecordingFiles.isMemoFile(it) }
                     ?.map { file ->
                         val entry = RecordingManifestEntry(
                             projectId = projectDir.name,

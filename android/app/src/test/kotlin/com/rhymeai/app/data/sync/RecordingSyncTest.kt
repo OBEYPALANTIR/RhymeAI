@@ -1,6 +1,6 @@
 package com.rhymeai.app.data.sync
 
-import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.data.recording.RecordingFiles
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -85,6 +85,28 @@ class RecordingSyncTest {
         )
 
         assertEquals("rec_project-123_take 1_final.m4a.enc", driveName)
+    }
+
+    @Test
+    fun importedFormatsPreserveExtensionAndCannotCollideWithM4aBackupNames() {
+        val wav = RecordingManifestEntry.driveNameFor("song", "take.wav")
+        val m4a = RecordingManifestEntry.driveNameFor("song", "take.wav.m4a")
+        assertEquals("rec_song_take.wav.enc", wav)
+        assertEquals("rec_song_take.wav.m4a.enc", m4a)
+        assertFalse(wav == m4a)
+    }
+
+    @Test
+    fun importedFormatsPassManifestValidationWithoutRelaxingFilenameSafety() {
+        listOf("m4a", "mp3", "wav", "aac").forEach { extension ->
+            recording("song", "take.$extension", 1L, "digest").validate()
+            assertFailsWith<IllegalArgumentException> {
+                recording("song", "../take.$extension", 1L, "digest").validate()
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            recording("song", "take.mp4", 1L, "digest").validate()
+        }
     }
 
     @Test
@@ -300,7 +322,7 @@ class RecordingSyncTest {
         val root = Files.createTempDirectory("rhymeai-recording-symlink").toFile()
         val external = Files.createTempDirectory("rhymeai-recording-external").toFile()
         try {
-            val memosRoot = VoiceMemoService.memosRoot(root).apply { mkdirs() }
+            val memosRoot = RecordingFiles.memosRoot(root).apply { mkdirs() }
             Files.createSymbolicLink(File(memosRoot, "safe").toPath(), external.toPath())
 
             assertFailsWith<IllegalArgumentException> {

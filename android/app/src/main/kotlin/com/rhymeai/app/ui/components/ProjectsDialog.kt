@@ -7,10 +7,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.animateFloatAsState
@@ -40,7 +38,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -53,10 +50,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Mic
@@ -84,22 +79,20 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
@@ -168,8 +161,6 @@ fun ProjectsDrawer(
     var showTrashBin by remember { mutableStateOf(false) }
     val trashTransition = remember { MutableTransitionState(false) }
     var isTrashBinClosing by remember { mutableStateOf(false) }
-    // 0 = Songs, 1 = Recordings
-    var selectedTab by remember { mutableStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     fun openTrashBin() {
@@ -386,11 +377,7 @@ fun ProjectsDrawer(
                                 },
                                 placeholder = {
                                     Text(
-                                        text = if (selectedTab == 0) {
-                                            "Search songs"
-                                        } else {
-                                            "Search recordings"
-                                        },
+                                        text = "Search songs",
                                         fontSize = 14.sp
                                     )
                                 },
@@ -414,75 +401,51 @@ fun ProjectsDrawer(
                                 Text("Create New Song", fontWeight = FontWeight.Medium)
                             }
 
-                            // Songs | Recordings tab switcher
                             Spacer(Modifier.height(DesignTokens.Spacing.md))
-                            SlidingSegmentedControl(
-                                labels = listOf("Songs", "Recordings"),
-                                selectedIndex = selectedTab,
-                                onSelect = { selectedTab = it },
+                            LazyColumn(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(bottom = DesignTokens.Spacing.sm)
-                            )
-
-                            if (selectedTab == 0) {
-                                // ── Songs tab ──
-                                LazyColumn(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
-                                ) {
-                                    if (projects.isEmpty()) {
-                                        item {
-                                            EmptyDrawerState(
-                                                icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
-                                                text = "No saved songs yet."
-                                            )
-                                        }
-                                    } else if (filteredProjects.isEmpty()) {
-                                        item {
-                                            EmptyDrawerState(
-                                                icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                                                text = if (isSearching) "No songs match your search." else "No saved songs yet."
-                                            )
-                                        }
-                                    } else {
-                                        items(filteredProjects, key = { it.id }) { project ->
-                                            ProjectDrawerRow(
-                                                project = project,
-                                                isActive = project.id == currentProjectId,
-                                                onLoadProject = { selected ->
-                                                    closeDrawer { onLoadProject(selected) }
-                                                },
-                                                onDeleteProject = { project ->
-                                                    onDeleteProject(project.id)
-                                                    scope.launch {
-                                                        val result = snackbarHostState.showSnackbar(
-                                                            message = "\"${project.title.ifEmpty { "Untitled Song" }}\" moved to Trash",
-                                                            actionLabel = "Undo",
-                                                            duration = SnackbarDuration.Short
-                                                        )
-                                                        if (result == SnackbarResult.ActionPerformed) {
-                                                            onRestoreProject(project.id)
-                                                        }
+                                    .weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+                            ) {
+                                if (projects.isEmpty()) {
+                                    item {
+                                        EmptyDrawerState(
+                                            icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
+                                            text = "No saved songs yet."
+                                        )
+                                    }
+                                } else if (filteredProjects.isEmpty()) {
+                                    item {
+                                        EmptyDrawerState(
+                                            icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                            text = if (isSearching) "No songs match your search." else "No saved songs yet."
+                                        )
+                                    }
+                                } else {
+                                    items(filteredProjects, key = { it.id }) { project ->
+                                        ProjectDrawerRow(
+                                            project = project,
+                                            isActive = project.id == currentProjectId,
+                                            onLoadProject = { selected ->
+                                                closeDrawer { onLoadProject(selected) }
+                                            },
+                                            onDeleteProject = { project ->
+                                                onDeleteProject(project.id)
+                                                scope.launch {
+                                                    val result = snackbarHostState.showSnackbar(
+                                                        message = "\"${project.title.ifEmpty { "Untitled Song" }}\" moved to Trash",
+                                                        actionLabel = "Undo",
+                                                        duration = SnackbarDuration.Short
+                                                    )
+                                                    if (result == SnackbarResult.ActionPerformed) {
+                                                        onRestoreProject(project.id)
                                                     }
                                                 }
-                                            )
-                                        }
+                                            }
+                                        )
                                     }
                                 }
-                            } else {
-                                // ── Recordings tab ──
-                                RecordingsTab(
-                                    service = service,
-                                    projects = projects,
-                                    searchQuery = searchQuery,
-                                    snackbarHostState = snackbarHostState,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f)
-                                )
                             }
 
                             importError?.let {
@@ -615,324 +578,6 @@ fun ProjectsDialog(
     )
 }
 
-/**
- * Recordings tab — scans all voice-memo dirs across every project and groups
- * recordings by their owning project folder. Orphaned memos (project no longer
- * in [projects]) are labeled "Deleted song" so they can still be played or
- * cleaned up.
- */
-private data class RecordingFolder(
-    val projectId: String,
-    val title: String,
-    val memos: List<VoiceMemo>,
-)
-
-@Composable
-private fun RecordingsTab(
-    service: VoiceMemoService?,
-    projects: List<SongProject>,
-    searchQuery: String,
-    snackbarHostState: SnackbarHostState,
-    modifier: Modifier = Modifier
-) {
-    if (service == null) {
-        // Service unavailable — show a graceful empty state.
-        EmptyDrawerState(
-            icon = { Icon(Icons.Default.Mic, contentDescription = null) },
-            text = "Recordings not available."
-        )
-        return
-    }
-
-    // Version counter: incremented after any mutation (delete, rename) so the
-    // async loader below is restarted and the list is re-scanned from disk.
-    var memoListVersion by remember { mutableIntStateOf(0) }
-
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val projectById = remember(projects) { projects.associateBy { it.id } }
-    val folders: List<RecordingFolder>? by produceState<List<RecordingFolder>?>(
-        initialValue = null,
-        projects,
-        memoListVersion
-    ) {
-        value = withContext(Dispatchers.IO) {
-            val memosRoot = File(context.filesDir, "voice-memos")
-            if (!memosRoot.exists()) {
-                emptyList()
-            } else {
-                memosRoot.listFiles()
-                    ?.filter { it.isDirectory }
-                    ?.mapNotNull { dir ->
-                        val memos = service.memosForProject(dir.name)
-                        if (memos.isEmpty()) return@mapNotNull null
-                        val title = projectById[dir.name]?.title?.ifEmpty { "Untitled" }
-                            ?: "Deleted song"
-                        RecordingFolder(
-                            projectId = dir.name,
-                            title = title,
-                            memos = memos,
-                        )
-                    }
-                    ?.sortedByDescending { it.memos.first().file.lastModified() }
-                    ?: emptyList()
-            }
-        }
-    }
-    val query = remember(searchQuery) { searchQuery.trim() }
-    val visibleFolders = remember(folders, query) {
-        if (query.isEmpty()) {
-            folders.orEmpty()
-        } else {
-            folders.orEmpty().mapNotNull { folder ->
-                if (folder.title.contains(query, ignoreCase = true)) {
-                    folder
-                } else {
-                    val matches = folder.memos.filter { memo ->
-                        VoiceMemoService.displayName(memo.file).contains(query, ignoreCase = true)
-                    }
-                    if (matches.isEmpty()) {
-                        null
-                    } else {
-                        RecordingFolder(
-                            projectId = folder.projectId,
-                            title = folder.title,
-                            memos = matches,
-                        )
-                    }
-                }
-            }
-        }
-    }
-    val expanded = remember { mutableStateMapOf<String, Boolean>() }
-    var isSelecting by remember { mutableStateOf(false) }
-    var selectedMemoPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var pendingBulkDelete by remember { mutableStateOf(false) }
-
-    if (pendingBulkDelete) {
-        AlertDialog(
-            onDismissRequest = { pendingBulkDelete = false },
-            title = { Text("Delete recordings?") },
-            text = { Text("${selectedMemoPaths.size} recordings will move to Trash Bin and be fully deleted after 30 days.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        val trashResults = folders.orEmpty()
-                            .flatMap { it.memos }
-                            .filter { it.file.absolutePath in selectedMemoPaths }
-                            .map { service.trashMemo(it) }
-                        val trashFailed = trashResults.any { it == null }
-                        pendingBulkDelete = false
-                        isSelecting = false
-                        selectedMemoPaths = emptySet()
-                        memoListVersion++
-                        if (trashFailed) {
-                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
-                        }
-                    }
-                }) { Text("Move to Trash", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingBulkDelete = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    if (folders == null) {
-        Box(
-            modifier = modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            CircularProgressIndicator()
-        }
-        return
-    }
-
-    if (visibleFolders.isEmpty()) {
-        EmptyDrawerState(
-            icon = {
-                val icon = if (query.isNotEmpty()) {
-                    Icons.Default.Search
-                } else {
-                    Icons.Default.Mic
-                }
-                Icon(icon, contentDescription = null)
-            },
-            text = if (query.isNotEmpty()) {
-                "No recordings match your search."
-            } else {
-                "No recordings yet. Tap the mic to start."
-            }
-        )
-        return
-    }
-
-    Column(modifier = modifier) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = DesignTokens.Spacing.xs),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (isSelecting) {
-                TextButton(onClick = {
-                    isSelecting = false
-                    selectedMemoPaths = emptySet()
-                }) {
-                    Text("Cancel")
-                }
-                TextButton(
-                    onClick = { pendingBulkDelete = true },
-                    enabled = selectedMemoPaths.isNotEmpty()
-                ) {
-                    Text("Delete (${selectedMemoPaths.size})", color = MaterialTheme.colorScheme.error)
-                }
-            } else {
-                TextButton(onClick = { isSelecting = true }) {
-                    Text("Select")
-                }
-            }
-        }
-
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md),
-            contentPadding = PaddingValues(vertical = DesignTokens.Spacing.sm)
-        ) {
-            visibleFolders.forEach { folder ->
-                val folderExpanded = expanded[folder.projectId] == true || query.isNotEmpty()
-                item(key = "folder-${folder.projectId}") {
-                    Column {
-                        FolderHeaderRow(
-                            folder = folder,
-                            isExpanded = folderExpanded,
-                            onToggle = {
-                                expanded[folder.projectId] = !(expanded[folder.projectId] ?: false)
-                            }
-                        )
-
-                        AnimatedVisibility(
-                            visible = folderExpanded,
-                            enter = expandVertically(
-                                animationSpec = tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing),
-                                expandFrom = Alignment.Top
-                            ) + fadeIn(animationSpec = tween(DesignTokens.Motion.feedbackMillis)),
-                            exit = shrinkVertically(
-                                animationSpec = tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing),
-                                shrinkTowards = Alignment.Top
-                            ) + fadeOut(animationSpec = tween(DesignTokens.Motion.feedbackMillis))
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(top = DesignTokens.Spacing.md),
-                                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
-                            ) {
-                                folder.memos.forEach { memo ->
-                                    key(memo.file.absolutePath) {
-                                        val memoPath = memo.file.absolutePath
-                                        Box(modifier = Modifier.padding(start = DesignTokens.Spacing.md)) {
-                                            RecordingMemoRow(
-                                                memo = memo,
-                                                service = service,
-                                                isSelecting = isSelecting,
-                                                isSelected = memoPath in selectedMemoPaths,
-                                                snackbarHostState = snackbarHostState,
-                                                onSelectionChanged = { selected ->
-                                                    selectedMemoPaths = if (selected) {
-                                                        selectedMemoPaths + memoPath
-                                                    } else {
-                                                        selectedMemoPaths - memoPath
-                                                    }
-                                                },
-                                                onTrashRequest = { m ->
-                                                    scope.launch {
-                                                        val trashed = service.trashMemo(m)
-                                                        memoListVersion++
-                                                        if (trashed != null) {
-                                                            val result = snackbarHostState.showSnackbar(
-                                                                message = "Recording moved to Trash",
-                                                                actionLabel = "Undo",
-                                                                duration = SnackbarDuration.Short
-                                                            )
-                                                            if (result == SnackbarResult.ActionPerformed) {
-                                                                service.restoreTrashedMemo(trashed)
-                                                                memoListVersion++
-                                                            }
-                                                        } else {
-                                                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
-                                                        }
-                                                    }
-                                                },
-                                                onMemoListChanged = { memoListVersion++ }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FolderHeaderRow(
-    folder: RecordingFolder,
-    isExpanded: Boolean,
-    onToggle: () -> Unit,
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    val arrowRotation by animateFloatAsState(
-        targetValue = if (isExpanded) 180f else 0f,
-        animationSpec = tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing)
-    )
-    Card(
-        onClick = onToggle,
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = DesignTokens.Touch.minTarget),
-        shape = RoundedCornerShape(DesignTokens.Radius.xl),
-        colors = CardDefaults.cardColors(
-            containerColor = colorScheme.surfaceContainer,
-            contentColor = colorScheme.onSurface
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(DesignTokens.Spacing.md),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = folder.title,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    color = if (folder.title == "Deleted song") {
-                        colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    } else {
-                        colorScheme.onSurface
-                    }
-                )
-                Text(
-                    text = "${folder.memos.size} ${if (folder.memos.size == 1) "recording" else "recordings"}",
-                    fontSize = DesignTokens.Typography.caption,
-                    color = colorScheme.onSurfaceVariant
-                )
-            }
-            Icon(
-                Icons.Default.KeyboardArrowDown,
-                contentDescription = if (isExpanded) "Collapse" else "Expand",
-                tint = colorScheme.onSurfaceVariant,
-                modifier = Modifier.rotate(arrowRotation)
-            )
-        }
-    }
-}
-
 @Composable
 private fun SwipeToRevealDelete(
     onDelete: () -> Unit,
@@ -1018,7 +663,7 @@ private fun SwipeToRevealDelete(
 }
 
 @Composable
-private fun RecordingMemoRow(
+internal fun RecordingMemoRow(
     memo: VoiceMemo,
     service: VoiceMemoService,
     isSelecting: Boolean,

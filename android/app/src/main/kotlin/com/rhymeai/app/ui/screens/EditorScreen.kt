@@ -128,6 +128,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import com.rhymeai.app.ui.components.SongRecordingsDialog
 import com.rhymeai.app.R
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.AnnotatedString
@@ -219,6 +220,7 @@ private fun rememberExportDocumentLauncher(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
+    var recordingsProjectId by rememberSaveable { mutableStateOf<String?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
     var lyricsFocused by remember { mutableStateOf(false) }
     var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -454,7 +456,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         viewModel.showExportSheet = false
     }
 
-    val modalOpen = viewModel.showSongNotebook || viewModel.showSettingsDialog ||
+    val modalOpen = recordingsProjectId != null || viewModel.showSongNotebook || viewModel.showSettingsDialog ||
         viewModel.showProjectsDialog ||
         viewModel.showExportSheet ||
         viewModel.showInspector
@@ -673,6 +675,30 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     actionIconContentColor = colorScheme.onSurfaceVariant
                 )
             )
+
+            if (!focusMode) TextButton(
+                onClick = {
+                    if (!micBusy) {
+                        micBusy = true
+                        scope.launch {
+                            try {
+                                recordingsProjectId = viewModel.ensureProjectForRecording()
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                snackbarHostState.showSnackbar("Could not save this song. Try opening recordings again.")
+                            } finally {
+                                micBusy = false
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Icon(Icons.Default.Mic, contentDescription = null)
+                Spacer(Modifier.width(DesignTokens.Spacing.sm))
+                Text("Recordings")
+            }
 
             // Divider
             HorizontalDivider(color = colorScheme.outlineVariant)
@@ -1388,6 +1414,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
 
         // Export sheet
+        recordingsProjectId?.let { projectId ->
+            SongRecordingsDialog(
+                projectId = projectId,
+                songTitle = viewModel.title.ifBlank { "Untitled Song" },
+                service = viewModel.voiceMemoService,
+                onRecord = { recordingsProjectId = null; onMicFabTap() },
+                onDismiss = { recordingsProjectId = null }
+            )
+        }
+
         if (viewModel.showExportSheet) {
             ExportSheet(
                 onPick = { launchExport(it) },

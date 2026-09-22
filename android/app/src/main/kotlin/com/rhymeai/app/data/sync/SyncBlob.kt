@@ -52,7 +52,7 @@ internal object SyncIdentity {
         require(value.isNotEmpty() && value.toByteArray(Charsets.UTF_8).size <= MAX_RECORDING_FILE_NAME_BYTES) {
             "Invalid recording filename"
         }
-        require(value == value.trim() && value.endsWith(".m4a")) { "Invalid recording filename" }
+        require(value == value.trim() && value.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) in com.rhymeai.app.data.recording.RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) { "Invalid recording filename" }
         require(value.none { it.isISOControl() || it in illegalRecordingCharacters }) {
             "Invalid recording filename"
         }
@@ -81,12 +81,10 @@ data class RecordingManifestEntry(
     companion object {
         const val MAX_SYNC_RECORDING_BYTES = 16L * 1024L * 1024L
         const val DRIVE_PREFIX = "rec_"
-        const val DRIVE_SUFFIX = ".m4a.enc"
         const val MIME_TYPE = "application/octet-stream"
 
         fun driveNameFor(projectId: String, fileName: String): String {
-            val stem = fileName.removeSuffix(".m4a")
-            return "$DRIVE_PREFIX${projectId}_${stem}$DRIVE_SUFFIX"
+            return "$DRIVE_PREFIX${projectId}_${fileName}.enc"
         }
     }
 }

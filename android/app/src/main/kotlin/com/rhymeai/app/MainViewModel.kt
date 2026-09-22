@@ -228,7 +228,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun keepAlternate(text: String) {
         if (text.isBlank() || notebookError != null || restoringDraft) return
-        val id = ensureProjectForRecording()
+        val id = ensureProjectForNotebook()
         updateWorkspace(id) { it.keep(text, System.currentTimeMillis()) }
     }
 
@@ -243,7 +243,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveDraftVersion() {
         if (notebookError != null || restoringDraft) return
-        val id = ensureProjectForRecording()
+        val id = ensureProjectForNotebook()
         updateWorkspace(id) { it.checkpoint(title, lyrics, theme, System.currentTimeMillis(), force = true) }
         triggerAutoSave()
     }
@@ -1383,28 +1383,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // A recording needs a project folder before any lyrics exist (people hum
-    // the melody first). Creates and persists an Untitled project on demand.
-    fun ensureProjectForRecording(): String {
-        currentProjectId?.let { return it }
-        val newProject = createUntitledProjectSnapshot()
-        projects = listOf(newProject) + projects
-        currentProjectId = newProject.id
+    private fun reserveProjectIdentity(): String = currentProjectId ?: createUntitledProjectSnapshot().let { project ->
+        projects = listOf(project) + projects
+        currentProjectId = project.id
         showStartMenu = false
+        project.id
+    }
+
+    private fun ensureProjectForNotebook(): String {
+        currentProjectId?.let { return it }
+        val projectId = reserveProjectIdentity()
         val savedProjects = projects
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
         viewModelScope.launch {
-            persistActiveProjectSnapshot(
-                projectId = newProject.id,
-                projectList = savedProjects,
-                editorTitle = savedTitle,
-                editorLyrics = savedLyrics,
-                editorTheme = savedTheme
-            )
+            persistActiveProjectSnapshot(projectId, savedProjects, savedTitle, savedLyrics, savedTheme)
         }
-        return newProject.id
+        return projectId
+    }
+
+    // Reserve identity before suspending so edits keep the same autosave target.
+    // Persist retries too: a failed save must not admit an orphaned recording.
+    suspend fun ensureProjectForRecording(): String {
+        val projectId = reserveProjectIdentity()
+        repo.saveActiveState(projects, projectId, title, lyrics, theme)
+        if (currentProjectId != projectId) throw CancellationException("Song changed")
+        return projectId
     }
 
     fun triggerAutoSave() {
