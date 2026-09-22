@@ -11,6 +11,7 @@ struct ProjectsDrawerView: View {
     @State private var searchText = ""
     @State private var fileImporterPresented = false
     @State private var importError: String?
+    @State private var importTask: Task<Void, Never>?
     @State private var drawerVisible = false
     @State private var isClosing = false
     @State private var undoToast: UndoToast?
@@ -124,6 +125,10 @@ struct ProjectsDrawerView: View {
                 }
             }
         }
+        .onDisappear {
+            importTask?.cancel()
+            importTask = nil
+        }
         .fileImporter(
             isPresented: $fileImporterPresented,
             allowedContentTypes: [.json],
@@ -195,6 +200,7 @@ struct ProjectsDrawerView: View {
 
             HStack(spacing: RhymeAITokens.Spacing.sm) {
                 Button {
+                    importTask?.cancel()
                     importError = nil
                     fileImporterPresented = true
                 } label: {
@@ -274,6 +280,7 @@ struct ProjectsDrawerView: View {
 
         return HStack(spacing: RhymeAITokens.Spacing.xs) {
             Button {
+                importTask?.cancel()
                 viewModel.loadProject(project)
                 isPresented = false
             } label: {
@@ -349,6 +356,7 @@ struct ProjectsDrawerView: View {
     }
 
     private func closeDrawer() {
+        importTask?.cancel()
         guard !isClosing else { return }
         isClosing = true
         withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.feedback, completionCriteria: .removed) {
@@ -359,18 +367,27 @@ struct ProjectsDrawerView: View {
     }
 
     private func handleImport(_ result: Result<[URL], Error>) {
+        importTask?.cancel()
         switch result {
         case .success(let urls):
             guard let url = urls.first else { return }
-            do {
-                let didStart = url.startAccessingSecurityScopedResource()
-                defer { if didStart { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let exported = try LyricsExporter.decodeJsonExport(data)
-                guard viewModel.importProject(exported) else { return }
-                closeDrawer()
-            } catch {
-                importError = "Could not import this file. Pick a RhymeAI project JSON."
+            importError = nil
+            importTask = Task { @MainActor in
+                do {
+                    let exported = try await LyricsExporter.decodeJsonExport(from: url)
+                    try Task.checkCancellation()
+                    guard viewModel.importProject(exported) else {
+                        importError = viewModel.errorMessage
+                        return
+                    }
+                    closeDrawer()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    importError = (error as? LyricsExporter.ImportError)?.errorDescription
+                        ?? "Could not import this file. Pick a RhymeAI project JSON."
+                }
             }
         case .failure:
             importError = "Could not open the selected file."

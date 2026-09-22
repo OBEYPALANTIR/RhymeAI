@@ -11,6 +11,7 @@ struct ProjectsView: View {
     @State private var searchText = ""
     @State private var fileImporterPresented = false
     @State private var importError: String?
+    @State private var importTask: Task<Void, Never>?
     @State private var pendingDeleteProject: SongProject?
     @State private var trashBinPresented = false
 
@@ -56,6 +57,7 @@ struct ProjectsView: View {
 
                 Button {
                     viewModel.newProject()
+                    importTask?.cancel()
                     dismiss()
                 } label: {
                     HStack {
@@ -71,6 +73,7 @@ struct ProjectsView: View {
                 .listRowBackground(Color.clear)
 
                 Button {
+                    importTask?.cancel()
                     importError = nil
                     fileImporterPresented = true
                 } label: {
@@ -111,6 +114,7 @@ struct ProjectsView: View {
                     ForEach(filteredProjects, id: \.id) { project in
                         Button {
                             viewModel.loadProject(project)
+                            importTask?.cancel()
                             dismiss()
                         } label: {
                             HStack {
@@ -166,7 +170,10 @@ struct ProjectsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        importTask?.cancel()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -190,6 +197,10 @@ struct ProjectsView: View {
                 handleImport(result)
             }
         }
+        .onDisappear {
+            importTask?.cancel()
+            importTask = nil
+        }
         .alert(
             "Delete this song?",
             isPresented: Binding(
@@ -211,18 +222,27 @@ struct ProjectsView: View {
     }
 
     private func handleImport(_ result: Result<[URL], Error>) {
+        importTask?.cancel()
         switch result {
         case .success(let urls):
             guard let url = urls.first else { return }
-            do {
-                let didStart = url.startAccessingSecurityScopedResource()
-                defer { if didStart { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let exported = try LyricsExporter.decodeJsonExport(data)
-                guard viewModel.importProject(exported) else { return }
-                dismiss()
-            } catch {
-                importError = "Could not import this file. Pick a RhymeAI project JSON."
+            importError = nil
+            importTask = Task { @MainActor in
+                do {
+                    let exported = try await LyricsExporter.decodeJsonExport(from: url)
+                    try Task.checkCancellation()
+                    guard viewModel.importProject(exported) else {
+                        importError = viewModel.errorMessage
+                        return
+                    }
+                    dismiss()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    importError = (error as? LyricsExporter.ImportError)?.errorDescription
+                        ?? "Could not import this file. Pick a RhymeAI project JSON."
+                }
             }
         case .failure:
             importError = "Could not open the selected file."
