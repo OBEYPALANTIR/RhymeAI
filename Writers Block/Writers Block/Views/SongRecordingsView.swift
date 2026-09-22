@@ -391,7 +391,7 @@ struct SongRecordingsView: View {
     }
 
     /// True when the stem is a pure millisecond-epoch timestamp (all digits,
-    /// 13 chars — matches the `VoiceMemoService.newMemoURL` naming scheme).
+    /// 13 chars — matches the `RecordingFiles.newMemoURL` naming scheme).
     private func isTimestampStem(_ stem: String) -> Bool {
         stem.count == 13 && stem.allSatisfy(\.isNumber)
     }
@@ -424,7 +424,7 @@ struct SongRecordingsView: View {
     }
 
     private func reloadRecordings() {
-        let items = VoiceMemoService.memos(for: projectId).map {
+        let items = RecordingFiles.memos(for: projectId).map {
             RecordingItem(id: $0.absoluteString, url: $0, projectId: projectId, projectTitle: projectTitle)
         }
         recordingFolders = items.isEmpty ? [] : [RecordingFolder(id: projectId, title: projectTitle, items: items)]

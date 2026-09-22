@@ -22,7 +22,7 @@ struct RecordingImportTests {
         let sources = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer {
             try? FileManager.default.removeItem(at: sources)
-            VoiceMemoService.deleteMemosFolder(for: projectId)
+            RecordingFiles.deleteMemosFolder(for: projectId)
         }
         let source = try makeWAV(in: sources)
         let original = try Data(contentsOf: source)
@@ -33,13 +33,13 @@ struct RecordingImportTests {
         #expect(second.lastPathComponent == "Melody 2.wav")
         try FileManager.default.removeItem(at: source)
         #expect(try Data(contentsOf: first) == original)
-        #expect(VoiceMemoService.memos(for: projectId).count == 2)
+        #expect(RecordingFiles.memos(for: projectId).count == 2)
         #expect(try AVAudioFile(forReading: first).length > 0)
         let service = VoiceMemoService()
         let renamed = try service.renameMemo(at: first, to: "Verse idea")
         #expect(renamed.pathExtension == "wav")
         let trash = try #require(service.trashMemo(at: renamed, projectId: projectId))
-        #expect(VoiceMemoService.trashedMemos().contains { $0.id == trash.id })
+        #expect(RecordingFiles.trashedMemos().contains { $0.id == trash.id })
         service.restoreTrashedMemo(trash)
         #expect(FileManager.default.fileExists(atPath: renamed.path))
         let manifest = try RecordingBackupManifest.scan(projectIds: [projectId])
@@ -55,7 +55,7 @@ struct RecordingImportTests {
         try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
         defer {
             try? FileManager.default.removeItem(at: sources)
-            VoiceMemoService.deleteMemosFolder(for: projectId)
+            RecordingFiles.deleteMemosFolder(for: projectId)
         }
         let fake = sources.appendingPathComponent("fake.mp3")
         try Data("This is not audio".utf8).write(to: fake)
@@ -72,8 +72,8 @@ struct RecordingImportTests {
             _ = try await task.value
             Issue.record("A cancelled import was accepted")
         } catch is CancellationError { }
-        #expect(VoiceMemoService.memos(for: projectId).isEmpty)
-        let remaining = try FileManager.default.contentsOfDirectory(atPath: VoiceMemoService.memoFolder(for: projectId).path)
+        #expect(RecordingFiles.memos(for: projectId).isEmpty)
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: RecordingFiles.memoFolder(for: projectId).path)
         #expect(remaining.isEmpty)
     }
 

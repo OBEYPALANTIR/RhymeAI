@@ -289,7 +289,7 @@ struct TrashLifecycleTests {
         defer { fixture.cleanUp() }
         #expect(fixture.memo.url.resolvingSymlinksInPath() == fixture.storedFile.resolvingSymlinksInPath())
 
-        VoiceMemoService.purgeExpiredTrashedMemos(now: Date())
+        RecordingFiles.purgeExpiredTrashedMemos(now: Date())
 
         #expect(FileManager.default.fileExists(atPath: fixture.storedFile.path))
     }
@@ -304,12 +304,12 @@ struct TrashLifecycleTests {
         try FileManager.default.moveItem(at: fixture.storedFile, to: outsideFile)
         try FileManager.default.createSymbolicLink(at: fixture.memo.url, withDestinationURL: outsideFile)
 
-        let discovered = VoiceMemoService.trashedMemos().contains {
+        let discovered = RecordingFiles.trashedMemos().contains {
             $0.url.resolvingSymlinksInPath() == outsideFile.resolvingSymlinksInPath()
         }
         #expect(discovered)
 
-        VoiceMemoService.purgeExpiredTrashedMemos(now: Date())
+        RecordingFiles.purgeExpiredTrashedMemos(now: Date())
         #expect(FileManager.default.fileExists(atPath: outsideFile.path))
     }
 
@@ -383,14 +383,14 @@ struct TrashLifecycleTests {
 
         init(symlinkedParent: Bool, deletedAt: Date = Date()) throws {
             let projectId = "trash-\(UUID().uuidString)"
-            let projectFolder = VoiceMemoService.trashFolder(for: projectId)
+            let projectFolder = RecordingFiles.trashFolder(for: projectId)
             let scratch = FileManager.default.temporaryDirectory
                 .appendingPathComponent("TrashLifecycleTests-\(UUID().uuidString)", isDirectory: true)
             let deletedAtMs = Int(deletedAt.timeIntervalSince1970 * 1000)
-            let storedName = "\(deletedAtMs)\(VoiceMemoService.trashNameSeparator)take.m4a"
+            let storedName = "\(deletedAtMs)\(RecordingFiles.trashNameSeparator)take.m4a"
 
             try FileManager.default.createDirectory(
-                at: VoiceMemoService.memosTrashRoot(),
+                at: RecordingFiles.memosTrashRoot(),
                 withIntermediateDirectories: true
             )
 

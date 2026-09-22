@@ -640,7 +640,7 @@ final class BackupService {
             oauthProvider: GoogleDriveOAuthService(),
             secretStore: KeychainBackupSecretStore(),
             defaults: .standard,
-            memosRoot: VoiceMemoService.memosRoot()
+            memosRoot: RecordingFiles.memosRoot()
         )
     }
 
@@ -1047,16 +1047,16 @@ final class BackupService {
     private func deleteLocalRecordingsCoveredByDeletions(_ deletions: [SyncDeletion]) throws {
         let deletedProjects = Set(deletions.filter { $0.fileName == nil }.map(\.projectId))
         for projectId in deletedProjects {
-            let live = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: memosRoot)
-            let trash = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: VoiceMemoService.memosTrashRoot())
+            let live = try RecordingFiles.projectURL(projectId: projectId, memosRoot: memosRoot)
+            let trash = try RecordingFiles.projectURL(projectId: projectId, memosRoot: RecordingFiles.memosTrashRoot())
             if FileManager.default.fileExists(atPath: live.path) { try FileManager.default.removeItem(at: live) }
             if FileManager.default.fileExists(atPath: trash.path) { try FileManager.default.removeItem(at: trash) }
         }
         for deletion in deletions {
             guard let fileName = deletion.fileName, !deletedProjects.contains(deletion.projectId) else { continue }
-            let live = try RecordingBackupManifest.localURL(projectId: deletion.projectId, fileName: fileName, memosRoot: memosRoot)
+            let live = try RecordingFiles.localURL(projectId: deletion.projectId, fileName: fileName, memosRoot: memosRoot)
             if FileManager.default.fileExists(atPath: live.path) { try FileManager.default.removeItem(at: live) }
-            for trashed in VoiceMemoService.trashedMemos() where trashed.projectId == deletion.projectId && trashed.originalName == fileName {
+            for trashed in RecordingFiles.trashedMemos() where trashed.projectId == deletion.projectId && trashed.originalName == fileName {
                 if FileManager.default.fileExists(atPath: trashed.url.path) { try FileManager.default.removeItem(at: trashed.url) }
             }
         }
@@ -1071,8 +1071,8 @@ final class BackupService {
     private func restoreRecordings(from recordings: [SyncRecordingManifestEntry], accessToken: String, passphrase: String) async throws {
         for entry in recordings {
             try entry.validate()
-            let folder = try RecordingBackupManifest.projectURL(projectId: entry.projectId, memosRoot: memosRoot)
-            let target = try RecordingBackupManifest.localURL(projectId: entry.projectId, fileName: entry.fileName, memosRoot: memosRoot)
+            let folder = try RecordingFiles.projectURL(projectId: entry.projectId, memosRoot: memosRoot)
+            let target = try RecordingFiles.localURL(projectId: entry.projectId, fileName: entry.fileName, memosRoot: memosRoot)
             let shouldRestore = try shouldRestoreRecording(entry: entry, localURL: target)
             guard shouldRestore else { continue }
             guard let remote = try await driveClient.findFile(named: entry.driveName, accessToken: accessToken) else { continue }

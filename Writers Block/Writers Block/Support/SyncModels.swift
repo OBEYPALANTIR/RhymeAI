@@ -20,7 +20,7 @@ enum SyncIdentity {
 
     nonisolated static func validateFileName(_ value: String) throws {
         let illegal = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
-        guard !value.isEmpty, value.utf8.count <= 240, VoiceMemoService.supportedAudioExtensions.contains((value as NSString).pathExtension),
+        guard !value.isEmpty, value.utf8.count <= 240, RecordingFiles.supportedAudioExtensions.contains((value as NSString).pathExtension),
               value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.unicodeScalars.contains(where: { illegal.contains($0) }) else {
             throw SyncValidationError.invalidFileName
@@ -405,31 +405,9 @@ enum RecordingBackupManifest {
         "rec_\(projectId)_\(fileName).enc"
     }
 
-    nonisolated static func projectURL(projectId: String, memosRoot: URL) throws -> URL {
-        try SyncIdentity.validateProjectId(projectId)
-        let root = memosRoot.standardizedFileURL.resolvingSymlinksInPath()
-        let folder = root.appendingPathComponent(projectId, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
-        try requireDescendant(folder, of: root)
-        return folder
-    }
-
-    nonisolated static func localURL(projectId: String, fileName: String, memosRoot: URL) throws -> URL {
-        try SyncIdentity.validateFileName(fileName)
-        let root = memosRoot.standardizedFileURL.resolvingSymlinksInPath()
-        let folder = try projectURL(projectId: projectId, memosRoot: root)
-        let url = folder.appendingPathComponent(fileName).standardizedFileURL.resolvingSymlinksInPath()
-        try requireDescendant(url, of: root)
-        return url
-    }
-
-    nonisolated private static func requireDescendant(_ url: URL, of root: URL) throws {
-        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        guard url.path.hasPrefix(prefix), url.path != root.path else { throw SyncValidationError.pathOutsideMemoRoot }
-    }
-
-    static func scan(projectIds: [String], memosRoot: URL = VoiceMemoService.memosRoot()) throws -> [(entry: SyncRecordingManifestEntry, localURL: URL)] {
+    static func scan(projectIds: [String], memosRoot: URL = RecordingFiles.memosRoot()) throws -> [(entry: SyncRecordingManifestEntry, localURL: URL)] {
         try projectIds.flatMap { projectId -> [(SyncRecordingManifestEntry, URL)] in
-            let folder = try projectURL(projectId: projectId, memosRoot: memosRoot)
+            let folder = try RecordingFiles.projectURL(projectId: projectId, memosRoot: memosRoot)
             guard let urls = try? FileManager.default.contentsOfDirectory(
                 at: folder,
                 includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
@@ -437,10 +415,10 @@ enum RecordingBackupManifest {
             ) else { return [] }
 
             return try urls
-                .filter { VoiceMemoService.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
+                .filter { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
                 .map { url in
-                    let url = try localURL(projectId: projectId, fileName: url.lastPathComponent, memosRoot: memosRoot)
+                    let url = try RecordingFiles.localURL(projectId: projectId, fileName: url.lastPathComponent, memosRoot: memosRoot)
                     let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
                     let data = try Data(contentsOf: url)
                     let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
