@@ -43,8 +43,6 @@ struct FloatingMicButton: View {
     private let recordingPillWidth: CGFloat = 220
     // Height stays constant — same as the idle circle.
     private let pillHeight: CGFloat = RhymeAITokens.Touch.comfortable         // 56
-    // Right-side glyph slot: 44 pt touch target + 8 pt trailing padding.
-    private let glyphSlot: CGFloat = RhymeAITokens.Touch.minimum + RhymeAITokens.Spacing.xs
 
     // MARK: - Body
 
@@ -78,15 +76,14 @@ struct FloatingMicButton: View {
                     }
                     .padding(.leading, RhymeAITokens.Spacing.sm)
                     .opacity(recordingContentOpacity)
-                    .frame(width: max(0, interpolatedWidth - glyphSlot), alignment: .leading)
+                    .frame(width: max(0, interpolatedWidth - idleSize), alignment: .leading)
                     .transition(.opacity)
                 }
 
                 Spacer(minLength: 0)
 
-                // Central glyph — mic crossfades to pause as progress advances.
-                // Wrapped in a button: when idle it starts recording; when
-                // recording the entire control is the stop affordance.
+                // The 44-point control stays centered in the fixed trailing slot
+                // while the recording content expands to its left.
                 Button {
                     if service.isRecording {
                         service.stopRecording()
@@ -122,10 +119,12 @@ struct FloatingMicButton: View {
                         width: RhymeAITokens.Touch.minimum,
                         height: RhymeAITokens.Touch.minimum
                     )
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .frame(width: idleSize, height: pillHeight)
                 .accessibilityLabel(service.isRecording ? "Stop recording" : "Record voice memo")
                 .accessibilityIdentifier("micButton")
-                .padding(.trailing, RhymeAITokens.Spacing.xs)
             }
             .frame(width: interpolatedWidth, height: pillHeight)
         }
