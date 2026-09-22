@@ -607,6 +607,29 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 modifier = Modifier.testTag("sectionMenuButton")
                             )
                             DropdownMenuItem(
+                                text = { Text("Song recordings") },
+                                onClick = {
+                                    songActionsExpanded = false
+                                    focusManager.clearFocus()
+                                    if (!micBusy) {
+                                        micBusy = true
+                                        scope.launch {
+                                            try {
+                                                recordingsProjectId = viewModel.ensureProjectForRecording()
+                                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                                throw cancelled
+                                            } catch (_: Exception) {
+                                                snackbarHostState.showSnackbar("Could not save this song. Try opening recordings again.")
+                                            } finally {
+                                                micBusy = false
+                                            }
+                                        }
+                                    }
+                                },
+                                enabled = !micBusy,
+                                modifier = Modifier.testTag("songRecordings")
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Song Notebook") },
                                 onClick = {
                                     songActionsExpanded = false
@@ -675,30 +698,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     actionIconContentColor = colorScheme.onSurfaceVariant
                 )
             )
-
-            if (!focusMode) TextButton(
-                onClick = {
-                    if (!micBusy) {
-                        micBusy = true
-                        scope.launch {
-                            try {
-                                recordingsProjectId = viewModel.ensureProjectForRecording()
-                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                                throw cancelled
-                            } catch (_: Exception) {
-                                snackbarHostState.showSnackbar("Could not save this song. Try opening recordings again.")
-                            } finally {
-                                micBusy = false
-                            }
-                        }
-                    }
-                },
-                modifier = Modifier.align(Alignment.End)
-            ) {
-                Icon(Icons.Default.Mic, contentDescription = null)
-                Spacer(Modifier.width(DesignTokens.Spacing.sm))
-                Text("Recordings")
-            }
 
             // Divider
             HorizontalDivider(color = colorScheme.outlineVariant)
@@ -1350,8 +1349,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.CenterEnd)
-                                .padding(horizontal = DesignTokens.EditorChrome.recordingContentStartPadding)
-                                .size(DesignTokens.EditorChrome.recordingIconSize),
+                                .size(DesignTokens.EditorChrome.fabSize),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -1360,6 +1358,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 tint = colorScheme.onSurfaceVariant,
                                 modifier = Modifier
                                     .size(DesignTokens.EditorChrome.recordingIconSize)
+                                    .testTag("micGlyph")
                                     .graphicsLayer { alpha = 1f - recProgress.value }
                             )
                             Icon(
@@ -1419,7 +1418,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 projectId = projectId,
                 songTitle = viewModel.title.ifBlank { "Untitled Song" },
                 service = viewModel.voiceMemoService,
-                onRecord = { recordingsProjectId = null; onMicFabTap() },
                 onDismiss = { recordingsProjectId = null }
             )
         }

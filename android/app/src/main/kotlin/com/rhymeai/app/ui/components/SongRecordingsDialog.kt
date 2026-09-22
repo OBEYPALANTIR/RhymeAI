@@ -11,6 +11,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.testTag
 import com.rhymeai.app.service.VoiceMemo
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.ui.theme.DesignTokens
@@ -25,7 +27,6 @@ fun SongRecordingsDialog(
     projectId: String,
     songTitle: String,
     service: VoiceMemoService,
-    onRecord: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -33,18 +34,15 @@ fun SongRecordingsDialog(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var isClosing by remember { mutableStateOf(false) }
     var didFinish by remember { mutableStateOf(false) }
-    var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     fun finishClose() {
         if (didFinish) return
         didFinish = true
         onDismiss()
-        pendingAction?.invoke()
     }
 
-    fun closeSheet(afterClose: (() -> Unit)? = null) {
+    fun closeSheet() {
         if (isClosing || didFinish) return
-        pendingAction = afterClose
         isClosing = true
         scope.launch {
             try {
@@ -112,20 +110,22 @@ fun SongRecordingsDialog(
         containerColor = MaterialTheme.colorScheme.background
     ) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.9f).appWritingSurface().padding(DesignTokens.Spacing.lg)) {
-            Text("Recordings", style = MaterialTheme.typography.headlineSmall)
-            Text(songTitle, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                TextButton(onClick = { picker.launch(arrayOf("audio/*")) }, enabled = !importing && !isClosing) {
-                    Text(if (importing) "Importing…" else "Import recording")
-                }
-                TextButton(onClick = { closeSheet(onRecord) }, enabled = !service.isRecording && !importing && !isClosing) { Text("Record") }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Recordings", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = { closeSheet() }, modifier = Modifier.testTag("recordingsDone")) { Text("Done") }
             }
+            Spacer(Modifier.height(DesignTokens.Spacing.sm))
             OutlinedTextField(
                 value = search, onValueChange = { search = it },
                 label = { Text("Search recordings") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(
+                onClick = { picker.launch(arrayOf("audio/*")) },
+                enabled = !importing && !isClosing,
+                modifier = Modifier.fillMaxWidth().testTag("importRecording")
+            ) { Text(if (importing) "Importing…" else "Import Recording") }
+            if (!memos.isNullOrEmpty()) FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 if (selecting) {
                     TextButton(onClick = { confirmBulkTrash = true }, enabled = selected.isNotEmpty()) {
                         Text("Delete (${selected.size})")
@@ -140,6 +140,16 @@ fun SongRecordingsDialog(
                 if (memos == null) item { CircularProgressIndicator() }
                 else if (visible.isEmpty()) item {
                     Text(if (search.isBlank()) "No recordings yet. Record or import audio for this song." else "No recordings match your search.")
+                }
+                if (visible.isNotEmpty()) item {
+                    Column(Modifier.padding(vertical = DesignTokens.Spacing.sm)) {
+                        Text(songTitle, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "${visible.size} ${if (visible.size == 1) "recording" else "recordings"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 items(visible, key = { it.file.absolutePath }) { memo ->
                     RecordingMemoRow(
@@ -165,7 +175,6 @@ fun SongRecordingsDialog(
                 }
             }
             SnackbarHost(snackbar)
-            TextButton(onClick = { closeSheet() }, modifier = Modifier.fillMaxWidth()) { Text("Done") }
         }
     }
 }

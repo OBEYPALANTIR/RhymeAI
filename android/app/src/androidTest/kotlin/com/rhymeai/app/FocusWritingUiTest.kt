@@ -36,6 +36,31 @@ class FocusWritingUiTest {
 
     @After fun stop() { scenario?.close() }
 
+    @Test fun songRecordingsLivesInSongActionsAndClosesBackToWriting() {
+        composeRule.onNodeWithText("Recordings", substring = false).assertDoesNotExist()
+        val micButton = composeRule.onNodeWithTag("micButton").fetchSemanticsNode().boundsInRoot
+        val micGlyph = composeRule.onNodeWithTag("micGlyph", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertEquals(micButton.center.x, micGlyph.center.x, 0.5f)
+        assertEquals(micButton.center.y, micGlyph.center.y, 0.5f)
+        composeRule.onNodeWithTag("lyricsEditor").performClick()
+        composeRule.onNodeWithTag("songActionsMenuButton").performClick()
+        composeRule.onNodeWithTag("songRecordings").assertIsDisplayed().performClick()
+        waitUntil { composeRule.onAllNodesWithTag("recordingsDone").fetchSemanticsNodes().isNotEmpty() }
+        composeRule.onNodeWithText("Search recordings").assertIsDisplayed()
+        composeRule.onNodeWithTag("importRecording").assertIsDisplayed()
+        composeRule.onNodeWithText("Record", substring = false).assertDoesNotExist()
+        composeRule.onNodeWithTag("recordingsDone").assertIsDisplayed().performClick()
+        waitUntil { composeRule.onAllNodesWithTag("recordingsDone").fetchSemanticsNodes().isEmpty() }
+        // Native dialog semantics disappear before the editor is interactive again.
+        waitUntil { composeRule.onAllNodesWithTag("micButton").fetchSemanticsNodes().isNotEmpty() }
+        composeRule.onNodeWithTag("lyricsEditor").assertIsDisplayed()
+        onMain { assertEquals(draft, vm.lyrics) }
+        composeRule.onNodeWithTag("songActionsMenuButton").performClick()
+        composeRule.onNodeWithTag("songRecordings").assertIsEnabled().assertIsDisplayed().performClick()
+        waitUntil { composeRule.onAllNodesWithTag("recordingsDone").fetchSemanticsNodes().isNotEmpty() }
+        composeRule.onNodeWithTag("recordingsDone").performClick()
+    }
+
     @Test fun suggestionActionsAreExplicitAndInsertionCanBeUndone() {
         seedSuggestions()
         composeRule.onNodeWithTag("unBlockAction").performClick()
