@@ -4,8 +4,6 @@ import SwiftUI
 
 /// BPM stepper + slider (40–220) with a tap-tempo button.
 struct BeatGridTempoControl: View {
-    @Environment(\.appAppearanceStyle) private var appearance
-
     @Binding var bpm: Int
     /// Rolling tap timestamps (milliseconds since reference) for tap-tempo.
     @State private var tapTimestamps: [TimeInterval] = []
@@ -30,7 +28,7 @@ struct BeatGridTempoControl: View {
                 } label: {
                     Label("Tap", systemImage: "music.note")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(appearance.palette.action)
+                        .foregroundStyle(.indigo)
                 }
                 .buttonStyle(.rhymePress)
                 .accessibilityLabel("Tap tempo")
@@ -53,7 +51,7 @@ struct BeatGridTempoControl: View {
                 get: { Double(bpm) },
                 set: { bpm = Int($0) }
             ), in: 40...220, step: 1)
-            .tint(appearance.palette.action)
+            .tint(.indigo)
         }
     }
 }
@@ -89,8 +87,6 @@ struct BeatGridPreviewView: View {
 // MARK: - Row
 
 private struct BeatGridLineRow: View {
-    @Environment(\.appAppearanceStyle) private var appearance
-
     let line: BeatGrid.LineResult
 
     var body: some View {
@@ -116,14 +112,18 @@ private struct BeatGridLineRow: View {
 
     private var barColor: Color {
         switch line.fit {
-        case .fits:     return appearance.palette.success
-        case .tight:    return appearance.palette.warning
-        case .overflow: return appearance.palette.error
+        case .fits:     return .accentColor
+        case .tight:    return Color(red: 1.0, green: 0.627, blue: 0.0) // amber
+        case .overflow: return .red
         }
     }
 
     private var labelColor: Color {
-        barColor
+        switch line.fit {
+        case .fits:     return .secondary
+        case .tight:    return Color(red: 1.0, green: 0.627, blue: 0.0)
+        case .overflow: return .red
+        }
     }
 }
 

@@ -3,6 +3,7 @@ import SwiftData
 import SwiftUI
 
 struct TrashBinView: View {
+    @Environment(\.appAppearanceStyle) private var appearance
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
@@ -13,7 +14,6 @@ struct TrashBinView: View {
     @State private var trashedMemos: [TrashedVoiceMemo] = []
     @State private var selectedMemoIds: Set<String> = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.appAppearanceStyle) private var appearance
 
     var onDismiss: (() -> Void)? = nil
 
@@ -139,7 +139,7 @@ struct TrashBinView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.md)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
-        .liquidGlassSurface(cornerRadius: 0)
+        .background(.ultraThinMaterial)
         .overlay(Divider().opacity(0.18), alignment: .bottom)
     }
 
@@ -207,7 +207,7 @@ struct TrashBinView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
-                    Text("\(SyllableCounter.wordCount(project.lyrics)) words · \(trashRemainingText(deleteAfter: project.deleteAfter))")
+                    Text("\(SyllableCounter.lyricWordCount(project.lyrics)) words · \(trashRemainingText(deleteAfter: project.deleteAfter))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -361,13 +361,13 @@ struct TrashBinView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
-        .liquidGlassSurface(cornerRadius: 0)
+        .background(.ultraThinMaterial)
     }
 
     private func restoreSelected() {
         if activeTab == .projects {
             let projects = selectedProjects
-            projects.forEach { _ = viewModel.restoreTrashedProject($0) }
+            projects.forEach(viewModel.restoreTrashedProject)
         } else {
             selectedMemos.forEach(viewModel.voiceMemoService.restoreTrashedMemo)
             reloadTrashedMemos()
@@ -378,9 +378,9 @@ struct TrashBinView: View {
     private func deleteSelectedForever() {
         if activeTab == .projects {
             let projects = selectedProjects
-            projects.forEach { _ = viewModel.permanentlyDeleteTrashedProject($0) }
+            projects.forEach(viewModel.permanentlyDeleteTrashedProject)
         } else {
-            selectedMemos.forEach { _ = viewModel.permanentlyDeleteTrashedMemo($0) }
+            selectedMemos.forEach(viewModel.voiceMemoService.permanentlyDeleteTrashedMemo)
             reloadTrashedMemos()
         }
         clearSelectionWithFeedback()
@@ -389,10 +389,10 @@ struct TrashBinView: View {
     private func selectionCircle(selected: Bool) -> some View {
         ZStack {
             Circle()
-                .strokeBorder(selected ? appearance.palette.action : appearance.palette.outlineStrong, lineWidth: 2)
+                .strokeBorder(selected ? Color.indigo : Color.secondary.opacity(0.9), lineWidth: 2)
                 .background(
                     Circle()
-                        .fill(appearance.palette.action)
+                        .fill(Color.indigo)
                         .scaleEffect(selected ? 1 : 0.72)
                         .opacity(selected ? 1 : 0)
                 )
@@ -400,7 +400,7 @@ struct TrashBinView: View {
             if selected {
                 Image(systemName: "checkmark")
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(appearance.palette.onAction)
+                    .foregroundStyle(.white)
                     .transition(.scale(scale: 0.72).combined(with: .opacity))
             }
         }

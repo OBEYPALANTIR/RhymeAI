@@ -14,15 +14,13 @@ import SwiftUI
 //
 // `accessibilityReduceMotion` collapses all transitions to instant swaps.
 //
-// The UnBlock FAB fall-down / rise-up is orchestrated by EditorView, which
-// observes `service.isRecording` directly. This component stays self-contained.
 struct FloatingMicButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
 
     let service: VoiceMemoService
     /// Called at record time to obtain (or lazily create) the project for this recording.
-    let ensureProjectId: () -> String?
+    let ensureProjectId: () -> String
 
     // MARK: - Animation state
 
@@ -36,12 +34,7 @@ struct FloatingMicButton: View {
         repeating: 0,
         count: FloatingMicButton.barCount
     )
-
-    init(service: VoiceMemoService, ensureProjectId: @escaping () -> String?) {
-        self.service = service
-        self.ensureProjectId = ensureProjectId
-        _progress = State(initialValue: service.isRecording ? 1 : 0)
-    }
+    @State private var barCursor = 0
 
     // MARK: - Layout constants
 
@@ -74,13 +67,14 @@ struct FloatingMicButton: View {
                 // Recording region — spectralizer + timer
                 // Fades in once the pill is mostly stretched (progress > 0.55).
                 if progress > 0.01 {
-                    HStack(spacing: RhymeAITokens.Spacing.xs) {
+                    HStack(spacing: 0) {
                         spectralBars
                         Text(formattedElapsed)
                             .font(.system(.caption, design: .monospaced).weight(.semibold))
                             .foregroundStyle(appearance.palette.onAction)
                             .monospacedDigit()
                             .fixedSize()
+                            .frame(width: RhymeAITokens.Touch.minimum, alignment: .center)
                     }
                     .padding(.leading, RhymeAITokens.Spacing.sm)
                     .opacity(recordingContentOpacity)
@@ -97,7 +91,7 @@ struct FloatingMicButton: View {
                     if service.isRecording {
                         service.stopRecording()
                     } else {
-                        guard let projectId = ensureProjectId() else { return }
+                        let projectId = ensureProjectId()
                         Task { await service.startRecording(projectId: projectId) }
                     }
                 } label: {
@@ -130,11 +124,11 @@ struct FloatingMicButton: View {
                     )
                 }
                 .accessibilityLabel(service.isRecording ? "Stop recording" : "Record voice memo")
+                .accessibilityIdentifier("micButton")
                 .padding(.trailing, RhymeAITokens.Spacing.xs)
             }
             .frame(width: interpolatedWidth, height: pillHeight)
         }
-        // Accessibility identifiers are set by EditorView on the parent container.
         .frame(width: interpolatedWidth, height: pillHeight)
         // React to service state changes with a spring animation.
         .onChange(of: service.isRecording) { _, isRecording in
@@ -145,6 +139,7 @@ struct FloatingMicButton: View {
         .task(id: service.isRecording) {
             guard service.isRecording else {
                 barHistory = Array(repeating: 0, count: Self.barCount)
+                barCursor = 0
                 return
             }
 
@@ -156,10 +151,8 @@ struct FloatingMicButton: View {
                 }
 
                 guard service.isRecording && !Task.isCancelled else { break }
-                var next = barHistory
-                next.removeFirst()
-                next.append(service.averagePowerNormalized)
-                barHistory = next
+                barHistory[barCursor] = service.averagePowerNormalized
+                barCursor = (barCursor + 1) % Self.barCount
             }
         }
         // Permission denied alert lives here so the mic button is self-contained.
@@ -198,7 +191,8 @@ struct FloatingMicButton: View {
             let pitch = size.width / CGFloat(n)
             let barW = pitch * 0.6
 
-            for (i, sample) in barHistory.enumerated() {
+            for i in barHistory.indices {
+                let sample = barHistory[(barCursor + i) % n]
                 let h = max(2, CGFloat(sample) * size.height)
                 let x = CGFloat(i) * pitch + (pitch - barW) / 2
                 let rect = CGRect(

@@ -66,7 +66,7 @@ enum RhymeComplexity: Int, CaseIterable, Codable {
     }
 }
 
-enum SongSection: String, Codable {
+nonisolated enum SongSection: String, Codable, Sendable {
     case verse
     case chorus
     case bridge
@@ -90,7 +90,7 @@ enum SongSection: String, Codable {
         case .bridge:
             return "Section direction: write it like a bridge. Create a harmonic or emotional turn, add contrast, and set up a satisfying return."
         case .unknown:
-            return "Section direction: no verse, chorus, or bridge header was detected. Fit the immediate stanza and surrounding lyric context."
+            return "Section direction: follow any explicit section label that is provided; otherwise fit the immediate stanza and surrounding lyric context."
         }
     }
 
@@ -131,7 +131,7 @@ struct SuggestedLine: Identifiable {
     }
 }
 
-struct RhymeContext {
+nonisolated struct RhymeContext: Sendable {
     let targetLine: String?
     let currentLetter: String
     let stanzaLines: [String]

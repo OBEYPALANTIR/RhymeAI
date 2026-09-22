@@ -7,7 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		78A34B002F837D260033E904 /* llama in Frameworks */ = {isa = PBXBuildFile; productRef = 78A34B022F837D260033E904 /* llama */; };
+		B10000012F837D250033E904 /* llama.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B10000002F837D250033E904 /* llama.xcframework */; };
+		B10000022F837D250033E904 /* llama.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B10000002F837D250033E904 /* llama.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,6 +29,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		B10000002F837D250033E904 /* llama.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = llama.xcframework; sourceTree = "<group>"; };
 		78A34A542F837D250033E904 /* Writers Block.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Writers Block.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		78A34A632F837D260033E904 /* Writers BlockTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Writers BlockTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		78A34A6D2F837D260033E904 /* Writers BlockUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Writers BlockUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -52,12 +54,26 @@
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		B10000032F837D250033E904 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				B10000022F837D250033E904 /* llama.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFrameworksBuildPhase section */
 		78A34A512F837D250033E904 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				78A34B002F837D260033E904 /* llama in Frameworks */,
+				B10000012F837D250033E904 /* llama.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -84,6 +100,7 @@
 				78A34A562F837D250033E904 /* Writers Block */,
 				78A34A662F837D260033E904 /* Writers BlockTests */,
 				78A34A702F837D260033E904 /* Writers BlockUITests */,
+				B10000042F837D250033E904 /* Frameworks */,
 				78A34A802F837D260033E904 /* Secrets.example.xcconfig */,
 				78A34A552F837D250033E904 /* Products */,
 			);
@@ -99,6 +116,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		B10000042F837D250033E904 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B10000002F837D250033E904 /* llama.xcframework */,
+			);
+			path = Frameworks;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -108,6 +133,7 @@
 			buildPhases = (
 				78A34A502F837D250033E904 /* Sources */,
 				78A34A512F837D250033E904 /* Frameworks */,
+				B10000032F837D250033E904 /* Embed Frameworks */,
 				78A34A522F837D250033E904 /* Resources */,
 			);
 			buildRules = (
@@ -119,7 +145,6 @@
 			);
 			name = "Writers Block";
 			packageProductDependencies = (
-				78A34B022F837D260033E904 /* llama */,
 			);
 			productName = "Writers Block";
 			productReference = 78A34A542F837D250033E904 /* Writers Block.app */;
@@ -207,9 +232,6 @@
 			productRefGroup = 78A34A552F837D250033E904 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			packageReferences = (
-				78A34B012F837D260033E904 /* XCLocalSwiftPackageReference "LlamaFramework" */,
-			);
 			targets = (
 				78A34A532F837D250033E904 /* Writers Block */,
 				78A34A622F837D260033E904 /* Writers BlockTests */,
@@ -278,20 +300,6 @@
 			targetProxy = 78A34A6E2F837D260033E904 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
-
-/* Begin XCLocalSwiftPackageReference section */
-		78A34B012F837D260033E904 /* XCLocalSwiftPackageReference "LlamaFramework" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = LlamaFramework;
-		};
-/* End XCLocalSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		78A34B022F837D260033E904 /* llama */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = llama;
-		};
-/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		78A34A752F837D260033E904 /* Debug */ = {
@@ -429,7 +437,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Writers Block/Writers Block.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -438,6 +446,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Writers-Block-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Writers Block";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -474,7 +483,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Writers Block/Writers Block.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -483,6 +492,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Writers-Block-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Writers Block";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -501,6 +511,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
+				SWIFT_COMPILATION_MODE = singlefile;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -515,7 +526,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -541,7 +552,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -566,10 +577,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-BlockUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -586,10 +596,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4X2B82KV44;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "ShaydeTree.Writers-BlockUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";

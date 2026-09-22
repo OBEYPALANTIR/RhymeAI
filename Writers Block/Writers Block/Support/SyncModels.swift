@@ -1,72 +1,6 @@
 import CryptoKit
 import Foundation
 
-enum SyncValidationError: Error, Equatable {
-    case unsupportedVersion(Int)
-    case invalidProjectId
-    case invalidFileName
-    case invalidDriveName
-    case pathOutsideMemoRoot
-    case invalidVersionShape
-}
-
-enum SyncIdentity {
-    static func validateProjectId(_ value: String) throws {
-        guard !value.isEmpty, value.utf8.count <= 128, value != ".", value != "..",
-              !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || "/\\".unicodeScalars.contains($0) }) else {
-            throw SyncValidationError.invalidProjectId
-        }
-    }
-
-    static func validateFileName(_ value: String) throws {
-        let illegal = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
-        guard !value.isEmpty, value.utf8.count <= 240, value.hasSuffix(".m4a"),
-              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.unicodeScalars.contains(where: { illegal.contains($0) }) else {
-            throw SyncValidationError.invalidFileName
-        }
-    }
-}
-
-struct SyncDeletion: Codable, Equatable, Hashable, Sendable {
-    var projectId: String
-    var fileName: String?
-    var deletedAt: Int64
-
-    init(projectId: String, fileName: String? = nil, deletedAt: Int64) {
-        self.projectId = projectId
-        self.fileName = fileName
-        self.deletedAt = deletedAt
-    }
-
-    func validate() throws {
-        try SyncIdentity.validateProjectId(projectId)
-        if let fileName { try SyncIdentity.validateFileName(fileName) }
-    }
-
-    enum CodingKeys: String, CodingKey { case projectId, fileName, deletedAt }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        projectId = try container.decode(String.self, forKey: .projectId)
-        fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
-        deletedAt = try container.decode(Int64.self, forKey: .deletedAt)
-        try validate()
-    }
-
-    func encode(to encoder: Encoder) throws {
-        try validate()
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(projectId, forKey: .projectId)
-        if let fileName {
-            try container.encode(fileName, forKey: .fileName)
-        } else {
-            try container.encodeNil(forKey: .fileName)
-        }
-        try container.encode(deletedAt, forKey: .deletedAt)
-    }
-}
-
 struct SyncSongProject: Codable, Equatable, Sendable {
     var id: String
     var title: String
@@ -211,15 +145,6 @@ struct SyncRecordingManifestEntry: Codable, Equatable, Sendable {
         sizeBytes = try container.decode(Int64.self, forKey: .sizeBytes)
         modifiedAt = try container.decodeEpochMilliseconds(forKey: .modifiedAt)
         sha256 = try container.decode(String.self, forKey: .sha256)
-        try validate()
-    }
-
-    func validate() throws {
-        try SyncIdentity.validateProjectId(projectId)
-        try SyncIdentity.validateFileName(fileName)
-        guard driveName == RecordingBackupManifest.driveName(projectId: projectId, fileName: fileName),
-              !driveName.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || "/\\".unicodeScalars.contains($0) }),
-              driveName.hasSuffix(".m4a.enc") else { throw SyncValidationError.invalidDriveName }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -234,7 +159,7 @@ struct SyncRecordingManifestEntry: Codable, Equatable, Sendable {
 }
 
 struct SyncBlob: Codable, Equatable, Sendable {
-    static let currentVersion = 2
+    static let currentVersion = 1
     static let driveFileName = "rhymeai-projects.json"
     static let driveMimeType = "application/json"
 
@@ -242,7 +167,6 @@ struct SyncBlob: Codable, Equatable, Sendable {
     var projects: [SyncSongProject]
     var trashed: [SyncTrashedSongProject]
     var recordings: [SyncRecordingManifestEntry]
-    var deletions: [SyncDeletion]
     var savedAt: Date
     var savedByClientId: String
 
@@ -251,7 +175,6 @@ struct SyncBlob: Codable, Equatable, Sendable {
         projects: [SyncSongProject] = [],
         trashed: [SyncTrashedSongProject] = [],
         recordings: [SyncRecordingManifestEntry] = [],
-        deletions: [SyncDeletion] = [],
         savedAt: Date = Date(),
         savedByClientId: String = ""
     ) {
@@ -259,50 +182,30 @@ struct SyncBlob: Codable, Equatable, Sendable {
         self.projects = projects
         self.trashed = trashed
         self.recordings = recordings
-        self.deletions = deletions
         self.savedAt = savedAt
         self.savedByClientId = savedByClientId
     }
 
-    enum CodingKeys: String, CodingKey { case version, projects, trashed, recordings, deletions, savedAt, savedByClientId }
+    enum CodingKeys: String, CodingKey { case version, projects, trashed, recordings, savedAt, savedByClientId }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        version = try container.decode(Int.self, forKey: .version)
-        guard (1...Self.currentVersion).contains(version) else { throw SyncValidationError.unsupportedVersion(version) }
-        if version == 1 {
-            guard !container.contains(.deletions) else { throw SyncValidationError.invalidVersionShape }
-            deletions = []
-        } else {
-            deletions = try container.decode([SyncDeletion].self, forKey: .deletions)
-        }
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? Self.currentVersion
         projects = try container.decodeIfPresent([SyncSongProject].self, forKey: .projects) ?? []
         trashed = try container.decodeIfPresent([SyncTrashedSongProject].self, forKey: .trashed) ?? []
         recordings = try container.decodeIfPresent([SyncRecordingManifestEntry].self, forKey: .recordings) ?? []
         savedAt = try container.decodeEpochMillisecondsIfPresent(forKey: .savedAt) ?? Date(timeIntervalSince1970: 0)
         savedByClientId = try container.decodeIfPresent(String.self, forKey: .savedByClientId) ?? ""
-        try validate()
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try validate()
         try container.encode(version, forKey: .version)
-        if version == 2 { try container.encode(deletions, forKey: .deletions) }
         try container.encode(projects, forKey: .projects)
         try container.encode(trashed, forKey: .trashed)
         try container.encode(recordings, forKey: .recordings)
         try container.encodeEpochMilliseconds(savedAt, forKey: .savedAt)
         try container.encode(savedByClientId, forKey: .savedByClientId)
-    }
-
-    func validate() throws {
-        guard (1...Self.currentVersion).contains(version) else { throw SyncValidationError.unsupportedVersion(version) }
-        guard version == 2 || deletions.isEmpty else { throw SyncValidationError.invalidVersionShape }
-        for project in projects { try SyncIdentity.validateProjectId(project.id) }
-        for project in trashed { try SyncIdentity.validateProjectId(project.id) }
-        for entry in recordings { try entry.validate() }
-        for deletion in deletions { try deletion.validate() }
     }
 }
 
@@ -317,46 +220,26 @@ enum SyncJSON {
 }
 
 enum SyncMerger {
-    static func merge(local: SyncBlob, remote: SyncBlob) throws -> SyncBlob {
-        try local.validate()
-        try remote.validate()
-        let deletions = try mergeDeletions(local.deletions + remote.deletions)
-        let deletedProjects = Set(deletions.filter { $0.fileName == nil }.map(\.projectId))
+    static func merge(local: SyncBlob, remote: SyncBlob) -> SyncBlob {
         let projects = mergeProjects(local: local.projects, remote: remote.projects)
         let trash = mergeTrash(local: local.trashed, remote: remote.trashed)
         let resolved = resolveActiveTrashConflicts(projects: projects, trashed: trash)
         let recordings = mergeRecordings(local: local.recordings, remote: remote.recordings)
         let newestSavedAt = max(local.savedAt, remote.savedAt)
         return SyncBlob(
-            version: SyncBlob.currentVersion,
-            projects: resolved.projects.filter { !deletedProjects.contains($0.id) }.sorted { ($0.title.lowercased(), $0.id) < ($1.title.lowercased(), $1.id) },
-            trashed: resolved.trashed.filter { !deletedProjects.contains($0.id) }.sorted { $0.deletedAt == $1.deletedAt ? $0.id < $1.id : $0.deletedAt > $1.deletedAt },
-            recordings: recordings.filter { entry in
-                !deletedProjects.contains(entry.projectId) && !deletions.contains { $0.projectId == entry.projectId && $0.fileName == entry.fileName }
-            }.sorted { ($0.driveName, $0.projectId, $0.fileName) < ($1.driveName, $1.projectId, $1.fileName) },
-            deletions: deletions,
+            version: max(local.version, remote.version),
+            projects: resolved.projects.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending },
+            trashed: resolved.trashed.sorted { $0.deletedAt > $1.deletedAt },
+            recordings: recordings.sorted { $0.driveName < $1.driveName },
             savedAt: newestSavedAt,
-            savedByClientId: local.savedAt == remote.savedAt ? max(local.savedByClientId, remote.savedByClientId) : (local.savedAt > remote.savedAt ? local.savedByClientId : remote.savedByClientId)
+            savedByClientId: local.savedByClientId.isEmpty ? remote.savedByClientId : local.savedByClientId
         )
-    }
-
-    static func mergeDeletions(_ deletions: [SyncDeletion]) throws -> [SyncDeletion] {
-        for deletion in deletions { try deletion.validate() }
-        let deletedProjects = Set(deletions.filter { $0.fileName == nil }.map(\.projectId))
-        var byIdentity: [String: SyncDeletion] = [:]
-        for deletion in deletions {
-            if deletion.fileName != nil && deletedProjects.contains(deletion.projectId) { continue }
-            let key = "\(deletion.projectId)/\(deletion.fileName ?? "")"
-            if let existing = byIdentity[key], existing.deletedAt >= deletion.deletedAt { continue }
-            byIdentity[key] = deletion
-        }
-        return byIdentity.values.sorted { ($0.projectId, $0.fileName ?? "") < ($1.projectId, $1.fileName ?? "") }
     }
 
     private static func mergeProjects(local: [SyncSongProject], remote: [SyncSongProject]) -> [SyncSongProject] {
         var byId: [String: SyncSongProject] = [:]
         for project in local + remote {
-            if let existing = byId[project.id], (existing.updatedAt, existing.title, existing.lyrics, existing.theme) >= (project.updatedAt, project.title, project.lyrics, project.theme) { continue }
+            if let existing = byId[project.id], existing.updatedAt > project.updatedAt { continue }
             byId[project.id] = project
         }
         return Array(byId.values)
@@ -365,7 +248,7 @@ enum SyncMerger {
     private static func mergeTrash(local: [SyncTrashedSongProject], remote: [SyncTrashedSongProject]) -> [SyncTrashedSongProject] {
         var byId: [String: SyncTrashedSongProject] = [:]
         for trashed in local + remote {
-            if let existing = byId[trashed.id], (existing.deletedAt, existing.updatedAt, existing.deleteAfter, existing.title, existing.lyrics, existing.theme) >= (trashed.deletedAt, trashed.updatedAt, trashed.deleteAfter, trashed.title, trashed.lyrics, trashed.theme) { continue }
+            if let existing = byId[trashed.id], existing.deletedAt > trashed.deletedAt { continue }
             byId[trashed.id] = trashed
         }
         return Array(byId.values)
@@ -376,11 +259,11 @@ enum SyncMerger {
         let projectById = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
         let resolvedProjects = projects.filter { project in
             guard let trash = trashById[project.id] else { return true }
-            return project.updatedAt > trash.deletedAt
+            return project.updatedAt >= trash.deletedAt
         }
         let resolvedTrash = trashed.filter { trash in
             guard let project = projectById[trash.id] else { return true }
-            return trash.deletedAt >= project.updatedAt
+            return trash.deletedAt > project.updatedAt
         }
         return (resolvedProjects, resolvedTrash)
     }
@@ -389,7 +272,7 @@ enum SyncMerger {
         var byIdentity: [String: SyncRecordingManifestEntry] = [:]
         for entry in local + remote {
             let key = "\(entry.projectId)/\(entry.fileName)"
-            if let existing = byIdentity[key], (existing.modifiedAt, existing.sha256, existing.sizeBytes, existing.driveName) >= (entry.modifiedAt, entry.sha256, entry.sizeBytes, entry.driveName) { continue }
+            if let existing = byIdentity[key], existing.modifiedAt > entry.modifiedAt { continue }
             byIdentity[key] = entry
         }
         return Array(byIdentity.values)
@@ -398,38 +281,13 @@ enum SyncMerger {
 
 enum RecordingBackupManifest {
     static func driveName(projectId: String, localURL: URL) -> String {
-        driveName(projectId: projectId, fileName: localURL.lastPathComponent)
-    }
-
-    static func driveName(projectId: String, fileName: String) -> String {
-        "rec_\(projectId)_\(fileName.dropLast(4)).m4a.enc"
-    }
-
-    static func projectURL(projectId: String, memosRoot: URL) throws -> URL {
-        try SyncIdentity.validateProjectId(projectId)
-        let root = memosRoot.standardizedFileURL.resolvingSymlinksInPath()
-        let folder = root.appendingPathComponent(projectId, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
-        try requireDescendant(folder, of: root)
-        return folder
-    }
-
-    static func localURL(projectId: String, fileName: String, memosRoot: URL) throws -> URL {
-        try SyncIdentity.validateFileName(fileName)
-        let root = memosRoot.standardizedFileURL.resolvingSymlinksInPath()
-        let folder = try projectURL(projectId: projectId, memosRoot: root)
-        let url = folder.appendingPathComponent(fileName).standardizedFileURL.resolvingSymlinksInPath()
-        try requireDescendant(url, of: root)
-        return url
-    }
-
-    private static func requireDescendant(_ url: URL, of root: URL) throws {
-        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        guard url.path.hasPrefix(prefix), url.path != root.path else { throw SyncValidationError.pathOutsideMemoRoot }
+        let stem = sanitizeComponent(localURL.deletingPathExtension().lastPathComponent)
+        return "rec_\(sanitizeComponent(projectId))_\(stem).m4a.enc"
     }
 
     static func scan(projectIds: [String], memosRoot: URL = VoiceMemoService.memosRoot()) throws -> [(entry: SyncRecordingManifestEntry, localURL: URL)] {
         try projectIds.flatMap { projectId -> [(SyncRecordingManifestEntry, URL)] in
-            let folder = try projectURL(projectId: projectId, memosRoot: memosRoot)
+            let folder = memosRoot.appendingPathComponent(projectId, isDirectory: true)
             guard let urls = try? FileManager.default.contentsOfDirectory(
                 at: folder,
                 includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
@@ -440,7 +298,6 @@ enum RecordingBackupManifest {
                 .filter { $0.pathExtension == "m4a" }
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
                 .map { url in
-                    let url = try localURL(projectId: projectId, fileName: url.lastPathComponent, memosRoot: memosRoot)
                     let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
                     let data = try Data(contentsOf: url)
                     let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -452,10 +309,15 @@ enum RecordingBackupManifest {
                         modifiedAt: values.contentModificationDate ?? Date(timeIntervalSince1970: 0),
                         sha256: digest
                     )
-                    try entry.validate()
                     return (entry, url)
                 }
         }
+    }
+
+    private static func sanitizeComponent(_ value: String) -> String {
+        let illegal = CharacterSet(charactersIn: "/:\u{0000}")
+        let filtered = value.unicodeScalars.filter { !illegal.contains($0) }
+        return String(String.UnicodeScalarView(filtered))
     }
 }
 

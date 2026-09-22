@@ -44,22 +44,20 @@ struct AppAppearanceTests {
     }
 
     @Test
-    func textureGeometryIsCachedByAppearanceLayerAndResolvedSize() {
+    func graphiteTextureGeometryIsCachedByResolvedSize() {
         let cache = AppearanceTexturePathCache()
         let phoneSize = CGRect(x: 0, y: 0, width: 393, height: 852)
 
-        _ = cache.path(for: .paper, layer: .paperRules, in: phoneSize)
-        _ = cache.path(for: .paper, layer: .paperRules, in: phoneSize)
+        _ = cache.path(for: .graphite, layer: .graphiteGrain, in: phoneSize)
+        _ = cache.path(for: .graphite, layer: .graphiteGrain, in: phoneSize)
         #expect(cache.generatedPathCount == 1)
 
-        _ = cache.path(for: .paper, layer: .paperFibers, in: phoneSize)
-        _ = cache.path(for: .graphite, layer: .graphiteGrain, in: phoneSize)
         _ = cache.path(
-            for: .paper,
-            layer: .paperRules,
+            for: .graphite,
+            layer: .graphiteGrain,
             in: CGRect(x: 0, y: 0, width: 852, height: 393)
         )
-        #expect(cache.generatedPathCount == 4)
+        #expect(cache.generatedPathCount == 2)
     }
 
     @Test
@@ -79,6 +77,29 @@ struct AppAppearanceTests {
             0x3F6212,
         ])
         #expect(AppAppearanceStyle.paper.analysisRhymeHexValues == AppAppearanceStyle.ink.analysisRhymeHexValues)
+    }
+
+    @Test
+    func syllablePaletteMatchesApprovedContrastSafeTokens() {
+        #expect(AppAppearanceStyle.ink.analysisSyllableHexValues == [
+            0x047857,
+            0x0369A1,
+            0x7E22CE,
+            0xB91C1C,
+        ])
+        #expect(AppAppearanceStyle.paper.analysisSyllableHexValues == AppAppearanceStyle.ink.analysisSyllableHexValues)
+        #expect(AppAppearanceStyle.graphite.analysisSyllableHexValues == [
+            0x6EE7B7,
+            0x93C5FD,
+            0xD8B4FE,
+            0xFDA4AF,
+        ])
+        #expect(AppAppearanceStyle.ink.editorWordCountHexValue == 0x047857)
+        #expect(AppAppearanceStyle.paper.editorWordCountHexValue == 0x047857)
+        #expect(AppAppearanceStyle.graphite.editorWordCountHexValue == 0x6EE7B7)
+        #expect(AppAppearanceStyle.ink.editorSyllableCountHexValue == 0xB91C1C)
+        #expect(AppAppearanceStyle.paper.editorSyllableCountHexValue == 0xB91C1C)
+        #expect(AppAppearanceStyle.graphite.editorSyllableCountHexValue == 0xFDA4AF)
     }
 
     @Test

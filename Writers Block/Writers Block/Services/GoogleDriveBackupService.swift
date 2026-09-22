@@ -15,7 +15,6 @@ enum BackupError: Error, Equatable {
     case invalidRequest
     case invalidResponse
     case corruptRemoteOrWrongPassphrase
-    case newerAppVersion
     case recordingIntegrityMismatch(String)
     case keychainWriteFailed(OSStatus)
 }
@@ -43,8 +42,6 @@ extension BackupError: LocalizedError {
             return "Google Drive returned an invalid response."
         case .corruptRemoteOrWrongPassphrase:
             return "Your Drive backup could not be decrypted or read. Check your passphrase; it was not overwritten."
-        case .newerAppVersion:
-            return "This backup was written by a newer version of Writers Block. Update the app before syncing."
         case .recordingIntegrityMismatch(let name):
             return "The recording \(name) did not match its backup manifest."
         case .keychainWriteFailed:
@@ -66,7 +63,6 @@ protocol DriveAppDataClient: AnyObject {
     func downloadFile(id: String, accessToken: String) async throws -> Data
     func uploadNewFile(named name: String, mimeType: String, content: Data, accessToken: String) async throws -> DriveAppDataFile
     func updateFile(id: String, mimeType: String, content: Data, accessToken: String) async throws
-    func deleteFile(id: String, accessToken: String) async throws
 }
 
 protocol OAuthAccessTokenProvider: AnyObject {
@@ -151,14 +147,6 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         request.httpBody = body
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
-        _ = try await data(for: request)
-    }
-
-    func deleteFile(id: String, accessToken: String) async throws {
-        var request = URLRequest(url: try Self.driveBaseURL().appendingPathComponent("files/\(id)"))
-        request.httpMethod = "DELETE"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 30
         _ = try await data(for: request)
     }
@@ -346,14 +334,7 @@ final class KeychainOAuthTokenStore: OAuthTokenStore {
         guard let data = try? JSONEncoder().encode(token) else {
             throw BackupError.keychainWriteFailed(errSecParam)
         }
-        let updateStatus = SecItemUpdate(
-            baseQuery() as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary
-        )
-        if updateStatus == errSecSuccess { return }
-        guard updateStatus == errSecItemNotFound else {
-            throw BackupError.keychainWriteFailed(updateStatus)
-        }
+        SecItemDelete(baseQuery() as CFDictionary)
         var query = baseQuery()
         query[kSecValueData as String] = data
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -419,7 +400,6 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
     private func authorize(clientID: String, redirectScheme: String) async throws -> OAuthToken {
         let verifier = Self.randomURLSafeString(byteCount: 32)
         let challenge = Self.codeChallenge(for: verifier)
-        let state = Self.randomURLSafeString(byteCount: 16)
         let redirectURI = "\(redirectScheme):/oauth2redirect/google"
         guard var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth") else {
             throw BackupError.invalidRequest
@@ -431,7 +411,6 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
             URLQueryItem(name: "scope", value: "https://www.googleapis.com/auth/drive.appdata"),
             URLQueryItem(name: "access_type", value: "offline"),
             URLQueryItem(name: "prompt", value: "consent"),
-            URLQueryItem(name: "state", value: state),
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256")
         ]
@@ -439,18 +418,11 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
             throw BackupError.invalidRequest
         }
         let callback = try await runWebAuthentication(url: authorizationURL, callbackScheme: redirectScheme)
-        let code = try Self.authorizationCode(from: callback, expectedState: state)
-        return try await exchangeCode(code, verifier: verifier, clientID: clientID, redirectURI: redirectURI)
-    }
-
-    static func authorizationCode(from callback: URL, expectedState: String) throws -> String {
         guard let returned = URLComponents(url: callback, resolvingAgainstBaseURL: false),
-              returned.queryItems?.first(where: { $0.name == "state" })?.value == expectedState,
-              let code = returned.queryItems?.first(where: { $0.name == "code" })?.value,
-              !code.isEmpty else {
+              let code = returned.queryItems?.first(where: { $0.name == "code" })?.value else {
             throw BackupError.invalidResponse
         }
-        return code
+        return try await exchangeCode(code, verifier: verifier, clientID: clientID, redirectURI: redirectURI)
     }
 
     private func runWebAuthentication(url: URL, callbackScheme: String) async throws -> URL {
@@ -588,17 +560,9 @@ final class KeychainBackupSecretStore: BackupSecretStore {
     }
 
     func setString(_ value: String, for key: String) throws {
-        let data = Data(value.utf8)
-        let updateStatus = SecItemUpdate(
-            baseQuery(key) as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary
-        )
-        if updateStatus == errSecSuccess { return }
-        guard updateStatus == errSecItemNotFound else {
-            throw BackupError.keychainWriteFailed(updateStatus)
-        }
+        SecItemDelete(baseQuery(key) as CFDictionary)
         var query = baseQuery(key)
-        query[kSecValueData as String] = data
+        query[kSecValueData as String] = Data(value.utf8)
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
@@ -709,12 +673,15 @@ final class BackupService {
         var localSnapshot = try makeSnapshot(modelContext: modelContext)
         let sourceRemoteFile = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken)
         var sourceRemoteBlob: SyncBlob?
-        var merged = finalizedBlob(try canonicalized(localSnapshot.blob))
+        var merged = finalizedBlob(localSnapshot.blob)
 
         if let sourceRemoteFile {
             let remoteBlob = try await downloadRemoteBlob(sourceRemoteFile, accessToken: accessToken, passphrase: passphrase)
             sourceRemoteBlob = remoteBlob
-            merged = finalizedBlob(try SyncMerger.merge(local: localSnapshot.blob, remote: remoteBlob))
+            merged = finalizedBlob(SyncMerger.merge(local: localSnapshot.blob, remote: remoteBlob))
+            try apply(merged, to: modelContext)
+            try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
+            localSnapshot = try makeSnapshot(modelContext: modelContext)
         }
 
         var localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
@@ -731,7 +698,11 @@ final class BackupService {
             localSnapshot = try makeSnapshot(modelContext: modelContext)
             if let latestRemoteFile {
                 let latestRemoteBlob = try await downloadRemoteBlob(latestRemoteFile, accessToken: accessToken, passphrase: passphrase)
-                merged = finalizedBlob(try SyncMerger.merge(local: merged, remote: latestRemoteBlob))
+                merged = finalizedBlob(SyncMerger.merge(local: localSnapshot.blob, remote: latestRemoteBlob))
+                try apply(merged, to: modelContext)
+                try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
+                localSnapshot = try makeSnapshot(modelContext: modelContext)
+                localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
                 try await uploadLocalRecordings(
                     for: merged.recordings,
                     localRecordings: localRecordings,
@@ -752,24 +723,7 @@ final class BackupService {
             }
         }
 
-        localSnapshot = try makeSnapshot(modelContext: modelContext)
-        merged = finalizedBlob(try SyncMerger.merge(local: localSnapshot.blob, remote: merged))
-        localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
-        try await uploadLocalRecordings(
-            for: merged.recordings,
-            localRecordings: localRecordings,
-            remoteBlob: merged,
-            accessToken: accessToken,
-            passphrase: passphrase
-        )
         try await uploadManifest(merged, accessToken: accessToken, passphrase: passphrase)
-        try apply(merged, to: modelContext)
-        try await deleteRemoteRecordingsCoveredByDeletions(
-            merged.deletions,
-            accessToken: accessToken
-        )
-        try deleteLocalRecordingsCoveredByDeletions(merged.deletions)
-        try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
         clearBackgroundBackupFailure()
     }
 
@@ -778,9 +732,11 @@ final class BackupService {
             throw BackupError.noRemoteBackup
         }
         let remoteBlob = try await downloadRemoteBlob(remoteFile, accessToken: accessToken, passphrase: passphrase)
-        var localSnapshot = try makeSnapshot(modelContext: modelContext)
-        var merged = finalizedBlob(try SyncMerger.merge(local: localSnapshot.blob, remote: remoteBlob))
-        var localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
+        let localSnapshot = try makeSnapshot(modelContext: modelContext)
+        let merged = finalizedBlob(SyncMerger.merge(local: localSnapshot.blob, remote: remoteBlob))
+        let localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
+        try apply(merged, to: modelContext)
+        try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
         try await uploadLocalRecordings(
             for: merged.recordings,
             localRecordings: localRecordings,
@@ -788,24 +744,7 @@ final class BackupService {
             accessToken: accessToken,
             passphrase: passphrase
         )
-        localSnapshot = try makeSnapshot(modelContext: modelContext)
-        merged = finalizedBlob(try SyncMerger.merge(local: localSnapshot.blob, remote: merged))
-        localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
-        try await uploadLocalRecordings(
-            for: merged.recordings,
-            localRecordings: localRecordings,
-            remoteBlob: merged,
-            accessToken: accessToken,
-            passphrase: passphrase
-        )
         try await uploadManifest(merged, accessToken: accessToken, passphrase: passphrase)
-        try apply(merged, to: modelContext)
-        try await deleteRemoteRecordingsCoveredByDeletions(
-            merged.deletions,
-            accessToken: accessToken
-        )
-        try deleteLocalRecordingsCoveredByDeletions(merged.deletions)
-        try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
         clearBackgroundBackupFailure()
     }
 
@@ -819,19 +758,22 @@ final class BackupService {
 
     private func downloadRemoteBlob(_ file: DriveAppDataFile, accessToken: String, passphrase: String) async throws -> SyncBlob {
         let encrypted = try await driveClient.downloadFile(id: file.id, accessToken: accessToken)
+        let plaintext: Data
         do {
-            return try SyncBlobCrypto.openManifest(encrypted, passphrase: passphrase)
-        } catch SyncBlobCryptoError.unsupportedEnvelopeVersion {
-            throw BackupError.newerAppVersion
-        } catch SyncValidationError.unsupportedVersion {
-            throw BackupError.newerAppVersion
+            plaintext = try SyncBlobCrypto.open(encrypted, passphrase: passphrase)
+        } catch {
+            throw BackupError.corruptRemoteOrWrongPassphrase
+        }
+        do {
+            return try SyncJSON.decoder.decode(SyncBlob.self, from: plaintext)
         } catch {
             throw BackupError.corruptRemoteOrWrongPassphrase
         }
     }
 
     private func uploadManifest(_ blob: SyncBlob, accessToken: String, passphrase: String) async throws {
-        let encrypted = try SyncBlobCrypto.sealManifest(blob, passphrase: passphrase)
+        let plaintext = try SyncJSON.encoder.encode(blob)
+        let encrypted = try SyncBlobCrypto.seal(plaintext, passphrase: passphrase)
         _ = try await upsertDriveFile(name: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: encrypted, accessToken: accessToken)
     }
 
@@ -840,13 +782,6 @@ final class BackupService {
         finalized.savedAt = Date()
         finalized.savedByClientId = clientId
         return finalized
-    }
-
-    private func canonicalized(_ blob: SyncBlob) throws -> SyncBlob {
-        try SyncMerger.merge(
-            local: blob,
-            remote: SyncBlob(savedAt: .distantPast, savedByClientId: "")
-        )
     }
 
     private func remoteMetadataChanged(original: DriveAppDataFile?, latest: DriveAppDataFile?) -> Bool {
@@ -939,15 +874,12 @@ final class BackupService {
     private func makeSnapshot(modelContext: ModelContext) throws -> BackupSnapshot {
         let projects = try modelContext.fetch(FetchDescriptor<SongProject>())
         let trashed = try modelContext.fetch(FetchDescriptor<TrashedSongProject>())
-        let deletionRecords = try modelContext.fetch(FetchDescriptor<SyncDeletionRecord>())
-        let deletions = try SyncMerger.mergeDeletions(deletionRecords.map(\.deletion))
         let projectIds = Set(projects.map(\.id) + trashed.map(\.id))
         let recordings = try RecordingBackupManifest.scan(projectIds: Array(projectIds), memosRoot: memosRoot).map(\.entry)
         let blob = SyncBlob(
             projects: projects.map(SyncSongProject.init(project:)),
             trashed: trashed.map(SyncTrashedSongProject.init(trashed:)),
             recordings: recordings,
-            deletions: deletions,
             savedAt: Date(),
             savedByClientId: clientId
         )
@@ -955,23 +887,10 @@ final class BackupService {
     }
 
     private func apply(_ blob: SyncBlob, to modelContext: ModelContext) throws {
-        let latestLocal = try makeSnapshot(modelContext: modelContext).blob
-        let blob = try SyncMerger.merge(local: latestLocal, remote: blob)
-        try blob.validate()
         let activeById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, $0) })
         let trashById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map { ($0.id, $0) })
-        let existingDeletionRecords = try modelContext.fetch(FetchDescriptor<SyncDeletionRecord>())
         let mergedActiveIds = Set(blob.projects.map(\.id))
         let mergedTrashIds = Set(blob.trashed.map(\.id))
-        let deletedProjectIds = Set(blob.deletions.filter { $0.fileName == nil }.map(\.projectId))
-
-        for deletion in blob.deletions {
-            if let existing = existingDeletionRecords.first(where: { $0.projectId == deletion.projectId && $0.fileName == deletion.fileName }) {
-                existing.deletedAt = max(existing.deletedAt, deletion.deletedAt)
-            } else {
-                modelContext.insert(SyncDeletionRecord(deletion: deletion))
-            }
-        }
 
         for project in blob.projects {
             if let existing = activeById[project.id] {
@@ -1009,70 +928,13 @@ final class BackupService {
         for (id, trash) in trashById where mergedActiveIds.contains(id) && !mergedTrashIds.contains(id) {
             modelContext.delete(trash)
         }
-        for (id, project) in activeById where deletedProjectIds.contains(id) {
-            modelContext.delete(project)
-        }
-        for (id, trash) in trashById where deletedProjectIds.contains(id) {
-            modelContext.delete(trash)
-        }
         try modelContext.save()
-    }
-
-    private func deleteRemoteRecordingsCoveredByDeletions(
-        _ deletions: [SyncDeletion],
-        accessToken: String
-    ) async throws {
-        let deletedProjects = Set(deletions.filter { $0.fileName == nil }.map(\.projectId))
-        for projectId in deletedProjects.sorted() {
-            try SyncIdentity.validateProjectId(projectId)
-            let prefix = "rec_\(projectId)_"
-            for file in try await driveClient.listFiles(prefix: prefix, accessToken: accessToken) {
-                try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
-            }
-        }
-        for deletion in deletions {
-            guard let fileName = deletion.fileName,
-                  !deletedProjects.contains(deletion.projectId) else { continue }
-            try deletion.validate()
-            let driveName = RecordingBackupManifest.driveName(
-                projectId: deletion.projectId,
-                fileName: fileName
-            )
-            if let file = try await driveClient.findFile(named: driveName, accessToken: accessToken) {
-                try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
-            }
-        }
-    }
-
-    private func deleteLocalRecordingsCoveredByDeletions(_ deletions: [SyncDeletion]) throws {
-        let deletedProjects = Set(deletions.filter { $0.fileName == nil }.map(\.projectId))
-        for projectId in deletedProjects {
-            let live = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: memosRoot)
-            let trash = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: VoiceMemoService.memosTrashRoot())
-            if FileManager.default.fileExists(atPath: live.path) { try FileManager.default.removeItem(at: live) }
-            if FileManager.default.fileExists(atPath: trash.path) { try FileManager.default.removeItem(at: trash) }
-        }
-        for deletion in deletions {
-            guard let fileName = deletion.fileName, !deletedProjects.contains(deletion.projectId) else { continue }
-            let live = try RecordingBackupManifest.localURL(projectId: deletion.projectId, fileName: fileName, memosRoot: memosRoot)
-            if FileManager.default.fileExists(atPath: live.path) { try FileManager.default.removeItem(at: live) }
-            for trashed in VoiceMemoService.trashedMemos() where trashed.projectId == deletion.projectId && trashed.originalName == fileName {
-                if FileManager.default.fileExists(atPath: trashed.url.path) { try FileManager.default.removeItem(at: trashed.url) }
-            }
-        }
-    }
-
-    private static func isDeleted(_ entry: SyncRecordingManifestEntry, by deletions: [SyncDeletion]) -> Bool {
-        deletions.contains {
-            $0.projectId == entry.projectId && ($0.fileName == nil || $0.fileName == entry.fileName)
-        }
     }
 
     private func restoreRecordings(from recordings: [SyncRecordingManifestEntry], accessToken: String, passphrase: String) async throws {
         for entry in recordings {
-            try entry.validate()
-            let folder = try RecordingBackupManifest.projectURL(projectId: entry.projectId, memosRoot: memosRoot)
-            let target = try RecordingBackupManifest.localURL(projectId: entry.projectId, fileName: entry.fileName, memosRoot: memosRoot)
+            let folder = memosRoot.appendingPathComponent(entry.projectId, isDirectory: true)
+            let target = folder.appendingPathComponent(entry.fileName)
             let shouldRestore = try shouldRestoreRecording(entry: entry, localURL: target)
             guard shouldRestore else { continue }
             guard let remote = try await driveClient.findFile(named: entry.driveName, accessToken: accessToken) else { continue }

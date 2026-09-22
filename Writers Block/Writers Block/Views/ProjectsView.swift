@@ -33,14 +33,8 @@ struct ProjectsView: View {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
 
-                    TextField(
-                        "",
-                        text: $searchText,
-                        prompt: Text("Search songs")
-                            .foregroundStyle(appearance.palette.placeholder)
-                    )
+                    TextField("Search songs", text: $searchText)
                         .textInputAutocapitalization(.never)
-                        .foregroundStyle(appearance.palette.primaryInk)
 
                     if !searchText.isEmpty {
                         Button {
@@ -66,13 +60,13 @@ struct ProjectsView: View {
                 } label: {
                     HStack {
                         Image(systemName: "plus")
-                            .foregroundStyle(appearance.palette.onAction)
+                            .foregroundStyle(appearance.palette.action)
                         Text("Create New Song")
-                            .foregroundStyle(appearance.palette.onAction)
+                            .foregroundStyle(.primary)
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .frame(height: RhymeAITokens.Touch.minimum)
-                    .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
+                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .indigo.opacity(0.10), interactive: true)
                 }
                 .listRowBackground(Color.clear)
 
@@ -125,10 +119,16 @@ struct ProjectsView: View {
                                         .font(.headline)
                                         .foregroundStyle(.primary)
 
+                                    if let preview = WritingCompanion.lyricPreview(project.lyrics) {
+                                        Text(preview)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                    }
                                     HStack(spacing: RhymeAITokens.Spacing.xs) {
                                         Text(project.updatedAt, style: .date)
                                         Text("·")
-                                        Text("\(SyllableCounter.wordCount(project.lyrics)) words")
+                                        Text("\(SyllableCounter.lyricWordCount(project.lyrics)) words")
                                     }
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -145,7 +145,7 @@ struct ProjectsView: View {
                         }
                         .listRowBackground(
                             viewModel.currentProjectId == project.id
-                                ? appearance.palette.raisedSurface
+                                ? appearance.palette.selectionTint
                                 : Color.clear
                         )
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -159,7 +159,9 @@ struct ProjectsView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(AppWritingBackground())
+            .background {
+                AppWritingBackground()
+            }
             .navigationTitle("Song Projects")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -217,9 +219,8 @@ struct ProjectsView: View {
                 defer { if didStart { url.stopAccessingSecurityScopedResource() } }
                 let data = try Data(contentsOf: url)
                 let exported = try LyricsExporter.decodeJsonExport(data)
-                if viewModel.importProject(exported) {
-                    dismiss()
-                }
+                viewModel.importProject(exported)
+                dismiss()
             } catch {
                 importError = "Could not import this file. Pick a RhymeAI project JSON."
             }

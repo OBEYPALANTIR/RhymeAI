@@ -26,8 +26,10 @@ nonisolated enum RhymeConstraint {
     /// the dictionary doesn't know the word — callers must then skip
     /// constraining entirely so the model isn't steered by bad data.
     ///
-    /// Each requested relation has its own exclusive pool. Words within that
-    /// pool are ranked by English frequency so common words surface first.
+    /// Within each rhyme pool (perfect/multi, then near) words are ranked by
+    /// English word frequency so common words surface before obscure ones.
+    /// Pool precedence is preserved: a near rhyme never outranks a perfect
+    /// rhyme regardless of frequency.
     static func candidateEndWords(
         targetWord: String,
         rhymeType: RhymeType,
@@ -38,30 +40,26 @@ nonisolated enum RhymeConstraint {
         return Array(orderedCandidates(matches, rhymeType: rhymeType, excluding: targetWord).prefix(limit))
     }
 
-    /// 3 = slant rhyme, 2 = perfect/multi rhyme, 1 = near rhyme, 0 = miss.
-    /// The actual ending is classified from its phonemes, independent of the
-    /// candidate-list caps used to keep prompts small.
+    /// 2 = perfect/multi rhyme with the target word, 1 = near rhyme, 0 = miss.
+    /// Membership reuses RhymeIndex rather than re-deriving phonology so the
+    /// verdict always agrees with what the prompt offered.
     static func rhymeTier(
         line: String,
         targetWord: String,
         dictionary: PronunciationDictionary = .shared
     ) -> Int {
+        let matches = RhymeIndex.shared.find(word: targetWord, dictionary: dictionary)
         let endWord = lineEndWord(line)
         guard !endWord.isEmpty else { return 0 }
-        switch ProsodyAnalyzer.rhymeRelation(
-            candidateWord: endWord,
-            targetWord: targetWord,
-            dictionary: dictionary
-        ) {
-        case .perfect: return 2
-        case .near: return 1
-        case .slant: return 3
-        case nil: return 0
-        }
+        if matches.perfect.contains(endWord) || matches.multi.contains(endWord) { return 2 }
+        if matches.near.contains(endWord) { return 1 }
+        return 0
     }
 
-    /// Dedupe, admit only the requested verified relation, then rank by
-    /// syllable distance to the target line and arrival order.
+    /// Dedupe, then prefer verified rhymes (tier desc, syllable distance to
+    /// the target line asc, arrival order asc), topping up with non-rhyming
+    /// lines in arrival order. Never returns empty for non-empty input — a
+    /// weak suggestion beats no suggestion.
     static func filterAndRank(
         lines: [String],
         targetLine: String,
@@ -93,8 +91,10 @@ nonisolated enum RhymeConstraint {
         }
     }
 
-    /// Each mode returns only its named phonetic relation. Perfect retains the
-    /// existing exact and multisyllabic pools; Near and Slant remain exclusive.
+    /// Selection order favors tighter rhymes: perfect-type requests never
+    /// offer near rhymes, looser types accept them after perfect and multi.
+    /// Each pool is already frequency-ranked by RhymeIndex.find; we simply
+    /// concatenate pools in priority order so perfect/multi always precede near.
     static func orderedCandidates(
         _ matches: RhymeMatches,
         rhymeType: RhymeType,
@@ -105,10 +105,8 @@ nonisolated enum RhymeConstraint {
         switch rhymeType {
         case .perfect:
             ordered = matches.perfect + matches.multi
-        case .near:
-            ordered = matches.near
-        case .slant:
-            ordered = matches.slant
+        case .near, .slant:
+            ordered = matches.perfect + matches.multi + matches.near
         }
         let exclude = ProsodyAnalyzer.normalizeWord(targetWord)
         var seen = Set<String>()
@@ -116,12 +114,12 @@ nonisolated enum RhymeConstraint {
     }
 }
 
-/// Per-request rhyme verifier.
+/// Per-request rhyme verifier. Caches the RhymeIndex lookup once so tier
+/// checks on streamed lines are set-membership tests, not index queries.
 nonisolated struct RhymeLineFilter: Sendable {
     private let targetSyllables: Int
-    private let targetWord: String
-    private let rhymeType: RhymeType
-    private let dictionary: PronunciationDictionary
+    private let perfectOrMulti: Set<String>
+    private let near: Set<String>
 
     /// Fails exactly when `rhymeConstraintBlock` would skip constraining the
     /// prompt, so an unconstrained generation is never filtered.
@@ -141,28 +139,19 @@ nonisolated struct RhymeLineFilter: Sendable {
             return nil
         }
         self.targetSyllables = SyllableCounter.countText(targetLine)
-        self.targetWord = targetWord
-        self.rhymeType = rhymeType
-        self.dictionary = dictionary
+        self.perfectOrMulti = Set(matches.perfect).union(matches.multi)
+        self.near = Set(matches.near)
     }
 
     func tier(of line: String) -> Int {
-        let tier = RhymeConstraint.rhymeTier(
-            line: line,
-            targetWord: targetWord,
-            dictionary: dictionary
-        )
-        switch rhymeType {
-        case .perfect:
-            return tier == 2 ? tier : 0
-        case .near:
-            return tier == 1 ? tier : 0
-        case .slant:
-            return tier == 3 ? tier : 0
-        }
+        let endWord = RhymeConstraint.lineEndWord(line)
+        guard !endWord.isEmpty else { return 0 }
+        if perfectOrMulti.contains(endWord) { return 2 }
+        if near.contains(endWord) { return 1 }
+        return 0
     }
 
-    /// The filterAndRank ordering for the requested relation.
+    /// The filterAndRank ordering, reusing this filter's cached rhyme sets.
     func rank(_ lines: [String], want: Int) -> [String] {
         guard want > 0, !lines.isEmpty else { return [] }
 
@@ -184,6 +173,14 @@ nonisolated struct RhymeLineFilter: Sendable {
             if a.syllableDistance != b.syllableDistance { return a.syllableDistance < b.syllableDistance }
             return a.index < b.index
         }
-        return rhyming.prefix(want).map(\.line)
+        var result = rhyming.prefix(want).map(\.line)
+        // Never starve the user: pad with unverified lines in arrival order.
+        if result.count < want {
+            for item in scored where item.tier == 0 {
+                result.append(item.line)
+                if result.count == want { break }
+            }
+        }
+        return result
     }
 }

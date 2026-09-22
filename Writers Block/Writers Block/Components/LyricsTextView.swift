@@ -5,30 +5,32 @@ struct LyricsRewriteHighlight: Equatable {
     let range: NSRange
     let isLoading: Bool
     let isError: Bool
+    var isInsertion: Bool = false
 }
 
 struct LyricsTextView: UIViewRepresentable {
-    private static let baseBodyFont = UIFont.systemFont(ofSize: 16, weight: .regular)
-
     @Environment(\.appAppearanceStyle) private var appearance
 
     @Binding var text: String
+    var selection: NSRange? = nil
     var displayText: String? = nil
     var rewriteHighlight: LyricsRewriteHighlight? = nil
+    var insertionHighlight: NSRange? = nil
     var onCursorChange: (Int) -> Void
     var onSelectionChange: ((NSRange) -> Void)? = nil
     var onEditingChange: ((Bool) -> Void)? = nil
     var bottomOverlayHeight: CGFloat = 0
-    var isTransparentText: Bool = false
+    var rhymeHighlightEnabled: Bool = false
+    var syllableColoringEnabled: Bool = false
     var isEditable: Bool = true
     var placeholder: String = "Start writing your lyrics here..."
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
+        let textView = UITextView(usingTextLayoutManager: true)
         textView.delegate = context.coordinator
-        textView.font = Self.scaledBodyFont(compatibleWith: textView.traitCollection)
-        textView.adjustsFontForContentSizeCategory = true
+        textView.font = UIFont.systemFont(ofSize: 16, weight: .regular)
         textView.backgroundColor = .clear
+        applyAppearance(to: textView)
         textView.autocorrectionType = .no
         textView.spellCheckingType = .no
         textView.isScrollEnabled = false
@@ -37,24 +39,69 @@ struct LyricsTextView: UIViewRepresentable {
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.accessibilityIdentifier = "lyricsEditor"
         context.coordinator.attach(to: textView)
-        applyAppearance(to: textView, coordinator: context.coordinator)
         context.coordinator.updatePlaceholder(textView, text: renderedText)
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.parent = self
-        textView.font = Self.scaledBodyFont(compatibleWith: textView.traitCollection)
         let currentRenderedText = renderedText
-        if textView.text != currentRenderedText {
-            context.coordinator.updateRenderedText(currentRenderedText, in: textView)
+        let textChanged = context.coordinator.shouldApplyText(currentRenderedText) && textView.text != currentRenderedText
+        if textChanged {
+            context.coordinator.isApplyingProgrammaticUpdate = true
+            let selectedRange = selection ?? textView.selectedRange
+            textView.text = currentRenderedText
+            // Restore selection if still valid — the whole range must fit, not just
+            // its start, or restoring after the text shrank raises NSRangeException.
+            if selectedRange.location + selectedRange.length <= currentRenderedText.utf16.count {
+                textView.selectedRange = selectedRange
+            }
+            context.coordinator.resetColorsAfterProgrammaticTextChange(textView)
+            context.coordinator.isApplyingProgrammaticUpdate = false
         }
-        textView.isEditable = isEditable
-        textView.isSelectable = isEditable
-        applyAppearance(to: textView, coordinator: context.coordinator)
-        context.coordinator.updatePlaceholder(textView, text: currentRenderedText)
-        context.coordinator.updateRewriteHighlight(textView, highlight: rewriteHighlight)
-        context.coordinator.scheduleKeepCursorVisible()
+        if context.coordinator.shouldApplySelection(selection),
+           textView.text == currentRenderedText,
+           let selection, selection.location >= 0, selection.length >= 0,
+           selection.location <= currentRenderedText.utf16.count,
+           selection.length <= currentRenderedText.utf16.count - selection.location,
+           textView.selectedRange != selection, textView.markedTextRange == nil {
+            context.coordinator.isApplyingProgrammaticUpdate = true
+            textView.selectedRange = selection
+            context.coordinator.isApplyingProgrammaticUpdate = false
+        }
+        if textView.isEditable != isEditable {
+            textView.isEditable = isEditable
+        }
+        if textView.isSelectable != isEditable {
+            textView.isSelectable = isEditable
+        }
+        if context.coordinator.shouldApplyAppearance(
+            appearance: appearance,
+            isEditable: isEditable
+        ) {
+            applyAppearance(to: textView)
+        }
+        context.coordinator.updateColors(textView)
+        if context.coordinator.shouldUpdatePlaceholder(
+            text: currentRenderedText,
+            appearance: appearance,
+            placeholder: placeholder
+        ) {
+            context.coordinator.updatePlaceholder(textView, text: currentRenderedText)
+        }
+        if context.coordinator.shouldUpdateRewriteHighlight(
+            textChanged: textChanged,
+            highlight: activeHighlight
+        ) {
+            context.coordinator.updateRewriteHighlight(textView, highlight: activeHighlight)
+        }
+        if context.coordinator.shouldKeepCursorVisible(
+            textChanged: textChanged,
+            selection: selection,
+            bottomOverlayHeight: bottomOverlayHeight
+        ) {
+            context.coordinator.scheduleKeepCursorVisible()
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -65,21 +112,18 @@ struct LyricsTextView: UIViewRepresentable {
         displayText ?? text
     }
 
-    private func applyAppearance(to textView: UITextView, coordinator: Coordinator) {
-        let palette = appearance.palette
-        let foreground = UIColor(palette.primaryInk)
-        textView.textColor = isTransparentText ? .clear : foreground
-        textView.tintColor = isEditable ? UIColor(palette.caret) : .clear
-        textView.keyboardAppearance = appearance == .graphite ? .dark : .light
-        textView.typingAttributes[.foregroundColor] = isTransparentText ? UIColor.clear : foreground
-        coordinator.updateAppearance(palette)
+    private var activeHighlight: LyricsRewriteHighlight? {
+        rewriteHighlight ?? insertionHighlight.map {
+            LyricsRewriteHighlight(range: $0, isLoading: false, isError: false, isInsertion: true)
+        }
     }
 
-    static func scaledBodyFont(compatibleWith traits: UITraitCollection?) -> UIFont {
-        UIFontMetrics(forTextStyle: .body).scaledFont(
-            for: baseBodyFont,
-            compatibleWith: traits
-        )
+    private func applyAppearance(to textView: UITextView) {
+        let foreground = UIColor(appearance.palette.primaryInk)
+        textView.textColor = foreground
+        textView.tintColor = isEditable ? UIColor(appearance.palette.caret) : .clear
+        textView.keyboardAppearance = appearance == .graphite ? .dark : .light
+        textView.typingAttributes[.foregroundColor] = foreground
     }
 
     class Coordinator: NSObject, UITextViewDelegate {
@@ -88,15 +132,40 @@ struct LyricsTextView: UIViewRepresentable {
         private var rewriteHighlightView: RewriteHighlightOverlayView?
         private weak var textView: UITextView?
         private var isObservingKeyboard = false
-        private var isApplyingProgrammaticTextUpdate = false
         private var keyboardFrameInScreen: CGRect = .zero
         private var isKeyboardVisible = false
+        private var lastAppearance: AppAppearanceStyle?
+        private var lastIsEditable: Bool?
+        private var lastPlaceholderText: String?
+        private var lastPlaceholderAppearance: AppAppearanceStyle?
+        private var lastPlaceholder: String?
+        private var lastRewriteHighlight: LyricsRewriteHighlight?
+        private var lastSelection: NSRange?
+        private var lastRequestedText: String?
+        private var lastPublishedText: String?
+        private var lastRequestedSelection: NSRange?
+        private var lastPublishedSelection: NSRange?
+        private var lastBottomOverlayHeight: CGFloat?
+        private var colorTask: Task<Void, Never>?
+        private var colorRequest: ColorRequest?
+        private var appliedColorSpans: [LyricsColorSpan] = []
+        private var appliedForeground: UIColor?
+        private var appliedColorText: String?
+        private var pendingColorEdit: (source: String, range: NSRange, replacement: String)?
+        private struct ColorRequest: Equatable {
+            let text: String
+            let rhyme: Bool
+            let syllables: Bool
+            let appearance: AppAppearanceStyle
+        }
+        var isApplyingProgrammaticUpdate = false
 
         init(_ parent: LyricsTextView) {
             self.parent = parent
         }
 
         deinit {
+            colorTask?.cancel()
             NotificationCenter.default.removeObserver(self)
         }
 
@@ -106,7 +175,14 @@ struct LyricsTextView: UIViewRepresentable {
                 let view = RewriteHighlightOverlayView()
                 view.backgroundColor = .clear
                 view.isUserInteractionEnabled = false
-                RewriteHighlightOverlayLayout.install(view, in: textView)
+                view.translatesAutoresizingMaskIntoConstraints = false
+                textView.addSubview(view)
+                NSLayoutConstraint.activate([
+                    view.topAnchor.constraint(equalTo: textView.topAnchor),
+                    view.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
+                    view.trailingAnchor.constraint(equalTo: textView.trailingAnchor),
+                    view.bottomAnchor.constraint(equalTo: textView.bottomAnchor)
+                ])
                 rewriteHighlightView = view
             }
 
@@ -126,6 +202,194 @@ struct LyricsTextView: UIViewRepresentable {
             )
         }
 
+        func shouldApplyText(_ text: String) -> Bool {
+            guard text != lastRequestedText else { return false }
+            lastRequestedText = text
+            defer { lastPublishedText = nil }
+            // A binding echo may arrive between UIKit's edit and its delegate callback.
+            return text != lastPublishedText
+        }
+
+        func shouldApplySelection(_ selection: NSRange?) -> Bool {
+            guard selection != lastRequestedSelection else { return false }
+            lastRequestedSelection = selection
+            defer { lastPublishedSelection = nil }
+            return selection != lastPublishedSelection
+        }
+
+        func shouldApplyAppearance(
+            appearance: AppAppearanceStyle,
+            isEditable: Bool
+        ) -> Bool {
+            let changed = lastAppearance != appearance
+                || lastIsEditable != isEditable
+            lastAppearance = appearance
+            lastIsEditable = isEditable
+            return changed
+        }
+
+        func shouldUpdatePlaceholder(
+            text: String,
+            appearance: AppAppearanceStyle,
+            placeholder: String
+        ) -> Bool {
+            let changed = lastPlaceholderText != text
+                || lastPlaceholderAppearance != appearance
+                || lastPlaceholder != placeholder
+            lastPlaceholderText = text
+            lastPlaceholderAppearance = appearance
+            lastPlaceholder = placeholder
+            return changed
+        }
+
+        func shouldUpdateRewriteHighlight(
+            textChanged: Bool,
+            highlight: LyricsRewriteHighlight?
+        ) -> Bool {
+            let changed = textChanged || lastRewriteHighlight != highlight
+            lastRewriteHighlight = highlight
+            return changed
+        }
+
+        func shouldKeepCursorVisible(
+            textChanged: Bool,
+            selection: NSRange?,
+            bottomOverlayHeight: CGFloat
+        ) -> Bool {
+            let changed = textChanged
+                || lastSelection != selection
+                || lastBottomOverlayHeight != bottomOverlayHeight
+            lastSelection = selection
+            lastBottomOverlayHeight = bottomOverlayHeight
+            return changed
+        }
+
+        func updateColors(_ textView: UITextView) {
+            guard textView.markedTextRange == nil else { return }
+            let request = ColorRequest(text: textView.text, rhyme: parent.rhymeHighlightEnabled,
+                                       syllables: parent.syllableColoringEnabled, appearance: parent.appearance)
+            guard colorRequest != request else { return }
+            colorRequest = request
+            colorTask?.cancel()
+            let foreground = UIColor(request.appearance.palette.primaryInk)
+            if !request.rhyme && !request.syllables {
+                installColors([], for: request.text, on: textView, foreground: foreground)
+                return
+            }
+            colorTask = Task { [weak self, weak textView] in
+                let spans = await LyricsHighlighting.spans(text: request.text, rhymeEnabled: request.rhyme,
+                                                          syllablesEnabled: request.syllables,
+                                                          isDark: request.appearance == .graphite)
+                guard !Task.isCancelled, let self, let textView,
+                      self.colorRequest == request, textView.text == request.text,
+                      textView.markedTextRange == nil else { return }
+                self.isApplyingProgrammaticUpdate = true
+                self.installColors(spans, for: request.text, on: textView, foreground: foreground)
+                self.isApplyingProgrammaticUpdate = false
+            }
+        }
+
+        func installColors(
+            _ spans: [LyricsColorSpan],
+            for text: String,
+            on textView: UITextView,
+            foreground: UIColor
+        ) {
+            appliedColorSpans = spans
+            appliedForeground = foreground
+            appliedColorText = text
+            Self.applyColors(spans, to: textView, foreground: foreground)
+        }
+
+        func resetColorsAfterProgrammaticTextChange(_ textView: UITextView) {
+            let foreground = UIColor(parent.appearance.palette.primaryInk)
+            installColors([], for: textView.text, on: textView, foreground: foreground)
+        }
+
+        private func reconcileColorsAfterEdit(_ textView: UITextView) {
+            defer { pendingColorEdit = nil }
+            guard let edit = pendingColorEdit,
+                  appliedColorText == edit.source,
+                  let foreground = appliedForeground,
+                  edit.range.location <= edit.source.utf16.count,
+                  edit.range.length <= edit.source.utf16.count - edit.range.location else { return }
+            let expectedText = (edit.source as NSString).replacingCharacters(in: edit.range, with: edit.replacement)
+            guard expectedText == textView.text else { return }
+            let replacementLength = edit.replacement.utf16.count
+            let editEnd = NSMaxRange(edit.range)
+            let delta = replacementLength - edit.range.length
+            var adjusted: [LyricsColorSpan] = []
+            adjusted.reserveCapacity(appliedColorSpans.count + 1)
+
+            for span in appliedColorSpans {
+                let spanEnd = NSMaxRange(span.range)
+                if spanEnd <= edit.range.location {
+                    adjusted.append(span)
+                } else if span.range.location >= editEnd {
+                    adjusted.append(LyricsColorSpan(
+                        range: NSRange(location: span.range.location + delta, length: span.range.length),
+                        foreground: span.foreground,
+                        underline: span.underline
+                    ))
+                } else {
+                    let prefixLength = max(edit.range.location - span.range.location, 0)
+                    if prefixLength > 0 {
+                        adjusted.append(LyricsColorSpan(
+                            range: NSRange(location: span.range.location, length: prefixLength),
+                            foreground: span.foreground,
+                            underline: span.underline
+                        ))
+                    }
+                    let suffixLength = max(spanEnd - editEnd, 0)
+                    if suffixLength > 0 {
+                        adjusted.append(LyricsColorSpan(
+                            range: NSRange(location: edit.range.location + replacementLength, length: suffixLength),
+                            foreground: span.foreground,
+                            underline: span.underline
+                        ))
+                    }
+                }
+            }
+
+            installColors(adjusted, for: textView.text, on: textView, foreground: foreground)
+        }
+
+        static func applyColors(_ spans: [LyricsColorSpan], to textView: UITextView, foreground: UIColor) {
+            // Color attributes must not change glyph metrics or the user's selection.
+            let range = NSRange(location: 0, length: textView.textStorage.length)
+            guard let layout = textView.textLayoutManager, let content = layout.textContentManager else { return }
+            layout.renderingAttributesValidator = nil
+            layout.removeRenderingAttribute(.foregroundColor, for: content.documentRange)
+            layout.removeRenderingAttribute(.underlineStyle, for: content.documentRange)
+            layout.removeRenderingAttribute(.underlineColor, for: content.documentRange)
+            layout.invalidateRenderingAttributes(for: content.documentRange)
+            let render: (NSTextLayoutManager, NSTextRange) -> Void = { layout, target in
+                guard let content = layout.textContentManager else { return }
+                layout.setRenderingAttributes([.foregroundColor: foreground], for: target)
+                let start = content.offset(from: content.documentRange.location, to: target.location)
+                let end = content.offset(from: content.documentRange.location, to: target.endLocation)
+                let targetRange = NSRange(location: start, length: end - start)
+                for span in spans {
+                    let intersection = NSIntersectionRange(span.range, targetRange)
+                    guard intersection.length > 0,
+                          let lower = content.location(content.documentRange.location, offsetBy: intersection.location),
+                          let upper = content.location(lower, offsetBy: intersection.length),
+                          let textRange = NSTextRange(location: lower, end: upper) else { continue }
+                    var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: span.foreground.map(UIColor.init) ?? foreground]
+                    if let underline = span.underline {
+                        attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                        attributes[.underlineColor] = UIColor(underline)
+                    }
+                    layout.setRenderingAttributes(attributes, for: textRange)
+                }
+            }
+            layout.renderingAttributesValidator = { layout, fragment in
+                render(layout, fragment.rangeInElement)
+            }
+            if range.length > 0 { render(layout, content.documentRange) }
+            textView.setNeedsDisplay()
+        }
+
         func updatePlaceholder(_ textView: UITextView, text: String) {
             if placeholderLabel == nil {
                 let label = UILabel()
@@ -139,28 +403,16 @@ struct LyricsTextView: UIViewRepresentable {
                 ])
                 placeholderLabel = label
             }
-            placeholderLabel?.isHidden = !text.isEmpty
-            placeholderLabel?.font = textView.font
             placeholderLabel?.text = parent.placeholder
             placeholderLabel?.textColor = UIColor(parent.appearance.palette.placeholder)
-        }
-
-        func updateAppearance(_ palette: AppAppearancePalette) {
-            rewriteHighlightView?.updateAppearance(palette)
-        }
-
-        func updateRenderedText(_ text: String, in textView: UITextView) {
-            let selectedRange = textView.selectedRange
-            isApplyingProgrammaticTextUpdate = true
-            defer { isApplyingProgrammaticTextUpdate = false }
-            textView.text = text
-            if selectedRange.location + selectedRange.length <= text.utf16.count {
-                textView.selectedRange = selectedRange
-            }
+            placeholderLabel?.isHidden = !text.isEmpty
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            guard !isApplyingProgrammaticTextUpdate else { return }
+            guard !isApplyingProgrammaticUpdate else { return }
+            reconcileColorsAfterEdit(textView)
+            lastPublishedSelection = textView.selectedRange
+            lastPublishedText = textView.text
             parent.text = textView.text
             parent.onCursorChange(textView.selectedRange.location)
             parent.onSelectionChange?(textView.selectedRange)
@@ -170,12 +422,22 @@ struct LyricsTextView: UIViewRepresentable {
             scheduleKeepCursorVisible()
         }
 
+        func textView(
+            _ textView: UITextView,
+            shouldChangeTextIn range: NSRange,
+            replacementText text: String
+        ) -> Bool {
+            pendingColorEdit = (textView.text, range, text)
+            return true
+        }
+
         func textViewDidChangeSelection(_ textView: UITextView) {
             // UIKit also fires this for programmatic resets (e.g. assigning
             // .text clamps the selection to {0,0} before first focus). Only
             // user-driven changes may move the app-level cursor — otherwise a
             // background reset clobbers seeded or restored cursor state.
-            guard textView.isFirstResponder, !isApplyingProgrammaticTextUpdate else { return }
+            guard textView.isFirstResponder, !isApplyingProgrammaticUpdate else { return }
+            lastPublishedSelection = textView.selectedRange
             parent.onCursorChange(textView.selectedRange.location)
             parent.onSelectionChange?(textView.selectedRange)
             scheduleKeepCursorVisible()
@@ -188,20 +450,16 @@ struct LyricsTextView: UIViewRepresentable {
                 return
             }
 
-            let rects = RewriteHighlightGeometry.enclosingRects(
-                layoutManager: textView.layoutManager,
-                textContainer: textView.textContainer,
-                characterRange: highlight.range,
-                textContainerInset: CGPoint(
-                    x: textView.textContainerInset.left,
-                    y: textView.textContainerInset.top
+            DispatchQueue.main.async { [weak textView, weak rewriteHighlightView] in
+                guard let textView, let rewriteHighlightView, self.lastRewriteHighlight == highlight else { return }
+                let rects = self.highlightRects(in: textView, range: highlight.range)
+                rewriteHighlightView.configure(
+                    rects: rects,
+                    isLoading: highlight.isLoading,
+                    isError: highlight.isError,
+                    insertionColor: highlight.isInsertion ? UIColor(self.parent.appearance.palette.primaryInk) : nil
                 )
-            )
-            rewriteHighlightView.configure(
-                rects: rects,
-                isLoading: highlight.isLoading,
-                isError: highlight.isError
-            )
+            }
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -329,74 +587,56 @@ struct LyricsTextView: UIViewRepresentable {
             return max(0, insetAdjustedHeight - keyboardOverlap - parent.bottomOverlayHeight)
         }
 
+        private func highlightRects(in textView: UITextView, range: NSRange) -> [CGRect] {
+            let nsText = textView.text as NSString
+            guard range.location >= 0, range.location + range.length <= nsText.length else {
+                return []
+            }
+
+            guard let start = textView.position(from: textView.beginningOfDocument, offset: range.location),
+                  let end = textView.position(from: start, offset: range.length),
+                  let textRange = textView.textRange(from: start, to: end) else { return [] }
+            let rects = textView.selectionRects(for: textRange).map { $0.rect.insetBy(dx: -3, dy: -2) }
+            return rects
+        }
     }
 }
 
-final class RewriteHighlightOverlayView: UIView {
+private final class RewriteHighlightOverlayView: UIView {
     private var rects: [CGRect] = []
     private var isLoading = false
     private var isError = false
-    private var rippleProgress: CGFloat = 0
+    private var insertionColor: UIColor?
+    private var scanProgress: CGFloat = 0
     private var displayLink: CADisplayLink?
-    private var lastFrameTimestamp: CFTimeInterval?
-    private lazy var displayLinkTarget = RewriteRippleDisplayLinkTarget(owner: self)
-    private var selectionFillColor = UIColor.clear
-    private var selectionStrokeColor = UIColor.clear
-    private var rippleColor = UIColor.clear
-    private var errorColor = UIColor.clear
-
-    var isRippleAnimating: Bool {
-        displayLink != nil
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        observeReduceMotionChanges()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        observeReduceMotionChanges()
-    }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
-        stopRipple()
+        displayLink?.invalidate()
     }
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        updateRippleState()
-    }
-
-    func configure(rects: [CGRect], isLoading: Bool, isError: Bool) {
+    func configure(rects: [CGRect], isLoading: Bool, isError: Bool, insertionColor: UIColor? = nil) {
         self.rects = rects
         self.isLoading = isLoading
         self.isError = isError
+        self.insertionColor = insertionColor
 
-        updateRippleState()
-        setNeedsDisplay()
-    }
-
-    func updateAppearance(_ palette: AppAppearancePalette) {
-        selectionFillColor = UIColor(palette.selectionTint).withAlphaComponent(
-            RewriteRippleMotion.loadingSelectionFillOpacity
-        )
-        selectionStrokeColor = UIColor(palette.outlineStrong).withAlphaComponent(0.82)
-        rippleColor = UIColor(palette.primaryInk)
-        errorColor = UIColor(palette.error)
+        if isLoading && !rects.isEmpty && !UIAccessibility.isReduceMotionEnabled {
+            startScan()
+        } else {
+            stopScan()
+        }
         setNeedsDisplay()
     }
 
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext(), !rects.isEmpty else { return }
 
-        let fillColor = isError
-            ? errorColor.withAlphaComponent(0.20)
-            : selectionFillColor
-        let strokeColor = isError
-            ? errorColor.withAlphaComponent(0.60)
-            : selectionStrokeColor
+        let fillColor = insertionColor?.withAlphaComponent(0.12) ?? (isError
+            ? UIColor.systemRed.withAlphaComponent(0.20)
+            : UIColor.systemIndigo.withAlphaComponent(0.22))
+        let strokeColor = insertionColor?.withAlphaComponent(0.45) ?? (isError
+            ? UIColor.systemRed.withAlphaComponent(0.60)
+            : UIColor.systemTeal.withAlphaComponent(0.70))
 
         context.setFillColor(fillColor.cgColor)
         context.setStrokeColor(strokeColor.cgColor)
@@ -405,139 +645,56 @@ final class RewriteHighlightOverlayView: UIView {
         for highlightRect in rects {
             let path = UIBezierPath(roundedRect: highlightRect, cornerRadius: RhymeAITokens.Radius.xs)
             context.addPath(path.cgPath)
-            context.drawPath(using: isLoading && !isError ? .fill : .fillStroke)
+            context.drawPath(using: .fillStroke)
         }
 
-        guard isLoading, !isError else { return }
-
-        let progress = UIAccessibility.isReduceMotionEnabled
-            ? RewriteRippleMotion.stableProgress
-            : rippleProgress
+        guard isLoading, !UIAccessibility.isReduceMotionEnabled else { return }
 
         for highlightRect in rects {
+            let bandWidth = max(highlightRect.width * 0.45, 24)
+            let travel = highlightRect.width + bandWidth * 2
+            let centerX = highlightRect.minX - bandWidth + travel * scanProgress
             context.saveGState()
             UIBezierPath(roundedRect: highlightRect, cornerRadius: RhymeAITokens.Radius.xs).addClip()
-            drawWave(
-                in: context,
-                rect: highlightRect,
-                y: highlightRect.maxY - 3.5,
-                progress: progress,
-                phaseOffset: 0,
-                amplitude: 1.45,
-                color: rippleColor.withAlphaComponent(0.88),
-                lineWidth: 1.2
-            )
-            drawWave(
-                in: context,
-                rect: highlightRect,
-                y: highlightRect.maxY - 1.35,
-                progress: progress,
-                phaseOffset: .pi * 0.7,
-                amplitude: 0.8,
-                color: rippleColor.withAlphaComponent(0.42),
-                lineWidth: 0.8
-            )
+            let colors = [
+                UIColor.systemIndigo.withAlphaComponent(0).cgColor,
+                UIColor.systemIndigo.withAlphaComponent(0.6).cgColor,
+                UIColor.systemIndigo.withAlphaComponent(0).cgColor
+            ] as CFArray
+            let locations: [CGFloat] = [0, 0.5, 1]
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
+                context.drawLinearGradient(
+                    gradient,
+                    start: CGPoint(x: centerX - bandWidth, y: highlightRect.midY),
+                    end: CGPoint(x: centerX + bandWidth, y: highlightRect.midY),
+                    options: []
+                )
+            }
             context.restoreGState()
         }
     }
 
-    private func drawWave(
-        in context: CGContext,
-        rect: CGRect,
-        y: CGFloat,
-        progress: CGFloat,
-        phaseOffset: CGFloat,
-        amplitude: CGFloat,
-        color: UIColor,
-        lineWidth: CGFloat
-    ) {
-        let path = UIBezierPath()
-        path.move(to: CGPoint(
-            x: rect.minX,
-            y: y + RewriteRippleMotion.verticalOffset(
-                fraction: 0,
-                progress: progress,
-                amplitude: amplitude,
-                phaseOffset: phaseOffset
-            )
-        ))
-        for index in 1...24 {
-            let fraction = CGFloat(index) / 24
-            path.addLine(to: CGPoint(
-                x: rect.minX + rect.width * fraction,
-                y: y + RewriteRippleMotion.verticalOffset(
-                    fraction: fraction,
-                    progress: progress,
-                    amplitude: amplitude,
-                    phaseOffset: phaseOffset
-                )
-            ))
-        }
-        context.setStrokeColor(color.cgColor)
-        context.setLineWidth(lineWidth)
-        context.setLineCap(.round)
-        context.addPath(path.cgPath)
-        context.strokePath()
-    }
-
-    private func startRipple() {
-        guard displayLink == nil, window != nil else { return }
-        let link = CADisplayLink(
-            target: displayLinkTarget,
-            selector: #selector(RewriteRippleDisplayLinkTarget.stepRipple(_:))
-        )
+    private func startScan() {
+        guard displayLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(stepScan))
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
 
-    private func stopRipple() {
+    private func stopScan() {
         displayLink?.invalidate()
         displayLink = nil
-        lastFrameTimestamp = nil
-        rippleProgress = 0
+        scanProgress = 0
     }
 
-    fileprivate func stepRipple(_ displayLink: CADisplayLink) {
-        guard !UIAccessibility.isReduceMotionEnabled else { stopRipple(); return }
-        let elapsed = lastFrameTimestamp.map { max(0, displayLink.timestamp - $0) }
-            ?? max(0, displayLink.targetTimestamp - displayLink.timestamp)
-        lastFrameTimestamp = displayLink.timestamp
-        rippleProgress = RewriteRippleMotion.advancedProgress(from: rippleProgress, elapsed: elapsed)
-        setNeedsDisplay()
-    }
-
-    private func updateRippleState() {
-        if isLoading && !rects.isEmpty && !UIAccessibility.isReduceMotionEnabled && window != nil {
-            startRipple()
-        } else {
-            stopRipple()
+    @objc private func stepScan() {
+        guard !UIAccessibility.isReduceMotionEnabled else { stopScan(); return }
+        let frameDuration = displayLink?.duration ?? (1.0 / 60.0)
+        scanProgress += CGFloat((frameDuration > 0 ? frameDuration : 1.0 / 60.0) / 1.2)
+        if scanProgress > 1 {
+            scanProgress = 0
         }
-    }
-
-    private func observeReduceMotionChanges() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(reduceMotionStatusDidChange),
-            name: UIAccessibility.reduceMotionStatusDidChangeNotification,
-            object: nil
-        )
-    }
-
-    @objc private func reduceMotionStatusDidChange() {
-        updateRippleState()
         setNeedsDisplay()
-    }
-}
-
-private final class RewriteRippleDisplayLinkTarget: NSObject {
-    private weak var owner: RewriteHighlightOverlayView?
-
-    init(owner: RewriteHighlightOverlayView) {
-        self.owner = owner
-    }
-
-    @objc func stepRipple(_ displayLink: CADisplayLink) {
-        owner?.stepRipple(displayLink)
     }
 }
 

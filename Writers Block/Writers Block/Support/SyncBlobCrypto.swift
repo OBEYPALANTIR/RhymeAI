@@ -7,8 +7,6 @@ enum SyncBlobCryptoError: Error, Equatable {
     case invalidSaltLength
     case invalidIVLength
     case truncatedEnvelope
-    case unsupportedEnvelopeVersion
-    case manifestVersionMismatch
     case unrecognizedEnvelope
     case keyDerivationFailed
     case authenticationFailed
@@ -17,7 +15,6 @@ enum SyncBlobCryptoError: Error, Equatable {
 
 enum SyncBlobCrypto {
     private static let magic = Data("RAI1".utf8)
-    private static let manifestMagic = Data("RAI2".utf8)
     private static let saltByteCount = 16
     private static let ivByteCount = 12
     private static let tagByteCount = 16
@@ -31,34 +28,6 @@ enum SyncBlobCrypto {
     }
 
     static func seal(_ plaintext: Data, passphrase: String, salt: Data, iv: Data) throws -> Data {
-        try seal(plaintext, passphrase: passphrase, salt: salt, iv: iv, magic: magic)
-    }
-
-    static func sealManifest(_ blob: SyncBlob, passphrase: String) throws -> Data {
-        try sealManifest(blob, passphrase: passphrase, salt: randomData(count: saltByteCount), iv: randomData(count: ivByteCount))
-    }
-
-    static func sealManifest(_ blob: SyncBlob, passphrase: String, salt: Data, iv: Data) throws -> Data {
-        guard blob.version == SyncBlob.currentVersion else { throw SyncBlobCryptoError.manifestVersionMismatch }
-        let canonical = try SyncMerger.merge(local: blob, remote: blob)
-        let plaintext = try SyncJSON.encoder.encode(canonical)
-        return try seal(plaintext, passphrase: passphrase, salt: salt, iv: iv, magic: manifestMagic)
-    }
-
-    static func openManifest(_ envelope: Data, passphrase: String) throws -> SyncBlob {
-        guard envelope.count >= magic.count else { throw SyncBlobCryptoError.truncatedEnvelope }
-        let envelopeMagic = Data(envelope.prefix(magic.count))
-        guard envelopeMagic == magic || envelopeMagic == manifestMagic else {
-            if envelopeMagic.prefix(3) == Data("RAI".utf8) { throw SyncBlobCryptoError.unsupportedEnvelopeVersion }
-            throw SyncBlobCryptoError.unrecognizedEnvelope
-        }
-        let plaintext = try open(envelope, passphrase: passphrase, magic: envelopeMagic)
-        let blob = try SyncJSON.decoder.decode(SyncBlob.self, from: plaintext)
-        guard blob.version == (envelopeMagic == magic ? 1 : 2) else { throw SyncBlobCryptoError.manifestVersionMismatch }
-        return blob
-    }
-
-    private static func seal(_ plaintext: Data, passphrase: String, salt: Data, iv: Data, magic: Data) throws -> Data {
         try requirePortablePassphrase(passphrase)
         guard salt.count == saltByteCount else { throw SyncBlobCryptoError.invalidSaltLength }
         guard iv.count == ivByteCount else { throw SyncBlobCryptoError.invalidIVLength }
@@ -71,13 +40,9 @@ enum SyncBlobCrypto {
     }
 
     static func open(_ envelope: Data, passphrase: String) throws -> Data {
-        try open(envelope, passphrase: passphrase, magic: magic)
-    }
-
-    private static func open(_ envelope: Data, passphrase: String, magic: Data) throws -> Data {
         try requirePortablePassphrase(passphrase)
         let headerByteCount = magic.count + saltByteCount + ivByteCount
-        guard envelope.count >= headerByteCount + tagByteCount else {
+        guard envelope.count > headerByteCount + tagByteCount else {
             throw SyncBlobCryptoError.truncatedEnvelope
         }
         guard envelope.prefix(magic.count) == magic else {

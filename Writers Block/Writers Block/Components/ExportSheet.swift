@@ -22,7 +22,7 @@ struct ExportSheet: View {
                             Image(systemName: format.iconSystemName)
                                 .foregroundStyle(appearance.palette.action)
                                 .frame(width: 36, height: 36)
-                                .liquidGlassSurface(cornerRadius: 8)
+                                .liquidGlassSurface(cornerRadius: 8, tint: .indigo.opacity(0.14), fallbackOpacity: 0.08)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(format.label)
                                     .font(.body.weight(.medium))
@@ -37,7 +37,7 @@ struct ExportSheet: View {
                         }
                         .padding(.horizontal, RhymeAITokens.Spacing.sm)
                         .padding(.vertical, RhymeAITokens.Spacing.sm)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, interactive: true)
+                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
                     }
                     .buttonStyle(.rhymePress)
                 }
@@ -46,7 +46,9 @@ struct ExportSheet: View {
             }
             .padding(RhymeAITokens.Spacing.md)
             .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
-            .background(AppWritingBackground())
+            .background {
+                AppWritingBackground()
+            }
             .navigationTitle("Export Song")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
