@@ -73,6 +73,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var settingsContent: some View {
         selectedTabContent
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: selectedTab)
     }
 
     @ViewBuilder

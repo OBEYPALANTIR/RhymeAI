@@ -280,6 +280,7 @@ struct EditorView: View {
             }
         }
         .rhymeAnimation(RhymeAITokens.Motion.presentation, value: inlineAssistantVisible)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: editorActionsVisible)
     }
 
     // MARK: - iPhone Layout (FAB + sheet)
@@ -307,6 +308,7 @@ struct EditorView: View {
                 .zIndex(EditorViewConstants.EditorLayout.assistantSheetZIndex)
         }
         .rhymeAnimation(assistantSheetTransitionAnimation, value: viewModel.showAssistantSheet)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: editorActionsVisible)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
@@ -367,7 +369,7 @@ struct EditorView: View {
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .padding(.bottom, RhymeAITokens.Spacing.md)
             }
-            .transition(.identity)
+            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: .bottomTrailing).combined(with: .opacity))
         }
     }
 
@@ -392,7 +394,7 @@ struct EditorView: View {
                          ? keyboardHeight + RhymeAITokens.Spacing.sm
                          : RhymeAITokens.Spacing.md)
             }
-            .transition(.identity)
+            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: .bottomTrailing).combined(with: .opacity))
         }
     }
 
@@ -626,7 +628,7 @@ struct EditorView: View {
                         onCancel: { viewModel.dismissRewrite() },
                         onRetry: { viewModel.retryRewrite() }
                     )
-                    .transition(.identity)
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 } else if shouldShowRewriteChipBar {
                     RewriteChipBar(
                         onAction: { viewModel.requestRewrite($0) },
@@ -634,10 +636,12 @@ struct EditorView: View {
                             ? { viewModel.openInspectorForSelection() }
                             : nil
                     )
-                    .transition(.identity)
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
             }
         }
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: shouldShowRewriteChipBar)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.hasActiveRewrite)
         .background {
             GeometryReader { proxy in
                 Color.clear

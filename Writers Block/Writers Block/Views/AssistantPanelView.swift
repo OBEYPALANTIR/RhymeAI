@@ -190,7 +190,7 @@ struct AssistantPanelView: View {
             // current tuning visible while collapsed.
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
                 Button {
-                    withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.state) {
+                    withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                         rhymeOptionsExpanded.toggle()
                     }
                 } label: {

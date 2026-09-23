@@ -21,6 +21,8 @@ struct SettingsTabPicker: View {
 }
 
 struct RhymeSegmentedControl<Option: Hashable>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var selectionAnimation
     @Environment(\.appAppearanceStyle) private var appearance
 
     let options: [Option]
@@ -33,7 +35,9 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
             ForEach(options, id: \.self) { option in
                 let isSelected = selection == option
                 Button {
-                    selection = option
+                    withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
+                        selection = option
+                    }
                 } label: {
                     Text(title(option))
                         .font(.caption.weight(isSelected ? .semibold : .medium))
@@ -41,10 +45,13 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                         .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
-                        .background(
-                            isSelected ? appearance.palette.action : Color.clear,
-                            in: RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
-                        )
+                        .background {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
+                                    .fill(appearance.palette.action)
+                                    .matchedGeometryEffect(id: "selection", in: selectionAnimation)
+                            }
+                        }
                 }
                 .buttonStyle(.rhymePress)
                 .accessibilityLabel(title(option))
