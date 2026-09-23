@@ -46,9 +46,9 @@ enum RhymeAITokens {
     }
 
     enum Motion {
-        // Keep routine feedback brief; only a released drag needs a settling spring.
+        // Shared timing keeps control, disclosure, and presentation motion coordinated.
         static let feedbackDuration: TimeInterval = 0.16
-        static let stateDuration: TimeInterval = 0.20
+        static let stateDuration: TimeInterval = 0.26
         static let presentationDuration: TimeInterval = 0.26
         static let settleDuration: TimeInterval = 0.420
 
@@ -56,11 +56,11 @@ enum RhymeAITokens {
         static let dismiss: Animation = feedback
         static let state: Animation = .timingCurve(0.23, 1, 0.32, 1, duration: stateDuration)
         static let dialog: Animation = .timingCurve(0.23, 1, 0.32, 1, duration: presentationDuration)
-        static let presentation: Animation = .timingCurve(0.32, 0.72, 0, 1, duration: presentationDuration)
+        static let presentation: Animation = .spring(response: presentationDuration, dampingFraction: 0.88)
         static let settle: Animation = .spring(response: settleDuration, dampingFraction: 0.80)
 
         // The recording control changes shape once to expose its timer and stop action.
-        static let recording: Animation = .timingCurve(0.23, 1, 0.32, 1, duration: presentationDuration)
+        static let recording: Animation = .spring(response: 0.40, dampingFraction: 0.76)
     }
 }
 

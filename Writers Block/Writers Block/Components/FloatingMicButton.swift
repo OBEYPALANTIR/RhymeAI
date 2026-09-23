@@ -77,6 +77,7 @@ struct FloatingMicButton: View {
                     .padding(.leading, RhymeAITokens.Spacing.sm)
                     .opacity(recordingContentOpacity)
                     .frame(width: max(0, interpolatedWidth - idleSize), alignment: .leading)
+                    .clipped()
                     .transition(.opacity)
                 }
 
