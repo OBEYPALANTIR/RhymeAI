@@ -113,7 +113,7 @@ object DesignTokens {
     }
 
     object Motion {
-        // Feedback is brief; occasional surfaces preserve spatial origin.
+        // Shared state springs preserve continuity when an interaction reverses mid-flight.
         const val feedbackMillis = 160
         const val pageFadeMillis = 140
         const val dismissMillis = 160
@@ -122,9 +122,22 @@ object DesignTokens {
         const val sheetPresentMillis = 260
         const val drawerPresentMillis = 260
 
-        val standardEasing: Easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
-        val emphasizedEasing: Easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
-        val exitEasing: Easing = standardEasing
+        val standardEasing: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+        val emphasizedEasing: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+        val exitEasing: Easing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
+
+        fun <T> standardSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
+            dampingRatio = 0.88f,
+            stiffness = Spring.StiffnessMediumLow,
+            visibilityThreshold = visibilityThreshold
+        )
+
+        // Match the iOS recording spring (response 0.40, damping 0.76).
+        fun <T> expressiveSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
+            dampingRatio = 0.76f,
+            stiffness = 247f,
+            visibilityThreshold = visibilityThreshold
+        )
 
         fun <T> settleSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
             dampingRatio = 0.80f,

@@ -239,10 +239,10 @@ motion:
   disclosure: "200ms"
   standard: "260ms"
   settle: "420ms"
-  easing-standard: "cubic-bezier(0.23, 1, 0.32, 1)"
+  easing-standard: "Platform-native state easing; interruptible springs for selection and recording controls."
   spring-settle: "response 420ms, damping 0.80"
   reduced-motion: "Remove app-owned travel and scale; honor live system changes."
-  reading: "Typing, selection actions, provider-form changes, and keyboard changes are immediate; keep text stationary."
+  reading: "Typing and lyric selection remain immediate; animate surrounding controls and provider changes without moving the text being edited."
   loading: "Use one progress indicator and a static selection highlight; no shimmer, waves, or repeated skeleton pulses."
 components:
   shared-writing-surface:
@@ -325,9 +325,9 @@ Graphite Night may use authored static procedural grain only. Generate it exclus
 
 Ink Editorial and Paper Notebook remain flat and untextured. Graphite grain stays at or below 2.5%. Texture is a background layer, clipped to its surface, and never overlays text or interactive content.
 
-Motion must explain feedback, state, or spatial origin. Use the shared 160ms feedback/dismissal and 260ms occasional-surface tiers with ease-out timing. Native sheets retain platform timing, focus management, and gestures. Templates rise from the bottom and dismiss toward the bottom. Complete an exit before removing its surface; do not approximate completion with a fixed wall-clock delay. Appearance selection applies immediately.
+Motion must explain feedback, state, or spatial origin. Restore visible selection travel, disclosure expansion, provider-form transitions, and editor control entrances/exits. Recording and UnBlock shape changes share an interruptible spring (iOS response 0.40, damping 0.76; Android stiffness 247, damping 0.76). Use the 160ms feedback/dismissal and 260ms occasional-surface tiers for opacity transitions. Native sheets retain platform timing, focus management, and gestures. Templates rise from the bottom and dismiss toward the bottom. Complete an exit before removing its surface; do not approximate completion with a fixed wall-clock delay. Appearance selection applies immediately.
 
-Frequent writing controls, selection actions, provider-form swaps, and keyboard-driven changes apply immediately. Reading text stays stationary. A static highlight identifies the rewrite target; one progress indicator conveys loading. Do not add shimmer, waves, repeated skeleton pulses, or celebratory scale. Real recording amplitude, progress, and direct manipulation remain useful state feedback. Reduced Motion removes app-owned travel and scale and takes effect when the system setting changes. Texture never moves.
+Writing and selection state changes apply immediately; their surrounding controls use short enter/exit transitions. Segmented selections slide and morph between cells, and provider forms crossfade with size continuity. Reading text stays stationary. A static highlight identifies the rewrite target; one progress indicator conveys loading. Do not add shimmer, waves, repeated skeleton pulses, or celebratory scale. Real recording amplitude, progress, and direct manipulation remain useful state feedback. Reduced Motion removes app-owned travel and scale and takes effect when the system setting changes. Texture never moves.
 
 ## 5. Components
 

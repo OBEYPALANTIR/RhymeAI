@@ -25,7 +25,7 @@ This tracks behavior that must stay aligned between Android and iOS. Source cont
 - Local is the initial provider and first setup option. Preserve valid saved provider/model choices; missing local weights open local setup rather than falling back to cloud.
 - Suggestion text is passive. Use line explicitly inserts; Keep for later does not edit the song. Insertion offers Undo without reversing subsequent unrelated typing.
 - Focus temporarily hides secondary controls and the assistant, then restores their prior visibility and preferences.
-- Templates use native bottom-origin sheets. Frequent writing, selection, keyboard, and provider-form changes are immediate. Rewrite targets stay highlighted without shimmer or waves; one progress indicator conveys loading.
+- Templates use native bottom-origin sheets. Selection indicators travel, disclosures expand, provider forms transition, and editor controls animate on entry/exit. Recording and UnBlock controls share spring timing. Typing and lyric selections stay immediate; rewrite targets remain stationary, with one progress indicator for loading.
 - Motion exists to explain feedback, state, or spatial origin. Reduced Motion removes app-owned travel and scale. Real recording amplitude and native direct manipulation remain useful feedback.
 
 ## Historical verification boundary

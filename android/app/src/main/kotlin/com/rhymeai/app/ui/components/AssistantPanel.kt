@@ -311,7 +311,7 @@ fun AssistantPanel(
                 AnimatedVisibility(
                     visible = rhymeOptionsExpanded,
                     enter = if (animationsEnabled) {
-                        expandVertically(animationSpec = tween(DesignTokens.Motion.disclosureMillis, easing = DesignTokens.Motion.standardEasing), expandFrom = Alignment.Top)
+                        expandVertically(animationSpec = DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
                     } else {
                         EnterTransition.None
                     },

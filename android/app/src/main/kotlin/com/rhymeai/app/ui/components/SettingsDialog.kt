@@ -9,6 +9,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -75,7 +78,6 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.runtime.key
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -507,8 +509,33 @@ internal fun SettingsDialog(
 
                 Spacer(Modifier.height(DesignTokens.Rhythm.section))
 
-                key(selectedProvider) {
-                    val providerForContent = selectedProvider
+                AnimatedContent(
+                    targetState = selectedProvider,
+                    contentAlignment = Alignment.TopStart,
+                    transitionSpec = {
+                        ContentTransform(
+                            targetContentEnter = fadeIn(
+                                animationSpec = tween(
+                                    durationMillis = if (animationsEnabled) DesignTokens.Motion.standardMillis else 0,
+                                    easing = DesignTokens.Motion.standardEasing
+                                )
+                            ),
+                            initialContentExit = fadeOut(
+                                animationSpec = tween(
+                                    durationMillis = if (animationsEnabled) DesignTokens.Motion.standardMillis else 0,
+                                    easing = DesignTokens.Motion.standardEasing
+                                )
+                            ),
+                            sizeTransform = SizeTransform(clip = false) { _, _ ->
+                                tween(
+                                    durationMillis = if (animationsEnabled) DesignTokens.Motion.standardMillis else 0,
+                                    easing = DesignTokens.Motion.standardEasing
+                                )
+                            }
+                        )
+                    },
+                    label = "settingsProviderContent"
+                ) { providerForContent ->
                     Column(modifier = Modifier.fillMaxWidth()) {
                         if (providerForContent == AIProvider.LOCAL) {
                             // Local model section
@@ -1015,7 +1042,7 @@ internal fun SettingsDialog(
 
                 AnimatedVisibility(
                     visible = syncSectionExpanded,
-                    enter = expandVertically(animationSpec = tween(DesignTokens.Motion.disclosureMillis, easing = DesignTokens.Motion.standardEasing), expandFrom = Alignment.Top),
+                    enter = expandVertically(animationSpec = DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top),
                     exit = shrinkVertically(animationSpec = tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
                 ) {
                 Column {

@@ -8,8 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDp
@@ -1104,8 +1102,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         if (!focusMode) {
             AnimatedVisibility(
                 visible = fabRowVisible,
-                enter = EnterTransition.None,
-                exit = ExitTransition.None,
+                enter = fadeIn(tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0)),
+                exit = fadeOut(tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0)),
                 modifier = Modifier.align(Alignment.BottomEnd)
             ) {
                 KeyboardSafeActionArea(
@@ -1173,27 +1171,27 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 // phases instead of recomposing the whole action group.
                 val pillWidth = micTransition.animateDp(
                     label = "pillWidth",
-                    transitionSpec = { tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing) }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) micRecordingWidth else DesignTokens.EditorChrome.fabSize }
 
                 val unBlockWidth = micTransition.animateDp(
                     label = "unBlockWidth",
-                    transitionSpec = { tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing) }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) DesignTokens.EditorChrome.fabSize else unBlockExtendedWidth }
 
                 val unBlockWordmarkAlpha = micTransition.animateFloat(
                     label = "unBlockWordmarkAlpha",
-                    transitionSpec = { tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing) }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 0f else 1f }
 
                 val unBlockWordmarkWidth = micTransition.animateDp(
                     label = "unBlockWordmarkWidth",
-                    transitionSpec = { tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing) }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 0.dp else unBlockExpandedWordmarkWidth }
 
                 val recProgress = micTransition.animateFloat(
                     label = "recProgress",
-                    transitionSpec = { tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing) }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
                 ) { recording -> if (recording) 1f else 0f }
 
                 Row(
@@ -1378,8 +1376,18 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
         AnimatedVisibility(
             visible = rewriteVisible || rewriteReviewVisible,
-            enter = EnterTransition.None,
-            exit = ExitTransition.None,
+            enter = fadeIn(
+                animationSpec = tween(
+                    durationMillis = if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0,
+                    easing = DesignTokens.Motion.standardEasing
+                )
+            ),
+            exit = fadeOut(
+                animationSpec = tween(
+                    durationMillis = if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0,
+                    easing = DesignTokens.Motion.exitEasing
+                )
+            ),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
         ) {
