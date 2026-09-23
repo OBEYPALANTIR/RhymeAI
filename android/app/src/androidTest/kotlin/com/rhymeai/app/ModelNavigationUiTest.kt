@@ -52,6 +52,8 @@ class ModelNavigationUiTest {
         composeRule.onNodeWithContentDescription("Assistant panel").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Collapse context and theme").assertExists()
         composeRule.onNodeWithText("Set up model").performClick()
+        // Synchronize Compose before sending Back through the separate system channel.
+        composeRule.onNodeWithContentDescription("Settings page").assertIsDisplayed()
         assertTrue(InstrumentationRegistry.getInstrumentation().uiAutomation
             .performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
         composeRule.waitUntil(5_000) {
