@@ -136,7 +136,11 @@ fun SlidingSegmentedControl(
         Row(Modifier.fillMaxSize().selectableGroup()) {
             labels.forEachIndexed { index, label ->
                 val selected = index == selectedIndex
-                val textColor = if (selected) colorScheme.onPrimary else colorScheme.onSurfaceVariant
+                // Foreground follows the rendered fill, not its destination, so labels
+                // remain readable while the highlight travels across a dark surface.
+                val labelCenter = segmentWidth * (index + 0.5f)
+                val overHighlight = labelCenter >= pillOffset && labelCenter <= pillOffset + segmentWidth
+                val textColor = if (overHighlight) colorScheme.onPrimary else colorScheme.onSurfaceVariant
                 Box(
                     modifier = Modifier
                         .weight(1f)
