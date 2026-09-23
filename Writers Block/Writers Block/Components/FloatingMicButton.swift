@@ -128,6 +128,7 @@ struct FloatingMicButton: View {
                 .accessibilityIdentifier("micButton")
             }
             .frame(width: interpolatedWidth, height: pillHeight)
+            .clipShape(Capsule())
         }
         .frame(width: interpolatedWidth, height: pillHeight)
         // React to service state changes with a spring animation.
