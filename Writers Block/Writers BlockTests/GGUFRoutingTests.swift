@@ -313,6 +313,104 @@ struct GemmaRewritePromptTests {
 }
 
 struct GGUFDownloadIntegrityTests {
+    @Test func modelDirectoryIsExcludedFromBackup() throws {
+        let directory = try GGUFModelStorage.modelsDirectory(create: true)
+        #expect(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+    }
+
+    @Test func invalidStagingIsDiscardedAndFreshDownloadCanBeInstalled() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        let resume = directory.appendingPathComponent("fixture.gguf.resume")
+        let destination = directory.appendingPathComponent(option.fileName)
+        let previousModel = Data("existing model".utf8)
+        try previousModel.write(to: destination)
+        var corrupt = valid
+        corrupt[7] = 9
+        for invalid in [Data(repeating: 0, count: valid.count), corrupt, Data(valid.dropLast())] {
+            try invalid.write(to: staging)
+            try Data([1, 2]).write(to: resume)
+            #expect(throws: (any Error).self) {
+                try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
+            }
+            #expect(!FileManager.default.fileExists(atPath: staging.path))
+            #expect(!FileManager.default.fileExists(atPath: resume.path))
+            #expect(try Data(contentsOf: destination) == previousModel)
+        }
+        try valid.write(to: staging)
+        try Data([1, 2]).write(to: resume)
+        try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
+        #expect(try Data(contentsOf: destination) == valid)
+        #expect(try destination.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(!FileManager.default.fileExists(atPath: resume.path))
+    }
+
+    @Test func filesystemFailurePreservesValidatedStagingForRetry() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        try valid.write(to: staging)
+        #expect(throws: (any Error).self) {
+            try GGUFDownloadManager.installDownload(
+                from: staging, in: directory.appendingPathComponent("missing"), option: option
+            )
+        }
+        #expect(try Data(contentsOf: staging) == valid)
+    }
+
+    @Test func replacementFailurePreservesExistingModelAndStaging() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let previousModel = Data("existing model".utf8)
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        let destination = directory.appendingPathComponent(option.fileName)
+        let resume = directory.appendingPathComponent("fixture.gguf.resume")
+        try valid.write(to: staging)
+        try previousModel.write(to: destination)
+        try Data([1, 2]).write(to: resume)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        #expect(throws: (any Error).self) {
+            try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
+        }
+        #expect(try Data(contentsOf: destination) == previousModel)
+        #expect(try Data(contentsOf: staging) == valid)
+        #expect(try Data(contentsOf: resume) == Data([1, 2]))
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
+        #expect(try Data(contentsOf: destination) == valid)
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(!FileManager.default.fileExists(atPath: resume.path))
+    }
+
     @Test func validatesCompleteModelAndRejectsCorruption() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: url) }

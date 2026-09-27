@@ -1,5 +1,6 @@
 import Combine
 import CryptoKit
+import Darwin
 import Foundation
 struct GGUFDownloadOption: Identifiable, Equatable, Sendable {
     let id: String
@@ -80,11 +81,16 @@ enum GGUFModelStorage {
             appropriateFor: nil,
             create: create
         )
-        let directory = baseURL
+        var directory = baseURL
             .appendingPathComponent("RhymeAI", isDirectory: true)
             .appendingPathComponent("Gemma", isDirectory: true)
         if create {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        if FileManager.default.fileExists(atPath: directory.path) {
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try directory.setResourceValues(values)
         }
         return directory
     }
@@ -227,13 +233,13 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 Task {
                     do {
                         try await Task.detached {
-                            try Self.validateDownload(at: stagingURL, option: option)
-                            try FileManager.default.moveItem(at: stagingURL, to: directory.appendingPathComponent(option.fileName))
+                            try Self.installDownload(from: stagingURL, in: directory, option: option)
                         }.value
                         finish(option: option)
                     } catch {
                         isVerifying = false
                         activeDownloadID = nil
+                        statusMessage = nil
                         errorMessage = "Could not recover \(option.title): \(error.localizedDescription)"
                     }
                 }
@@ -425,17 +431,9 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
             }
             let directory = try GGUFModelStorage.modelsDirectory(create: true)
             let stagingURL = directory.appendingPathComponent("\(option.fileName).download")
-            let destinationURL = directory.appendingPathComponent(option.fileName)
             try? FileManager.default.removeItem(at: stagingURL)
             try FileManager.default.moveItem(at: location, to: stagingURL)
-            try Self.validateDownload(at: stagingURL, option: option)
-            if FileManager.default.fileExists(atPath: destinationURL.path) {
-                try FileManager.default.removeItem(at: destinationURL)
-            }
-            try FileManager.default.moveItem(at: stagingURL, to: destinationURL)
-            try? FileManager.default.removeItem(
-                at: directory.appendingPathComponent("\(option.fileName).resume")
-            )
+            try Self.installDownload(from: stagingURL, in: directory, option: option)
             Task { @MainActor [weak self] in
                 self?.finish(option: option)
             }
@@ -472,6 +470,41 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
             self?.backgroundCompletionHandler = nil
             completion?()
         }
+    }
+
+    nonisolated static func installDownload(
+        from stagingURL: URL,
+        in directory: URL,
+        option: GGUFDownloadOption
+    ) throws {
+        let resumeURL = directory.appendingPathComponent("\(option.fileName).resume")
+        do {
+            try validateDownload(at: stagingURL, option: option)
+        } catch let error as GGUFDownloadError {
+            // Invalid bytes cannot be recovered or resumed. Keep valid staging
+            // files on filesystem failures so a later retry need not download again.
+            switch error {
+            case .invalidFormat, .checksumMismatch, .incomplete:
+                try FileManager.default.removeItem(at: stagingURL)
+                if FileManager.default.fileExists(atPath: resumeURL.path) {
+                    try FileManager.default.removeItem(at: resumeURL)
+                }
+            default:
+                break
+            }
+            throw error
+        }
+        var excludedStagingURL = stagingURL
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try excludedStagingURL.setResourceValues(values)
+        let destinationURL = directory.appendingPathComponent(option.fileName)
+        // Staging and destination share a directory. rename publishes atomically,
+        // preserving both the old model and staging if replacement fails.
+        guard Darwin.rename(stagingURL.path, destinationURL.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        try? FileManager.default.removeItem(at: resumeURL)
     }
 
     nonisolated static func validateDownload(at url: URL, option: GGUFDownloadOption) throws {
