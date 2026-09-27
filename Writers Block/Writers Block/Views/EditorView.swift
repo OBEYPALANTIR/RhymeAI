@@ -48,6 +48,10 @@ private enum EditorViewConstants {
         static let enabledExportOpacity: Double = 1.0
     }
 
+    enum ControlChrome {
+        static let iconSize: CGFloat = 17
+    }
+
     enum RewriteReview {
         static let progressScale: CGFloat = 0.72
         static let statusMinimumScale: CGFloat = 0.82
@@ -82,6 +86,7 @@ struct EditorView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
     @State private var writingScrollPosition = ScrollPosition(y: 0)
@@ -357,6 +362,10 @@ struct EditorView: View {
             && !shouldShowRewriteChipBar && !viewModel.voiceMemoService.isRecording
     }
 
+    private var usesCompactControlChrome: Bool {
+        horizontalSizeClass == .compact && dynamicTypeSize.isAccessibilitySize
+    }
+
     @ViewBuilder
     private var iPadEditorActions: some View {
         if editorActionsVisible {
@@ -403,13 +412,13 @@ struct EditorView: View {
             Button {
                 presentAssistant()
             } label: {
-                HStack(spacing: unblockCollapsed ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : RhymeAITokens.Spacing.xs) {
+                HStack(spacing: unblockCollapsed || usesCompactControlChrome ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : RhymeAITokens.Spacing.xs) {
                     Image(systemName: inlineAssistantIsOpen ? "sidebar.right" : "pencil")
-                        .font(.body.weight(.semibold))
-                    if inlineAssistantIsOpen && !unblockCollapsed {
+                        .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .semibold))
+                    if inlineAssistantIsOpen && !unblockCollapsed && !usesCompactControlChrome {
                         Text("Hide AI")
                             .font(.subheadline.weight(.semibold))
-                    } else {
+                    } else if !usesCompactControlChrome {
                         UnBlockWordmark()
                             .opacity(unblockWordmarkOpacity)
                             .frame(width: unblockWordmarkWidth)
@@ -419,7 +428,7 @@ struct EditorView: View {
                 .foregroundStyle(appearance.palette.onAction)
                 .padding(.vertical, RhymeAITokens.Spacing.sm)
                 .frame(
-                    width: unblockButtonWidth,
+                    width: usesCompactControlChrome ? RhymeAITokens.Touch.comfortable : unblockButtonWidth,
                     height: RhymeAITokens.Touch.comfortable
                 )
                 .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.pill)
@@ -434,6 +443,7 @@ struct EditorView: View {
                 ensureProjectId: { viewModel.ensureProjectForRecording() }
             )
         }
+        .dynamicTypeSize(.large)
     }
 
     private var inlineAssistantIsOpen: Bool {
@@ -831,15 +841,24 @@ struct EditorView: View {
             Button {
                 isFocusMode.toggle()
             } label: {
-                ZStack {
-                    Text("Exit Focus").hidden()
-                    Text(isFocusMode ? "Exit Focus" : "Focus")
+                Group {
+                    if usesCompactControlChrome {
+                        Image(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "viewfinder")
+                            .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
+                    } else {
+                        ZStack {
+                            Text("Exit Focus").hidden()
+                            Text(isFocusMode ? "Exit Focus" : "Focus")
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .font(.subheadline.weight(.medium))
-                .fixedSize(horizontal: false, vertical: true)
                 .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                .contentShape(Rectangle())
             }
             .disabled(viewModel.hasActiveRewrite || viewModel.voiceMemoService.isRecording)
+            .accessibilityLabel(isFocusMode ? "Exit Focus" : "Focus")
             .accessibilityValue(isFocusMode ? "On" : "Off")
             .accessibilityHint("Hides analysis and secondary controls while you write")
             .accessibilityIdentifier("focusModeButton")
@@ -900,6 +919,7 @@ struct EditorView: View {
         }
         .padding(.horizontal, RhymeAITokens.Spacing.xs)
         .padding(.vertical, RhymeAITokens.Spacing.xs)
+        .dynamicTypeSize(.large)
         .overlay(
             Divider(), alignment: .bottom
         )

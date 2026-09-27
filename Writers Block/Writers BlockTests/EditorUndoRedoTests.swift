@@ -126,6 +126,68 @@ struct EditorUndoRedoTests {
 @MainActor
 struct LyricsCaretLayoutTests {
     @Test
+    func lyricTypographyUsesDynamicBodyMetrics() {
+        let standard = LyricsTextView.lyricsFont(for: .large)
+        let accessibility = LyricsTextView.lyricsFont(for: .accessibilityExtraExtraExtraLarge)
+        #expect(standard.pointSize == 16)
+        #expect(accessibility.pointSize > standard.pointSize)
+        #expect(accessibility.lineHeight > standard.lineHeight)
+
+        let view = UITextView()
+        LyricsTextView.configureTypography(view, contentSizeCategory: .large)
+        #expect(view.adjustsFontForContentSizeCategory)
+        #expect(view.font?.pointSize == 16)
+
+        let parent = LyricsTextView(
+            text: .constant(""),
+            onCursorChange: { _ in },
+            placeholder: "Typography placeholder"
+        )
+        let coordinator = parent.makeCoordinator()
+        coordinator.updatePlaceholder(view, text: "")
+        let placeholder = view.subviews
+            .compactMap { $0 as? UILabel }
+            .first { $0.text == parent.placeholder }
+        coordinator.updateTypography(view, contentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        #expect(view.font?.pointSize == accessibility.pointSize)
+        #expect(placeholder?.font.pointSize == accessibility.pointSize)
+    }
+
+    @Test
+    func rapidTextChangesCoalesceHighlightAnalysisAndKeepSelection() async throws {
+        let probe = HighlightAnalysisProbe()
+        let parent = LyricsTextView(
+            text: .constant(""),
+            onCursorChange: { _ in },
+            syllableColoringEnabled: true
+        )
+        let coordinator = LyricsTextView.Coordinator(
+            parent,
+            colorAnalysisDebounce: .milliseconds(30),
+            colorSpanProvider: { text, _, _, _ in
+                await probe.record(text)
+                return []
+            }
+        )
+        let view = UITextView(usingTextLayoutManager: true)
+        view.text = "seed"
+        coordinator.updateColors(view)
+        try await waitForRequests(1, in: probe)
+        await probe.reset()
+
+        for text in ["seed l", "seed li", "seed lig", "seed light"] {
+            view.text = text
+            coordinator.updateColors(view)
+        }
+        view.selectedRange = NSRange(location: view.text.utf16.count, length: 0)
+
+        try await waitForRequests(1, in: probe)
+        let requests = await probe.requests()
+        #expect(requests == ["seed light"])
+        #expect(view.selectedRange == NSRange(location: view.text.utf16.count, length: 0))
+    }
+
+    @Test
     func localTypingDoesNotReapplyStaleSelection() {
         let parent = LyricsTextView(text: .constant(""), onCursorChange: { _ in })
         let coordinator = parent.makeCoordinator()
@@ -368,6 +430,14 @@ struct LyricsCaretLayoutTests {
         Issue.record("Expected TextKit 2 to render a colored glyph at UTF-16 offset \(offset).")
     }
 
+    private func waitForRequests(_ count: Int, in probe: HighlightAnalysisProbe) async throws {
+        for _ in 0..<100 {
+            if await probe.count() == count { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("Expected \(count) highlight analysis request(s).")
+    }
+
     private func renderedImage(of view: UITextView) -> UIImage {
         view.setNeedsLayout()
         view.layoutIfNeeded()
@@ -409,5 +479,25 @@ struct LyricsCaretLayoutTests {
             in: image,
             xRange: view.caretRect(for: start).minX..<view.caretRect(for: end).minX
         )
+    }
+}
+
+private actor HighlightAnalysisProbe {
+    private var recordedRequests: [String] = []
+
+    func record(_ text: String) {
+        recordedRequests.append(text)
+    }
+
+    func reset() {
+        recordedRequests.removeAll()
+    }
+
+    func count() -> Int {
+        recordedRequests.count
+    }
+
+    func requests() -> [String] {
+        recordedRequests
     }
 }

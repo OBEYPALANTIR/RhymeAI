@@ -19,6 +19,11 @@ final class Writers_BlockUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         let app = isolatedUITestApp()
         app.launch()
+        let window = app.windows.firstMatch
+        let portraitWindowFrame = try XCTUnwrap(
+            waitForStableFrame(of: window, matching: { $0.height > $0.width }),
+            "The app window never settled in portrait"
+        )
         let newSong = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
         XCTAssertTrue(newSong.waitForExistence(timeout: 5))
         newSong.tap()
@@ -27,13 +32,46 @@ final class Writers_BlockUITests: XCTestCase {
         editor.tap()
         let text = "The last word is light tonight and the melody carries through the night"
         editor.typeText(text)
+        XCTAssertEqual(editor.value as? String, text)
+        let portraitKeyboardFrame = try XCTUnwrap(
+            waitForVisibleKeyboardFrame(in: app, windowFrame: portraitWindowFrame),
+            "The software keyboard never became visible in portrait"
+        )
+        XCTAssertLessThanOrEqual(editor.frame.minY, portraitKeyboardFrame.minY)
+        XCTAssertNotNil(
+            waitForStableFrame(of: editor, matching: { $0.intersects(portraitWindowFrame) }),
+            "The editor frame did not settle before the portrait capture"
+        )
         attachScreenshot(app, name: "colored-lyrics-line-end-portrait")
         editor.typeText("s\nA new line")
         XCTAssertEqual(editor.value as? String, text + "s\nA new line")
         XCUIDevice.shared.orientation = .landscapeLeft
+        let expectsLandscape = UIDevice.current.userInterfaceIdiom == .pad
+        let rotatedWindowFrame = try XCTUnwrap(
+            waitForStableFrame(of: window, matching: {
+                expectsLandscape ? $0.width > $0.height : $0.height > $0.width
+            }),
+            expectsLandscape
+                ? "The iPad app window never settled in landscape"
+                : "The portrait-only iPhone app window did not remain portrait"
+        )
+        let rotatedKeyboardFrame = try XCTUnwrap(
+            waitForVisibleKeyboardFrame(in: app, windowFrame: rotatedWindowFrame),
+            "The software keyboard never became visible after the orientation request"
+        )
         editor.typeText(" ends here")
         XCTAssertEqual(editor.value as? String, text + "s\nA new line ends here")
-        attachScreenshot(app, name: "colored-lyrics-line-end-landscape")
+        XCTAssertLessThanOrEqual(editor.frame.minY, rotatedKeyboardFrame.minY)
+        XCTAssertNotNil(
+            waitForStableFrame(of: editor, matching: { $0.intersects(rotatedWindowFrame) }),
+            "The editor frame did not settle after the orientation request"
+        )
+        attachScreenshot(
+            app,
+            name: expectsLandscape
+                ? "colored-lyrics-line-end-ipad-landscape"
+                : "colored-lyrics-line-end-iphone-portrait-retained"
+        )
         XCUIDevice.shared.orientation = .portrait
     }
 
@@ -198,6 +236,97 @@ final class Writers_BlockUITests: XCTestCase {
             XCTAssertTrue(newSong.isHittable)
             newSong.tap()
             XCTAssertTrue(app.textViews["lyricsEditor"].waitForExistence(timeout: 5))
+            app.terminate()
+        }
+    }
+
+    @MainActor
+    func testLyricsEditorRendersAtDefaultAndAccessibilityTextSizes() throws {
+        let configurations: [(name: String, arguments: [String])] = [
+            ("default", []),
+            ("accessibility-xxxl", [
+                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"
+            ]),
+        ]
+
+        for configuration in configurations {
+            let app = isolatedUITestApp(arguments: ["--ui-test-seed-prosody-song"] + configuration.arguments)
+            app.launch()
+
+            let window = app.windows.firstMatch
+            let windowFrame = try XCTUnwrap(
+                waitForStableFrame(of: window, matching: { $0.height > $0.width }),
+                "The app window never settled in portrait for \(configuration.name)"
+            )
+            let editor = app.textViews["lyricsEditor"]
+            XCTAssertTrue(editor.waitForExistence(timeout: 5))
+            XCTAssertTrue((editor.value as? String)?.contains("yellow music") == true)
+            editor.tap()
+            let keyboardProbe = " keyboard visible"
+            editor.typeText(keyboardProbe)
+            XCTAssertTrue((editor.value as? String)?.contains(keyboardProbe) == true)
+            let keyboardFrame = try XCTUnwrap(
+                waitForVisibleKeyboardFrame(in: app, windowFrame: windowFrame),
+                "The software keyboard never occupied the app window for \(configuration.name)"
+            )
+            XCTAssertTrue(editor.isHittable)
+
+            if configuration.name == "accessibility-xxxl" {
+                let focusButton = app.buttons["focusModeButton"]
+                XCTAssertTrue(focusButton.waitForExistence(timeout: 3))
+                let outerHitOffset: CGFloat = 19
+                var outerHitPoint = CGPoint(
+                    x: focusButton.frame.midX,
+                    y: focusButton.frame.midY + outerHitOffset
+                )
+                XCTAssertTrue(windowFrame.contains(outerHitPoint))
+                app.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: outerHitPoint.x, dy: outerHitPoint.y))
+                    .tap()
+                XCTAssertEqual(focusButton.value as? String, "On")
+
+                outerHitPoint = CGPoint(
+                    x: focusButton.frame.midX,
+                    y: focusButton.frame.midY + outerHitOffset
+                )
+                XCTAssertTrue(windowFrame.contains(outerHitPoint))
+                app.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: outerHitPoint.x, dy: outerHitPoint.y))
+                    .tap()
+                XCTAssertEqual(focusButton.value as? String, "Off")
+            }
+
+            let topControls = [
+                app.buttons["Open songs drawer"],
+                app.buttons["undoLyricsButton"],
+                app.buttons["redoLyricsButton"],
+                app.buttons["focusModeButton"],
+                app.buttons["songActionsButton"],
+                app.buttons["gearshape"],
+            ]
+            for control in topControls {
+                XCTAssertTrue(control.waitForExistence(timeout: 3))
+                XCTAssertTrue(windowFrame.contains(control.frame))
+            }
+            for (leading, trailing) in zip(topControls, topControls.dropFirst()) {
+                XCTAssertLessThanOrEqual(leading.frame.maxX, trailing.frame.minX)
+            }
+
+            let unblockButton = app.buttons["unblockButton"]
+            let micButton = app.buttons["micButton"]
+            XCTAssertTrue(unblockButton.waitForExistence(timeout: 3))
+            XCTAssertTrue(micButton.waitForExistence(timeout: 3))
+            XCTAssertTrue(windowFrame.contains(unblockButton.frame))
+            XCTAssertTrue(windowFrame.contains(micButton.frame))
+            XCTAssertLessThan(unblockButton.frame.maxX, micButton.frame.minX)
+            XCTAssertLessThanOrEqual(unblockButton.frame.maxY, keyboardFrame.minY + 4)
+            XCTAssertLessThanOrEqual(micButton.frame.maxY, keyboardFrame.minY + 4)
+            XCTAssertNotNil(
+                waitForStableFrame(of: unblockButton, matching: { windowFrame.contains($0) }),
+                "The editor actions did not settle before the \(configuration.name) capture"
+            )
+            attachScreenshot(app, name: "lyrics-editor-\(configuration.name)")
+
             app.terminate()
         }
     }
@@ -1353,6 +1482,52 @@ final class Writers_BlockUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func waitForVisibleKeyboardFrame(
+        in app: XCUIApplication,
+        windowFrame: CGRect,
+        timeout: TimeInterval = 5
+    ) -> CGRect? {
+        let keyboard = app.keyboards.firstMatch
+        guard keyboard.waitForExistence(timeout: timeout) else { return nil }
+        return waitForStableFrame(of: keyboard, timeout: timeout) { frame in
+            frame.height >= 100
+                && frame.width >= windowFrame.width * 0.8
+                && frame.intersects(windowFrame)
+                && frame.maxY <= windowFrame.maxY + 4
+        }
+    }
+
+    private func waitForStableFrame(
+        of element: XCUIElement,
+        timeout: TimeInterval = 5,
+        matching predicate: (CGRect) -> Bool
+    ) -> CGRect? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var previousFrame: CGRect?
+        var stableSampleCount = 0
+
+        while Date() < deadline {
+            let frame = element.frame.integral
+            if element.exists && predicate(frame) {
+                if frame == previousFrame {
+                    stableSampleCount += 1
+                } else {
+                    previousFrame = frame
+                    stableSampleCount = 1
+                }
+                if stableSampleCount >= 3 {
+                    return frame
+                }
+            } else {
+                previousFrame = nil
+                stableSampleCount = 0
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+
+        return nil
     }
 
     private var ipadAuditOrientations: [UIDeviceOrientation] {

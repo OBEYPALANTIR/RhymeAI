@@ -65,8 +65,8 @@ nonisolated private final class HighlightAnalysisCache: @unchecked Sendable {
 
     func analysis(
         for request: HighlightAnalysisRequest,
-        build: () -> HighlightAnalysis
-    ) -> HighlightAnalysis {
+        build: () -> HighlightAnalysis?
+    ) -> HighlightAnalysis? {
         lock.lock()
         if latestRequest == request, let latestAnalysis {
             lock.unlock()
@@ -74,7 +74,7 @@ nonisolated private final class HighlightAnalysisCache: @unchecked Sendable {
         }
         lock.unlock()
 
-        let computed = build()
+        guard let computed = build(), !Task.isCancelled else { return nil }
         lock.lock()
         defer { lock.unlock() }
         if latestRequest == request, let latestAnalysis {
@@ -118,12 +118,19 @@ enum LyricsHighlighting {
     ]
 
     static func spans(text: String, rhymeEnabled: Bool, syllablesEnabled: Bool, isDark: Bool) async -> [LyricsColorSpan] {
-        await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) { () -> [LyricsColorSpan] in
+            guard !Task.isCancelled else { return [] }
             let request = HighlightAnalysisRequest(source: text, rhymeEnabled: rhymeEnabled)
-            let analysis = HighlightAnalysisCache.shared.analysis(for: request) {
-                analyze(text: text, rhymeEnabled: rhymeEnabled)
-            }
-            return analysis.tokens.compactMap { token in
+            let analysis = HighlightAnalysisCache.shared.analysis(
+                for: request,
+                build: { analyze(text: text, rhymeEnabled: rhymeEnabled) }
+            )
+            guard let analysis else { return [] }
+            guard !Task.isCancelled else { return [] }
+            var spans: [LyricsColorSpan] = []
+            spans.reserveCapacity(analysis.tokens.count)
+            for token in analysis.tokens {
+                guard !Task.isCancelled else { return [] }
                 let foreground: Color?
                 if rhymeEnabled, let key = token.familyKey {
                     foreground = colorFor(key: key, isDark: isDark)
@@ -132,36 +139,47 @@ enum LyricsHighlighting {
                 } else {
                     foreground = nil
                 }
-                return LyricsColorSpan(
+                spans.append(LyricsColorSpan(
                     range: NSRange(location: token.location, length: token.length),
                     foreground: foreground,
                     underline: rhymeEnabled && syllablesEnabled
                         ? syllableColor(for: token.syllableCount, isDark: isDark) : nil
-                )
+                ))
             }
-        }.value
+            return spans
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     nonisolated private static func analyze(
         text: String,
         rhymeEnabled: Bool
-    ) -> HighlightAnalysis {
+    ) -> HighlightAnalysis? {
         let nsText = text as NSString
         let headerRanges = SectionMap.headerRanges(text)
+        guard !Task.isCancelled else { return nil }
         let matches = LyricRegex.word.matches(
             in: text,
             range: NSRange(location: 0, length: nsText.length)
         ).filter { match in
             !SectionMap.intersectsHeader(match.range, headerRanges: headerRanges)
         }
-        let analyses = matches.map { match in
-            WordAnalysisCache.shared.analysis(for: nsText.substring(with: match.range))
+        var analyses: [(rhymeKeys: [String], syllableCount: Int)] = []
+        analyses.reserveCapacity(matches.count)
+        for match in matches {
+            guard !Task.isCancelled else { return nil }
+            analyses.append(WordAnalysisCache.shared.analysis(for: nsText.substring(with: match.range)))
         }
         let keysPerToken: [[String]] = analyses.map { $0.rhymeKeys }
 
         var keyOccurrences: [String: Int] = [:]
         if rhymeEnabled {
             for keys in keysPerToken {
+                guard !Task.isCancelled else { return nil }
                 for key in keys { keyOccurrences[key, default: 0] += 1 }
             }
         }
@@ -169,13 +187,16 @@ enum LyricsHighlighting {
             rhymeEnabled ? keys.last { (keyOccurrences[$0] ?? 0) >= 2 } : nil
         }
 
-        let tokens = matches.enumerated().map { index, match in
-            HighlightToken(
+        var tokens: [HighlightToken] = []
+        tokens.reserveCapacity(matches.count)
+        for (index, match) in matches.enumerated() {
+            guard !Task.isCancelled else { return nil }
+            tokens.append(HighlightToken(
                 location: match.range.location,
                 length: match.range.length,
                 familyKey: familyKeyPerToken[index],
                 syllableCount: analyses[index].syllableCount
-            )
+            ))
         }
         return HighlightAnalysis(source: text, tokens: tokens)
     }

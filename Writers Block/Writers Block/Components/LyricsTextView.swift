@@ -28,7 +28,7 @@ struct LyricsTextView: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView(usingTextLayoutManager: true)
         textView.delegate = context.coordinator
-        textView.font = UIFont.systemFont(ofSize: 16, weight: .regular)
+        Self.configureTypography(textView)
         textView.backgroundColor = .clear
         applyAppearance(to: textView)
         textView.autocorrectionType = .no
@@ -108,6 +108,22 @@ struct LyricsTextView: UIViewRepresentable {
         Coordinator(self)
     }
 
+    static func lyricsFont(for contentSizeCategory: UIContentSizeCategory) -> UIFont {
+        UIFontMetrics(forTextStyle: .body).scaledFont(
+            for: UIFont.systemFont(ofSize: 16, weight: .regular),
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: contentSizeCategory)
+        )
+    }
+
+    static func configureTypography(
+        _ textView: UITextView,
+        contentSizeCategory: UIContentSizeCategory? = nil
+    ) {
+        let category = contentSizeCategory ?? textView.traitCollection.preferredContentSizeCategory
+        textView.adjustsFontForContentSizeCategory = true
+        textView.font = lyricsFont(for: category == .unspecified ? .large : category)
+    }
+
     private var renderedText: String {
         displayText ?? text
     }
@@ -127,6 +143,13 @@ struct LyricsTextView: UIViewRepresentable {
     }
 
     class Coordinator: NSObject, UITextViewDelegate {
+        typealias ColorSpanProvider = @Sendable (
+            _ text: String,
+            _ rhymeEnabled: Bool,
+            _ syllablesEnabled: Bool,
+            _ isDark: Bool
+        ) async -> [LyricsColorSpan]
+
         var parent: LyricsTextView
         private var placeholderLabel: UILabel?
         private var rewriteHighlightView: RewriteHighlightOverlayView?
@@ -152,6 +175,8 @@ struct LyricsTextView: UIViewRepresentable {
         private var appliedForeground: UIColor?
         private var appliedColorText: String?
         private var pendingColorEdit: (source: String, range: NSRange, replacement: String)?
+        private let colorAnalysisDebounce: Duration
+        private let colorSpanProvider: ColorSpanProvider
         private struct ColorRequest: Equatable {
             let text: String
             let rhyme: Bool
@@ -160,8 +185,21 @@ struct LyricsTextView: UIViewRepresentable {
         }
         var isApplyingProgrammaticUpdate = false
 
-        init(_ parent: LyricsTextView) {
+        init(
+            _ parent: LyricsTextView,
+            colorAnalysisDebounce: Duration = .milliseconds(120),
+            colorSpanProvider: @escaping ColorSpanProvider = { text, rhyme, syllables, isDark in
+                await LyricsHighlighting.spans(
+                    text: text,
+                    rhymeEnabled: rhyme,
+                    syllablesEnabled: syllables,
+                    isDark: isDark
+                )
+            }
+        ) {
             self.parent = parent
+            self.colorAnalysisDebounce = colorAnalysisDebounce
+            self.colorSpanProvider = colorSpanProvider
         }
 
         deinit {
@@ -198,6 +236,12 @@ struct LyricsTextView: UIViewRepresentable {
                 self,
                 selector: #selector(keyboardWillHide),
                 name: UIResponder.keyboardWillHideNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(contentSizeCategoryDidChange),
+                name: UIContentSizeCategory.didChangeNotification,
                 object: nil
             )
         }
@@ -269,6 +313,7 @@ struct LyricsTextView: UIViewRepresentable {
             let request = ColorRequest(text: textView.text, rhyme: parent.rhymeHighlightEnabled,
                                        syllables: parent.syllableColoringEnabled, appearance: parent.appearance)
             guard colorRequest != request else { return }
+            let previousRequest = colorRequest
             colorRequest = request
             colorTask?.cancel()
             let foreground = UIColor(request.appearance.palette.primaryInk)
@@ -276,11 +321,29 @@ struct LyricsTextView: UIViewRepresentable {
                 installColors([], for: request.text, on: textView, foreground: foreground)
                 return
             }
+            let shouldCoalesceTextChange = previousRequest.map {
+                $0.text != request.text
+                    && $0.rhyme == request.rhyme
+                    && $0.syllables == request.syllables
+                    && $0.appearance == request.appearance
+            } ?? false
             colorTask = Task { [weak self, weak textView] in
-                let spans = await LyricsHighlighting.spans(text: request.text, rhymeEnabled: request.rhyme,
-                                                          syllablesEnabled: request.syllables,
-                                                          isDark: request.appearance == .graphite)
-                guard !Task.isCancelled, let self, let textView,
+                guard let self else { return }
+                if shouldCoalesceTextChange {
+                    do {
+                        try await Task.sleep(for: colorAnalysisDebounce)
+                    } catch {
+                        return
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                let spans = await colorSpanProvider(
+                    request.text,
+                    request.rhyme,
+                    request.syllables,
+                    request.appearance == .graphite
+                )
+                guard !Task.isCancelled, let textView,
                       self.colorRequest == request, textView.text == request.text,
                       textView.markedTextRange == nil else { return }
                 self.isApplyingProgrammaticUpdate = true
@@ -395,6 +458,10 @@ struct LyricsTextView: UIViewRepresentable {
                 let label = UILabel()
                 label.text = parent.placeholder
                 label.font = textView.font
+                // The coordinator applies the same already-scaled font to both views.
+                // Automatic label scaling would use its current trait collection and
+                // can temporarily diverge from the notification's new category.
+                label.adjustsFontForContentSizeCategory = false
                 label.translatesAutoresizingMaskIntoConstraints = false
                 textView.addSubview(label)
                 NSLayoutConstraint.activate([
@@ -406,6 +473,16 @@ struct LyricsTextView: UIViewRepresentable {
             placeholderLabel?.text = parent.placeholder
             placeholderLabel?.textColor = UIColor(parent.appearance.palette.placeholder)
             placeholderLabel?.isHidden = !text.isEmpty
+        }
+
+        func updateTypography(
+            _ textView: UITextView,
+            contentSizeCategory: UIContentSizeCategory? = nil
+        ) {
+            LyricsTextView.configureTypography(textView, contentSizeCategory: contentSizeCategory)
+            placeholderLabel?.adjustsFontForContentSizeCategory = false
+            placeholderLabel?.font = textView.font
+            textView.invalidateIntrinsicContentSize()
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -484,6 +561,13 @@ struct LyricsTextView: UIViewRepresentable {
         @objc private func keyboardWillHide(_ notification: Notification) {
             isKeyboardVisible = false
             keyboardFrameInScreen = .zero
+        }
+
+        @objc private func contentSizeCategoryDidChange(_ notification: Notification) {
+            guard let textView else { return }
+            let category = notification.userInfo?[UIContentSizeCategory.newValueUserInfoKey]
+                as? UIContentSizeCategory
+            updateTypography(textView, contentSizeCategory: category)
         }
 
         func scheduleKeepCursorVisible(animated: Bool = false) {
