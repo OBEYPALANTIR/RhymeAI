@@ -191,10 +191,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private data class LyricStats(
+internal data class LyricStatsSnapshot(
+    val sourceText: String,
     val wordCount: Int,
     val syllableCount: Int
 )
+
+internal fun currentLyricStats(
+    lyrics: String,
+    snapshot: LyricStatsSnapshot?
+): LyricStatsSnapshot? = snapshot?.takeIf { it.sourceText == lyrics }
 
 private const val FAKE_RECORDING_EXTRA = "com.rhymeai.app.FAKE_RECORDING"
 
@@ -225,7 +231,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     var titleHeightPx by remember { mutableIntStateOf(0) }
     var metadataHeightPx by remember { mutableIntStateOf(0) }
     var analyzedLyrics by remember { mutableStateOf(viewModel.lyrics) }
-    var lyricStats by remember { mutableStateOf(LyricStats(0, 0)) }
+    var lyricStats by remember {
+        mutableStateOf<LyricStatsSnapshot?>(
+            if (viewModel.lyrics.isEmpty()) LyricStatsSnapshot("", 0, 0) else null
+        )
+    }
     var songActionsExpanded by remember { mutableStateOf(false) }
     var sectionMenuExpanded by remember { mutableStateOf(false) }
     var focusMode by rememberSaveable { mutableStateOf(false) }
@@ -269,7 +279,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         val lyricsSnapshot = viewModel.lyrics
         delay(180)
         val stats = withContext(Dispatchers.Default) {
-            LyricStats(
+            LyricStatsSnapshot(
+                sourceText = lyricsSnapshot,
                 wordCount = SyllableCounter.lyricWordCount(lyricsSnapshot),
                 syllableCount = SyllableCounter.lyricSyllableCount(lyricsSnapshot)
             )
@@ -895,6 +906,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
                     Spacer(Modifier.height(DesignTokens.Spacing.xs))
                     val statsUseDarkPalette = LocalAppAppearance.current.isDark
+                    val visibleLyricStats = currentLyricStats(viewModel.lyrics, lyricStats)
+                    val measuredLyricStats = visibleLyricStats
+                        ?: lyricStats
+                        ?: LyricStatsSnapshot("", 0, 0)
                     val secondaryContentAlpha by animateFloatAsState(
                         targetValue = if (focusMode) 0f else 1f,
                         animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0),
@@ -908,7 +923,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     fontWeight = FontWeight.SemiBold
                                 )
                             ) {
-                                append("${lyricStats.wordCount}w")
+                                append("${measuredLyricStats.wordCount}w")
                             }
                             withStyle(SpanStyle(color = colorScheme.onSurfaceVariant)) {
                                 append(" · ")
@@ -919,7 +934,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     fontWeight = FontWeight.SemiBold
                                 )
                             ) {
-                                append("${lyricStats.syllableCount}s")
+                                append("${measuredLyricStats.syllableCount}s")
                             }
                         },
                         fontSize = DesignTokens.Editor.metadataFontSize,
@@ -927,8 +942,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .onSizeChanged { metadataHeightPx = it.height }
-                            .alpha(secondaryContentAlpha)
-                            .then(if (focusMode) Modifier.clearAndSetSemantics { } else Modifier.testTag("editorStats"))
+                            .alpha(secondaryContentAlpha * if (visibleLyricStats == null) 0f else 1f)
+                            .then(
+                                if (focusMode || visibleLyricStats == null) {
+                                    Modifier.clearAndSetSemantics { }
+                                } else {
+                                    Modifier.testTag("editorStats")
+                                }
+                            )
                     )
                     Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
@@ -996,8 +1017,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val analysisTextActive = analysisOverlayActive && !focusMode
                     val analysisTextResult = rememberAnalysisTextResult(
                         text = analyzedLyrics,
-                        enabled = viewModel.isRhymeHighlightEnabled,
-                        syllablesEnabled = viewModel.isSyllableColoringEnabled
+                        enabled = analysisTextActive && viewModel.isRhymeHighlightEnabled,
+                        syllablesEnabled = analysisTextActive && viewModel.isSyllableColoringEnabled
                     )
                     val analysisTransformation = remember(analysisTextActive, analysisTextResult) {
                         VisualTransformation { source ->
