@@ -203,7 +203,7 @@ struct RhymeConstraintTests {
             currentLetter: "A",
             currentSection: .unknown,
             complexity: .moderate,
-            useWholeSongContext: false
+            useWholeSongContext: true
         )
 
         #expect(

@@ -1088,7 +1088,7 @@ struct Writers_BlockTests {
             sectionOrdinal: 2,
             firstChorusLines: firstLines,
             complexity: .moderate,
-            useWholeSongContext: false
+            useWholeSongContext: true
         )
         #expect(prompt.contains("This is the chorus (instance 2). Keep hook language and ending words consistent with the established chorus:"))
         #expect(prompt.contains("We rise together"))

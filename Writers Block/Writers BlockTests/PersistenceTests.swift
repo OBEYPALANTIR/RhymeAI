@@ -44,6 +44,7 @@ struct PersistenceTests {
         let viewModel = harness.viewModel
         let context = harness.context
 
+        viewModel.newProject()
         viewModel.title = "Autosaved Draft"
         viewModel.lyrics = "first line\nsecond line"
         viewModel.theme = "late-night resolve"
