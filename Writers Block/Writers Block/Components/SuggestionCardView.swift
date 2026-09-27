@@ -13,6 +13,7 @@ struct SuggestionCardView: View {
     var isKept: Bool = false
 
     var body: some View {
+        let prosody = ProsodyAnalyzer.analyzeLine(suggestion)
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
@@ -23,7 +24,7 @@ struct SuggestionCardView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     if showProsody {
-                        SuggestionProsodyPreviewView(text: suggestion)
+                        SuggestionProsodyPreviewView(prosody: prosody)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -39,7 +40,7 @@ struct SuggestionCardView: View {
                             .accessibilityHidden(true)
                     }
 
-                    Text("\(SyllableCounter.countText(suggestion))")
+                    Text("\(prosody.syllableCount)")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary.opacity(0.6))
                         .padding(.horizontal, RhymeAITokens.Spacing.xs)
@@ -136,8 +137,7 @@ struct SuggestionCardView: View {
 }
 
 private struct SuggestionProsodyPreviewView: View {
-    let text: String
-    private var prosody: LineProsody { ProsodyAnalyzer.analyzeLine(text) }
+    let prosody: LineProsody
 
     var body: some View {
         if prosody.syllableCount > 0 {

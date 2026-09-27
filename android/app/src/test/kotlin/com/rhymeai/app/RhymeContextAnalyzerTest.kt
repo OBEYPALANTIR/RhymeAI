@@ -67,6 +67,25 @@ class RhymeContextAnalyzerTest {
     }
 
     @Test
+    fun preservesUtf16CursorContextAndSectionReference() {
+        val lyrics = "[Verse]\nfirst glow\n🎵 second rain\nthird road"
+        val cursor = lyrics.indexOf("third") + 2
+
+        val context = RhymeContextAnalyzer.compute(
+            text = lyrics,
+            cursor = cursor,
+            scheme = "ABAB"
+        )
+
+        assertEquals("A", context.currentLetter)
+        assertEquals("first glow", context.targetLine)
+        assertEquals(3, context.currentLineIndex)
+        assertEquals(SongSection.VERSE, context.currentSection)
+        assertEquals("Verse", context.currentSectionRef?.label)
+        assertEquals(1, context.currentSectionRef?.ordinal)
+    }
+
+    @Test
     fun clampsCursorAndFallsBackForEmptyScheme() {
         val lyrics = "[Verse]\nfirst line\nsecond line"
 
@@ -80,6 +99,7 @@ class RhymeContextAnalyzerTest {
         assertNull(context.targetLine)
         assertEquals(2, context.currentLineIndex)
         assertEquals(SongSection.VERSE, context.currentSection)
+        assertNull(context.currentSectionRef)
     }
 
     @Test

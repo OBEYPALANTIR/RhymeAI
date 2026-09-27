@@ -74,9 +74,9 @@ enum FeatureHelp: String, Identifiable {
 
 struct AssistantProsodyPreviewView: View {
     let text: String
-    private var prosody: LineProsody { ProsodyAnalyzer.analyzeLine(text) }
 
     var body: some View {
+        let prosody = ProsodyAnalyzer.analyzeLine(text)
         if prosody.syllableCount > 0 {
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.hairline) {
                 if !prosody.feet.isEmpty {

@@ -10,9 +10,11 @@ internal object RhymeContextAnalyzer {
         }
 
         val pos = cursor.coerceIn(0, text.length)
-        val currentSection = currentSongSection(text, pos)
         val textBefore = text.substring(0, pos)
         val textAfter = text.substring(pos)
+        val currentLineIndex = textBefore.count { it == '\n' }
+        val sectionRef = SectionMap.parse(text).sectionAt(currentLineIndex)
+        val currentSection = sectionRef.type
 
         val lastDoubleNewline = textBefore.lastIndexOf("\n\n")
         val stanzaStart = if (lastDoubleNewline == -1) 0 else lastDoubleNewline + 2
@@ -50,11 +52,6 @@ internal object RhymeContextAnalyzer {
             }
             lyricCount++
         }
-
-        // Derive the full SectionRef (ordinal, chorus lines, etc.) so downstream
-        // prompt builders know which instance of a section this is.
-        val currentLineIndex = text.substring(0, pos).count { it == '\n' }
-        val sectionRef = SectionMap.parse(text).sectionAt(currentLineIndex)
 
         return RhymeContext(
             targetLine = targetLine,
