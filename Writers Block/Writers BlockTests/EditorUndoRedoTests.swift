@@ -53,10 +53,16 @@ struct EditorUndoRedoTests {
         viewModel.newProject()
         viewModel.onLyricsChanged("temporary draft", timestampMilliseconds: 0)
 
+        let loaded = SongProject(title: "Loaded", lyrics: "saved lyrics")
+        container.mainContext.insert(loaded)
+        try container.mainContext.save()
+
         // When
-        viewModel.loadProject(SongProject(title: "Loaded", lyrics: "saved lyrics"))
+        viewModel.loadProject(loaded)
 
         // Then
+        #expect(viewModel.currentProjectId == loaded.id)
+        #expect(try container.mainContext.fetch(FetchDescriptor<SongProject>()).contains { $0.lyrics == "temporary draft" })
         #expect(!viewModel.canUndoLyrics)
         #expect(!viewModel.canRedoLyrics)
     }

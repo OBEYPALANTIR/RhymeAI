@@ -184,6 +184,7 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var cloudBackupConfigured: Bool = false
     @Published private(set) var cloudBackupHasStoredPassphrase: Bool = false
     @Published private(set) var cloudBackupIsWorking: Bool = false
+    private var activeCloudEditorOperation: CloudEditorOperation?
     @Published private(set) var cloudBackupStatusText: String = "Google Drive backup is unavailable in this build."
     @Published private(set) var cloudBackupLastResultIsError: Bool = false
 
@@ -1141,7 +1142,7 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Project Management
 
     func newProject() {
-        guard flushCurrentDraft() else { return }
+        guard preserveOutgoingDraftBeforeNavigation() else { return }
         cancelEditorAIWork()
         title = ""
         lyrics = ""
@@ -1154,10 +1155,11 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showProjectsSheet = false
         resetLyricsHistory()
+        trackSelectedDraftDuringCloudOperation()
     }
 
     func loadProject(_ project: SongProject) {
-        guard flushCurrentDraft() else { return }
+        guard preserveOutgoingDraftBeforeNavigation() else { return }
         cancelEditorAIWork()
         title = project.title
         lyrics = project.lyrics
@@ -1170,6 +1172,7 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showProjectsSheet = false
         resetLyricsHistory()
+        trackSelectedDraftDuringCloudOperation()
     }
 
     private func cancelEditorAIWork() {
@@ -1183,6 +1186,7 @@ final class EditorViewModel: ObservableObject {
 
     @discardableResult
     func moveProjectToTrash(_ project: SongProject) -> Bool {
+        if activeCloudEditorOperation != nil { return false }
         if currentProjectId == project.id, !flushCurrentDraft() { return false }
         guard let context = modelContext else { return false }
         autoSaveTask?.cancel()
@@ -1463,7 +1467,7 @@ final class EditorViewModel: ObservableObject {
 
     @discardableResult
     func importProject(_ exported: SongProjectExport) -> Bool {
-        guard let context = modelContext else { return false }
+        guard let context = modelContext, preserveOutgoingDraftBeforeNavigation() else { return false }
         autoSaveTask?.cancel()
         cancelEditorAIWork()
         let project = makeImportedProject(from: exported)
@@ -1487,6 +1491,7 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showProjectsSheet = false
         resetLyricsHistory()
+        trackSelectedDraftDuringCloudOperation()
         return true
     }
 
@@ -1495,6 +1500,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func applyTemplate(_ template: SongTemplate) {
+        guard preserveOutgoingDraftBeforeNavigation() else { return }
         cancelEditorAIWork()
         title = "Untitled \(template.name)"
         theme = template.theme
@@ -1506,6 +1512,7 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showTemplatesSheet = false
         resetLyricsHistory()
+        trackSelectedDraftDuringCloudOperation(isUnsaved: true)
         triggerAutoSave()
     }
 
@@ -1540,6 +1547,10 @@ final class EditorViewModel: ObservableObject {
 
     func triggerAutoSave() {
         autoSaveTask?.cancel()
+        if activeCloudEditorOperation != nil {
+            saveStatus = .saving
+            return
+        }
         let projectIdAtTrigger = currentProjectId
         autoSaveTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1596,6 +1607,7 @@ final class EditorViewModel: ObservableObject {
 
     @discardableResult
     func flushCurrentDraft() -> Bool {
+        guard activeCloudEditorOperation == nil else { return false }
         autoSaveTask?.cancel()
         guard !showWelcome || currentProjectId != nil,
               currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return true }
@@ -1746,22 +1758,40 @@ final class EditorViewModel: ObservableObject {
             refreshCloudBackupState()
             return
         }
+        guard beginCloudEditorOperation(in: context) else {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Backup canceled. Save the open song before retrying; your edits remain open."
+            return
+        }
 
         cloudBackupIsWorking = true
         cloudBackupLastResultIsError = false
         cloudBackupStatusText = "Encrypting backup for Google Drive..."
         defer {
+            activeCloudEditorOperation = nil
             cloudBackupIsWorking = false
             cloudBackupConfigured = backupService.isConfigured
             cloudBackupHasStoredPassphrase = backupService.hasStoredPassphrase
         }
 
+        var backupFailure: Error?
         do {
             try await backupService.backupNow(modelContext: context)
-            cloudBackupStatusText = "Backup complete. Projects, trash, and recordings are encrypted in Google Drive."
         } catch {
+            backupFailure = error
+        }
+        guard let recovered = reconcileOpenDraftAfterCloudOperation(in: context) else {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Backup failed: \(cloudBackupErrorDescription(error))"
+            cloudBackupStatusText = "Backup finished, but the open draft could not be saved. Keep this editor open and retry saving."
+            return
+        }
+        if let backupFailure {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Backup failed: \(cloudBackupErrorDescription(backupFailure)). Your open edits remain in the local library."
+        } else if recovered {
+            cloudBackupStatusText = "Backup complete. Your edits were saved as a separate local draft; back up again to include them."
+        } else {
+            cloudBackupStatusText = "Backup complete. Projects, trash, and recordings are encrypted in Google Drive."
         }
     }
 
@@ -1769,6 +1799,17 @@ final class EditorViewModel: ObservableObject {
         let title: String
         let lyrics: String
         let theme: String
+    }
+
+    private final class CloudEditorOperation {
+        var currentBaseline: OpenDraft
+        var currentHadPendingEdit: Bool
+        var savedSeparateOutgoingDraft = false
+
+        init(currentBaseline: OpenDraft, currentHadPendingEdit: Bool) {
+            self.currentBaseline = currentBaseline
+            self.currentHadPendingEdit = currentHadPendingEdit
+        }
     }
 
     private var openDraft: OpenDraft {
@@ -1781,37 +1822,69 @@ final class EditorViewModel: ObservableObject {
         return (project, OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme))
     }
 
+    private func beginCloudEditorOperation(in context: ModelContext) -> Bool {
+        guard activeCloudEditorOperation == nil else { return false }
+        let draft = openDraft
+        let hadPendingEdit: Bool
+        do {
+            if let id = currentProjectId {
+                hadPendingEdit = try storedDraft(id: id, in: context)?.1 != draft
+            } else {
+                hadPendingEdit = !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty
+            }
+        } catch {
+            errorMessage = "Could not read the open song. Your edits remain open."
+            return false
+        }
+        guard flushCurrentDraft() else { return false }
+        activeCloudEditorOperation = CloudEditorOperation(
+            currentBaseline: openDraft,
+            currentHadPendingEdit: hadPendingEdit
+        )
+        return true
+    }
+
+    private func preserveOutgoingDraftBeforeNavigation() -> Bool {
+        guard let operation = activeCloudEditorOperation else { return flushCurrentDraft() }
+        autoSaveTask?.cancel()
+        let draft = openDraft
+        guard operation.currentHadPendingEdit || draft != operation.currentBaseline else { return true }
+        guard let context = modelContext else { return false }
+        do {
+            let recovered = SongProject(id: UUID().uuidString, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
+            context.insert(recovered)
+            try saveModelContext(context)
+            operation.savedSeparateOutgoingDraft = true
+            return true
+        } catch {
+            context.rollback()
+            errorMessage = "Could not save this draft before switching songs. Your edits remain open."
+            return false
+        }
+    }
+
+    private func trackSelectedDraftDuringCloudOperation(isUnsaved: Bool = false) {
+        guard let operation = activeCloudEditorOperation else { return }
+        operation.currentBaseline = openDraft
+        operation.currentHadPendingEdit = isUnsaved
+    }
+
     func restoreBackupNow() async {
         guard let backupService, let context = modelContext, canRunCloudBackup else {
             refreshCloudBackupState()
             return
         }
-
-        let beforeRestore = openDraft
-        let hadPendingEdit: Bool
-        do {
-            if let id = currentProjectId {
-                hadPendingEdit = try storedDraft(id: id, in: context)?.1 != beforeRestore
-            } else {
-                hadPendingEdit = !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty
-            }
-        } catch {
-            cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Restore canceled. Could not read the open song; your edits remain open."
-            return
-        }
-        guard flushCurrentDraft() else {
+        guard beginCloudEditorOperation(in: context) else {
             cloudBackupLastResultIsError = true
             cloudBackupStatusText = "Restore canceled. Save the open song before retrying; your edits remain open."
             return
         }
-        let savedProjectID = currentProjectId
-        let savedDraft = openDraft
 
         cloudBackupIsWorking = true
         cloudBackupLastResultIsError = false
         cloudBackupStatusText = "Restoring encrypted Google Drive backup..."
         defer {
+            activeCloudEditorOperation = nil
             cloudBackupIsWorking = false
             cloudBackupConfigured = backupService.isConfigured
             cloudBackupHasStoredPassphrase = backupService.hasStoredPassphrase
@@ -1823,66 +1896,54 @@ final class EditorViewModel: ObservableObject {
         } catch {
             restoreFailure = error
         }
-
-        guard let recovered = reconcileOpenDraftAfterRestore(
-            in: context,
-            savedProjectID: savedProjectID,
-            savedDraft: savedDraft,
-            hadPendingEdit: hadPendingEdit
-        ) else {
+        guard let recovered = reconcileOpenDraftAfterCloudOperation(in: context) else {
             cloudBackupLastResultIsError = true
             cloudBackupStatusText = "Restore finished, but the open draft could not be saved. Keep this editor open and retry saving."
             return
         }
-
         if let restoreFailure {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Restore failed: \(cloudBackupErrorDescription(restoreFailure))"
+            cloudBackupStatusText = "Restore failed: \(cloudBackupErrorDescription(restoreFailure)). Your open edits remain in the local library."
         } else if recovered {
-            cloudBackupStatusText = "Restore complete. Your open draft was saved separately from the restored song."
+            cloudBackupStatusText = "Restore complete. Your open edits were saved as a separate local draft."
         } else {
             cloudBackupStatusText = "Restore complete. Projects, trash, and missing recordings were restored."
         }
     }
 
-    private func reconcileOpenDraftAfterRestore(
-        in context: ModelContext,
-        savedProjectID: String?,
-        savedDraft: OpenDraft,
-        hadPendingEdit: Bool
-    ) -> Bool? {
+    private func reconcileOpenDraftAfterCloudOperation(in context: ModelContext) -> Bool? {
+        guard let operation = activeCloudEditorOperation else { return nil }
         autoSaveTask?.cancel()
-        let currentDraft = openDraft
-        let switchedSong = currentProjectId != savedProjectID
-        let editedDuringRestore = currentDraft != savedDraft
+        let draft = openDraft
+        let edited = operation.currentHadPendingEdit || draft != operation.currentBaseline
 
         do {
             let stored = try currentProjectId.flatMap { try storedDraft(id: $0, in: context) }
-            if stored?.1 == currentDraft { return false }
-            if stored?.1 == savedDraft, editedDuringRestore, !switchedSong {
-                return flushCurrentDraft() ? false : nil
-            }
-
-            if hadPendingEdit || editedDuringRestore || switchedSong {
-                let recovered = makeUntitledSongProject()
-                context.insert(recovered)
-                do {
-                    try saveModelContext(context)
-                    cancelEditorAIWork()
-                    currentProjectId = recovered.id
-                    saveStatus = .saved
-                    showWelcome = false
-                    return true
-                } catch {
-                    context.rollback()
-                    currentProjectId = nil
-                    saveStatus = .idle
-                    errorMessage = "Your open draft was not saved. Keep this editor open and retry."
-                    return nil
+            if edited {
+                if stored?.1 == draft {
+                    if saveStatus == .saving { saveStatus = .saved }
+                    return operation.savedSeparateOutgoingDraft
                 }
+                if let stored, stored.1 == operation.currentBaseline {
+                    stored.0.title = draft.title
+                    stored.0.lyrics = draft.lyrics
+                    stored.0.theme = draft.theme
+                    stored.0.updatedAt = Date()
+                    try saveModelContext(context)
+                    saveStatus = .saved
+                    return operation.savedSeparateOutgoingDraft
+                }
+                let recovered = SongProject(id: UUID().uuidString, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
+                context.insert(recovered)
+                try saveModelContext(context)
+                cancelEditorAIWork()
+                currentProjectId = recovered.id
+                saveStatus = .saved
+                showWelcome = false
+                return true
             }
 
-            if let stored {
+            if let stored, stored.1 != draft {
                 cancelEditorAIWork()
                 title = stored.0.title
                 lyrics = stored.0.lyrics
@@ -1893,15 +1954,17 @@ final class EditorViewModel: ObservableObject {
                 errorMessage = nil
                 saveStatus = .saved
                 resetLyricsHistory()
-            } else if savedProjectID != nil {
+            } else if stored == nil, currentProjectId != nil {
                 clearEditorAfterProjectDelete()
                 selectedRange = NSRange(location: 0, length: 0)
                 showWelcome = true
             }
-            return false
+            if saveStatus == .saving { saveStatus = currentProjectId == nil ? .idle : .saved }
+            return operation.savedSeparateOutgoingDraft
         } catch {
+            context.rollback()
             saveStatus = .idle
-            errorMessage = "Could not reconcile the restored song. Your edits remain open."
+            errorMessage = "Could not reconcile the backup with your open song. Your edits remain open."
             return nil
         }
     }
@@ -1911,13 +1974,34 @@ final class EditorViewModel: ObservableObject {
         guard let backupService,
               let context = modelContext,
               cloudBackupConfigured,
-              cloudBackupHasStoredPassphrase else {
+              cloudBackupHasStoredPassphrase,
+              !cloudBackupIsWorking else {
             return
         }
-
+        guard beginCloudEditorOperation(in: context) else {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Background backup canceled. Your open draft could not be saved."
+            return
+        }
+        cloudBackupIsWorking = true
         await backupService.backupInBackgroundIfPossible(modelContext: context)
+        let recovered = reconcileOpenDraftAfterCloudOperation(in: context)
+        activeCloudEditorOperation = nil
+        cloudBackupIsWorking = false
         refreshCloudBackupState()
+        if recovered == nil {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Background backup finished, but the open draft could not be saved. Keep this editor open."
+        } else if recovered == true, !cloudBackupLastResultIsError {
+            cloudBackupStatusText = "Background backup finished. Your edits were saved as a separate local draft; back up again to include them."
+        }
     }
+
+    #if DEBUG
+    func waitForPendingAutoSaveForTesting() async {
+        await autoSaveTask?.value
+    }
+    #endif
 
     private func cloudBackupErrorDescription(_ error: Error) -> String {
         if let localized = error as? LocalizedError,

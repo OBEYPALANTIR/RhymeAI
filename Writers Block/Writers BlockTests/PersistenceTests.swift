@@ -80,7 +80,7 @@ struct PersistenceTests {
     }
 
     @MainActor
-    @Test func pendingAutoSaveCannotCrossIntoImportedProject() async throws {
+    @Test func pendingAutoSaveFlushesOriginalBeforeImportWithoutCrossingIntoImportedProject() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
         let original = SongProject(
@@ -110,7 +110,7 @@ struct PersistenceTests {
         let projects = try Self.fetchProjects(harness.context)
         let persistedOriginal = try #require(projects.first { $0.id == "song-a" })
         let imported = try #require(projects.first { $0.id == viewModel.currentProjectId })
-        #expect(persistedOriginal.lyrics == "persisted original")
+        #expect(persistedOriginal.lyrics == "unsaved editor change")
         #expect(imported.lyrics == "imported lyric")
         #expect(viewModel.lyrics == "imported lyric")
     }
@@ -178,6 +178,30 @@ struct PersistenceTests {
         #expect(viewModel.lyrics == "unsaved lyric")
         #expect(viewModel.cloudBackupLastResultIsError)
         #expect(viewModel.cloudBackupStatusText.contains("Restore canceled"))
+        #expect(try Self.fetchProjects(harness.context).first?.lyrics == "saved line")
+    }
+
+    @MainActor
+    @Test func manualBackupDoesNotStartWhenOpenDraftCannotBeSaved() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, hasStoredPassphrase: true)
+        let harness = try Self.makeHarness(
+            backupService: backupService,
+            saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) }
+        )
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = harness.viewModel
+        viewModel.loadProject(project)
+        viewModel.lyrics = "unsaved lyric"
+
+        await viewModel.backUpNow()
+
+        #expect(backupService.backupCalls == 0)
+        #expect(viewModel.currentProjectId == project.id)
+        #expect(viewModel.lyrics == "unsaved lyric")
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText.contains("Backup canceled"))
         #expect(try Self.fetchProjects(harness.context).first?.lyrics == "saved line")
     }
 
