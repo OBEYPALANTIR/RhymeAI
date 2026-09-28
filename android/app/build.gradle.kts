@@ -56,26 +56,25 @@ val releaseSigningProperties = if (environmentSigningProperties.values.any { it 
 }
 val releaseStoreFile = releaseSigningProperties?.get("storeFile")?.let { rootProject.file(it) }
 val hasReleaseSigningConfig = releaseSigningProperties != null && releaseStoreFile?.isFile == true
-val releaseArtifactTaskNames = setOf("assembleRelease", "bundleRelease", "packageRelease", "validateSigningRelease")
-val releaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
-    taskName.substringAfterLast(':') in releaseArtifactTaskNames
-}
-if (releaseTaskRequested && !hasReleaseSigningConfig) {
-    throw GradleException(
-        "Release signing material missing: configure android/keystore.properties or RHYMEAI_* signing variables"
-    )
-}
-
-tasks.configureEach {
-    if (name in releaseArtifactTaskNames) {
-        doFirst {
-            if (!hasReleaseSigningConfig) {
-                throw GradleException(
-                    "Release signing material missing: configure android/keystore.properties or RHYMEAI_* signing variables"
+if (!hasReleaseSigningConfig) {
+    val appTaskPath = "${project.path}:"
+    // Resolved tasks include CLI abbreviations and aggregate dependencies; this runs before any task executes.
+    gradle.taskGraph.whenReady(org.gradle.api.Action<org.gradle.api.execution.TaskExecutionGraph> {
+        val releaseArtifactRequested = allTasks.any { task ->
+            task.path.startsWith(appTaskPath) && (
+                task.name == "assembleRelease" ||
+                    task.name == "bundleRelease" ||
+                    task.name == "validateSigningRelease" ||
+                    task.name.startsWith("packageRelease") ||
+                    task.name.startsWith("signRelease")
                 )
-            }
         }
-    }
+        if (releaseArtifactRequested) {
+            throw GradleException(
+                "Release signing material missing: configure android/keystore.properties or RHYMEAI_* signing variables"
+            )
+        }
+    })
 }
 
 android {
