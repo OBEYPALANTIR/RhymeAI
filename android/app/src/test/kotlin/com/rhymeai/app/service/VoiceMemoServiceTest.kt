@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 
 /**
  * Unit tests for pure, platform-independent logic in VoiceMemoService:
- * file naming/pathing, list ordering, purge, and the companion formatting helpers.
+ * list ordering, purge, deletion, and the companion formatting helpers.
  *
  * MediaRecorder and MediaPlayer are Android-framework classes that cannot run on
  * the JVM; tests that would require them are instrumented tests instead.
@@ -48,26 +48,6 @@ class VoiceMemoServiceTest {
     fun formatMemoLabelIsNonEmptyForCurrentTime() {
         val label = VoiceMemoService.formatMemoLabel(System.currentTimeMillis())
         assertTrue(label.isNotBlank())
-    }
-
-    // ---------------------------------------------------------------------------
-    // Pathing: memo files live in filesDir/voice-memos/<projectId>/
-    // ---------------------------------------------------------------------------
-
-    @Test
-    fun memoFilePathSitsInsideVoiceMemosSubdir() {
-        val filesDir = tempFolder.root
-        val projectId = "proj-abc"
-        val dir = File(filesDir, "voice-memos/$projectId")
-        dir.mkdirs()
-
-        val ts = 1_718_000_000_000L
-        val file = File(dir, "$ts.m4a")
-        file.createNewFile()
-
-        assertTrue(file.path.startsWith(dir.path))
-        assertEquals("$ts.m4a", file.name)
-        assertTrue(file.name.endsWith(".m4a"))
     }
 
     // ---------------------------------------------------------------------------
@@ -109,22 +89,6 @@ class VoiceMemoServiceTest {
         // Mirror the VoiceMemoService early-return guard.
         val result: List<File> = if (!dir.exists()) emptyList() else listOf()
         assertTrue(result.isEmpty())
-    }
-
-    @Test
-    fun nonM4aFilesInMemoDirAreIgnored() {
-        val dir = File(tempFolder.root, "voice-memos/proj-filter")
-        dir.mkdirs()
-        File(dir, "1000.m4a").createNewFile()
-        File(dir, "readme.txt").createNewFile()
-        File(dir, "noise.mp3").createNewFile()
-
-        val m4aFiles = dir.listFiles()
-            ?.filter { it.isFile && it.name.endsWith(".m4a") }
-            ?: emptyList()
-
-        assertEquals(1, m4aFiles.size)
-        assertEquals("1000.m4a", m4aFiles[0].name)
     }
 
     // ---------------------------------------------------------------------------
@@ -226,81 +190,6 @@ class VoiceMemoServiceTest {
     }
 
     // ---------------------------------------------------------------------------
-    // Task 3 — rename: sanitizeBasename
-    // ---------------------------------------------------------------------------
-
-    @Test
-    fun sanitizeBasenameTrimsPadding() {
-        assertEquals("hello", VoiceMemoService.sanitizeBasename("  hello  "))
-    }
-
-    @Test
-    fun sanitizeBasenameStripsIllegalChars() {
-        // All of / \ : * ? " < > | should be removed.
-        val input = """slash/back\colon:star*question?quote"lt<gt>pipe|"""
-        val result = VoiceMemoService.sanitizeBasename(input)
-        assertFalse(result.contains('/'))
-        assertFalse(result.contains('\\'))
-        assertFalse(result.contains(':'))
-        assertFalse(result.contains('*'))
-        assertFalse(result.contains('?'))
-        assertFalse(result.contains('"'))
-        assertFalse(result.contains('<'))
-        assertFalse(result.contains('>'))
-        assertFalse(result.contains('|'))
-    }
-
-    @Test
-    fun sanitizeBasenameCollapsesWhitespace() {
-        assertEquals("a b c", VoiceMemoService.sanitizeBasename("a   b   c"))
-    }
-
-    @Test
-    fun sanitizeBasenameEmptyAfterStripReturnsEmpty() {
-        assertEquals("", VoiceMemoService.sanitizeBasename("   /\\:*?\"<>|   "))
-    }
-
-    @Test
-    fun sanitizeBasenamePreservesNormalName() {
-        assertEquals("My Cool Track", VoiceMemoService.sanitizeBasename("My Cool Track"))
-    }
-
-    // ---------------------------------------------------------------------------
-    // Task 3 — rename: resolveCollision
-    // ---------------------------------------------------------------------------
-
-    @Test
-    fun resolveCollisionReturnsPrimaryNameWhenFree() {
-        val dir = File(tempFolder.root, "voice-memos/proj-collision")
-        dir.mkdirs()
-        // No files exist — should return base.m4a.
-        val result = VoiceMemoService.resolveCollision(dir, "chorus")
-        assertEquals("chorus.m4a", result.name)
-    }
-
-    @Test
-    fun resolveCollisionAppendsNumberOnConflict() {
-        val dir = File(tempFolder.root, "voice-memos/proj-conflict")
-        dir.mkdirs()
-        File(dir, "chorus.m4a").createNewFile()
-
-        val result = VoiceMemoService.resolveCollision(dir, "chorus")
-        assertEquals("chorus 2.m4a", result.name)
-    }
-
-    @Test
-    fun resolveCollisionIncrementsPastMultipleConflicts() {
-        val dir = File(tempFolder.root, "voice-memos/proj-multi")
-        dir.mkdirs()
-        File(dir, "verse.m4a").createNewFile()
-        File(dir, "verse 2.m4a").createNewFile()
-        File(dir, "verse 3.m4a").createNewFile()
-
-        val result = VoiceMemoService.resolveCollision(dir, "verse")
-        assertEquals("verse 4.m4a", result.name)
-    }
-
-    // ---------------------------------------------------------------------------
     // Task 3 — rename: displayName
     // ---------------------------------------------------------------------------
 
@@ -330,22 +219,4 @@ class VoiceMemoServiceTest {
         assertTrue(label.isNotBlank())
     }
 
-    // ---------------------------------------------------------------------------
-    // Task 3 — rename: file-level rename via File.renameTo
-    // ---------------------------------------------------------------------------
-
-    @Test
-    fun renameFileToDifferentBasenameSucceeds() {
-        val dir = File(tempFolder.root, "voice-memos/proj-rename")
-        dir.mkdirs()
-        val original = File(dir, "1718000000000.m4a").also { it.createNewFile() }
-
-        val sanitized = VoiceMemoService.sanitizeBasename("Bridge Hook")
-        val target = VoiceMemoService.resolveCollision(dir, sanitized)
-
-        assertTrue(original.renameTo(target))
-        assertTrue(target.exists())
-        assertEquals("Bridge Hook.m4a", target.name)
-        assertFalse(original.exists())
-    }
 }

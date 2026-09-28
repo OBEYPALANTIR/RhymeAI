@@ -35,14 +35,14 @@ import java.net.URL
 import java.net.UnknownHostException
 
 enum class AIProvider(val displayName: String) {
+    LOCAL("Local"),
     GEMINI("Gemini"),
     OPENAI("OpenAI"),
-    CLAUDE("Claude"),
-    LOCAL("Local");
+    CLAUDE("Claude");
 
     companion object {
         fun fromName(name: String): AIProvider =
-            entries.find { it.name == name } ?: GEMINI
+            entries.find { it.name == name } ?: LOCAL
     }
 }
 
@@ -89,7 +89,6 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
 
 class AIService {
     internal data class SingleWordRewriteContext(
-        val line: String,
         val previousWord: String?,
         val nextWord: String?,
         val isLineEnding: Boolean
@@ -116,48 +115,8 @@ class AIService {
         const val LOCAL_WHOLE_SONG_HEAD_CHARS = 900
         const val LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
         const val LOCAL_REWRITE_ATTEMPTS = 2
-        val fallbackRephraseWords = mapOf(
-            "believe" to listOf("imagine", "trust", "dream"),
-            "birds" to listOf("sparrows", "voices", "wings"),
-            "calls" to listOf("rings", "echoes", "signals"),
-            "enemies" to listOf("rivals", "foes", "strangers"),
-            "feel" to listOf("sense", "know", "ache"),
-            "free" to listOf("loose", "clear", "unbound"),
-            "glow" to listOf("gleam", "shine", "spark"),
-            "lies" to listOf("myths", "spin", "masks"),
-            "real" to listOf("true", "clear", "solid"),
-            "street" to listOf("block", "road", "lane"),
-            "tvs" to listOf("screens", "feeds", "channels"),
-            "walls" to listOf("barriers", "rooms", "blocks")
-        )
-        val fallbackHarderRhymeWords = mapOf(
-            "believe" to listOf("deceive", "relieve", "receive"),
-            "birds" to listOf("words", "herds", "thirds"),
-            "calls" to listOf("walls", "falls", "halls"),
-            "enemies" to listOf("remedies", "memories", "melodies"),
-            "feel" to listOf("real", "steel", "wheel"),
-            "free" to listOf("see", "be", "flee"),
-            "glow" to listOf("show", "flow", "low"),
-            "lies" to listOf("eyes", "skies", "disguise"),
-            "real" to listOf("feel", "steel", "wheel"),
-            "street" to listOf("beat", "heat", "feet"),
-            "tvs" to listOf("feeds", "screens", "dreams"),
-            "walls" to listOf("calls", "falls", "halls")
-        )
-        val fallbackPunchUpWords = mapOf(
-            "believe" to listOf("swallow", "worship", "chase"),
-            "birds" to listOf("sirens", "static", "wires"),
-            "calls" to listOf("alarms", "signals", "sirens"),
-            "enemies" to listOf("traitors", "targets", "rivals"),
-            "feel" to listOf("burn", "bleed", "know"),
-            "free" to listOf("wild", "untamed", "unbound"),
-            "glow" to listOf("flare", "blaze", "spark"),
-            "lies" to listOf("poison", "fraud", "venom"),
-            "real" to listOf("raw", "true", "solid"),
-            "street" to listOf("asphalt", "gutter", "curb"),
-            "tvs" to listOf("screens", "static", "feeds"),
-            "walls" to listOf("concrete", "barricades", "barriers")
-        )
+        const val LOCAL_INCOMPLETE_RESPONSE =
+            "Local model returned an incomplete response. Try again or use a cloud provider."
 
         fun userFacingStatusMessage(code: Int): String = when (code) {
             401, 403 -> "Provider rejected the request — check your API key in Settings."
@@ -261,6 +220,7 @@ class AIService {
         val lines = lyrics.split('\n')
         return firstChorus.lineRange
             .mapNotNull { idx -> lines.getOrNull(idx) }
+            .filter { SectionMap.headerTitle(it) == null }
             .map { RhymeConstraint.lineEndWord(it) }
             .filter { it.isNotEmpty() }
             .toSet()
@@ -279,7 +239,7 @@ class AIService {
      */
     private fun buildSectionDirective(ref: SectionRef?, lyrics: String): String {
         if (ref == null) return ""
-        return when (ref.type) {
+        val instanceDirective = when (ref.type) {
             SongSection.VERSE -> "This is Verse ${ref.ordinal}.\n"
             SongSection.BRIDGE -> "This is the bridge — introduce a contrasting rhyme sound and cadence; avoid the chorus's ending words.\n"
             SongSection.CHORUS -> {
@@ -295,6 +255,7 @@ class AIService {
             }
             SongSection.UNKNOWN -> ""
         }
+        return instanceDirective
     }
 
     /** Lines of lyrics content (non-header, non-blank) within the first chorus section. */
@@ -303,10 +264,9 @@ class AIService {
         val firstChorus = map.allSections.firstOrNull { it.type == SongSection.CHORUS }
             ?: return emptyList()
         val lines = lyrics.split('\n')
-        val headerPattern = Regex("""^\s*\[.+]\s*$""")
         return firstChorus.lineRange
             .mapNotNull { idx -> lines.getOrNull(idx) }
-            .filter { it.isNotBlank() && !headerPattern.matches(it) }
+            .filter { it.isNotBlank() && SectionMap.headerTitle(it) == null }
     }
 
     internal fun buildPrompt(
@@ -319,19 +279,25 @@ class AIService {
         currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
         useWholeSongContext: Boolean,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        sectionRef: SectionRef? = constraint?.sectionRef
     ): String {
+        val providerLyrics = if (useWholeSongContext) lyrics else targetRhymeLine.orEmpty()
+        val providerSection = sectionRef.takeIf { useWholeSongContext }
+        val providerConstraint = if (useWholeSongContext) constraint else constraint?.let {
+            suggestionRhymeConstraint(targetRhymeLine, rhymeType, it.dictionary)
+        }
         val rhymeInstruction = if (targetRhymeLine != null) {
             "Crucially, the new line MUST end with a **${rhymeType.displayName}** to this specific line: \"$targetRhymeLine\"."
         } else {
             "Since this is a new rhyme sound (\"$currentLetter\"), the new line should introduce a new end-rhyme that fits the meter and theme."
         }
-        val constraintBlock = constraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
-        val requestCount = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        val constraintBlock = providerConstraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
+        val requestCount = if (providerConstraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
         val songContextInstruction = if (useWholeSongContext) {
             "Analyze the whole song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary. Make each suggestion feel connected to the entire song while still fitting the immediate target line and rhyme scheme."
         } else {
-            "Prioritize the immediate writing context, current stanza, target line, rhyme scheme, and provided theme/context."
+            "Prioritize the target line, rhyme scheme, and provided theme/context."
         }
 
         val effectiveTheme = if (useWholeSongContext) {
@@ -340,14 +306,14 @@ class AIService {
             theme.ifEmpty { "No specific theme provided" }
         }
 
-        val sectionDirective = buildSectionDirective(constraint?.sectionRef, lyrics)
+        val sectionDirective = buildSectionDirective(providerSection, providerLyrics)
 
         return """
 You are an expert songwriter and lyricist.
 The user is writing a song with the following theme/context: "$effectiveTheme".
 Here are the current lyrics:
 ${"\"\"\""}
-$lyrics
+$providerLyrics
 ${"\"\"\""}
 
 The user needs a line that follows the current lyrics.
@@ -389,9 +355,10 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
-        val chorusEnds = firstChorusEndWords(fullLyrics)
+        val includeSong = provider == AIProvider.LOCAL || useWholeSongContext
+        val chorusEnds = if (includeSong) firstChorusEndWords(fullLyrics) else emptySet()
         val constraint = suggestionRhymeConstraint(
-            targetRhymeLine, rhymeType, sectionRef = sectionRef, chorusEndWords = chorusEnds
+            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds
         )
         return if (provider == AIProvider.LOCAL) {
             val localPrompt = buildLocalPrompt(
@@ -408,7 +375,19 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             )
             callLocal(localPrompt, lyrics, constraint)
         } else {
-            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
+            val prompt = buildPrompt(
+                theme,
+                lyrics,
+                targetRhymeLine,
+                rhymeType,
+                rhymeScheme,
+                currentLetter,
+                currentSection,
+                complexity,
+                useWholeSongContext,
+                constraint,
+                sectionRef
+            )
             when (provider) {
                 AIProvider.GEMINI -> callGemini(apiKey, modelId, prompt, constraint)
                 AIProvider.OPENAI -> callOpenAI(apiKey, modelId, prompt, constraint)
@@ -438,16 +417,45 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
         }
 
-        val chorusEnds = firstChorusEndWords(fullLyrics)
+        val includeSong = provider == AIProvider.LOCAL || useWholeSongContext
+        val chorusEnds = if (includeSong) firstChorusEndWords(fullLyrics) else emptySet()
         val constraint = suggestionRhymeConstraint(
-            targetRhymeLine, rhymeType, sectionRef = sectionRef, chorusEndWords = chorusEnds
+            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds
         )
         if (provider == AIProvider.LOCAL) {
-            // Local model already streams tokens internally; needs its own Flow surface (follow-up).
-            getSuggestions(provider, apiKey, modelId, theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, sectionRef, fullLyrics)
-                .forEach { emit(it) }
+            val service = localModelService
+                ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
+            if (!service.isLoaded) {
+                throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
+            }
+            val prompt = buildLocalPrompt(
+                theme = theme,
+                lyrics = lyrics,
+                targetRhymeLine = targetRhymeLine,
+                rhymeType = rhymeType,
+                rhymeScheme = rhymeScheme,
+                currentLetter = currentLetter,
+                currentSection = currentSection,
+                complexity = complexity,
+                useWholeSongContext = useWholeSongContext,
+                constraint = constraint
+            )
+            validatedLocalSuggestionStream(service.streamResponse(prompt), lyrics, constraint)
+                .collect { emit(it) }
         } else {
-            val prompt = buildPrompt(theme, lyrics, targetRhymeLine, rhymeType, rhymeScheme, currentLetter, currentSection, complexity, useWholeSongContext, constraint)
+            val prompt = buildPrompt(
+                theme,
+                lyrics,
+                targetRhymeLine,
+                rhymeType,
+                rhymeScheme,
+                currentLetter,
+                currentSection,
+                complexity,
+                useWholeSongContext,
+                constraint,
+                sectionRef
+            )
             when (provider) {
                 AIProvider.GEMINI -> streamGemini(apiKey, modelId, prompt, constraint).collect { emit(it) }
                 AIProvider.OPENAI -> streamOpenAI(apiKey, modelId, prompt, constraint).collect { emit(it) }
@@ -505,7 +513,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         emitLinesFromTokens(tokens, constraint)
     }
 
-    private fun buildOpenAIChatRequestBody(
+    internal fun buildOpenAIChatRequestBody(
         modelId: String,
         prompt: String,
         temperature: Double,
@@ -546,7 +554,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 ?.get("content")?.jsonPrimitive?.content
         }.getOrNull()
 
-    private fun buildClaudeMessagesRequestBody(
+    internal fun buildClaudeMessagesRequestBody(
         modelId: String,
         prompt: String,
         stream: Boolean = false
@@ -604,9 +612,11 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             .text
             ?.trim()
 
-    private suspend fun FlowCollector<SuggestedLine>.emitLinesFromTokens(
+    internal suspend fun FlowCollector<SuggestedLine>.emitLinesFromTokens(
         tokens: Flow<String>,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        excludedKeys: Set<String> = emptySet(),
+        requireExactCount: Boolean = false
     ) {
         val buffer = StringBuilder()
         val seen = mutableSetOf<String>()
@@ -628,7 +638,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             if (accepted >= acceptLimit || emitted >= SUGGESTION_COUNT) return false
             val cleaned = cleanLocalSuggestionLine(rawLine) ?: return false
             val key = normalizeSuggestionKey(cleaned)
-            if (key.isEmpty() || !seen.add(key)) return false
+            if (key.isEmpty() || key in excludedKeys || !seen.add(key)) return false
             accepted++
 
             // Determine phonetic tier; treat chorus-repeat end-words as tier 2
@@ -637,7 +647,9 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
             val tier = when {
                 isHook -> 2
-                matches != null -> RhymeConstraint.rhymeTier(cleaned, matches)
+                matches != null && constraint != null -> RhymeConstraint.rhymeTier(
+                    cleaned, constraint.targetWord, matches, constraint.dictionary
+                )
                 else -> 0
             }
 
@@ -673,10 +685,40 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             ).forEach { line ->
                 val endWord = RhymeConstraint.lineEndWord(line)
                 val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-                val tier = if (matches != null) RhymeConstraint.rhymeTier(line, matches) else 0
+                val tier = RhymeConstraint.rhymeTier(
+                    line, constraint.targetWord, requireNotNull(matches), constraint.dictionary
+                )
                 emit(SuggestedLine(line, tier, isHook))
+                emitted++
             }
         }
+        if (requireExactCount && emitted != SUGGESTION_COUNT) {
+            throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
+        }
+    }
+
+    internal fun validatedLocalSuggestionStream(
+        tokens: Flow<String>,
+        lyrics: String,
+        constraint: SuggestionRhymeConstraint? = null
+    ): Flow<SuggestedLine> = flow {
+        val existingKeys = lyrics.lines()
+            .map(::normalizeSuggestionKey)
+            .filter(String::isNotEmpty)
+            .toSet()
+        emitLinesFromTokens(
+            tokens = flow {
+                tokens.collect { chunk ->
+                    if (containsMarkupOrControlLeakage(chunk)) {
+                        throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
+                    }
+                    emit(chunk)
+                }
+            },
+            constraint = constraint,
+            excludedKeys = existingKeys,
+            requireExactCount = true
+        )
     }
 
     private fun httpPostStream(
@@ -745,7 +787,11 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             val prompt = buildSynonymsPrompt(target, lineContext, limit)
             callCloudRaw(provider, apiKey, modelId, prompt)
         }
-        return extractSynonyms(raw, exclude = target).take(limit)
+        val synonyms = extractSynonyms(raw, exclude = target).take(limit.coerceAtLeast(0))
+        if (provider == AIProvider.LOCAL && synonyms.isEmpty()) {
+            throw RuntimeException("Local model returned no valid synonyms. Try again or use a cloud provider.")
+        }
+        return synonyms
     }
 
     private fun buildSynonymsPrompt(word: String, lineContext: String, limit: Int): String {
@@ -771,14 +817,17 @@ Respond ONLY with a JSON object of the form {"synonyms": ["..."]}. No code fence
 """.trimIndent()
     }
 
-    internal fun buildLocalSynonymsPrompt(word: String, lineContext: String, limit: Int): String {
+    internal fun buildLocalSynonymsPrompt(word: String, lineContext: String, limit: Int): String =
+        buildLocalSynonymsUserPrompt(word, lineContext, limit)
+
+    internal fun buildLocalSynonymsUserPrompt(word: String, lineContext: String, limit: Int): String {
         val contextLine = lineContext.trim().take(180)
         val contextBlock = if (contextLine.isEmpty()) {
             "(no surrounding line)"
         } else {
             contextLine
         }
-        val userPrompt = """
+        return """
 You are RhymeAI's on-device word helper.
 
 Task: give up to $limit single-word replacements for "$word" in this lyric line:
@@ -790,17 +839,17 @@ Rules:
 - Do not include "$word".
 - Prefer words with similar tone and syllable count.
 """.trimIndent()
-        return gemmaInstructionPrompt(userPrompt)
     }
 
-    internal fun extractSynonyms(raw: String, exclude: String): List<String> {
+    internal fun extractSynonyms(
+        raw: String,
+        exclude: String,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+    ): List<String> {
+        if (containsMarkupOrControlLeakage(raw)) return emptyList()
         val cleaned = raw.trim()
-            .removePrefix("```json")
-            .removePrefix("```")
-            .removeSuffix("```")
-            .trim()
         if (cleaned.isEmpty()) return emptyList()
-        val excludeKey = exclude.lowercase()
+        val excludeKey = canonicalWordKey(exclude)
         val tryObject = runCatching {
             val obj = json.parseToJsonElement(cleaned).jsonObject
             obj["synonyms"]?.jsonArray?.mapNotNull { it.jsonPrimitive.content.trim().takeIf(String::isNotEmpty) }
@@ -811,14 +860,14 @@ Rules:
         val candidates = tryObject ?: tryArray ?: cleaned
             .lines()
             .flatMap { it.split(",") }
-            .map { line -> line.trim().trim('"', '\'', ',', '-', '*', '•', ' ') }
+            .map { line -> line.trim().trim('"', '\'') }
             .filter { it.isNotEmpty() }
 
         val seen = mutableSetOf<String>()
-        return candidates.mapNotNull { raw ->
-            val word = raw.trim().trim('"', '\'').trim()
-            if (word.isEmpty() || word.length > 32) return@mapNotNull null
-            val key = word.lowercase()
+        return candidates.mapNotNull { candidate ->
+            val word = candidate.trim().trim('"', '\'')
+            if (!isKnownSingleWord(word, dictionary)) return@mapNotNull null
+            val key = canonicalWordKey(word)
             if (key == excludeKey || !seen.add(key)) null else word
         }
     }
@@ -832,7 +881,8 @@ Rules:
         selection: String,
         currentSection: SongSection = SongSection.UNKNOWN,
         selectionStart: Int? = null,
-        rejectedCandidates: Set<String> = emptySet()
+        rejectedCandidates: Set<String> = emptySet(),
+        useWholeSongContext: Boolean = false
     ): String {
         if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
@@ -851,7 +901,13 @@ Rules:
                 rejectedCandidates = rejectedCandidates
             )
         } else {
-            val prompt = buildRewritePrompt(action, fullLyrics, selection, currentSection)
+            val prompt = buildRewritePrompt(
+                action,
+                fullLyrics,
+                selection,
+                currentSection,
+                useWholeSongContext
+            )
             val raw = callCloudRaw(provider, apiKey, modelId, prompt)
             extractRewriteField(raw)?.takeIf { it.isNotBlank() }
                 ?: throw RuntimeException("AI did not return a rewrite. Try again.")
@@ -862,14 +918,15 @@ Rules:
         action: RewriteAction,
         lyrics: String,
         selection: String,
-        currentSection: SongSection = SongSection.UNKNOWN
+        currentSection: SongSection = SongSection.UNKNOWN,
+        useWholeSongContext: Boolean = false
     ): String =
         """
 You are an expert songwriter helping the user rewrite a portion of their song.
 
-Full lyrics for context:
+${if (useWholeSongContext) "Full lyrics for context:" else "Selected passage context:"}
 ${"\"\"\""}
-$lyrics
+${if (useWholeSongContext) lyrics else selection}
 ${"\"\"\""}
 
 The user has selected the following passage from those lyrics. Rewrite ONLY this passage:
@@ -898,6 +955,22 @@ Respond ONLY with a JSON object of the form {"rewrite": "..."}. No code fences.
         currentSection: SongSection = SongSection.UNKNOWN,
         selectionStart: Int? = null,
         rejectedCandidates: Set<String> = emptySet()
+    ): String = buildLocalRewriteUserPrompt(
+            action,
+            lyrics,
+            selection,
+            currentSection,
+            selectionStart,
+            rejectedCandidates
+        )
+
+    internal fun buildLocalRewriteUserPrompt(
+        action: RewriteAction,
+        lyrics: String,
+        selection: String,
+        currentSection: SongSection = SongSection.UNKNOWN,
+        selectionStart: Int? = null,
+        rejectedCandidates: Set<String> = emptySet()
     ): String {
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext = false)
         val singleWord = isSingleWordSelection(selection)
@@ -915,6 +988,8 @@ Respond ONLY with a JSON object of the form {"rewrite": "..."}. No code fences.
         } else {
             ""
         }
+        val selectedLineCount = selection.lines().size
+        val selectedLineNoun = if (selectedLineCount == 1) "line" else "lines"
         val outputRules = if (singleWord) {
             """
 - Return exactly one replacement word.
@@ -926,11 +1001,12 @@ $rejectedRule
         } else {
             """
 - Output the rewritten passage only.
+- Return exactly $selectedLineCount $selectedLineNoun.
 - Preserve line breaks if the selection has multiple lines.
 - No quotes, no markdown, no labels, no commentary.
 """.trimIndent()
         }
-        val userPrompt = """
+        return """
 You are RhymeAI's on-device songwriting assistant.
 
 $taskLine
@@ -953,7 +1029,6 @@ ${"\"\"\""}
 Rules:
 $outputRules
 """.trimIndent()
-        return gemmaInstructionPrompt(userPrompt)
     }
 
     private fun isSingleWordSelection(selection: String): Boolean =
@@ -1030,7 +1105,13 @@ $outputRules
         }
 
         if (!isSingleWordSelection(selection)) {
-            val prompt = buildLocalRewritePrompt(action, lyrics, selection, currentSection)
+            val prompt = buildLocalRewritePrompt(
+                action,
+                lyrics,
+                selection,
+                currentSection,
+                selectionStart
+            )
             val parsed = cleanLocalRewrite(service.generateResponse(prompt), selection)
             if (parsed.isBlank()) {
                 throw RuntimeException("Local model returned no rewrite. Try a different model or use a cloud provider.")
@@ -1055,16 +1136,13 @@ $outputRules
             val parsed = cleanLocalRewrite(service.generateResponse(prompt), selection)
             val accepted = acceptLocalSingleWordRewrite(parsed, selection, action, context, rejectedKeys)
             if (accepted.isNotBlank()) return accepted
-            normalizeSuggestionKey(parsed).takeIf { it.isNotBlank() }?.let { rejectedKeys += it }
+            canonicalWordKey(parsed).takeIf { it.isNotBlank() }?.let { rejectedKeys += it }
         }
-
-        val fallback = fallbackLocalSingleWordRewrite(selection, action, context, rejectedKeys)
-        if (fallback.isNotBlank()) return fallback
 
         if (action == RewriteAction.HARDER_RHYME) {
             throw RuntimeException("No safe rhyme. Select the line.")
         }
-        throw RuntimeException("Local model returned no rewrite. Try a different model or use a cloud provider.")
+        throw RuntimeException("Local model returned no valid replacement. Try again or use a cloud provider.")
     }
 
     internal fun acceptLocalSingleWordRewrite(candidate: String, selection: String, action: RewriteAction): String =
@@ -1075,12 +1153,13 @@ $outputRules
         selection: String,
         action: RewriteAction,
         context: SingleWordRewriteContext?,
-        rejectedCandidates: Set<String>
+        rejectedCandidates: Set<String>,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
     ): String {
         val word = candidate.trim()
-        if (!isSingleWordSelection(word)) return ""
-        val originalKey = normalizeSuggestionKey(selection)
-        val candidateKey = normalizeSuggestionKey(word)
+        if (!isKnownSingleWord(word, dictionary)) return ""
+        val originalKey = canonicalWordKey(selection)
+        val candidateKey = canonicalWordKey(word)
         if (
             candidateKey.isEmpty() ||
             candidateKey == originalKey ||
@@ -1090,31 +1169,13 @@ $outputRules
         }
 
         if (action == RewriteAction.HARDER_RHYME) {
-            val originalSyllables = ProsodyAnalyzer.countWord(selection).coerceAtLeast(1)
-            val candidateSyllables = ProsodyAnalyzer.countWord(word).coerceAtLeast(1)
+            val originalSyllables = ProsodyAnalyzer.analyzeWord(selection, dictionary).syllableCount.coerceAtLeast(1)
+            val candidateSyllables = ProsodyAnalyzer.analyzeWord(word, dictionary).syllableCount.coerceAtLeast(1)
             if (candidateSyllables > originalSyllables + 1) return ""
-            if (!harderRhymeFitsContext(selection, word, context)) return ""
+            if (!harderRhymeFitsContext(selection, word, context, dictionary)) return ""
         }
 
         return word
-    }
-
-    internal fun fallbackLocalSingleWordRewrite(
-        selection: String,
-        action: RewriteAction,
-        context: SingleWordRewriteContext? = null,
-        rejectedCandidates: Set<String> = emptySet()
-    ): String {
-        val originalKey = normalizeSuggestionKey(selection)
-        if (originalKey.isEmpty()) return ""
-        val candidates = when (action) {
-            RewriteAction.REPHRASE -> fallbackRephraseWords[originalKey]
-            RewriteAction.HARDER_RHYME -> fallbackHarderRhymeWords[originalKey]
-            RewriteAction.PUNCH_UP -> fallbackPunchUpWords[originalKey]
-        }.orEmpty()
-        return candidates.firstOrNull { candidate ->
-            acceptLocalSingleWordRewrite(candidate, selection, action, context, rejectedCandidates).isNotBlank()
-        }.orEmpty()
     }
 
     internal fun singleWordRewriteContext(
@@ -1138,7 +1199,6 @@ $outputRules
         val selectedMatch = matches[selectedIndex]
         val trailing = line.substring(selectedMatch.range.last + 1)
         return SingleWordRewriteContext(
-            line = line,
             previousWord = matches.getOrNull(selectedIndex - 1)?.value,
             nextWord = matches.getOrNull(selectedIndex + 1)?.value,
             isLineEnding = trailing.none { it.isLetterOrDigit() }
@@ -1148,51 +1208,33 @@ $outputRules
     private fun harderRhymeFitsContext(
         selection: String,
         candidate: String,
-        context: SingleWordRewriteContext?
+        context: SingleWordRewriteContext?,
+        dictionary: PronunciationDictionary
     ): Boolean {
-        val ctx = context ?: return true
-        val originalKey = normalizeSuggestionKey(selection)
-        val candidateKey = normalizeSuggestionKey(candidate)
-        val previousKey = ctx.previousWord?.let(::normalizeSuggestionKey).orEmpty()
-        val nextKey = ctx.nextWord?.let(::normalizeSuggestionKey).orEmpty()
+        if (context != null) {
+            val originalKey = canonicalWordKey(selection)
+            val candidateKey = canonicalWordKey(candidate)
+            val previousKey = context.previousWord?.let(::canonicalWordKey).orEmpty()
+            val nextKey = context.nextWord?.let(::canonicalWordKey).orEmpty()
 
-        if (!ctx.isLineEnding) return false
-        if (originalKey == "make" && nextKey == "believe") return false
-        if (previousKey == "phone" && candidateKey in setOf("walls", "falls", "halls")) return false
-        if (!harderRhymeSoundsClose(selection, candidate)) return false
-        return true
-    }
-
-    private fun harderRhymeSoundsClose(selection: String, candidate: String): Boolean {
-        val originalKey = normalizeSuggestionKey(selection)
-        val candidateKey = normalizeSuggestionKey(candidate)
-        val fallbackKeys = fallbackHarderRhymeWords[originalKey].orEmpty().map(::normalizeSuggestionKey).toSet()
-        if (candidateKey in fallbackKeys) return true
-
-        val originalRhymeKeys = ProsodyAnalyzer.rhymeKeys(selection, maxDepth = 2).toSet()
-        val candidateRhymeKeys = ProsodyAnalyzer.rhymeKeys(candidate, maxDepth = 2).toSet()
-        if (originalRhymeKeys.isNotEmpty() && candidateRhymeKeys.isNotEmpty()) {
-            return originalRhymeKeys.intersect(candidateRhymeKeys).isNotEmpty()
+            if (!context.isLineEnding) return false
+            // Preserve the contextual exclusions already enforced on main and iOS.
+            if (originalKey == "make" && nextKey == "believe") return false
+            if (previousKey == "phone" && candidateKey in setOf("walls", "falls", "halls")) return false
         }
-
-        val originalTail = spellingRhymeTail(originalKey)
-        val candidateTail = spellingRhymeTail(candidateKey)
-        return originalTail.isNotBlank() && originalTail == candidateTail
+        return harderRhymeSoundsClose(selection, candidate, dictionary)
     }
 
-    private fun spellingRhymeTail(word: String): String {
-        if (word.length < 2) return ""
-        return word
-            .replace("ee", "i")
-            .replace("ea", "i")
-            .replace("ie", "i")
-            // "ight" must collapse before the bare "igh" rule so "night"/"invite"
-            // land in the same bucket ("nite"/"vite" share the "ite" tail).
-            .replace("ight", "ite")
-            .replace("igh", "i")
-            .replace("ai", "a")
-            .replace("ay", "a")
-            .takeLast(3)
+    private fun harderRhymeSoundsClose(
+        selection: String,
+        candidate: String,
+        dictionary: PronunciationDictionary
+    ): Boolean {
+        val originalRhymeKeys = ProsodyAnalyzer.rhymeKeys(selection, maxDepth = 2, dictionary = dictionary).toSet()
+        val candidateRhymeKeys = ProsodyAnalyzer.rhymeKeys(candidate, maxDepth = 2, dictionary = dictionary).toSet()
+        return originalRhymeKeys.isNotEmpty() &&
+            candidateRhymeKeys.isNotEmpty() &&
+            originalRhymeKeys.intersect(candidateRhymeKeys).isNotEmpty()
     }
 
     private fun lyricLineAt(lyrics: String, selectionStart: Int): String {
@@ -1204,10 +1246,11 @@ $outputRules
 
     private fun rewriteRejectKeys(selection: String, rejectedCandidates: Set<String>): Set<String> =
         (rejectedCandidates + selection)
-            .mapNotNull { normalizeSuggestionKey(it).takeIf(String::isNotBlank) }
+            .mapNotNull { canonicalWordKey(it).takeIf(String::isNotBlank) }
             .toSet()
 
     internal fun cleanLocalRewrite(response: String, selection: String? = null): String {
+        if (containsMarkupOrControlLeakage(response)) return ""
         val trimmed = stripLocalModelArtifacts(response)
         // If the model still emitted JSON, extract its rewrite field.
         val extracted = extractRewriteField(trimmed)?.let(::stripLocalModelArtifacts) ?: trimmed
@@ -1218,7 +1261,7 @@ $outputRules
         val candidate = if (selection != null && isSingleWordSelection(selection)) {
             cleanSingleWordRewrite(cleaned, selection)
         } else {
-            cleanRewritePassage(cleaned)
+            cleanRewritePassage(cleaned, selection)
         }
         return if (selection != null && normalizeSuggestionKey(candidate) == normalizeSuggestionKey(selection)) {
             ""
@@ -1227,72 +1270,37 @@ $outputRules
         }
     }
 
-    private fun cleanRewritePassage(response: String): String {
+    private fun cleanRewritePassage(response: String, selection: String?): String {
         val cleaned = stripLocalModelArtifacts(response)
             .lines()
-            .mapNotNull { cleanLocalOutputLine(it, maxLength = 240) }
+            .map { line ->
+                if (line.isBlank()) "" else cleanLocalOutputLine(line, maxLength = 240) ?: return ""
+            }
             .joinToString("\n")
             .trim()
         if (cleaned.isBlank()) return ""
         if (localControlMarkerPattern.containsMatchIn(cleaned)) return ""
+        if (selection != null) {
+            val sourceLines = selection.trim().lines()
+            val candidateLines = cleaned.lines()
+            if (sourceLines.size != candidateLines.size) return ""
+            if (sourceLines.zip(candidateLines).any { (source, candidate) -> source.isBlank() != candidate.isBlank() }) {
+                return ""
+            }
+        }
         return cleaned
     }
 
     private fun cleanSingleWordRewrite(response: String, selection: String): String {
         val originalKey = normalizeSuggestionKey(selection)
-        val labelTokens = setOf(
-            "a",
-            "an",
-            "as",
-            "be",
-            "i",
-            "instead",
-            "is",
-            "model",
-            "original",
-            "replace",
-            "replacement",
-            "rewrite",
-            "selected",
-            "suggest",
-            "the",
-            "try",
-            "turn",
-            "use",
-            "user",
-            "with",
-            "word",
-            "would"
-        )
-        return stripLocalModelArtifacts(response)
-            .replace("=>", "->")
-            .replace(":", " ")
-            .lineSequence()
-            .flatMap { line -> line.split("->", ",", "/", "|").asSequence() }
-            .map { part ->
-                part.trim()
-                    .removePrefix("replacement")
-                    .removePrefix("Replacement")
-                    .removePrefix("rewrite")
-                    .removePrefix("Rewrite")
-                    .trim('"', '\'', '`', '.', '!', '?', ';', ':', '-', '*', '•', ' ')
-            }
-            .flatMap { part ->
-                if (part.any(Char::isWhitespace)) {
-                    part.split(Regex("\\s+")).asSequence()
-                } else {
-                    sequenceOf(part)
-                }
-            }
-            .map { it.trim('"', '\'', '`', '.', '!', '?', ';', ':', '-', '*', '•', ' ') }
-            .firstOrNull { token ->
-                val key = normalizeSuggestionKey(token)
+        val word = response.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+        val key = normalizeSuggestionKey(word)
+        return word.takeIf {
+            isSingleWordSelection(it) &&
+                it.length <= 32 &&
                 key.isNotEmpty() &&
-                    key != originalKey &&
-                    token.length <= 32 &&
-                    key !in labelTokens
-            }
-            .orEmpty()
+                key != originalKey
+        }.orEmpty()
     }
 
     private fun extractRewriteField(text: String): String? {
@@ -1376,12 +1384,38 @@ $outputRules
         return ranked.map { line ->
             val endWord = RhymeConstraint.lineEndWord(line)
             val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-            val tier = if (matches.isEmpty) 0 else RhymeConstraint.rhymeTier(line, matches)
+            val tier = RhymeConstraint.rhymeTier(
+                line, constraint.targetWord, matches, constraint.dictionary
+            )
             SuggestedLine(line, tier, isHook)
         }
     }
 
     internal fun buildLocalPrompt(
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        rhymeScheme: String,
+        currentLetter: String,
+        currentSection: SongSection = SongSection.UNKNOWN,
+        complexity: RhymeComplexity,
+        useWholeSongContext: Boolean,
+        constraint: SuggestionRhymeConstraint? = null
+    ): String = buildLocalSuggestionUserPrompt(
+            theme,
+            lyrics,
+            targetRhymeLine,
+            rhymeType,
+            rhymeScheme,
+            currentLetter,
+            currentSection,
+            complexity,
+            useWholeSongContext,
+            constraint
+        )
+
+    internal fun buildLocalSuggestionUserPrompt(
         theme: String,
         lyrics: String,
         targetRhymeLine: String?,
@@ -1415,7 +1449,7 @@ $outputRules
         }
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext)
         val sectionDirective = buildSectionDirective(constraint?.sectionRef, lyrics)
-        val userPrompt = """
+        return """
 You are RhymeAI's on-device songwriting assistant.
 
 Task: write exactly $requestCount next-line options for the song.
@@ -1442,8 +1476,6 @@ Rules:
 - Do not apologize, explain limitations, or restate the rules.
 - Keep each suggestion under 16 words.
 """.trimIndent()
-
-        return gemmaInstructionPrompt(userPrompt)
     }
 
     private suspend fun callLocal(prompt: String, lyrics: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
@@ -1454,10 +1486,37 @@ Rules:
         }
         // The local prompt asks for SUGGESTION_COUNT lines even when constrained
         // (see buildLocalPrompt); filterAndRank still verifies and re-ranks them.
-        val limit = SUGGESTION_COUNT
         val response = service.generateResponse(prompt)
-        val rawResults = parseJsonArray(response, limit).ifEmpty { parseLines(response) }
-        val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, limit)
+        val ranked = validateLocalSuggestionResponse(response, lyrics, constraint)
+        val matches = constraint?.let {
+            ProsodyAnalyzer.findRhymes(it.targetWord, dictionary = it.dictionary)
+        }
+        return ranked.map { line ->
+            if (constraint == null) {
+                SuggestedLine(line, 0)
+            } else {
+                val endWord = RhymeConstraint.lineEndWord(line)
+                val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS &&
+                        (constraint.sectionRef.ordinal) >= 2
+                val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in constraint.chorusEndWords
+                val tier = RhymeConstraint.rhymeTier(
+                    line, constraint.targetWord, requireNotNull(matches), constraint.dictionary
+                )
+                SuggestedLine(line, tier, isHook)
+            }
+        }
+    }
+
+    internal fun validateLocalSuggestionResponse(
+        response: String,
+        lyrics: String,
+        constraint: SuggestionRhymeConstraint? = null
+    ): List<String> {
+        if (containsMarkupOrControlLeakage(response)) {
+            throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
+        }
+        val rawResults = parseJsonArray(response, SUGGESTION_COUNT).ifEmpty { parseLines(response) }
+        val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, SUGGESTION_COUNT)
         val ranked = if (constraint == null) sanitized else RhymeConstraint.filterAndRank(
             lines = sanitized,
             targetLine = constraint.targetLine,
@@ -1465,22 +1524,10 @@ Rules:
             want = SUGGESTION_COUNT,
             dictionary = constraint.dictionary
         )
-        if (ranked.isEmpty()) {
-            throw RuntimeException("Local model returned no usable suggestions. Try a different model or use a cloud provider.")
+        if (ranked.size != SUGGESTION_COUNT) {
+            throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
         }
-        return ranked.map { line ->
-            if (constraint == null) {
-                SuggestedLine(line, 0)
-            } else {
-                val matches = ProsodyAnalyzer.findRhymes(constraint.targetWord, dictionary = constraint.dictionary)
-                val endWord = RhymeConstraint.lineEndWord(line)
-                val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS &&
-                        (constraint.sectionRef.ordinal) >= 2
-                val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in constraint.chorusEndWords
-                val tier = if (matches.isEmpty) 0 else RhymeConstraint.rhymeTier(line, matches)
-                SuggestedLine(line, tier, isHook)
-            }
-        }
+        return ranked
     }
 
     private val listPrefixPattern = Regex("^\\s*(?:[-*]\\s+|\\d+[.)\\-:]\\s*)")
@@ -1507,6 +1554,10 @@ Rules:
     private val localControlMarkerPattern = Regex(
         pattern = "<?/?(?:start|end)_?(?:of_?)?turn>?\\w*|_?response>|_?model_response>|assistant_response>|model_response>",
         option = RegexOption.IGNORE_CASE
+    )
+    private val markupOrControlLeakagePattern = Regex(
+        pattern = "```|<[^>\\n]+>|(?:^|\\s)<?/?(?:start|end)_?(?:of_?)?turn>?|(?:^|\\s)(?:assistant|model|user)(?:_response)?>|<[a-z_/]{0,16}$",
+        options = setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
     )
     private val promptEchoPattern = Regex(
         pattern = "^(?:task:|theme:|rhyme scheme:|lyrics context:|rules:|return exactly|return only|one suggestion|no numbering|do not|keep each|you are rhymeai|sure[, ]|here are|i can(?:not|'t)|as an ai)",
@@ -1574,14 +1625,6 @@ Rules:
         }.getOrDefault(emptyList())
     }
 
-    private fun gemmaInstructionPrompt(userPrompt: String): String =
-        """
-<start_of_turn>user
-$userPrompt
-<end_of_turn>
-<start_of_turn>model
-""".trimIndent()
-
     private fun localLyricsContext(lyrics: String, useWholeSongContext: Boolean): String {
         val trimmed = lyrics.trim()
         if (trimmed.length <= LOCAL_RECENT_CONTEXT_CHARS) return trimmed
@@ -1620,6 +1663,7 @@ $userPrompt
     }
 
     private fun cleanLocalSuggestionLine(line: String): String? {
+        if (containsMarkupOrControlLeakage(line)) return null
         var cleaned = stripLocalModelArtifacts(line)
             .removePrefix("```json")
             .removePrefix("```")
@@ -1679,6 +1723,23 @@ $userPrompt
 
     private fun normalizeSuggestionKey(text: String): String =
         normalizedLinePattern.replace(text.lowercase().trim(), "")
+
+    private fun canonicalWordKey(text: String): String = text.trim().lowercase()
+
+    private fun isKnownSingleWord(
+        word: String,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+    ): Boolean {
+        val key = canonicalWordKey(word)
+        return word.length <= 32 &&
+            isSingleWordSelection(word) &&
+            key.isNotEmpty() &&
+            key == ProsodyAnalyzer.normalizeWord(word) &&
+            dictionary.pronunciations(key).isNotEmpty()
+    }
+
+    private fun containsMarkupOrControlLeakage(text: String): Boolean =
+        markupOrControlLeakagePattern.containsMatchIn(text)
 
     private fun String.trimToLineBoundary(preferStart: Boolean): String {
         if (isEmpty()) return this

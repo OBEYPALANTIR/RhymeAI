@@ -1,6 +1,10 @@
 package com.rhymeai.app.service
 
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -8,6 +12,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.rhymeai.app.BuildConfig
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+import com.rhymeai.app.data.recording.RecordingFiles
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,7 +56,7 @@ data class TrashedVoiceMemo(
 /**
  * Handles recording, playback, and deletion of per-song voice memos.
  *
- * Files live at: context.filesDir/voice-memos/<projectId>/<timestamp>.m4a
+ * Files live at: context.filesDir/voice-memos/<projectId>/<name>.<audio extension>
  *
  * Resource discipline: every MediaRecorder and MediaPlayer is stop()ed and
  * release()d in all exit paths — including cancellation and error — mirroring
@@ -103,6 +111,14 @@ class VoiceMemoService(private val context: Context) {
         return (((db + 60.0) / 60.0).toFloat()).coerceIn(0f, 1f)
     }
 
+    internal fun seedRecordingForTesting() {
+        check(BuildConfig.DEBUG || BuildConfig.BENCHMARK) {
+            "Recording test seeding requires a debug or benchmark build"
+        }
+        recordingElapsedMs = 3_000L
+        isRecording = true
+    }
+
     // ---------------------------------------------------------------------------
     // Recording
     // ---------------------------------------------------------------------------
@@ -118,7 +134,7 @@ class VoiceMemoService(private val context: Context) {
         check(!isRecording) { "Already recording — call stopRecording() first" }
 
         // Ensure the directory exists; surface storage failures to the caller.
-        val dir = memoDir(projectId)
+        val dir = RecordingFiles.memoDirectory(context.filesDir, projectId)
         if (!dir.exists() && !dir.mkdirs()) {
             throw IllegalStateException("Could not create voice memo directory: ${dir.absolutePath}")
         }
@@ -276,13 +292,54 @@ class VoiceMemoService(private val context: Context) {
 
     /** Return all memos for [projectId], sorted newest-first. */
     suspend fun memosForProject(projectId: String): List<VoiceMemo> = withContext(Dispatchers.IO) {
-        val dir = memoDir(projectId)
+        val dir = RecordingFiles.memoDirectory(context.filesDir, projectId)
         if (!dir.exists()) return@withContext emptyList()
         dir.listFiles()
-            ?.filter { it.isFile && it.name.endsWith(".m4a") }
+            ?.filter { RecordingFiles.isMemoFile(it) && it != recordingFile }
             ?.sortedByDescending { it.lastModified() }
             ?.map { memoFromFile(it) }
             ?: emptyList()
+    }
+
+    /** Copy a selected document into this song; no microphone permission is needed. */
+    suspend fun importRecording(projectId: String, uri: Uri): VoiceMemo {
+        var imported: File? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                val resolver = context.contentResolver
+                val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    } ?: throw IllegalArgumentException("Missing audio filename")
+                val coroutineContext = currentCoroutineContext()
+                val source = resolver.openInputStream(uri)
+                    ?: throw java.io.IOException("Cannot open audio")
+                val file = RecordingImportStore.copy(
+                        input = source,
+                        directory = RecordingFiles.memoDirectory(context.filesDir, projectId),
+                        displayName = name,
+                        checkCancellation = { coroutineContext.ensureActive() },
+                        validate = { candidate ->
+                            val extractor = MediaExtractor()
+                            try {
+                                extractor.setDataSource(candidate.absolutePath)
+                                require((0 until extractor.trackCount).any { index ->
+                                    extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)
+                                        ?.startsWith("audio/") == true
+                                }) { "No audio track" }
+                            } finally {
+                                extractor.release()
+                            }
+                            require(probeAudioDurationMs(candidate) > 0) { "Audio cannot be played" }
+                        }
+                    )
+                imported = file
+                memoFromFile(file)
+            }
+        } catch (error: Exception) {
+            imported?.delete()
+            throw error
+        }
     }
 
     /** Delete a single memo. Stops playback of that file if it is currently playing. */
@@ -299,7 +356,7 @@ class VoiceMemoService(private val context: Context) {
 
     /**
      * Move [memo] to the Trash Bin instead of deleting it. The file is relocated
-     * to voice-memos-trash/<projectId>/<deletedAt>__<name>.m4a and kept for
+     * to voice-memos-trash/<projectId>/<deletedAt>__<original filename> and kept for
      * [TRASH_RETENTION_MILLIS] before purge. Returns false on I/O failure.
      */
     /** Returns the trashed record on success (usable for undo), null on failure. */
@@ -308,7 +365,7 @@ class VoiceMemoService(private val context: Context) {
         return withContext(Dispatchers.IO) {
             val projectId = memo.file.parentFile?.name ?: return@withContext null
             if (!memo.file.exists()) return@withContext null
-            val dir = trashDir(projectId)
+            val dir = RecordingFiles.trashDirectory(context.filesDir, projectId)
             if (!dir.exists() && !dir.mkdirs()) return@withContext null
             // Bump the timestamp on collision so renameTo never overwrites an
             // existing trashed file (same name trashed twice in one millisecond).
@@ -324,13 +381,13 @@ class VoiceMemoService(private val context: Context) {
 
     /** All trashed recordings across every project, newest deletion first. */
     suspend fun trashedMemos(): List<TrashedVoiceMemo> = withContext(Dispatchers.IO) {
-        val root = trashRoot(context.filesDir)
+        val root = RecordingFiles.trashRoot(context.filesDir)
         if (!root.exists()) return@withContext emptyList()
         root.listFiles()
             ?.filter { it.isDirectory }
             ?.flatMap { dir ->
                 dir.listFiles()
-                    ?.filter { it.isFile && it.name.endsWith(MEMO_EXTENSION) }
+                    ?.filter { RecordingFiles.isMemoFile(it) }
                     ?.mapNotNull { file -> trashedMemoFromFile(file, dir.name) }
                     ?: emptyList()
             }
@@ -344,10 +401,10 @@ class VoiceMemoService(private val context: Context) {
      */
     suspend fun restoreTrashedMemo(trashed: TrashedVoiceMemo): Boolean = withContext(Dispatchers.IO) {
         if (!trashed.file.exists()) return@withContext false
-        val dir = memoDir(trashed.projectId)
+        val dir = RecordingFiles.memoDirectory(context.filesDir, trashed.projectId)
         if (!dir.exists() && !dir.mkdirs()) return@withContext false
-        val base = trashed.originalName.removeSuffix(MEMO_EXTENSION)
-        val target = resolveCollision(dir, base)
+        val original = File(trashed.originalName)
+        val target = RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension)
         trashed.file.renameTo(target).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
     }
 
@@ -376,21 +433,21 @@ class VoiceMemoService(private val context: Context) {
      * (`/ \ : * ? " < > |`) are removed, and runs of whitespace collapsed to a single
      * space. If the sanitized string is empty the rename is rejected (returns null).
      *
-     * Collision: if `<sanitized>.m4a` already exists in the same directory, suffixes
+     * Collision: if the sanitized name with the original extension already exists, suffixes
      * " 2", " 3", … are tried until a free name is found (mirrors iOS behavior).
      *
      * Returns the renamed [VoiceMemo] on success, null on failure (bad name or
      * rename I/O error).
      */
     suspend fun renameMemo(memo: VoiceMemo, newBasename: String): VoiceMemo? {
-        val sanitized = sanitizeBasename(newBasename)
+        val sanitized = RecordingFiles.sanitizeBasename(newBasename)
         if (sanitized.isEmpty()) return null
 
         if (playingFile == memo.file) stopPlayback()
 
         return withContext(Dispatchers.IO) {
             val dir = memo.file.parentFile ?: return@withContext null
-            val targetFile = resolveCollision(dir, sanitized)
+            val targetFile = RecordingFiles.resolveCollision(dir, sanitized, memo.file.extension)
 
             if (memo.file.renameTo(targetFile)) {
                 memoFromFile(targetFile)
@@ -405,10 +462,12 @@ class VoiceMemoService(private val context: Context) {
      * when a project is permanently deleted so orphaned audio files do not accumulate.
      */
     suspend fun deleteMemoDirectory(projectId: String) {
-        val dir = memoDir(projectId)
-        val trash = trashDir(projectId)
+        val (dir, trash) = runCatching {
+            RecordingFiles.memoDirectory(context.filesDir, projectId) to RecordingFiles.trashDirectory(context.filesDir, projectId)
+        }.getOrNull() ?: return
         val playing = playingFile
-        if (playing != null && (playing.path.startsWith(dir.path) || playing.path.startsWith(trash.path))) {
+        val playingPath = playing?.let { runCatching { it.canonicalFile.toPath() }.getOrNull() }
+        if (playingPath != null && (playingPath.startsWith(dir.toPath()) || playingPath.startsWith(trash.toPath()))) {
             stopPlayback()
         }
 
@@ -434,12 +493,6 @@ class VoiceMemoService(private val context: Context) {
     // ---------------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------------
-
-    private fun memoDir(projectId: String): File =
-        memoDirectory(context.filesDir, projectId)
-
-    private fun trashDir(projectId: String): File =
-        File(trashRoot(context.filesDir), projectId)
 
     private fun trashedMemoFromFile(file: File, projectId: String): TrashedVoiceMemo? {
         val separatorIndex = file.name.indexOf(TRASH_NAME_SEPARATOR)
@@ -494,22 +547,8 @@ class VoiceMemoService(private val context: Context) {
 
     companion object {
         private val LABEL_FORMAT = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
-        const val MEMOS_ROOT_DIR = "voice-memos"
-        const val MEMOS_TRASH_ROOT_DIR = "voice-memos-trash"
-        const val MEMO_EXTENSION = ".m4a"
-
         /** Separates the deletion timestamp from the original name in trash filenames. */
         const val TRASH_NAME_SEPARATOR = "__"
-
-        fun memosRoot(filesDir: File): File =
-            File(filesDir, MEMOS_ROOT_DIR)
-
-        fun trashRoot(filesDir: File): File =
-            File(filesDir, MEMOS_TRASH_ROOT_DIR)
-
-        fun memoDirectory(filesDir: File, projectId: String): File =
-            File(memosRoot(filesDir), projectId)
-
 
         fun formatMemoLabel(timestampMs: Long): String =
             LABEL_FORMAT.format(Date(timestampMs))
@@ -545,31 +584,5 @@ class VoiceMemoService(private val context: Context) {
         internal fun deleteMemoFile(file: File): Boolean =
             !file.exists() || file.delete()
 
-        /**
-         * Strip characters that are illegal in file paths on Android (FAT32 + ext4),
-         * collapse whitespace, and trim. Returns an empty string if nothing remains
-         * after sanitization — the caller must reject empty results.
-         */
-        internal fun sanitizeBasename(raw: String): String =
-            raw
-                .replace(Regex("""[/\\:*?"<>|]"""), "")
-                .replace(Regex("""\s+"""), " ")
-                .trim()
-
-        /**
-         * Find a free filename for [base].m4a inside [dir]. If [base].m4a already
-         * exists (and is not the source file being renamed), append " 2", " 3", … until
-         * a free slot is found. The loop is capped at 999 to avoid an infinite cycle in
-         * degenerate cases.
-         */
-        internal fun resolveCollision(dir: File, base: String): File {
-            var candidate = File(dir, "$base.m4a")
-            var suffix = 2
-            while (candidate.exists() && suffix < 1000) {
-                candidate = File(dir, "$base $suffix.m4a")
-                suffix++
-            }
-            return candidate
-        }
     }
 }

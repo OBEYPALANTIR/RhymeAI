@@ -1,6 +1,7 @@
 package com.rhymeai.app.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
@@ -38,6 +39,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -47,7 +49,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.ExportFormat
 import com.rhymeai.app.ui.theme.DesignTokens
-import kotlinx.coroutines.delay
+import com.rhymeai.app.ui.theme.appWritingSurface
 
 @Composable
 fun ExportSheet(
@@ -55,24 +57,19 @@ fun ExportSheet(
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    var visible by remember { mutableStateOf(false) }
-    var hasEntered by remember { mutableStateOf(false) }
+    val visibility = remember { MutableTransitionState(false).apply { targetState = true } }
+    var isClosing by remember { mutableStateOf(false) }
     var pendingPick by remember { mutableStateOf<ExportFormat?>(null) }
 
     fun requestDismiss(format: ExportFormat? = null) {
-        if (!visible) return
+        if (isClosing) return
+        isClosing = true
         pendingPick = format
-        visible = false
+        visibility.targetState = false
     }
 
-    LaunchedEffect(Unit) {
-        visible = true
-        hasEntered = true
-    }
-
-    LaunchedEffect(visible) {
-        if (hasEntered && !visible) {
-            delay(DesignTokens.Motion.dismissMillis.toLong())
+    LaunchedEffect(visibility.isIdle, visibility.currentState, isClosing) {
+        if (isClosing && visibility.isIdle && !visibility.currentState) {
             pendingPick?.let(onPick) ?: onDismiss()
         }
     }
@@ -91,7 +88,7 @@ fun ExportSheet(
                 .padding(horizontal = DesignTokens.Spacing.lg)
         ) {
             AnimatedVisibility(
-                visible = visible,
+                visibleState = visibility,
                 enter = fadeIn(
                     animationSpec = tween(
                         durationMillis = DesignTokens.Motion.standardMillis,
@@ -126,7 +123,8 @@ fun ExportSheet(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(colorScheme.surfaceContainerLow, RoundedCornerShape(DesignTokens.Radius.xxl))
+                            .clip(RoundedCornerShape(DesignTokens.Radius.xxl))
+                            .appWritingSurface()
                             .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.xxl))
                             .padding(DesignTokens.Spacing.lg)
                     ) {

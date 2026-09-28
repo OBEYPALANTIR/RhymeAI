@@ -10,7 +10,7 @@ import com.google.android.gms.common.api.Scope
 import com.rhymeai.app.BuildConfig
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SecureKeyStore
-import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.data.recording.RecordingFiles
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -21,12 +21,20 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
+import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.InputStream
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.io.File
 import java.net.URLEncoder
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -88,7 +96,7 @@ interface DriveClient {
 
     suspend fun findFileByName(accessToken: String, name: String): DriveFileMetadata?
     suspend fun listFilesByNamePrefix(accessToken: String, namePrefix: String): List<DriveFileMetadata>
-    suspend fun downloadFile(accessToken: String, fileId: String): ByteArray
+    suspend fun downloadFile(accessToken: String, fileId: String, maxBytes: Long): ByteArray
 
     suspend fun uploadNewFile(accessToken: String, content: ByteArray): String =
         uploadNewFile(accessToken, SyncBlob.DRIVE_FILE_NAME, SyncBlob.DRIVE_MIME_TYPE, content)
@@ -133,16 +141,21 @@ class RealDriveClient : DriveClient {
             .filter { it.name.startsWith(namePrefix) }
     }
 
-    override suspend fun downloadFile(accessToken: String, fileId: String): ByteArray =
+    override suspend fun downloadFile(accessToken: String, fileId: String, maxBytes: Long): ByteArray =
         withContext(Dispatchers.IO) {
             mapIoFailure("Drive download") {
+                require(maxBytes in 0..Int.MAX_VALUE.toLong()) { "Invalid Drive download limit" }
                 val conn = openGet("$DRIVE_V3/files/$fileId?alt=media", accessToken)
                 try {
                     val code = conn.responseCode
                     if (code !in 200..299) {
                         throwHttpFailure("Drive download", code, conn.errorBody())
                     }
-                    conn.inputStream.readBytes()
+                    val contentLength = conn.contentLengthLong
+                    if (contentLength > maxBytes) {
+                        throw DriveNetworkException("Drive download exceeds the allowed size")
+                    }
+                    conn.inputStream.readBytesBounded(maxBytes)
                 } finally {
                     conn.disconnect()
                 }
@@ -308,10 +321,46 @@ open class DriveNetworkException(message: String, cause: Throwable? = null) : Ex
 
 class DriveHttpException(val statusCode: Int, message: String) : DriveNetworkException(message)
 
+internal fun InputStream.readBytesBounded(maxBytes: Long): ByteArray {
+    require(maxBytes in 0..Int.MAX_VALUE.toLong()) { "Invalid Drive download limit" }
+    val output = ByteArrayOutputStream(minOf(DEFAULT_BUFFER_SIZE.toLong(), maxBytes).toInt())
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0L
+    while (true) {
+        val count = read(buffer)
+        if (count < 0) break
+        if (count == 0) continue
+        total = Math.addExact(total, count.toLong())
+        if (total > maxBytes) {
+            throw DriveNetworkException("Drive download exceeds the allowed size")
+        }
+        output.write(buffer, 0, count)
+    }
+    return output.toByteArray()
+}
+
 data class RecordingRestorePlan(
     val entry: RecordingManifestEntry,
     val remoteFileId: String
 )
+
+internal fun requireRecordingBatchWithinLimit(entries: List<RecordingManifestEntry>): Long {
+    var totalBytes = 0L
+    for (entry in entries) {
+        try {
+            entry.validate()
+            totalBytes = Math.addExact(totalBytes, entry.sizeBytes)
+        } catch (e: ArithmeticException) {
+            throw DriveNetworkException("Recording transfer exceeds the allowed size", e)
+        } catch (e: IllegalArgumentException) {
+            throw DriveNetworkException("Recording transfer contains unsupported data", e)
+        }
+        if (totalBytes > DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES) {
+            throw DriveNetworkException("Recording transfer exceeds the allowed size")
+        }
+    }
+    return totalBytes
+}
 
 object RecordingSyncPlanner {
     fun planUploads(
@@ -349,8 +398,20 @@ object RecordingSyncPlanner {
 }
 
 object RecordingFileStore {
+    internal const val RESTORE_STAGE_PREFIX = ".recording-restore-"
+    private const val JOURNAL_FILE = "restore-journal"
+    private const val COMPLETE_FILE = "restore-complete"
+    private const val JOURNAL_MAGIC = 0x5248594D
+    private const val JOURNAL_VERSION = 1
+    private const val MAX_JOURNAL_ENTRIES = 10_000
+
+    internal data class StagedRecording(
+        val entry: RecordingManifestEntry,
+        val file: File
+    )
+
     fun targetFile(filesDir: File, projectId: String, fileName: String): File =
-        File(VoiceMemoService.memoDirectory(filesDir, projectId), fileName)
+        RecordingFiles.memoFile(filesDir, projectId, fileName)
 
     fun writeAtomically(filesDir: File, entry: RecordingManifestEntry, bytes: ByteArray) {
         val target = targetFile(filesDir, entry.projectId, entry.fileName)
@@ -360,7 +421,7 @@ object RecordingFileStore {
             throw DriveNetworkException("Could not create memo directory for ${entry.projectId}")
         }
 
-        val temp = File(dir, ".${entry.fileName}.${System.nanoTime()}.tmp")
+        val temp = Files.createTempFile(dir.toPath(), ".sync-", ".tmp").toFile()
         try {
             temp.writeBytes(bytes)
             if (temp.length() != entry.sizeBytes || sha256Hex(temp) != entry.sha256) {
@@ -378,6 +439,204 @@ object RecordingFileStore {
         }
     }
 
+    internal fun stageRestore(
+        stageDirectory: File,
+        index: Int,
+        entry: RecordingManifestEntry,
+        bytes: ByteArray
+    ): StagedRecording {
+        val staged = File(stageDirectory, "recording-$index.tmp")
+        staged.writeBytes(bytes)
+        if (staged.length() != entry.sizeBytes || sha256Hex(staged) != entry.sha256) {
+            throw DriveNetworkException("Recording ${entry.driveName} failed integrity verification")
+        }
+        return StagedRecording(entry, staged)
+    }
+
+    internal fun recoverInterruptedRestores(filesDir: File) {
+        filesDir.listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith(RESTORE_STAGE_PREFIX) }
+            ?.forEach { stageDirectory ->
+                val journal = File(stageDirectory, JOURNAL_FILE)
+                val complete = File(stageDirectory, COMPLETE_FILE)
+                when {
+                    complete.exists() -> stageDirectory.deleteRecursively()
+                    journal.exists() -> rollbackRestoreTransaction(filesDir, stageDirectory)
+                    else -> stageDirectory.deleteRecursively()
+                }
+                if (stageDirectory.exists()) {
+                    throw DriveNetworkException("Interrupted recording restore could not be cleaned up")
+                }
+            }
+    }
+
+    internal fun prepareRestoreTransaction(
+        filesDir: File,
+        stageDirectory: File,
+        staged: List<StagedRecording>
+    ) {
+        syncDirectory(filesDir)
+        val journalEntries = staged.mapIndexed { index, item ->
+            val target = targetFile(filesDir, item.entry.projectId, item.entry.fileName)
+            val directory = target.parentFile
+                ?: throw DriveNetworkException("Recording ${item.entry.driveName} has no parent directory")
+            if (!directory.exists() && !directory.mkdirs()) {
+                throw DriveNetworkException("Could not create memo directory for ${item.entry.projectId}")
+            }
+            val hadOriginal = target.exists()
+            if (hadOriginal) {
+                val backup = File(stageDirectory, "backup-$index.tmp")
+                Files.copy(
+                    target.toPath(),
+                    backup.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.COPY_ATTRIBUTES
+                )
+                syncFile(backup)
+            }
+            RestoreJournalEntry(index, item.entry.projectId, item.entry.fileName, hadOriginal)
+        }
+        syncDirectory(stageDirectory)
+        writeJournal(stageDirectory, journalEntries)
+    }
+
+    internal fun commitStagedRestores(filesDir: File, staged: List<StagedRecording>) {
+        if (staged.isEmpty()) return
+        val stageDirectory = staged.first().file.parentFile
+            ?: throw DriveNetworkException("Recording restore staging directory is missing")
+        if (staged.any { it.file.parentFile != stageDirectory }) {
+            throw DriveNetworkException("Recording restore staging files do not share one transaction")
+        }
+        prepareRestoreTransaction(filesDir, stageDirectory, staged)
+        val touchedDirectories = linkedSetOf<File>()
+        try {
+            for (item in staged) {
+                val target = targetFile(filesDir, item.entry.projectId, item.entry.fileName)
+                Files.move(
+                    item.file.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE
+                )
+                target.setLastModified(item.entry.modifiedAt)
+                syncFile(target)
+                target.parentFile?.let(touchedDirectories::add)
+            }
+            touchedDirectories.forEach(::syncDirectory)
+            writeCompletionMarker(stageDirectory)
+        } catch (e: Exception) {
+            rollbackRestoreTransaction(filesDir, stageDirectory)
+            throw DriveNetworkException("Recording restore could not be committed", e)
+        }
+        stageDirectory.deleteRecursively()
+    }
+
+    internal fun hasPreparedRestore(stageDirectory: File): Boolean =
+        File(stageDirectory, JOURNAL_FILE).exists()
+
+    private data class RestoreJournalEntry(
+        val index: Int,
+        val projectId: String,
+        val fileName: String,
+        val hadOriginal: Boolean
+    )
+
+    private fun writeJournal(stageDirectory: File, entries: List<RestoreJournalEntry>) {
+        val temp = File(stageDirectory, "$JOURNAL_FILE.tmp")
+        val output = FileOutputStream(temp)
+        DataOutputStream(output).use { data ->
+            data.writeInt(JOURNAL_MAGIC)
+            data.writeInt(JOURNAL_VERSION)
+            data.writeInt(entries.size)
+            entries.forEach { entry ->
+                data.writeInt(entry.index)
+                data.writeUTF(entry.projectId)
+                data.writeUTF(entry.fileName)
+                data.writeBoolean(entry.hadOriginal)
+            }
+            data.flush()
+            output.fd.sync()
+        }
+        Files.move(
+            temp.toPath(),
+            File(stageDirectory, JOURNAL_FILE).toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+            StandardCopyOption.ATOMIC_MOVE
+        )
+        syncDirectory(stageDirectory)
+    }
+
+    private fun readJournal(stageDirectory: File): List<RestoreJournalEntry> {
+        DataInputStream(FileInputStream(File(stageDirectory, JOURNAL_FILE))).use { data ->
+            require(data.readInt() == JOURNAL_MAGIC) { "Invalid recording restore journal" }
+            require(data.readInt() == JOURNAL_VERSION) { "Unsupported recording restore journal" }
+            val count = data.readInt()
+            require(count in 0..MAX_JOURNAL_ENTRIES) { "Invalid recording restore journal size" }
+            return List(count) {
+                RestoreJournalEntry(
+                    index = data.readInt(),
+                    projectId = data.readUTF(),
+                    fileName = data.readUTF(),
+                    hadOriginal = data.readBoolean()
+                )
+            }
+        }
+    }
+
+    private fun rollbackRestoreTransaction(filesDir: File, stageDirectory: File) {
+        try {
+            val touchedDirectories = linkedSetOf<File>()
+            readJournal(stageDirectory).asReversed().forEach { entry ->
+                val target = targetFile(filesDir, entry.projectId, entry.fileName)
+                if (entry.hadOriginal) {
+                    val backup = File(stageDirectory, "backup-${entry.index}.tmp")
+                    if (!backup.isFile) throw IOException("Recording restore backup is missing")
+                    Files.copy(
+                        backup.toPath(),
+                        target.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.COPY_ATTRIBUTES
+                    )
+                    syncFile(target)
+                } else {
+                    Files.deleteIfExists(target.toPath())
+                }
+                target.parentFile?.let(touchedDirectories::add)
+            }
+            touchedDirectories.forEach(::syncDirectory)
+            stageDirectory.deleteRecursively()
+        } catch (e: Exception) {
+            throw DriveNetworkException("Interrupted recording restore could not be recovered", e)
+        }
+    }
+
+    private fun writeCompletionMarker(stageDirectory: File) {
+        val temp = File(stageDirectory, "$COMPLETE_FILE.tmp")
+        FileOutputStream(temp).use { output ->
+            output.write(1)
+            output.fd.sync()
+        }
+        Files.move(
+            temp.toPath(),
+            File(stageDirectory, COMPLETE_FILE).toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+            StandardCopyOption.ATOMIC_MOVE
+        )
+        syncDirectory(stageDirectory)
+    }
+
+    private fun syncFile(file: File) {
+        FileChannel.open(file.toPath(), StandardOpenOption.WRITE).use { channel ->
+            channel.force(true)
+        }
+    }
+
+    private fun syncDirectory(directory: File) {
+        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
+            channel.force(true)
+        }
+    }
+
     fun sha256Hex(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
@@ -391,6 +650,20 @@ object RecordingFileStore {
         return digest.digest().joinToString(separator = "") { byte ->
             "%02x".format(byte.toInt() and 0xff)
         }
+    }
+
+    internal fun readForUpload(file: File, entry: RecordingManifestEntry): ByteArray {
+        val bytes = file.inputStream().use { input -> input.readBytesBounded(entry.sizeBytes) }
+        if (bytes.size.toLong() != entry.sizeBytes) {
+            throw DriveNetworkException("Recording ${entry.driveName} changed before upload")
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        if (digest != entry.sha256) {
+            throw DriveNetworkException("Recording ${entry.driveName} changed before upload")
+        }
+        return bytes
     }
 }
 
@@ -459,9 +732,18 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     } else {
         input.local
     }
+    try {
+        localWithId.validate()
+    } catch (e: IllegalArgumentException) {
+        throw DriveNetworkException("Local Drive backup contains unsupported data", e)
+    }
 
     val sealLocal = { blob: SyncBlob ->
+        requireRecordingBatchWithinLimit(blob.recordings)
         val plaintext = json.encodeToString(blob).toByteArray(Charsets.UTF_8)
+        if (SyncBlobCrypto.envelopeSizeForPlaintext(plaintext.size.toLong()) > DriveSyncService.MAX_SYNC_BLOB_BYTES) {
+            throw DriveNetworkException("Drive backup exceeds the allowed size")
+        }
         SyncBlobCrypto.seal(plaintext, input.passphrase)
     }
 
@@ -476,7 +758,10 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     }
 
     val remoteBlob = try {
-        json.decodeFromString<SyncBlob>(remotePlaintext.toString(Charsets.UTF_8))
+        json.decodeFromString<SyncBlob>(remotePlaintext.toString(Charsets.UTF_8)).also { blob ->
+            require(blob.version == SyncBlob.CURRENT_VERSION) { "Unsupported sync version" }
+            blob.validate()
+        }
     } catch (e: Exception) {
         return SyncDecision.CorruptRemote
     }
@@ -541,6 +826,9 @@ class DriveSyncService(
         const val PASSPHRASE_KEY = "DRIVE_SYNC_PASSPHRASE"
 
         private const val TAG = "DriveSyncService"
+        internal const val MAX_SYNC_BLOB_BYTES = 16L * 1024L * 1024L
+        internal const val MAX_SYNC_RECORDING_BATCH_BYTES = 64L * 1024L * 1024L
+        internal const val MIN_FREE_AFTER_RECORDING_RESTORE_BYTES = 128L * 1024L * 1024L
 
         /** Drive appData scope — the only scope we request. */
         private val DRIVE_APPDATA_SCOPE = Scope("https://www.googleapis.com/auth/drive.appdata")
@@ -593,7 +881,7 @@ class DriveSyncService(
 
             val remoteBytes = if (remoteMetadata != null) {
                 try {
-                    driveClient.downloadFile(accessToken, remoteMetadata.id)
+                    driveClient.downloadFile(accessToken, remoteMetadata.id, MAX_SYNC_BLOB_BYTES)
                 } catch (e: DriveNetworkException) {
                     return@withContext SyncResult.NetworkError("Could not download sync file: ${driveNetworkMessage(e)}")
                 }
@@ -845,6 +1133,8 @@ class DriveSyncService(
             }
         } catch (e: DriveAuthException) {
             SyncResult.NetworkError(driveAuthMessage())
+        } catch (e: DriveNetworkException) {
+            SyncResult.NetworkError(driveNetworkMessage(e))
         } catch (e: IOException) {
             SyncResult.NetworkError("Drive sync failed — check your connection.")
         } catch (e: Exception) {
@@ -882,7 +1172,7 @@ class DriveSyncService(
             } ?: return@withContext SyncResult.NetworkError("No Drive backup found")
 
             val remoteBytes = try {
-                driveClient.downloadFile(accessToken, remoteMetadata.id)
+                driveClient.downloadFile(accessToken, remoteMetadata.id, MAX_SYNC_BLOB_BYTES)
             } catch (e: DriveNetworkException) {
                 return@withContext SyncResult.NetworkError("Could not download sync file: ${driveNetworkMessage(e)}")
             }
@@ -992,6 +1282,8 @@ class DriveSyncService(
             }
         } catch (e: DriveAuthException) {
             SyncResult.NetworkError(driveAuthMessage())
+        } catch (e: DriveNetworkException) {
+            SyncResult.NetworkError(driveNetworkMessage(e))
         } catch (e: IOException) {
             SyncResult.NetworkError("Drive restore failed — check your connection.")
         } catch (e: Exception) {
@@ -1020,7 +1312,9 @@ class DriveSyncService(
             return GuardedDecision(originalMetadata, currentDecision)
         }
 
-        val latestBytes = latestMetadata?.let { driveClient.downloadFile(accessToken, it.id) }
+        val latestBytes = latestMetadata?.let {
+            driveClient.downloadFile(accessToken, it.id, MAX_SYNC_BLOB_BYTES)
+        }
         val latestDecision = decideSyncAction(
             SyncDecisionInput(
                 local = localBlob,
@@ -1049,7 +1343,8 @@ class DriveSyncService(
     )
 
     private fun snapshotLocalRecordingFiles(): List<LocalRecordingFile> {
-        val root = VoiceMemoService.memosRoot(context.filesDir)
+        RecordingFileStore.recoverInterruptedRestores(context.filesDir)
+        val root = RecordingFiles.memosRoot(context.filesDir)
         if (!root.exists()) return emptyList()
         return root.listFiles()
             ?.asSequence()
@@ -1057,7 +1352,7 @@ class DriveSyncService(
             ?.flatMap { projectDir ->
                 projectDir.listFiles()
                     ?.asSequence()
-                    ?.filter { it.isFile && it.name.endsWith(VoiceMemoService.MEMO_EXTENSION) }
+                    ?.filter { RecordingFiles.isMemoFile(it) }
                     ?.map { file ->
                         val entry = RecordingManifestEntry(
                             projectId = projectDir.name,
@@ -1083,11 +1378,16 @@ class DriveSyncService(
         localFiles: List<LocalRecordingFile>,
         remoteFilesByName: Map<String, String>
     ): Map<String, String> {
+        requireRecordingBatchWithinLimit(uploads)
         val localByIdentity = localFiles.associateBy { it.entry.identityKey }
         val uploaded = mutableMapOf<String, String>()
         for (entry in uploads) {
-            val file = localByIdentity[entry.identityKey]?.file ?: continue
-            val encrypted = SyncBlobCrypto.seal(file.readBytes(), passphrase)
+            val file = localByIdentity[entry.identityKey]?.file
+                ?: throw DriveNetworkException("Recording ${entry.driveName} is no longer available for upload")
+            val encrypted = SyncBlobCrypto.seal(
+                RecordingFileStore.readForUpload(file, entry),
+                passphrase
+            )
             val existingId = remoteFilesByName[entry.driveName]
             if (existingId != null) {
                 driveClient.updateFile(
@@ -1121,14 +1421,45 @@ class DriveSyncService(
             remoteManifest = remoteManifest,
             remoteFilesByName = remoteFilesByName
         )
-        for (restore in plan) {
-            val encrypted = driveClient.downloadFile(accessToken, restore.remoteFileId)
-            val plaintext = try {
-                SyncBlobCrypto.open(encrypted, passphrase)
-            } catch (e: SyncBlobSealException) {
-                throw DriveNetworkException("Recording ${restore.entry.driveName} could not be decrypted")
+        if (plan.isEmpty()) return
+        val restoreBytes = requireRecordingBatchWithinLimit(plan.map { it.entry })
+        val requiredFreeBytes = Math.addExact(
+            restoreBytes,
+            MIN_FREE_AFTER_RECORDING_RESTORE_BYTES
+        )
+        if (context.filesDir.usableSpace < requiredFreeBytes) {
+            throw DriveNetworkException("Not enough storage to restore recordings safely")
+        }
+
+        val stageDirectory = Files.createTempDirectory(
+            context.filesDir.toPath(),
+            RecordingFileStore.RESTORE_STAGE_PREFIX
+        ).toFile()
+        try {
+            val staged = plan.mapIndexed { index, restore ->
+                val encrypted = driveClient.downloadFile(
+                    accessToken,
+                    restore.remoteFileId,
+                    SyncBlobCrypto.envelopeSizeForPlaintext(restore.entry.sizeBytes)
+                )
+                val plaintext = try {
+                    SyncBlobCrypto.open(encrypted, passphrase)
+                } catch (e: SyncBlobSealException) {
+                    throw DriveNetworkException("Recording ${restore.entry.driveName} could not be decrypted")
+                }
+                RecordingFileStore.stageRestore(
+                    stageDirectory,
+                    index,
+                    restore.entry,
+                    plaintext
+                )
             }
-            RecordingFileStore.writeAtomically(context.filesDir, restore.entry, plaintext)
+            RecordingFileStore.commitStagedRestores(context.filesDir, staged)
+        } catch (e: Exception) {
+            if (!RecordingFileStore.hasPreparedRestore(stageDirectory)) {
+                stageDirectory.deleteRecursively()
+            }
+            throw e
         }
     }
 

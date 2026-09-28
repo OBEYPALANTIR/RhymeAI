@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
+source "$ROOT_DIR/scripts/android-release-common.sh"
 
 if [[ -z "${LOCAL_GGUF_PATH:-}" ]]; then
   echo "Set LOCAL_GGUF_PATH to a readable GGUF model file before running local inference smoke." >&2
@@ -38,47 +40,24 @@ if [[ ! -x "$ADB" ]]; then
   ADB="adb"
 fi
 
-serial="${ANDROID_SERIAL:-}"
-if [[ -z "$serial" ]]; then
-  serial="$("$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1; exit }')"
-fi
-
-if [[ -z "$serial" ]]; then
-  echo "No adb device is attached for local model smoke." >&2
+require_empty_android_target
+serial="$ANDROID_SERIAL"
+device_model_path="$("$ADB" -s "$serial" shell mktemp /data/local/tmp/rhymeai-model.XXXXXX | tr -d '\r')"
+if [[ ! "$device_model_path" =~ ^/data/local/tmp/rhymeai-model\.[[:alnum:]]+$ ]]; then
+  echo "Could not allocate a fresh device model path." >&2
   exit 1
 fi
-
-device_model_path="${DEVICE_GGUF_PATH:-/data/local/tmp/rhymeai-local-model-smoke.gguf}"
-
-install_apk() {
-  local apk="$1"
-  local output
-  if output="$("$ADB" -s "$serial" install -r "$apk" 2>&1)"; then
-    printf '%s\n' "$output"
-    return 0
-  fi
-
-  if [[ "$output" == *"INSTALL_FAILED_UPDATE_INCOMPATIBLE"* ]]; then
-    echo "$output" >&2
-    echo "Existing RhymeAI install has a different signature; uninstalling app/test packages and retrying." >&2
-    "$ADB" -s "$serial" uninstall com.rhymeai.app >/dev/null 2>&1 || true
-    "$ADB" -s "$serial" uninstall com.rhymeai.app.test >/dev/null 2>&1 || true
-    "$ADB" -s "$serial" install -r "$apk"
-    return 0
-  fi
-
-  echo "$output" >&2
-  return 1
-}
-
-"$ADB" -s "$serial" shell rm -f "$device_model_path" >/dev/null 2>&1 || true
+trap '"$ADB" -s "$serial" shell rm -f "$device_model_path"' EXIT
 
 cd "$ANDROID_DIR"
 ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+APP_BUILD_DIR="$(android_app_build_directory)"
 
-install_apk app/build/outputs/apk/debug/app-debug.apk
-install_apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+require_empty_android_target
+"$ADB" -s "$serial" install "$APP_BUILD_DIR/outputs/apk/debug/app-debug.apk"
+"$ADB" -s "$serial" install "$APP_BUILD_DIR/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 "$ADB" -s "$serial" push "$LOCAL_GGUF_PATH" "$device_model_path"
+"$ADB" -s "$serial" shell chmod 644 "$device_model_path"
 
 instrumentation_output="$("$ADB" -s "$serial" shell am instrument -w \
   -e class com.rhymeai.app.LocalModelInstrumentedTest \

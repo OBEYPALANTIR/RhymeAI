@@ -38,7 +38,9 @@ class EncryptedPrefsKeyStore(context: Context) : SecureKeyStore {
         prefs.getString(provider, "").orEmpty()
 
     override fun setKey(provider: String, key: String) {
-        prefs.edit().putString(provider, key).apply()
+        check(prefs.edit().putString(provider, key).commit()) {
+            "Secure credential storage failed"
+        }
     }
 
     override fun allKeys(): Map<String, String> =

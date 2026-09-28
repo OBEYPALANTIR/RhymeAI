@@ -1,12 +1,35 @@
 package com.rhymeai.app.service
 
 import com.rhymeai.app.data.model.RewriteAction
+import com.rhymeai.app.util.PronunciationDictionary
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AIServiceParsingTest {
+    private val dictionary = PronunciationDictionary.fromLines(
+        sequenceOf(
+            "glow\tG L OW1",
+            "gleam\tG L IY1 M",
+            "shine\tSH AY1 N",
+            "radiance\tR EY1 D IY0 AH0 N S",
+            "real\tR IY1 L",
+            "feel\tF IY1 L",
+            "reality\tR IY0 AE1 L AH0 T IY0",
+            "calls\tK AO1 L Z",
+            "walls\tW AO1 L Z",
+            "make\tM EY1 K",
+            "deceive\tD IH0 S IY1 V",
+            "feeds\tF IY1 D Z",
+            "streams\tS T R IY1 M Z"
+        )
+    )
 
     @Test
     fun suggestionParserSanitizesProviderLineResponses() {
@@ -16,11 +39,8 @@ class AIServiceParsingTest {
             - Static in the choir of the road
             model_response>
             You are RhymeAI's on-device songwriting assistant.
-            This line is deliberately far too long to be a usable lyric suggestion because it keeps going past the expected single-line length limit for the assistant surface.
             2) I trade the dark for a borrowed glow
         """.trimIndent()
-
-        val suggestions = AIService().parseSuggestionList(raw).map { it.text }
 
         assertEquals(
             listOf(
@@ -28,7 +48,7 @@ class AIServiceParsingTest {
                 "Static in the choir of the road",
                 "I trade the dark for a borrowed glow"
             ),
-            suggestions
+            AIService().parseSuggestionList(raw).map { it.text }
         )
     }
 
@@ -47,7 +67,7 @@ class AIServiceParsingTest {
     }
 
     @Test
-    fun suggestionParserDropsLocalModelChatter() {
+    fun suggestionParserDropsLocalModelChatterForCloudCompatibility() {
         val raw = """
             Sure, here are six options:
             Here are the next-line suggestions:
@@ -58,206 +78,252 @@ class AIServiceParsingTest {
         """.trimIndent()
 
         assertEquals(
-            listOf(
-                "Static in the choir of the road",
-                "I trade the dark for a borrowed glow"
-            ),
+            listOf("Static in the choir of the road", "I trade the dark for a borrowed glow"),
             AIService().parseSuggestionList(raw).map { it.text }
         )
     }
 
     @Test
-    fun localRewriteCleanerStripsMalformedTurnMarkers() {
-        val raw = """
-            start_of_turn>model
-            Where we swear we're free
-            <end_of_turn>
-        """.trimIndent()
+    fun localSuggestionBoundaryRequiresSixDistinctCompleteLines() = runBlocking {
+        val service = AIService()
+        val valid = (1..6).joinToString("\n") { "Original lyric option $it" }
+
+        assertEquals(
+            (1..6).map { "Original lyric option $it" },
+            service.validatedLocalSuggestionStream(flowOf(valid), lyrics = "Existing lyric").toList().map { it.text }
+        )
+
+        val error = assertFailsWith<RuntimeException> {
+            service.validatedLocalSuggestionStream(
+                flowOf("One\nTwo\nTwo\nExisting lyric\nFive"),
+                lyrics = "Existing lyric"
+            ).toList()
+        }
+        assertEquals("Local model returned an incomplete response. Try again or use a cloud provider.", error.message)
+    }
+
+    @Test
+    fun localSuggestionBoundaryStreamsOnlyCompleteValidatedLines() = runBlocking {
+        val lines = AIService().validatedLocalSuggestionStream(
+            flowOf("First line\nSecond", " line\nThird line\nFourth line\nFifth line\nSixth line"),
+            lyrics = ""
+        ).toList().map { it.text }
+
+        assertEquals(
+            listOf("First line", "Second line", "Third line", "Fourth line", "Fifth line", "Sixth line"),
+            lines
+        )
+    }
+
+    @Test
+    fun localSuggestionBoundaryRejectsMarkupBeforeCleanup() = runBlocking {
+        val error = assertFailsWith<RuntimeException> {
+            AIService().validatedLocalSuggestionStream(
+                flowOf("<start_of_turn>model\nOne\nTwo\nThree\nFour\nFive\nSix"),
+                lyrics = ""
+            ).toList()
+        }
+        assertEquals("Local model returned an incomplete response. Try again or use a cloud provider.", error.message)
+    }
+
+    @Test
+    fun passageRewritePreservesLineStructureAndRejectsLeakageOrUnchangedText() {
+        val service = AIService()
+        val selection = "First source line\n\nSecond source line"
+
+        assertEquals(
+            "First changed line\n\nSecond changed line",
+            service.cleanLocalRewrite("First changed line\n\nSecond changed line", selection)
+        )
+        assertTrue(service.cleanLocalRewrite("Only one line", selection).isBlank())
+        assertTrue(service.cleanLocalRewrite("First changed line\nSecond changed line\nThird line", selection).isBlank())
+        assertTrue(service.cleanLocalRewrite(selection, selection).isBlank())
+        assertTrue(service.cleanLocalRewrite("<end_of_turn>\nFirst changed line\n\nSecond changed line", selection).isBlank())
+    }
+
+    @Test
+    fun localRewriteCleanerAcceptsPlainOrJsonAndRejectsTurnMarkers() {
+        val service = AIService()
 
         assertEquals(
             "Where we swear we're free",
-            AIService().cleanLocalRewrite(raw, selection = "Where we claim to be free")
+            service.cleanLocalRewrite("Where we swear we're free", selection = "Where we claim to be free")
         )
-    }
-
-    @Test
-    fun localRewriteCleanerExtractsJsonAfterMarkers() {
-        val raw = """
-            <start_of_turn>model
-            {"rewrite":"Cold corporate walls still listen"}
-            <end_of_turn>
-        """.trimIndent()
-
         assertEquals(
             "Cold corporate walls still listen",
-            AIService().cleanLocalRewrite(raw, selection = "Cold corporate walls")
+            service.cleanLocalRewrite(
+                """{"rewrite":"Cold corporate walls still listen"}""",
+                selection = "Cold corporate walls"
+            )
         )
-    }
-
-    @Test
-    fun localRewriteCleanerRejectsMarkerOnlyAndUnchangedOutput() {
-        val service = AIService()
-
-        assertTrue(service.cleanLocalRewrite("start_of_turn>", selection = "Where we claim to be free").isBlank())
-        assertTrue(service.cleanLocalRewrite("Where we claim to be free", selection = "Where we claim to be free").isBlank())
-    }
-
-    @Test
-    fun localSingleWordRewriteDropsLabelsAndMarkers() {
-        val raw = """
-            <start_of_turn>model
-            Replacement: gleam
-            <end_of_turn>
-        """.trimIndent()
-
-        assertEquals("gleam", AIService().cleanLocalRewrite(raw, selection = "glow"))
-    }
-
-    @Test
-    fun localSingleWordFallbackCoversCommonRewriteActions() {
-        val service = AIService()
-
-        assertEquals("gleam", service.fallbackLocalSingleWordRewrite("glow", RewriteAction.REPHRASE))
-        assertEquals("show", service.fallbackLocalSingleWordRewrite("glow", RewriteAction.HARDER_RHYME))
-        assertEquals("flare", service.fallbackLocalSingleWordRewrite("glow", RewriteAction.PUNCH_UP))
-        assertEquals("feel", service.fallbackLocalSingleWordRewrite("real", RewriteAction.HARDER_RHYME))
-        assertTrue(service.fallbackLocalSingleWordRewrite("xylophone", RewriteAction.REPHRASE).isBlank())
-    }
-
-    @Test
-    fun localSingleWordValidatorRejectsAwkwardHarderRhymeExpansion() {
-        val service = AIService()
-
-        assertEquals("reality", service.cleanLocalRewrite("reality", selection = "real"))
         assertTrue(
-            service.acceptLocalSingleWordRewrite(
-                candidate = "reality",
-                selection = "real",
-                action = RewriteAction.HARDER_RHYME
+            service.cleanLocalRewrite(
+                "<start_of_turn>model\nWhere we swear we're free\n<end_of_turn>",
+                selection = "Where we claim to be free"
             ).isBlank()
         )
-        assertEquals(
-            "feel",
-            service.acceptLocalSingleWordRewrite(
-                candidate = "reality",
-                selection = "real",
-                action = RewriteAction.HARDER_RHYME
-            ).ifBlank { service.fallbackLocalSingleWordRewrite("real", RewriteAction.HARDER_RHYME) }
-        )
+    }
+
+    @Test
+    fun singleWordBoundaryRejectsLabelsMarkupLossySpellingsAndExclusions() {
+        val service = AIService()
+
+        assertEquals("gleam", service.cleanLocalRewrite("gleam", selection = "glow"))
+        assertTrue(service.cleanLocalRewrite("Replacement: gleam", selection = "glow").isBlank())
+        assertTrue(service.cleanLocalRewrite("<b>gleam</b>", selection = "glow").isBlank())
+        listOf("g-l-e-a-m", "Gleam").forEach { candidate ->
+            assertTrue(
+                service.acceptLocalSingleWordRewrite(
+                    candidate = candidate,
+                    selection = "glow",
+                    action = RewriteAction.REPHRASE,
+                    context = null,
+                    rejectedCandidates = setOf("gleam"),
+                    dictionary = dictionary
+                ).isBlank()
+            )
+        }
+    }
+
+    @Test
+    fun harderRhymeRequiresLineEndingKnownWordAndRhymeFit() {
+        val service = AIService()
+
         assertEquals(
             "feel",
             service.acceptLocalSingleWordRewrite(
                 candidate = "feel",
                 selection = "real",
-                action = RewriteAction.HARDER_RHYME
+                action = RewriteAction.HARDER_RHYME,
+                context = service.singleWordRewriteContext("What is real", "real", 8),
+                rejectedCandidates = emptySet(),
+                dictionary = dictionary
             )
+        )
+        assertTrue(
+            service.acceptLocalSingleWordRewrite(
+                candidate = "reality",
+                selection = "real",
+                action = RewriteAction.HARDER_RHYME,
+                context = service.singleWordRewriteContext("What is real", "real", 8),
+                rejectedCandidates = emptySet(),
+                dictionary = dictionary
+            ).isBlank()
+        )
+        assertTrue(
+            service.acceptLocalSingleWordRewrite(
+                candidate = "feel",
+                selection = "real",
+                action = RewriteAction.HARDER_RHYME,
+                context = service.singleWordRewriteContext("The real thing", "real", 4),
+                rejectedCandidates = emptySet(),
+                dictionary = dictionary
+            ).isBlank()
         )
     }
 
     @Test
-    fun localHarderRhymeValidatorRejectsReportedBadSingleWordContexts() {
+    fun harderRhymePreservesMainContextRejectionsAndValidRetry() {
         val service = AIService()
-        val makeLyrics = "In the land of make believe"
-        val makeContext = service.singleWordRewriteContext(
-            lyrics = makeLyrics,
-            selection = "make",
-            selectionStart = makeLyrics.indexOf("make")
+        fun context(line: String, word: String) =
+            service.singleWordRewriteContext(line, word, line.indexOf(word))
+
+        assertTrue(
+            service.acceptLocalSingleWordRewrite(
+                candidate = "walls",
+                selection = "calls",
+                action = RewriteAction.HARDER_RHYME,
+                context = context("Birds chirping in phone calls", "calls"),
+                rejectedCandidates = emptySet(),
+                dictionary = dictionary
+            ).isBlank()
         )
         assertTrue(
             service.acceptLocalSingleWordRewrite(
                 candidate = "deceive",
                 selection = "make",
                 action = RewriteAction.HARDER_RHYME,
-                context = makeContext,
-                rejectedCandidates = emptySet()
+                context = context("In the land of make believe", "make"),
+                rejectedCandidates = emptySet(),
+                dictionary = dictionary
             ).isBlank()
-        )
-
-        val callsLyrics = "Birds chirping in phone calls"
-        val callsContext = service.singleWordRewriteContext(
-            lyrics = callsLyrics,
-            selection = "calls",
-            selectionStart = callsLyrics.indexOf("calls")
-        )
-        assertTrue(
-            service.acceptLocalSingleWordRewrite(
-                candidate = "walls",
-                selection = "calls",
-                action = RewriteAction.HARDER_RHYME,
-                context = callsContext,
-                rejectedCandidates = emptySet()
-            ).isBlank()
-        )
-        assertTrue(
-            service.fallbackLocalSingleWordRewrite(
-                selection = "calls",
-                action = RewriteAction.HARDER_RHYME,
-                context = callsContext
-            ).isBlank()
-        )
-
-        val feedsLyrics = "Personalized social feeds"
-        val feedsContext = service.singleWordRewriteContext(
-            lyrics = feedsLyrics,
-            selection = "feeds",
-            selectionStart = feedsLyrics.indexOf("feeds")
         )
         assertTrue(
             service.acceptLocalSingleWordRewrite(
                 candidate = "streams",
                 selection = "feeds",
                 action = RewriteAction.HARDER_RHYME,
-                context = feedsContext,
-                rejectedCandidates = emptySet()
+                context = context("Personalized social feeds", "feeds"),
+                rejectedCandidates = emptySet(),
+                dictionary = dictionary
             ).isBlank()
         )
-    }
-
-    @Test
-    fun localHarderRhymeValidatorRejectsPreviousPreviewOnRedo() {
-        val service = AIService()
-        val lyrics = "Cold corporate walls"
-        val context = service.singleWordRewriteContext(
-            lyrics = lyrics,
-            selection = "walls",
-            selectionStart = lyrics.indexOf("walls")
-        )
-
+        val validContext = context("Cold corporate calls", "calls")
         assertEquals(
-            "calls",
+            "walls",
             service.acceptLocalSingleWordRewrite(
-                candidate = "calls",
-                selection = "walls",
+                candidate = "walls",
+                selection = "calls",
                 action = RewriteAction.HARDER_RHYME,
-                context = context,
-                rejectedCandidates = emptySet()
+                context = validContext,
+                rejectedCandidates = emptySet(),
+                dictionary = dictionary
             )
         )
         assertTrue(
             service.acceptLocalSingleWordRewrite(
-                candidate = "calls",
-                selection = "walls",
+                candidate = "walls",
+                selection = "calls",
                 action = RewriteAction.HARDER_RHYME,
-                context = context,
-                rejectedCandidates = setOf("calls")
+                context = validContext,
+                rejectedCandidates = setOf("WALLS"),
+                dictionary = dictionary
             ).isBlank()
-        )
-        assertEquals(
-            "falls",
-            service.fallbackLocalSingleWordRewrite(
-                selection = "walls",
-                action = RewriteAction.HARDER_RHYME,
-                context = context,
-                rejectedCandidates = setOf("calls")
-            )
         )
     }
 
     @Test
-    fun synonymParserAcceptsCommaSeparatedLocalOutput() {
+    fun localSingleWordValidatorRejectsPreviousPreviewOnRedo() {
+        val service = AIService()
+
+        assertEquals(
+            "feel",
+            service.acceptLocalSingleWordRewrite(
+                candidate = "feel",
+                selection = "real",
+                action = RewriteAction.HARDER_RHYME,
+                context = service.singleWordRewriteContext("What is real", "real", 8),
+                rejectedCandidates = emptySet(),
+                dictionary = dictionary
+            )
+        )
+        assertTrue(
+            service.acceptLocalSingleWordRewrite(
+                candidate = "feel",
+                selection = "real",
+                action = RewriteAction.HARDER_RHYME,
+                context = service.singleWordRewriteContext("What is real", "real", 8),
+                rejectedCandidates = setOf("FEEL"),
+                dictionary = dictionary
+            ).isBlank()
+        )
+    }
+
+    @Test
+    fun synonymBoundaryAllowsKnownWordsAndBlocksAdversaries() {
+        val service = AIService()
+
         assertEquals(
             listOf("gleam", "shine", "radiance"),
-            AIService().extractSynonyms("gleam, shine, glow, radiance", exclude = "glow")
+            service.extractSynonyms("gleam, shine, glow, radiance", exclude = "glow", dictionary = dictionary)
+        )
+        assertEquals(
+            emptyList(),
+            service.extractSynonyms("g-l-e-a-m, a-skew, GLOW", exclude = "glow", dictionary = dictionary)
+        )
+        assertEquals(
+            emptyList(),
+            service.extractSynonyms("<start_of_turn>model\ngleam", exclude = "glow", dictionary = dictionary)
         )
     }
 
@@ -269,7 +335,8 @@ class AIServiceParsingTest {
             limit = 6
         )
 
-        assertContains(prompt, "<start_of_turn>user")
+        assertFalse(prompt.contains("<start_of_turn>"))
+        assertFalse(prompt.contains("<|turn>"))
         assertContains(prompt, "Return only replacement words")
         assertContains(prompt, "one per line")
         assertContains(prompt, "No JSON")

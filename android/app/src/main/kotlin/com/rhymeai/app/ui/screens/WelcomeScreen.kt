@@ -2,7 +2,6 @@ package com.rhymeai.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -41,34 +43,34 @@ import androidx.compose.ui.unit.dp
 import com.rhymeai.app.R
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.appWritingSurface
 
 @Composable
 fun WelcomeScreen(
     onNewSong: () -> Unit,
     onLoadSong: () -> Unit,
-    onTemplates: () -> Unit
+    onTemplates: () -> Unit,
+    recentSongTitle: String? = null,
+    onContinue: () -> Unit = {}
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(colorScheme.background)
+            .appWritingSurface()
             .statusBarsPadding()
             .bottomSafeActionPadding(extra = DesignTokens.Spacing.xl)
     ) {
         val isCompact = maxHeight < 600.dp
         val iconSize = if (isCompact) 56.dp else 80.dp
-        val titleStyle = if (isCompact) {
-            MaterialTheme.typography.headlineLarge
-        } else {
-            MaterialTheme.typography.displayMedium
-        }
         val verticalSpacing = if (isCompact) DesignTokens.Spacing.lg else DesignTokens.Spacing.xxl
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .wrapContentWidth(Alignment.CenterHorizontally)
+                .widthIn(max = DesignTokens.Drawer.expandedWidth)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = DesignTokens.Spacing.xl, vertical = verticalSpacing),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -104,7 +106,7 @@ fun WelcomeScreen(
             // Title
             Text(
                 text = "Writers Block",
-                style = titleStyle,
+                style = MaterialTheme.typography.headlineMedium,
                 color = colorScheme.primary,
                 textAlign = TextAlign.Center,
             )
@@ -112,7 +114,7 @@ fun WelcomeScreen(
             Spacer(Modifier.height(DesignTokens.Spacing.md))
 
             Text(
-                "Your intelligent songwriting companion. Start from scratch, load an existing project, or kickstart your creativity with a template.",
+                "A space for your next song.",
                 color = colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
@@ -126,6 +128,9 @@ fun WelcomeScreen(
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md),
                 modifier = Modifier.fillMaxWidth()
             ) {
+                if (recentSongTitle != null) {
+                    WelcomeCard(Icons.Default.FolderOpen, "Continue $recentSongTitle", "Return to your writing", onContinue)
+                }
                 WelcomeCard(
                     icon = Icons.Default.Add,
                     title = "New Song",
@@ -182,7 +187,12 @@ private fun WelcomeCard(
                 modifier = Modifier.size(28.dp)
             )
             Spacer(Modifier.width(DesignTokens.Spacing.lg))
-            Column {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("welcomeCardText"),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+            ) {
                 Text(
                     title,
                     fontWeight = FontWeight.Medium,

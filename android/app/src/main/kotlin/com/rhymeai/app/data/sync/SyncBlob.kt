@@ -27,6 +27,36 @@ data class SyncBlob(
         const val DRIVE_FILE_NAME = "rhymeai-projects.json"
         const val DRIVE_MIME_TYPE = "application/json"
     }
+
+    fun validate() {
+        projects.forEach { SyncIdentity.validateProjectId(it.id) }
+        trashed.forEach { SyncIdentity.validateProjectId(it.project.id) }
+        recordings.forEach(RecordingManifestEntry::validate)
+    }
+}
+
+internal object SyncIdentity {
+    private const val MAX_PROJECT_ID_BYTES = 128
+    private const val MAX_RECORDING_FILE_NAME_BYTES = 240
+    private val illegalRecordingCharacters = setOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
+
+    fun validateProjectId(value: String) {
+        require(value.isNotEmpty() && value.toByteArray(Charsets.UTF_8).size <= MAX_PROJECT_ID_BYTES) {
+            "Invalid project identifier"
+        }
+        require(value != "." && value != "..") { "Invalid project identifier" }
+        require(value.none { it.isISOControl() || it == '/' || it == '\\' }) { "Invalid project identifier" }
+    }
+
+    fun validateFileName(value: String) {
+        require(value.isNotEmpty() && value.toByteArray(Charsets.UTF_8).size <= MAX_RECORDING_FILE_NAME_BYTES) {
+            "Invalid recording filename"
+        }
+        require(value == value.trim() && value.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) in com.rhymeai.app.data.recording.RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) { "Invalid recording filename" }
+        require(value.none { it.isISOControl() || it in illegalRecordingCharacters }) {
+            "Invalid recording filename"
+        }
+    }
 }
 
 @Serializable
@@ -41,14 +71,20 @@ data class RecordingManifestEntry(
     val identityKey: String
         get() = "$projectId/$fileName"
 
+    fun validate() {
+        SyncIdentity.validateProjectId(projectId)
+        SyncIdentity.validateFileName(fileName)
+        require(driveName == driveNameFor(projectId, fileName)) { "Invalid recording Drive name" }
+        require(sizeBytes in 0..MAX_SYNC_RECORDING_BYTES) { "Invalid recording size" }
+    }
+
     companion object {
+        const val MAX_SYNC_RECORDING_BYTES = 16L * 1024L * 1024L
         const val DRIVE_PREFIX = "rec_"
-        const val DRIVE_SUFFIX = ".m4a.enc"
         const val MIME_TYPE = "application/octet-stream"
 
         fun driveNameFor(projectId: String, fileName: String): String {
-            val stem = fileName.removeSuffix(".m4a")
-            return "$DRIVE_PREFIX${projectId}_${stem}$DRIVE_SUFFIX"
+            return "$DRIVE_PREFIX${projectId}_${fileName}.enc"
         }
     }
 }
@@ -65,6 +101,8 @@ data class RecordingManifestEntry(
  */
 object SyncMerger {
     fun merge(local: SyncBlob, remote: SyncBlob): SyncBlob {
+        local.validate()
+        remote.validate()
         val mergedProjects = mergeProjects(local.projects, remote.projects)
         val mergedTrashed = mergeTrash(local.trashed, remote.trashed)
         val mergedRecordings = mergeRecordings(local.recordings, remote.recordings)

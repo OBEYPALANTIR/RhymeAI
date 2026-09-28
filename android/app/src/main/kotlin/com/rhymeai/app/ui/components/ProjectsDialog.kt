@@ -4,15 +4,15 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -38,7 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -50,10 +50,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Mic
@@ -62,6 +60,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -80,35 +79,33 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.R
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
@@ -117,14 +114,15 @@ import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.service.TrashedVoiceMemo
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.motion.OffsetMotionState
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.appWritingSurface
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -157,27 +155,28 @@ fun ProjectsDrawer(
     val importJson = remember { Json { ignoreUnknownKeys = true } }
     var importError by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
-    var drawerVisible by remember { mutableStateOf(false) }
+    val drawerTransition = remember { MutableTransitionState(false).apply { targetState = true } }
+    val animationsEnabled = LocalAnimationsEnabled.current
     var isClosing by remember { mutableStateOf(false) }
     var showTrashBin by remember { mutableStateOf(false) }
-    var trashBinVisible by remember { mutableStateOf(false) }
+    val trashTransition = remember { MutableTransitionState(false) }
     var isTrashBinClosing by remember { mutableStateOf(false) }
-    // 0 = Songs, 1 = Recordings
-    var selectedTab by remember { mutableStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     fun openTrashBin() {
         isTrashBinClosing = false
         showTrashBin = true
-        trashBinVisible = true
+        trashTransition.targetState = true
     }
 
     fun closeTrashBin() {
         if (!showTrashBin || isTrashBinClosing) return
         isTrashBinClosing = true
-        trashBinVisible = false
-        scope.launch {
-            delay(DrawerDismissMillis.toLong())
+        trashTransition.targetState = false
+    }
+
+    LaunchedEffect(trashTransition.isIdle, trashTransition.currentState, isTrashBinClosing) {
+        if (isTrashBinClosing && trashTransition.isIdle && !trashTransition.currentState) {
             showTrashBin = false
             isTrashBinClosing = false
         }
@@ -187,19 +186,25 @@ fun ProjectsDrawer(
         closeTrashBin()
     }
 
-    fun closeDrawer(afterClose: () -> Unit = {}) {
+    fun closeDrawer(onSelection: (() -> Unit)? = null) {
         if (isClosing) return
         isClosing = true
-        drawerVisible = false
-        scope.launch {
-            delay(DrawerDismissMillis.toLong())
-            afterClose()
+        if (onSelection != null) {
+            onSelection()
             onDismiss()
+        } else {
+            drawerTransition.targetState = false
         }
     }
 
-    LaunchedEffect(Unit) {
-        drawerVisible = true
+    BackHandler(enabled = !showTrashBin) {
+        closeDrawer()
+    }
+
+    LaunchedEffect(drawerTransition.isIdle, drawerTransition.currentState, isClosing) {
+        if (isClosing && drawerTransition.isIdle && !drawerTransition.currentState) {
+            onDismiss()
+        }
     }
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -209,14 +214,15 @@ fun ProjectsDrawer(
         scope.launch {
             try {
                 val text = withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    context.contentResolver.openInputStream(uri)?.use(::readProjectText)
                         ?: throw Exception("Cannot read file")
                 }
                 val project = importJson.decodeFromString(SongProject.serializer(), text)
                 importError = null
                 closeDrawer { onImportProject(project) }
             } catch (e: Exception) {
-                importError = "Could not import this file. Pick a RhymeAI project JSON."
+                importError = e.message?.takeIf { it.startsWith("Project files must be") }
+                    ?: "Could not import this file. Pick a RhymeAI project JSON."
             }
         }
     }
@@ -241,14 +247,13 @@ fun ProjectsDrawer(
     // Push-style reveal: while the trash screen slides in from the right, the
     // drawer slides toward the left like a navigation push, so the trash reads
     // as the next screen rather than an overlay.
-    val animationsEnabled = LocalAnimationsEnabled.current
     val density = LocalDensity.current
     val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
     val trashRevealProgress by animateFloatAsState(
-        targetValue = if (trashBinVisible) 1f else 0f,
+        targetValue = if (trashTransition.targetState) 1f else 0f,
         animationSpec = if (!animationsEnabled) {
             snap()
-        } else if (trashBinVisible) {
+        } else if (trashTransition.targetState) {
             tween(DrawerAnimationMillis, easing = DesignTokens.Motion.standardEasing)
         } else {
             tween(DrawerDismissMillis, easing = DesignTokens.Motion.exitEasing)
@@ -256,62 +261,47 @@ fun ProjectsDrawer(
         label = "trashRevealProgress"
     )
 
-    Dialog(
-        onDismissRequest = {
-            if (showTrashBin) closeTrashBin() else closeDrawer()
-        },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
-    ) {
-        EdgeToEdgeDialogEffect()
-        Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
-                visible = drawerVisible,
-                enter = fadeIn(animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing)),
-                exit = fadeOut(animationSpec = tween(if (animationsEnabled) DrawerDismissMillis else 0, easing = DesignTokens.Motion.exitEasing))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(colorScheme.scrim.copy(alpha = 0.42f))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { closeDrawer() }
-                        )
-                )
-            }
-
-            AnimatedVisibility(
-                visible = drawerVisible,
-                // Pure slide — the moving edge carries the spatial story; a
-                // simultaneous fade just muddies it. Exit rides the faster
-                // dismiss tier with an accelerate curve.
-                enter = slideInHorizontally(
-                    animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing),
-                    initialOffsetX = { -it }
-                ),
-                exit = slideOutHorizontally(
-                    animationSpec = tween(if (animationsEnabled) DrawerDismissMillis else 0, easing = DesignTokens.Motion.exitEasing),
-                    targetOffsetX = { -it }
-                )
+                visibleState = drawerTransition,
+                enter = if (animationsEnabled) {
+                    slideInHorizontally(
+                        animationSpec = tween(
+                            DrawerAnimationMillis,
+                            easing = DesignTokens.Motion.standardEasing
+                        ),
+                        initialOffsetX = { -it }
+                    )
+                } else {
+                    EnterTransition.None
+                },
+                exit = if (animationsEnabled) {
+                    slideOutHorizontally(
+                        animationSpec = tween(
+                            DrawerDismissMillis,
+                            easing = DesignTokens.Motion.exitEasing
+                        ),
+                        targetOffsetX = { -it }
+                    )
+                } else {
+                    ExitTransition.None
+                }
             ) {
                 Surface(
                     modifier = Modifier
                         .graphicsLayer { translationX = -screenWidthPx * 0.3f * trashRevealProgress }
                         .fillMaxSize()
+                        .appWritingSurface()
                         .imePadding()
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = {}
-                        ),
+                    ),
                     shape = RoundedCornerShape(0.dp),
-                    color = colorScheme.surfaceContainerLow,
+                    color = Color.Transparent,
                     contentColor = colorScheme.onSurface,
-                    tonalElevation = 8.dp
+                    tonalElevation = 0.dp
                 ) {
                     val bottomActionClearance = maxOf(
                         navigationBarBottomPadding(),
@@ -335,8 +325,31 @@ fun ProjectsDrawer(
                                         DesignTokens.Spacing.lg
                                 )
                         ) {
-                            // Full-bleed search: one trailing X inside the field — clears the
-                            // query while typing, closes the drawer when the field is empty.
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Song Library",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                IconButton(
+                                    onClick = { closeDrawer() },
+                                    modifier = Modifier.size(DesignTokens.Touch.minTarget)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close drawer",
+                                        tint = colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
@@ -348,117 +361,91 @@ fun ProjectsDrawer(
                                         modifier = Modifier.size(18.dp)
                                     )
                                 },
-                                trailingIcon = {
-                                    val isClearing = searchQuery.isNotEmpty()
-                                    IconButton(onClick = {
-                                        if (isClearing) searchQuery = "" else closeDrawer()
-                                    }) {
-                                        Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = if (isClearing) "Clear search" else "Close drawer",
-                                            tint = colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(18.dp)
-                                        )
+                                trailingIcon = if (searchQuery.isNotEmpty()) {
+                                    {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "Clear search",
+                                                tint = colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                     }
+                                } else {
+                                    null
                                 },
                                 placeholder = {
                                     Text(
-                                        text = if (selectedTab == 0) {
-                                            "Search songs"
-                                        } else {
-                                            "Search recordings"
-                                        },
+                                        text = "Search songs",
                                         fontSize = 14.sp
                                     )
                                 },
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = DesignTokens.Spacing.sm),
                                 colors = textFieldColors,
-                                shape = RoundedCornerShape(DesignTokens.Radius.xl)
+                                shape = RoundedCornerShape(DesignTokens.Radius.lg)
                             )
 
-                            OutlinedButton(
-                                onClick = { closeDrawer(afterClose = onNewProject) },
+                            Button(
+                                onClick = { closeDrawer(onSelection = onNewProject) },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(top = DesignTokens.Spacing.md)
-                                    .heightIn(min = 56.dp),
-                                shape = RoundedCornerShape(DesignTokens.Radius.xl),
-                                border = BorderStroke(1.dp, colorScheme.outline)
+                                    .heightIn(min = DesignTokens.Rhythm.primary),
+                                shape = RoundedCornerShape(DesignTokens.Radius.lg)
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(DesignTokens.Spacing.sm))
                                 Text("Create New Song", fontWeight = FontWeight.Medium)
                             }
 
-                            // Songs | Recordings tab switcher
                             Spacer(Modifier.height(DesignTokens.Spacing.md))
-                            SlidingSegmentedControl(
-                                labels = listOf("Songs", "Recordings"),
-                                selectedIndex = selectedTab,
-                                onSelect = { selectedTab = it },
+                            LazyColumn(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(bottom = DesignTokens.Spacing.sm)
-                            )
-
-                            if (selectedTab == 0) {
-                                // ── Songs tab ──
-                                LazyColumn(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
-                                ) {
-                                    if (projects.isEmpty()) {
-                                        item {
-                                            EmptyDrawerState(
-                                                icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
-                                                text = "No saved songs yet."
-                                            )
-                                        }
-                                    } else if (filteredProjects.isEmpty()) {
-                                        item {
-                                            EmptyDrawerState(
-                                                icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                                                text = if (isSearching) "No songs match your search." else "No saved songs yet."
-                                            )
-                                        }
-                                    } else {
-                                        items(filteredProjects, key = { it.id }) { project ->
-                                            ProjectDrawerRow(
-                                                project = project,
-                                                isActive = project.id == currentProjectId,
-                                                onLoadProject = { selected ->
-                                                    closeDrawer { onLoadProject(selected) }
-                                                },
-                                                onDeleteProject = { project ->
-                                                    onDeleteProject(project.id)
-                                                    scope.launch {
-                                                        val result = snackbarHostState.showSnackbar(
-                                                            message = "\"${project.title.ifEmpty { "Untitled Song" }}\" moved to Trash",
-                                                            actionLabel = "Undo",
-                                                            duration = SnackbarDuration.Short
-                                                        )
-                                                        if (result == SnackbarResult.ActionPerformed) {
-                                                            onRestoreProject(project.id)
-                                                        }
+                                    .weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+                            ) {
+                                if (projects.isEmpty()) {
+                                    item {
+                                        EmptyDrawerState(
+                                            icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
+                                            text = "No saved songs yet."
+                                        )
+                                    }
+                                } else if (filteredProjects.isEmpty()) {
+                                    item {
+                                        EmptyDrawerState(
+                                            icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                            text = if (isSearching) "No songs match your search." else "No saved songs yet."
+                                        )
+                                    }
+                                } else {
+                                    items(filteredProjects, key = { it.id }) { project ->
+                                        ProjectDrawerRow(
+                                            project = project,
+                                            isActive = project.id == currentProjectId,
+                                            onLoadProject = { selected ->
+                                                closeDrawer { onLoadProject(selected) }
+                                            },
+                                            onDeleteProject = { project ->
+                                                onDeleteProject(project.id)
+                                                scope.launch {
+                                                    val result = snackbarHostState.showSnackbar(
+                                                        message = "\"${project.title.ifEmpty { "Untitled Song" }}\" moved to Trash",
+                                                        actionLabel = "Undo",
+                                                        duration = SnackbarDuration.Short
+                                                    )
+                                                    if (result == SnackbarResult.ActionPerformed) {
+                                                        onRestoreProject(project.id)
                                                     }
                                                 }
-                                            )
-                                        }
+                                            }
+                                        )
                                     }
                                 }
-                            } else {
-                                // ── Recordings tab ──
-                                RecordingsTab(
-                                    service = service,
-                                    projects = projects,
-                                    searchQuery = searchQuery,
-                                    snackbarHostState = snackbarHostState,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f)
-                                )
                             }
 
                             importError?.let {
@@ -484,7 +471,7 @@ fun ProjectsDrawer(
                                 horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OutlinedButton(
+                                TextButton(
                                     onClick = {
                                         importError = null
                                         importLauncher.launch(arrayOf("application/json", "*/*"))
@@ -492,15 +479,13 @@ fun ProjectsDrawer(
                                     modifier = Modifier
                                         .weight(1f)
                                         .fillMaxHeight(),
-                                    shape = RoundedCornerShape(DesignTokens.Radius.xl),
-                                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
                                 ) {
                                     Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(DesignTokens.Spacing.sm))
                                     Text("Import Files", fontWeight = FontWeight.Medium)
                                 }
 
-                                OutlinedIconButton(
+                                IconButton(
                                     onClick = {
                                         onPurgeExpiredTrash()
                                         openTrashBin()
@@ -509,12 +494,10 @@ fun ProjectsDrawer(
                                         .fillMaxHeight()
                                         .width(DesignTokens.Touch.minTarget)
                                         .semantics { contentDescription = "Open Trash Bin" },
-                                    shape = RoundedCornerShape(DesignTokens.Radius.xl),
-                                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
                                 ) {
                                     Icon(
                                         Icons.Default.Delete,
-                                        contentDescription = "Open Trash Bin",
+                                        contentDescription = null,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
@@ -530,7 +513,7 @@ fun ProjectsDrawer(
             // entirely (the page used to just appear). Kept in composition,
             // the slide-in runs; content is only materialized while visible.
             AnimatedVisibility(
-                visible = trashBinVisible,
+                visibleState = trashTransition,
                 enter = slideInHorizontally(
                     animationSpec = tween(if (animationsEnabled) DrawerAnimationMillis else 0, easing = DesignTokens.Motion.standardEasing),
                     initialOffsetX = { it }
@@ -554,12 +537,14 @@ fun ProjectsDrawer(
                 hostState = snackbarHostState,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    // Clear the gesture bar: without the inset the snackbar (and
-                    // its Undo action) renders half off-screen behind it.
-                    .padding(bottom = navigationBarBottomPadding())
+                    .padding(
+                        bottom = maxOf(
+                            navigationBarBottomPadding(),
+                            DialogBottomActionMinClearance
+                        ) + DesignTokens.Touch.minTarget + DesignTokens.Spacing.lg
+                    )
                     .padding(DesignTokens.Spacing.lg)
             )
-        }
     }
 
 }
@@ -593,325 +578,6 @@ fun ProjectsDialog(
     )
 }
 
-/**
- * Recordings tab — scans all voice-memo dirs across every project and groups
- * recordings by their owning project folder. Orphaned memos (project no longer
- * in [projects]) are labeled "Deleted song" so they can still be played or
- * cleaned up.
- */
-private data class RecordingFolder(
-    val projectId: String,
-    val title: String,
-    val memos: List<VoiceMemo>,
-)
-
-@Composable
-private fun RecordingsTab(
-    service: VoiceMemoService?,
-    projects: List<SongProject>,
-    searchQuery: String,
-    snackbarHostState: SnackbarHostState,
-    modifier: Modifier = Modifier
-) {
-    if (service == null) {
-        // Service unavailable — show a graceful empty state.
-        EmptyDrawerState(
-            icon = { Icon(Icons.Default.Mic, contentDescription = null) },
-            text = "Recordings not available."
-        )
-        return
-    }
-
-    // Version counter: incremented after any mutation (delete, rename) so the
-    // async loader below is restarted and the list is re-scanned from disk.
-    var memoListVersion by remember { mutableIntStateOf(0) }
-
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val projectById = remember(projects) { projects.associateBy { it.id } }
-    val folders: List<RecordingFolder>? by produceState<List<RecordingFolder>?>(
-        initialValue = null,
-        projects,
-        memoListVersion
-    ) {
-        value = withContext(Dispatchers.IO) {
-            val memosRoot = File(context.filesDir, "voice-memos")
-            if (!memosRoot.exists()) {
-                emptyList()
-            } else {
-                memosRoot.listFiles()
-                    ?.filter { it.isDirectory }
-                    ?.mapNotNull { dir ->
-                        val memos = service.memosForProject(dir.name)
-                        if (memos.isEmpty()) return@mapNotNull null
-                        val title = projectById[dir.name]?.title?.ifEmpty { "Untitled" }
-                            ?: "Deleted song"
-                        RecordingFolder(
-                            projectId = dir.name,
-                            title = title,
-                            memos = memos,
-                        )
-                    }
-                    ?.sortedByDescending { it.memos.first().file.lastModified() }
-                    ?: emptyList()
-            }
-        }
-    }
-    val query = remember(searchQuery) { searchQuery.trim() }
-    val visibleFolders = remember(folders, query) {
-        if (query.isEmpty()) {
-            folders.orEmpty()
-        } else {
-            folders.orEmpty().mapNotNull { folder ->
-                if (folder.title.contains(query, ignoreCase = true)) {
-                    folder
-                } else {
-                    val matches = folder.memos.filter { memo ->
-                        VoiceMemoService.displayName(memo.file).contains(query, ignoreCase = true)
-                    }
-                    if (matches.isEmpty()) {
-                        null
-                    } else {
-                        RecordingFolder(
-                            projectId = folder.projectId,
-                            title = folder.title,
-                            memos = matches,
-                        )
-                    }
-                }
-            }
-        }
-    }
-    val expanded = remember { mutableStateMapOf<String, Boolean>() }
-    var isSelecting by remember { mutableStateOf(false) }
-    var selectedMemoPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var pendingBulkDelete by remember { mutableStateOf(false) }
-
-    if (pendingBulkDelete) {
-        AlertDialog(
-            onDismissRequest = { pendingBulkDelete = false },
-            title = { Text("Delete recordings?") },
-            text = { Text("${selectedMemoPaths.size} recordings will move to Trash Bin and be fully deleted after 30 days.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        val trashResults = folders.orEmpty()
-                            .flatMap { it.memos }
-                            .filter { it.file.absolutePath in selectedMemoPaths }
-                            .map { service.trashMemo(it) }
-                        val trashFailed = trashResults.any { it == null }
-                        pendingBulkDelete = false
-                        isSelecting = false
-                        selectedMemoPaths = emptySet()
-                        memoListVersion++
-                        if (trashFailed) {
-                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
-                        }
-                    }
-                }) { Text("Move to Trash", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingBulkDelete = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    if (folders == null) {
-        Box(
-            modifier = modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            CircularProgressIndicator()
-        }
-        return
-    }
-
-    if (visibleFolders.isEmpty()) {
-        EmptyDrawerState(
-            icon = {
-                val icon = if (query.isNotEmpty()) {
-                    Icons.Default.Search
-                } else {
-                    Icons.Default.Mic
-                }
-                Icon(icon, contentDescription = null)
-            },
-            text = if (query.isNotEmpty()) {
-                "No recordings match your search."
-            } else {
-                "No recordings yet. Tap the mic to start."
-            }
-        )
-        return
-    }
-
-    Column(modifier = modifier) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = DesignTokens.Spacing.xs),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (isSelecting) {
-                TextButton(onClick = {
-                    isSelecting = false
-                    selectedMemoPaths = emptySet()
-                }) {
-                    Text("Cancel")
-                }
-                TextButton(
-                    onClick = { pendingBulkDelete = true },
-                    enabled = selectedMemoPaths.isNotEmpty()
-                ) {
-                    Text("Delete (${selectedMemoPaths.size})", color = MaterialTheme.colorScheme.error)
-                }
-            } else {
-                TextButton(onClick = { isSelecting = true }) {
-                    Text("Select")
-                }
-            }
-        }
-
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md),
-            contentPadding = PaddingValues(vertical = DesignTokens.Spacing.sm)
-        ) {
-            visibleFolders.forEach { folder ->
-                val folderExpanded = expanded[folder.projectId] == true || query.isNotEmpty()
-                item(key = "folder-${folder.projectId}") {
-                    Column {
-                        FolderHeaderRow(
-                            folder = folder,
-                            isExpanded = folderExpanded,
-                            onToggle = {
-                                expanded[folder.projectId] = !(expanded[folder.projectId] ?: false)
-                            }
-                        )
-
-                        AnimatedVisibility(
-                            visible = folderExpanded,
-                            enter = expandVertically(
-                                animationSpec = DesignTokens.Motion.expressiveSpring(),
-                                expandFrom = Alignment.Top
-                            ) + fadeIn(animationSpec = tween(DesignTokens.Motion.feedbackMillis)),
-                            exit = shrinkVertically(
-                                animationSpec = DesignTokens.Motion.expressiveSpring(),
-                                shrinkTowards = Alignment.Top
-                            ) + fadeOut(animationSpec = tween(DesignTokens.Motion.feedbackMillis))
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(top = DesignTokens.Spacing.md),
-                                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
-                            ) {
-                                folder.memos.forEach { memo ->
-                                    key(memo.file.absolutePath) {
-                                        val memoPath = memo.file.absolutePath
-                                        Box(modifier = Modifier.padding(start = DesignTokens.Spacing.md)) {
-                                            RecordingMemoRow(
-                                                memo = memo,
-                                                service = service,
-                                                isSelecting = isSelecting,
-                                                isSelected = memoPath in selectedMemoPaths,
-                                                snackbarHostState = snackbarHostState,
-                                                onSelectionChanged = { selected ->
-                                                    selectedMemoPaths = if (selected) {
-                                                        selectedMemoPaths + memoPath
-                                                    } else {
-                                                        selectedMemoPaths - memoPath
-                                                    }
-                                                },
-                                                onTrashRequest = { m ->
-                                                    scope.launch {
-                                                        val trashed = service.trashMemo(m)
-                                                        memoListVersion++
-                                                        if (trashed != null) {
-                                                            val result = snackbarHostState.showSnackbar(
-                                                                message = "Recording moved to Trash",
-                                                                actionLabel = "Undo",
-                                                                duration = SnackbarDuration.Short
-                                                            )
-                                                            if (result == SnackbarResult.ActionPerformed) {
-                                                                service.restoreTrashedMemo(trashed)
-                                                                memoListVersion++
-                                                            }
-                                                        } else {
-                                                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_delete_failed))
-                                                        }
-                                                    }
-                                                },
-                                                onMemoListChanged = { memoListVersion++ }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FolderHeaderRow(
-    folder: RecordingFolder,
-    isExpanded: Boolean,
-    onToggle: () -> Unit,
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    val arrowRotation by animateFloatAsState(
-        targetValue = if (isExpanded) 180f else 0f,
-        animationSpec = DesignTokens.Motion.expressiveSpring()
-    )
-    OutlinedCard(
-        onClick = onToggle,
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = DesignTokens.Touch.minTarget),
-        shape = RoundedCornerShape(DesignTokens.Radius.xl),
-        colors = CardDefaults.outlinedCardColors(
-            containerColor = colorScheme.surfaceContainer,
-            contentColor = colorScheme.onSurface
-        ),
-        border = BorderStroke(1.dp, colorScheme.outlineVariant)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(DesignTokens.Spacing.md),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = folder.title,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    color = if (folder.title == "Deleted song") {
-                        colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    } else {
-                        colorScheme.onSurface
-                    }
-                )
-                Text(
-                    text = "${folder.memos.size} ${if (folder.memos.size == 1) "recording" else "recordings"}",
-                    fontSize = DesignTokens.Typography.caption,
-                    color = colorScheme.onSurfaceVariant
-                )
-            }
-            Icon(
-                Icons.Default.KeyboardArrowDown,
-                contentDescription = if (isExpanded) "Collapse" else "Expand",
-                tint = colorScheme.onSurfaceVariant,
-                modifier = Modifier.rotate(arrowRotation)
-            )
-        }
-    }
-}
-
 @Composable
 private fun SwipeToRevealDelete(
     onDelete: () -> Unit,
@@ -924,12 +590,17 @@ private fun SwipeToRevealDelete(
     val revealWidth = 64.dp
     val revealPx = with(density) { revealWidth.toPx() }
     val revealPxInt = revealPx.roundToInt()
-    val offsetX = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
+    val offsetX = remember(scope) { OffsetMotionState(scope) }
+    val animationsEnabled = LocalAnimationsEnabled.current
+
+    fun settleOffset(target: Float) {
+        offsetX.animateTo(target, DesignTokens.Motion.settleSpring(), animationsEnabled)
+    }
     // Only compose the red reveal layer when the rendered row offset is visibly open.
     // At rest the stationary container and moving foreground both paint the row surface,
     // so anti-aliased rounded edges cannot blend with red and leave a halo.
-    val displayOffsetPx by remember {
+    val displayOffsetPx by remember(revealPxInt) {
         derivedStateOf { offsetX.value.roundToInt().coerceIn(-revealPxInt, 0) }
     }
     val revealVisible by remember { derivedStateOf { displayOffsetPx < 0 } }
@@ -939,7 +610,6 @@ private fun SwipeToRevealDelete(
             .fillMaxWidth()
             .clip(rowShape)
             .background(colorScheme.surfaceContainerLow)
-            .border(1.dp, colorScheme.outlineVariant, rowShape)
     ) {
         if (revealVisible) {
             Box(
@@ -950,7 +620,7 @@ private fun SwipeToRevealDelete(
             ) {
                 IconButton(
                     onClick = {
-                        scope.launch { offsetX.animateTo(0f, DesignTokens.Motion.settleSpring()) }
+                        settleOffset(0f)
                         onDelete()
                     },
                     modifier = Modifier.width(revealWidth)
@@ -969,24 +639,20 @@ private fun SwipeToRevealDelete(
                 .fillMaxWidth()
                 .offset { IntOffset(displayOffsetPx, 0) }
                 .background(colorScheme.surfaceContainerLow)
-                .pointerInput(Unit) {
+                .pointerInput(revealPx, animationsEnabled) {
                     detectHorizontalDragGestures(
-                        onHorizontalDrag = { _, dragAmount ->
-                            scope.launch {
-                                offsetX.snapTo((offsetX.value + dragAmount).coerceIn(-revealPx, 0f))
-                            }
+                        onDragStart = { offsetX.snapTo(offsetX.value) },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            offsetX.snapTo((offsetX.value + dragAmount).coerceIn(-revealPx, 0f))
                         },
                         onDragEnd = {
                             val target = if (offsetX.value < -revealPx / 2f) -revealPx else 0f
-                            scope.launch {
-                                offsetX.animateTo(target, DesignTokens.Motion.settleSpring())
-                            }
+                            settleOffset(target)
                         },
                         onDragCancel = {
                             val target = if (offsetX.value < -revealPx / 2f) -revealPx else 0f
-                            scope.launch {
-                                offsetX.animateTo(target, DesignTokens.Motion.settleSpring())
-                            }
+                            settleOffset(target)
                         }
                     )
                 }
@@ -997,7 +663,7 @@ private fun SwipeToRevealDelete(
 }
 
 @Composable
-private fun RecordingMemoRow(
+internal fun RecordingMemoRow(
     memo: VoiceMemo,
     service: VoiceMemoService,
     isSelecting: Boolean,
@@ -1150,15 +816,15 @@ private fun ProjectDrawerRow(
     val dateStr = remember(project.updatedAt) {
         SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(project.updatedAt))
     }
-    val wordCount = remember(project.lyrics) { SyllableCounter.wordCount(project.lyrics) }
+    val wordCount = remember(project.lyrics) { SyllableCounter.lyricWordCount(project.lyrics) }
 
-    OutlinedCard(
+    Card(
         onClick = { onLoadProject(project) },
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = DesignTokens.Touch.minTarget),
         shape = RoundedCornerShape(DesignTokens.Radius.xl),
-        colors = CardDefaults.outlinedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = if (isActive) {
                 colorScheme.primaryContainer
             } else {
@@ -1169,10 +835,6 @@ private fun ProjectDrawerRow(
             } else {
                 colorScheme.onSurface
             }
-        ),
-        border = BorderStroke(
-            1.dp,
-            if (isActive) colorScheme.primary else colorScheme.outlineVariant
         )
     ) {
         Row(
@@ -1189,6 +851,9 @@ private fun ProjectDrawerRow(
                     color = if (isActive) colorScheme.onPrimaryContainer else colorScheme.onSurface,
                     maxLines = 1
                 )
+                com.rhymeai.app.util.SectionMap.lyricContent(project.lyrics).lineSequence().firstOrNull { it.isNotBlank() }?.let { preview ->
+                    Text(preview.trim(), style = MaterialTheme.typography.bodyMedium, color = colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
                 Text(
                     "$dateStr \u2022 $wordCount words",
                     fontSize = DesignTokens.Typography.caption,
@@ -1204,7 +869,7 @@ private fun ProjectDrawerRow(
                 modifier = Modifier.size(DesignTokens.Touch.minTarget)
             ) {
                 Icon(
-                    Icons.Default.Close,
+                    Icons.Default.Delete,
                     contentDescription = "Delete ${project.title.ifEmpty { "Untitled Song" }}",
                     tint = colorScheme.error.copy(alpha = 0.75f),
                     modifier = Modifier.size(18.dp)
@@ -1324,8 +989,10 @@ private fun TrashBinPage(
     }
 
     Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = colorScheme.surfaceContainerLow,
+        modifier = Modifier
+            .fillMaxSize()
+            .appWritingSurface(),
+        color = Color.Transparent,
         contentColor = colorScheme.onSurface
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -1520,7 +1187,11 @@ private fun TrashRecordingSelectableRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
-            .clickable(onClick = onToggle)
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
@@ -1558,7 +1229,7 @@ private fun TrashRecordingSelectableRow(
             )
         }
 
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
@@ -1593,7 +1264,11 @@ private fun TrashSelectionHeaderRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(DesignTokens.Touch.minTarget)
-            .clickable(onClick = onToggle),
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            ),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -1603,7 +1278,7 @@ private fun TrashSelectionHeaderRow(
             color = colorScheme.onSurface,
             modifier = Modifier.weight(1f)
         )
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
@@ -1615,13 +1290,17 @@ private fun TrashProjectSelectableRow(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val project = trashedProject.project
-    val wordCount = remember(project.lyrics) { SyllableCounter.wordCount(project.lyrics) }
+    val wordCount = remember(project.lyrics) { SyllableCounter.lyricWordCount(project.lyrics) }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
-            .clickable(onClick = onToggle)
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() }
+            )
             .padding(vertical = DesignTokens.Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
@@ -1659,12 +1338,12 @@ private fun TrashProjectSelectableRow(
             )
         }
 
-        SelectionCircle(selected = selected, onToggle = onToggle)
+        SelectionCircle(selected = selected)
     }
 }
 
 @Composable
-private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
+private fun SelectionCircle(selected: Boolean) {
     val colorScheme = MaterialTheme.colorScheme
     val fillColor by animateColorAsState(
         targetValue = if (selected) colorScheme.primary else colorScheme.surfaceContainerLow,
@@ -1675,9 +1354,7 @@ private fun SelectionCircle(selected: Boolean, onToggle: () -> Unit) {
         animationSpec = tween(DesignTokens.Motion.feedbackMillis)
     )
     Box(
-        modifier = Modifier
-            .size(DesignTokens.Touch.minTarget)
-            .clickable(onClick = onToggle),
+        modifier = Modifier.size(DesignTokens.Touch.minTarget),
         contentAlignment = Alignment.Center
     ) {
         Box(

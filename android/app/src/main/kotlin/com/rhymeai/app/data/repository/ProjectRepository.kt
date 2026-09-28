@@ -7,8 +7,14 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.rhymeai.app.data.model.AnalysisPresentation
+import com.rhymeai.app.data.model.AppAppearance
+import com.rhymeai.app.data.model.SavedLocalModel
+import com.rhymeai.app.data.model.SongWorkspace
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -20,23 +26,56 @@ import kotlinx.serialization.json.Json
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "rhymeai_prefs")
 
-class ProjectRepository(
-    private val context: Context,
-    private val secureKeyStore: SecureKeyStore = EncryptedPrefsKeyStore(context)
+internal class CorruptLibraryException(
+    val area: String,
+    cause: Throwable
+) : IllegalStateException("Stored $area data could not be read", cause)
+
+internal class FailClosedStoredJson<T>(
+    private val area: String,
+    private val decodeValue: (String) -> T
 ) {
+    @Volatile private var corrupt = false
+
+    fun decode(raw: String): T = try {
+        decodeValue(raw).also { corrupt = false }
+    } catch (error: Exception) {
+        corrupt = true
+        throw CorruptLibraryException(area, error)
+    }
+
+    fun requireWritable(raw: String) {
+        decode(raw)
+        check(!corrupt) { "Cannot overwrite unreadable $area data" }
+    }
+}
+
+class ProjectRepository internal constructor(
+    private val dataStore: DataStore<Preferences>,
+    private val secureKeyStore: SecureKeyStore
+) {
+    constructor(
+        context: Context,
+        secureKeyStore: SecureKeyStore = EncryptedPrefsKeyStore(context)
+    ) : this(context.dataStore, secureKeyStore)
 
     companion object {
+        private val WORKSPACES_KEY = stringPreferencesKey("local_song_workspaces_json")
         private val PROJECTS_KEY = stringPreferencesKey("projects_json")
         private val TRASHED_PROJECTS_KEY = stringPreferencesKey("trashed_projects_json")
         private val CURRENT_PROJECT_ID_KEY = stringPreferencesKey("current_project_id")
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
+        private val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
+        private val ANALYSIS_PRESENTATION_KEY = stringPreferencesKey("analysis_presentation")
         private val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         private val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
         private val CLAUDE_API_KEY = stringPreferencesKey("claude_api_key")
         private val SELECTED_PROVIDER_KEY = stringPreferencesKey("selected_provider")
         private val GEMINI_MODEL_KEY = stringPreferencesKey("gemini_model_id")
+        private val LOCAL_MODELS_KEY = stringPreferencesKey("local_models_json")
+        private val SELECTED_LOCAL_MODEL_ID_KEY = stringPreferencesKey("selected_local_model_id")
 
         // Editor toggle keys — persisted separately from project data so they
         // survive project switches and app restart without loading an entire project.
@@ -58,52 +97,87 @@ class ProjectRepository(
         val isBeatGridEnabled: Boolean = false
     )
 
+    private val projectSaveMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
+    private val projectsStore = FailClosedStoredJson("song library") {
+        json.decodeFromString<List<SongProject>>(it)
+    }
+    private val trashedProjectsStore = FailClosedStoredJson("trash") {
+        json.decodeFromString<List<TrashedSongProject>>(it)
+    }
+    private val localModelsStore = FailClosedStoredJson("saved local models") {
+        json.decodeFromString<List<SavedLocalModel>>(it)
+    }
 
-    val projectsFlow: Flow<List<SongProject>> = context.dataStore.data.map { prefs ->
-        val raw = prefs[PROJECTS_KEY] ?: "[]"
-        try { json.decodeFromString<List<SongProject>>(raw) } catch (_: Exception) { emptyList() }
+    val projectsFlow: Flow<List<SongProject>> = dataStore.data.map { prefs ->
+        projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
     }.flowOn(Dispatchers.Default)
 
-    val currentProjectIdFlow: Flow<String?> = context.dataStore.data.map { prefs ->
+    val currentProjectIdFlow: Flow<String?> = dataStore.data.map { prefs ->
         prefs[CURRENT_PROJECT_ID_KEY]
     }
 
-    val trashedProjectsFlow: Flow<List<TrashedSongProject>> = context.dataStore.data.map { prefs ->
-        val raw = prefs[TRASHED_PROJECTS_KEY] ?: "[]"
-        try { json.decodeFromString<List<TrashedSongProject>>(raw) } catch (_: Exception) { emptyList() }
+    val trashedProjectsFlow: Flow<List<TrashedSongProject>> = dataStore.data.map { prefs ->
+        trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
     }.flowOn(Dispatchers.Default)
 
-    suspend fun saveProjects(projects: List<SongProject>) {
+    val workspacesFlow: Flow<Map<String, SongWorkspace>> = dataStore.data.map { prefs ->
+        prefs[WORKSPACES_KEY]?.let { json.decodeFromString<Map<String, SongWorkspace>>(it) } ?: emptyMap()
+    }
+
+    suspend fun saveWorkspace(id: String, workspace: SongWorkspace?) {
+        dataStore.edit { prefs ->
+            val current = prefs[WORKSPACES_KEY]?.let { json.decodeFromString<Map<String, SongWorkspace>>(it) } ?: emptyMap()
+            prefs[WORKSPACES_KEY] = json.encodeToString(
+                if (workspace == null) current - id else current + (id to workspace)
+            )
+        }
+    }
+
+    suspend fun saveActiveState(projects: List<SongProject>, id: String?, title: String, lyrics: String, theme: String) = projectSaveMutex.withLock {
         val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
+            projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")
             prefs[PROJECTS_KEY] = encoded
-        }
-    }
-
-    suspend fun saveTrashedProjects(projects: List<TrashedSongProject>) {
-        val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
-        context.dataStore.edit { prefs ->
-            prefs[TRASHED_PROJECTS_KEY] = encoded
-        }
-    }
-
-    suspend fun setCurrentProjectId(id: String?) {
-        context.dataStore.edit { prefs ->
-            if (id != null) prefs[CURRENT_PROJECT_ID_KEY] = id
-            else prefs.remove(CURRENT_PROJECT_ID_KEY)
-        }
-    }
-
-    suspend fun saveEditorState(title: String, lyrics: String, theme: String) {
-        context.dataStore.edit { prefs ->
+            if (id == null) prefs.remove(CURRENT_PROJECT_ID_KEY) else prefs[CURRENT_PROJECT_ID_KEY] = id
             prefs[CURRENT_TITLE_KEY] = title
             prefs[CURRENT_LYRICS_KEY] = lyrics
             prefs[CURRENT_THEME_KEY] = theme
         }
     }
 
-    fun editorStateFlow(): Flow<Triple<String, String, String>> = context.dataStore.data.map { prefs ->
+    suspend fun saveProjects(projects: List<SongProject>) = projectSaveMutex.withLock {
+        val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
+        dataStore.edit { prefs ->
+            projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")
+            prefs[PROJECTS_KEY] = encoded
+        }
+    }
+
+    suspend fun saveTrashedProjects(projects: List<TrashedSongProject>) {
+        val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
+        dataStore.edit { prefs ->
+            trashedProjectsStore.requireWritable(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+            prefs[TRASHED_PROJECTS_KEY] = encoded
+        }
+    }
+
+    suspend fun setCurrentProjectId(id: String?) {
+        dataStore.edit { prefs ->
+            if (id != null) prefs[CURRENT_PROJECT_ID_KEY] = id
+            else prefs.remove(CURRENT_PROJECT_ID_KEY)
+        }
+    }
+
+    suspend fun saveEditorState(title: String, lyrics: String, theme: String) {
+        dataStore.edit { prefs ->
+            prefs[CURRENT_TITLE_KEY] = title
+            prefs[CURRENT_LYRICS_KEY] = lyrics
+            prefs[CURRENT_THEME_KEY] = theme
+        }
+    }
+
+    fun editorStateFlow(): Flow<Triple<String, String, String>> = dataStore.data.map { prefs ->
         Triple(
             prefs[CURRENT_TITLE_KEY] ?: "",
             prefs[CURRENT_LYRICS_KEY] ?: "",
@@ -111,8 +185,30 @@ class ProjectRepository(
         )
     }
 
+    val appearanceFlow: Flow<AppAppearance> = dataStore.data.map { prefs ->
+        AppAppearance.fromStorage(prefs[APP_APPEARANCE_KEY])
+    }
+
+    suspend fun saveAppearance(appearance: AppAppearance) {
+        dataStore.edit { prefs ->
+            prefs[APP_APPEARANCE_KEY] = appearance.storageValue
+        }
+    }
+
+    val analysisPresentationFlow: Flow<AnalysisPresentation> = dataStore.data.map { prefs ->
+        AnalysisPresentation.fromStorage(prefs[ANALYSIS_PRESENTATION_KEY])
+    }
+
+    suspend fun saveAnalysisPresentation(value: AnalysisPresentation) {
+        dataStore.edit { prefs ->
+            prefs[ANALYSIS_PRESENTATION_KEY] = value.storageValue
+        }
+    }
+
     suspend fun saveApiKey(provider: String, key: String) {
-        secureKeyStore.setKey(provider, key)
+        withContext(Dispatchers.IO) {
+            secureKeyStore.setKey(provider, key)
+        }
     }
 
     /**
@@ -129,28 +225,66 @@ class ProjectRepository(
      */
     fun apiKeySnapshot(): Map<String, String> = secureKeyStore.allKeys()
 
-    val selectedProviderFlow: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[SELECTED_PROVIDER_KEY] ?: "GEMINI"
+    val selectedProviderFlow: Flow<String> = dataStore.data.map { prefs ->
+        prefs[SELECTED_PROVIDER_KEY] ?: "LOCAL"
     }
 
     suspend fun saveSelectedProvider(provider: String) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[SELECTED_PROVIDER_KEY] = provider
         }
     }
 
-    val modelIdFlow: Flow<String> = context.dataStore.data.map { prefs ->
+    val cloudAIConsentsFlow: Flow<Set<String>> = dataStore.data.map { prefs ->
+        prefs[androidx.datastore.preferences.core.stringSetPreferencesKey("cloud_ai_consent_v1")] ?: emptySet()
+    }
+
+    suspend fun saveCloudAIConsent(key: String, allowed: Boolean) {
+        dataStore.edit { prefs ->
+            val consentKey = androidx.datastore.preferences.core.stringSetPreferencesKey("cloud_ai_consent_v1")
+            val current = prefs[consentKey] ?: emptySet()
+            prefs[consentKey] = if (allowed) current + key else current - key
+        }
+    }
+
+    val modelIdFlow: Flow<String> = dataStore.data.map { prefs ->
         prefs[GEMINI_MODEL_KEY] ?: ""
     }
 
     suspend fun saveModelId(id: String) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[GEMINI_MODEL_KEY] = id
         }
     }
 
+    val localModelsFlow: Flow<List<SavedLocalModel>> = dataStore.data.map { prefs ->
+        localModelsStore.decode(prefs[LOCAL_MODELS_KEY] ?: "[]")
+    }.flowOn(Dispatchers.Default)
+
+    suspend fun saveLocalModels(models: List<SavedLocalModel>) {
+        val encoded = withContext(Dispatchers.Default) { json.encodeToString(models) }
+        dataStore.edit { prefs ->
+            localModelsStore.requireWritable(prefs[LOCAL_MODELS_KEY] ?: "[]")
+            prefs[LOCAL_MODELS_KEY] = encoded
+        }
+    }
+
+    val selectedLocalModelIdFlow: Flow<String?> = dataStore.data.map { prefs ->
+        prefs[SELECTED_LOCAL_MODEL_ID_KEY]
+    }
+
+    suspend fun saveSelectedLocalModelId(id: String?) {
+        dataStore.edit { prefs ->
+            if (id == null) {
+                prefs.remove(SELECTED_LOCAL_MODEL_ID_KEY)
+            } else {
+                prefs[SELECTED_LOCAL_MODEL_ID_KEY] = id
+            }
+        }
+    }
+
     /** Flow of editor toggle preferences; emits immediately with current values. */
-    val editorTogglesFlow: Flow<EditorToggles> = context.dataStore.data.map { prefs ->
+    val editorTogglesFlow: Flow<EditorToggles> = dataStore.data.map { prefs ->
         EditorToggles(
             useWholeSongContext = prefs[EDITOR_WHOLE_SONG_CONTEXT] ?: false,
             isStressIpaEnabled = prefs[EDITOR_STRESS_IPA] ?: false,
@@ -163,7 +297,7 @@ class ProjectRepository(
 
     /** Persist all 6 editor toggles atomically. */
     suspend fun saveEditorToggles(toggles: EditorToggles) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[EDITOR_WHOLE_SONG_CONTEXT] = toggles.useWholeSongContext
             prefs[EDITOR_STRESS_IPA] = toggles.isStressIpaEnabled
             prefs[EDITOR_HIGHLIGHT_RHYMES] = toggles.isHighlightEnabled
@@ -179,15 +313,17 @@ class ProjectRepository(
      * subsequent calls find no legacy entries and do nothing.
      */
     suspend fun ensureApiKeysMigrated() {
-        val prefs = context.dataStore.data.first()
+        val prefs = dataStore.data.first()
         val legacy = mapOf(
             "GEMINI" to (prefs[GEMINI_API_KEY] ?: ""),
             "OPENAI" to (prefs[OPENAI_API_KEY] ?: ""),
             "CLAUDE" to (prefs[CLAUDE_API_KEY] ?: "")
         )
-        val wipeLegacy = ApiKeyMigration.apply(legacy, secureKeyStore)
+        val wipeLegacy = withContext(Dispatchers.IO) {
+            ApiKeyMigration.apply(legacy, secureKeyStore)
+        }
         if (wipeLegacy) {
-            context.dataStore.edit {
+            dataStore.edit {
                 it.remove(GEMINI_API_KEY)
                 it.remove(OPENAI_API_KEY)
                 it.remove(CLAUDE_API_KEY)
