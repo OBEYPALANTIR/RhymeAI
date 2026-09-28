@@ -411,31 +411,31 @@ nonisolated enum ProsodyAnalyzer {
     ) -> RhymeType? {
         let normalizedCandidate = normalizeWord(candidateWord)
         let normalizedTarget = normalizeWord(targetWord)
-        guard normalizedCandidate != normalizedTarget,
-              let targetPhones = dictionary.pronunciations(for: normalizedTarget).first,
-              let targetTail = rhymeTailForPhones(targetPhones) else {
-            return nil
-        }
-
-        let targetKeys = rhymeKeysForPhones(targetPhones, maxDepth: 2)
-        guard let targetKey = targetKeys.first else { return nil }
-        let targetMultiKey = targetKeys.dropFirst().first
+        guard normalizedCandidate != normalizedTarget else { return nil }
+        let candidatePronunciations = dictionary.pronunciations(for: normalizedCandidate)
         var near = false
         var slant = false
-        for candidatePhones in dictionary.pronunciations(for: normalizedCandidate) {
-            let candidateKeys = rhymeKeysForPhones(candidatePhones, maxDepth: 2)
-            if candidateKeys.first == targetKey ||
-                (targetMultiKey != nil && candidateKeys.dropFirst().first == targetMultiKey) {
-                return .perfect
-            }
-            guard let candidateTail = rhymeTailForPhones(candidatePhones) else { continue }
-            if candidateTail.vowel == targetTail.vowel,
-               hasSingleCodaEdit(targetTail.coda, candidateTail.coda) {
-                near = true
-            } else if !targetTail.coda.isEmpty,
-                      candidateTail.vowel != targetTail.vowel,
-                      candidateTail.coda == targetTail.coda {
-                slant = true
+        for targetPhones in dictionary.pronunciations(for: normalizedTarget) {
+            let targetKeys = rhymeKeysForPhones(targetPhones, maxDepth: 2)
+            guard let targetKey = targetKeys.first,
+                  let targetTail = rhymeTailForPhones(targetPhones) else { continue }
+            let targetMultiKey = targetKeys.dropFirst().first
+
+            for candidatePhones in candidatePronunciations {
+                let candidateKeys = rhymeKeysForPhones(candidatePhones, maxDepth: 2)
+                if candidateKeys.first == targetKey ||
+                    (targetMultiKey != nil && candidateKeys.dropFirst().first == targetMultiKey) {
+                    return .perfect
+                }
+                guard let candidateTail = rhymeTailForPhones(candidatePhones) else { continue }
+                if candidateTail.vowel == targetTail.vowel,
+                   hasSingleCodaEdit(targetTail.coda, candidateTail.coda) {
+                    near = true
+                } else if !targetTail.coda.isEmpty,
+                          candidateTail.vowel != targetTail.vowel,
+                          candidateTail.coda == targetTail.coda {
+                    slant = true
+                }
             }
         }
         if near { return .near }

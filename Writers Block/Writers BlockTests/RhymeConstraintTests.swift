@@ -130,6 +130,37 @@ struct RhymeConstraintTests {
         #expect(suggestionRhymeBadgeLabel(rhymeTier: 0, isHookRepeat: false) == nil)
     }
 
+    @Test func bundledAlternateTargetPronunciationCanMakeAPerfectRhyme() {
+        let dictionary = PronunciationDictionary.shared
+        #expect(dictionary.pronunciations(for: "abuse").count == 2)
+        #expect(dictionary.pronunciations(for: "news").count == 2)
+        #expect(dictionary.pronunciations(for: "blues").count == 1)
+        #expect(RhymeConstraint.rhymeTier(line: "The evening news", targetWord: "abuse") == 2)
+        #expect(RhymeConstraint.rhymeTier(line: "I sing the blues", targetWord: "abuse") == 2)
+        #expect(RhymeConstraint.rhymeTier(line: "A little juice", targetWord: "abuse") == 2)
+        #expect(RhymeConstraint.rhymeTier(line: "The long night", targetWord: "abuse") == 0)
+        #expect(RhymeConstraint.rhymeTier(line: "The evening news", targetWord: "unknownzz") == 0)
+        #expect(RhymeConstraint.rhymeTier(line: "My abuse", targetWord: "abuse") == 0)
+        #expect(ProsodyAnalyzer.rhymeTail(for: "the") == nil)
+    }
+
+    @Test func alternateTargetAndCandidatePronunciationsPreserveNearAndSlant() {
+        let dictionary = PronunciationDictionary.fromLines([
+            "anchor\tR OW1 D|R AY1 M",
+            "match\tK AY1 M",
+            "alternate\tK EH1 P|K AY1 M",
+            "nearword\tN OW1 T",
+            "slantword\tS EH1 D",
+            "miss\tM UW1 P"
+        ])
+        #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: "match", targetWord: "anchor", dictionary: dictionary) == .perfect)
+        #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: "alternate", targetWord: "anchor", dictionary: dictionary) == .perfect)
+        #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: "nearword", targetWord: "anchor", dictionary: dictionary) == .near)
+        #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: "slantword", targetWord: "anchor", dictionary: dictionary) == .slant)
+        #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: "miss", targetWord: "anchor", dictionary: dictionary) == nil)
+        #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: "anchor", targetWord: "anchor", dictionary: dictionary) == nil)
+    }
+
     @Test func rhymeTierClassifiesPerfectNearAndMiss() throws {
         let perfectWord = try #require(roundTripSafeCandidate(for: "night", rhymeType: .perfect))
         #expect(RhymeConstraint.rhymeTier(line: "We chase the \(perfectWord)", targetWord: "night") == 2)
