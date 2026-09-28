@@ -72,12 +72,7 @@ require_empty_android_target
 "$ADB" -s "$serial" install "$APP_BUILD_DIR/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 
 device_model_path=""
-logcat_pid=""
 cleanup() {
-  if [[ -n "$logcat_pid" ]]; then
-    kill "$logcat_pid" >/dev/null 2>&1 || true
-    wait "$logcat_pid" >/dev/null 2>&1 || true
-  fi
   if [[ -n "$device_model_path" ]]; then
     "$ADB" -s "$serial" shell rm -f "$device_model_path" >/dev/null 2>&1 || true
   fi
@@ -105,8 +100,8 @@ for i in "${!model_paths[@]}"; do
   "$ADB" -s "$serial" shell df -h /data /data/local/tmp | tee "$model_artifact_dir/$model_label-df-after-push.txt"
 
   echo "Running Gemma benchmark for $model_label on $serial"
-  "$ADB" -s "$serial" logcat > "$logcat_file" 2>&1 &
-  logcat_pid=$!
+  log_marker="rhymeai-benchmark-$i-$$-$(date +%s)"
+  "$ADB" -s "$serial" shell log -t RhymeAIBenchmark "$log_marker"
   set +e
   instrumentation_output="$("$ADB" -s "$serial" shell am instrument -w \
     -e class com.rhymeai.app.LocalModelInstrumentedTest \
@@ -115,11 +110,16 @@ for i in "${!model_paths[@]}"; do
     com.rhymeai.app.test/androidx.test.runner.AndroidJUnitRunner 2>&1)"
   instrumentation_status=$?
   set -e
-  kill "$logcat_pid" >/dev/null 2>&1 || true
-  wait "$logcat_pid" >/dev/null 2>&1 || true
-  logcat_pid=""
   printf '%s\n' "$instrumentation_output" | tee "$output_file"
-
+  printf '%s\n' "$instrumentation_status" > "$model_artifact_dir/$model_label-exit-status.txt"
+  if ! "$ADB" -s "$serial" logcat -d -v threadtime | awk -v marker="$log_marker" '
+    index($0, marker) { started = 1; next }
+    started { print }
+    END { if (!started) exit 1 }
+  ' > "$logcat_file"; then
+    echo "Could not verify the benchmark log boundary for $model_label." >&2
+    exit 1
+  fi
   "$ADB" -s "$serial" shell rm -f "$device_model_path" >/dev/null 2>&1 || true
   device_model_path=""
 

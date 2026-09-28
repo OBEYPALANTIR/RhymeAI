@@ -32,9 +32,24 @@ if name=='adb':
  elif a[:3]==['shell','cat','/sdcard/rhymeai-window.xml']:
   labels=['New Song','Settings','AI Provider','Paste your API key here...','Save Settings','Settings saved successfully.','Close','Song Title...','Start writing your lyrics here...','Saved','UnBlock','Suggest Next Line','AI-generated','borrowed train','Rephrase','Previewing Rephrase','Cancel']
   print('<hierarchy>'+''.join('<node text="'+html.escape(s,quote=True)+'" bounds="[0,0][100,100]"/>' for s in labels)+'</hierarchy>')
- elif a[:3]==['shell','pidof','com.rhymeai.app']: print('1234')
+ elif a[:3]==['shell','pidof','com.rhymeai.app']:
+  if mode!='dead-process': print('1234')
  elif a and a[0]=='logcat' and '-d' in a:
   if mode=='log-secret': print('synthetic-runtime-secret-12345')
+  if '-v' in a and mode in ('stale-crash','other-app-crash','fresh-app-crash','fresh-app-crash-large','prior-run-log','missing-marker',''):
+   print('09-27 21:00:00.000  1234  1234 E AndroidRuntime: FATAL EXCEPTION: stale')
+   if mode=='prior-run-log': print('09-27 21:00:00.500  1234  1234 I RhymeAI: PRIOR_RUN')
+   markers=[r['args'][6] for r in (json.loads(line) for line in Path(os.environ['RECORD']).read_text().splitlines())
+            if r.get('name')=='adb' and r.get('args',[])[2:5]==['shell','log','-t']]
+   if mode!='missing-marker':
+    for marker in markers:
+     print('09-27 21:00:01.000  5555  5555 I RhymeMarker: '+marker)
+     print('09-27 21:00:02.000  1234  1234 I RhymeAI: CURRENT_RUN')
+   if mode=='other-app-crash': print('09-27 21:00:03.000  9999  9999 E AndroidRuntime: FATAL EXCEPTION: other')
+   if mode in ('fresh-app-crash','fresh-app-crash-large'):
+    print('09-27 21:00:03.000  1234  1234 E AndroidRuntime: FATAL EXCEPTION: current')
+    if mode=='fresh-app-crash-large':
+     print('09-27 21:00:04.000  1234  1234 I RhymeAI: ordinary following output\n' * 100000)
  elif a[:3]==['shell','df','-h']: print('DISK_EVIDENCE')
  elif len(a)==2 and a[0]=='shell' and 'read -r key' in a[1]:
   data=sys.stdin.read().rstrip('\n')
@@ -42,7 +57,11 @@ if name=='adb':
   with open(os.environ['RECORD'],'a') as f:f.write(json.dumps({'runtime_input_matches':data=='synthetic-runtime-secret-12345'})+'\n')
  elif a[:3]==['shell','mktemp','/data/local/tmp/rhymeai-model.XXXXXX']:
   print('/data/local/tmp/existing-user-model.gguf' if mode=='invalid-mktemp' else '/data/local/tmp/rhymeai-model.fixture')
- elif a[:3]==['shell','am','instrument']: print('OK (1 test)')
+ elif a[:3]==['shell','am','instrument']:
+  print('OK (1 test)')
+  if mode=='missing-marker':
+   print('COMPLETED_WITH_MISSING_LOG_MARKER')
+   sys.exit(7)
 elif name=='apksigner':
  if mode=='unsigned':sys.exit(1)
  print('Signer #1 certificate SHA-256 digest: '+('b'*64 if mode=='wrong-signer' else 'a'*64))
@@ -107,6 +126,21 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(any('install' in r['args'] for r in self.records()))
 
+    def test_release_launch_ignores_stale_and_unrelated_crashes(self):
+        for mode in ['stale-crash', 'other-app-crash']:
+            with self.subTest(mode=mode):
+                result = self.run_script('android-release-smoke.sh', MODE=mode)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.run_script('android-release-smoke.sh', MODE='fresh-app-crash')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Release launch emitted crash markers', result.stderr)
+        result = self.run_script('android-release-smoke.sh', MODE='fresh-app-crash-large')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Release launch emitted crash markers', result.stderr)
+        result = self.run_script('android-release-smoke.sh', MODE='missing-marker')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Could not verify the release launch log boundary', result.stderr)
+
     def test_local_signature_mismatch_has_no_destructive_retry(self):
         result = self.run_script('android-local-model-smoke.sh', MODE='install-mismatch')
         self.assertNotEqual(result.returncode, 0)
@@ -138,6 +172,23 @@ class ReleaseOrchestrationTests(unittest.TestCase):
                             c[2] == "/data/local/tmp/rhymeai-model.fixture" for c in calls))
         self.assertFalse(any(c[0] == "uninstall" or c[:3] == ["shell", "pm", "clear"] or
                              c[:2] == ["logcat", "-c"] for c in calls))
+
+    def test_benchmark_log_contains_only_current_run(self):
+        output = self.root / 'run-log'
+        result = self.run_script('android-gemma-benchmark.sh', str(self.root / 'model.gguf'),
+                                 MODE='prior-run-log', GEMMA_BENCHMARK_DIR=str(output))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        log = (output / '01/model-logcat.txt').read_text()
+        self.assertIn('CURRENT_RUN', log)
+        self.assertNotIn('PRIOR_RUN', log)
+        self.assertNotIn('FATAL EXCEPTION: stale', log)
+        result = self.run_script('android-gemma-benchmark.sh', str(self.root / 'model.gguf'),
+                                 MODE='missing-marker', GEMMA_BENCHMARK_DIR=str(self.root / 'missing-log'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Could not verify the benchmark log boundary', result.stderr)
+        self.assertIn('COMPLETED_WITH_MISSING_LOG_MARKER',
+                      (self.root / 'missing-log/01/model.txt').read_text())
+        self.assertEqual((self.root / 'missing-log/01/model-exit-status.txt').read_text(), '7\n')
 
     def test_benchmark_rejected_allocation_does_not_delete_unowned_path(self):
         result = self.run_script("android-gemma-benchmark.sh", str(self.root / "model.gguf"),

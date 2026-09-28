@@ -59,17 +59,26 @@ require_empty_android_target
 serial="$ANDROID_SERIAL"
 
 install_release_apk "$APK"
+log_marker="rhymeai-release-$$-$(date +%s)"
+"$ADB" -s "$serial" shell log -t RhymeAIReleaseSmoke "$log_marker"
 "$ADB" -s "$serial" shell am start -W -n com.rhymeai.app/.MainActivity
 sleep 5
 
 pid="$("$ADB" -s "$serial" shell pidof com.rhymeai.app | tr -d '\r' || true)"
 if [[ -z "$pid" ]]; then
-  "$ADB" -s "$serial" logcat -d -t 400 | rg -q 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError' || true
   echo "Release app process did not stay alive after launch." >&2
   exit 1
 fi
 
-if "$ADB" -s "$serial" logcat -d -t 400 | rg -q 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError'; then
+launch_log="$("$ADB" -s "$serial" logcat -d -v threadtime | awk -v marker="$log_marker" -v pid="$pid" '
+  index($0, marker) { started = 1; next }
+  started && $3 == pid { print }
+  END { if (!started) exit 1 }
+')" || {
+  echo "Could not verify the release launch log boundary." >&2
+  exit 1
+}
+if rg -q 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError' <<< "$launch_log"; then
   echo "Release launch emitted crash markers." >&2
   exit 1
 fi
