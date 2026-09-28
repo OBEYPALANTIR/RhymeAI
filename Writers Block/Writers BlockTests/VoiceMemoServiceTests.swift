@@ -23,6 +23,14 @@ struct VoiceMemoServiceTests {
         }
     }
 
+    private func waitForSignal(_ semaphore: DispatchSemaphore) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: semaphore.wait(timeout: .now() + 2) == .success)
+            }
+        }
+    }
+
     @Test func heldDeactivationCompletesBeforeNewPlaybackActivation() async throws {
         let entered = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
@@ -40,9 +48,7 @@ struct VoiceMemoServiceTests {
         )
 
         transitions.deactivate()
-        let didEnter = await Task.detached {
-            entered.wait(timeout: .now() + 2) == .success
-        }.value
+        let didEnter = await waitForSignal(entered)
         #expect(didEnter)
         // Enqueue before releasing the held stop; a delayed queue must not let
         // the new activation overtake it.
@@ -51,9 +57,7 @@ struct VoiceMemoServiceTests {
             playbackFinished.signal()
         }
         release.signal()
-        let didFinish = await Task.detached {
-            playbackFinished.wait(timeout: .now() + 2) == .success
-        }.value
+        let didFinish = await waitForSignal(playbackFinished)
 
         #expect(didFinish)
         #expect(events.snapshot == ["deactivate-start", "deactivate-end", "play"])
@@ -86,7 +90,7 @@ struct VoiceMemoServiceTests {
         #expect(events.snapshot == ["record", "stop", "play", "stop", "record", "stop", "play"])
     }
 
-    @Test func stoppingPendingPlaybackInvalidatesItsHeldActivation() async {
+    @Test @MainActor func stoppingPendingPlaybackInvalidatesItsHeldActivation() async {
         let entered = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
         let stopped = DispatchSemaphore(value: 0)
@@ -108,15 +112,11 @@ struct VoiceMemoServiceTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("pending-\(UUID()).m4a")
 
         service.togglePlayback(url: url)
-        let didEnter = await Task.detached {
-            entered.wait(timeout: .now() + 2) == .success
-        }.value
+        let didEnter = await waitForSignal(entered)
         #expect(didEnter)
         service.stopPlayback()
         release.signal()
-        let didStop = await Task.detached {
-            stopped.wait(timeout: .now() + 2) == .success
-        }.value
+        let didStop = await waitForSignal(stopped)
 
         #expect(didStop)
         #expect(events.snapshot == ["play-start", "play-end", "stop"])
