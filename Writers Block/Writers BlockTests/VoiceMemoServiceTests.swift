@@ -9,19 +9,19 @@ struct VoiceMemoServiceTests {
     // MARK: - File Naming
 
     @Test func newMemoURLHasMp4aExtension() {
-        let url = VoiceMemoService.newMemoURL(for: "song-abc")
+        let url = RecordingFiles.newMemoURL(for: "song-abc")
         #expect(url.pathExtension == "m4a")
     }
 
     @Test func newMemoURLIsUnderProjectFolder() {
         let projectId = "song-xyz"
-        let url = VoiceMemoService.newMemoURL(for: projectId)
-        let folder = VoiceMemoService.memoFolder(for: projectId)
+        let url = RecordingFiles.newMemoURL(for: projectId)
+        let folder = RecordingFiles.memoFolder(for: projectId)
         #expect(url.deletingLastPathComponent() == folder)
     }
 
     @Test func newMemoURLFilenameIsNumericTimestamp() {
-        let url = VoiceMemoService.newMemoURL(for: "song-1")
+        let url = RecordingFiles.newMemoURL(for: "song-1")
         let stem = url.deletingPathExtension().lastPathComponent
         // Filename is milliseconds since epoch — all digits.
         #expect(Int64(stem) != nil)
@@ -30,9 +30,9 @@ struct VoiceMemoServiceTests {
 
     @Test func consecutiveURLsHaveDifferentFilenames() async throws {
         // Two calls must not collide — we sleep 2ms to advance the ms clock.
-        let first = VoiceMemoService.newMemoURL(for: "song-1")
+        let first = RecordingFiles.newMemoURL(for: "song-1")
         try await Task.sleep(for: .milliseconds(2))
-        let second = VoiceMemoService.newMemoURL(for: "song-1")
+        let second = RecordingFiles.newMemoURL(for: "song-1")
         #expect(first.lastPathComponent != second.lastPathComponent)
     }
 
@@ -40,8 +40,8 @@ struct VoiceMemoServiceTests {
 
     @Test func memoFolderIsInsideMemosRoot() {
         let projectId = "song-42"
-        let folder = VoiceMemoService.memoFolder(for: projectId)
-        let root = VoiceMemoService.memosRoot()
+        let folder = RecordingFiles.memoFolder(for: projectId)
+        let root = RecordingFiles.memosRoot()
         // folder must be a direct child of root
         #expect(folder.deletingLastPathComponent() == root)
         #expect(folder.lastPathComponent == projectId)
@@ -98,7 +98,7 @@ struct VoiceMemoServiceTests {
 
     @Test func memosForAbsentProjectReturnsEmpty() {
         // Non-existent directory — must return [] without throwing.
-        let memos = VoiceMemoService.memos(for: "nonexistent-project-\(UUID().uuidString)")
+        let memos = RecordingFiles.memos(for: "nonexistent-project-\(UUID().uuidString)")
         #expect(memos.isEmpty)
     }
 
@@ -126,34 +126,34 @@ struct VoiceMemoServiceTests {
 
     @Test func deleteMemosFolderIsSilentWhenFolderAbsent() {
         // Must not throw/crash when the folder never existed.
-        VoiceMemoService.deleteMemosFolder(for: "ghost-project-\(UUID().uuidString)")
+        RecordingFiles.deleteMemosFolder(for: "ghost-project-\(UUID().uuidString)")
     }
 
     // MARK: - sanitizeName
 
     @Test func sanitizeNameTrimsWhitespace() {
-        #expect(VoiceMemoService.sanitizeName("  Hello  ") == "Hello")
+        #expect(RecordingFiles.sanitizeName("  Hello  ") == "Hello")
     }
 
     @Test func sanitizeNameStripsSlash() {
-        #expect(VoiceMemoService.sanitizeName("my/memo") == "mymemo")
+        #expect(RecordingFiles.sanitizeName("my/memo") == "mymemo")
     }
 
     @Test func sanitizeNameStripsColon() {
-        #expect(VoiceMemoService.sanitizeName("verse:chorus") == "versechorus")
+        #expect(RecordingFiles.sanitizeName("verse:chorus") == "versechorus")
     }
 
     @Test func sanitizeNameCollapsesInternalWhitespace() {
-        #expect(VoiceMemoService.sanitizeName("hello   world") == "hello world")
+        #expect(RecordingFiles.sanitizeName("hello   world") == "hello world")
     }
 
     @Test func sanitizeNameReturnsEmptyForBlankInput() {
-        #expect(VoiceMemoService.sanitizeName("   ") == "")
+        #expect(RecordingFiles.sanitizeName("   ") == "")
     }
 
     @Test func sanitizeNamePreservesNormalName() {
         let name = "Verse 1 - Hook"
-        #expect(VoiceMemoService.sanitizeName(name) == name)
+        #expect(RecordingFiles.sanitizeName(name) == name)
     }
 
     // MARK: - renameMemo

@@ -67,6 +67,7 @@ enum RhymeAITokens {
         /// Android equivalent: `DesignTokens.Motion.expressiveSpring()`
         /// (dampingRatio 0.76, stiffness 247 ≈ (2π / 0.40)²).
         static let expressive: Animation = .spring(response: 0.40, dampingFraction: 0.76)
+        static let recording: Animation = expressive
     }
 }
 
@@ -75,7 +76,7 @@ struct RhymeAIPressButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .opacity(configuration.isPressed ? 0.86 : 1)
             .animation(reduceMotion ? nil : RhymeAITokens.Motion.feedback, value: configuration.isPressed)
     }
@@ -105,7 +106,9 @@ extension View {
 /// `withAnimation` wrapper that honours reduce-motion. Pass the environment value from the call site.
 func withRhymeAnimation<Result>(_ animation: Animation?, reduceMotion: Bool, _ body: () throws -> Result) rethrows -> Result {
     if reduceMotion {
-        return try body()
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        return try withTransaction(transaction, body)
     }
     return try withAnimation(animation, body)
 }

@@ -20,6 +20,10 @@ final class EditHistory<State: Equatable> {
         self.coalescingWindowMilliseconds = coalescingWindowMilliseconds
     }
 
+    // Xcode 26.6's optimizer crashes on the synthesized generic deinitializer.
+    @_optimize(none)
+    deinit {}
+
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
 

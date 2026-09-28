@@ -851,7 +851,7 @@ struct BackupCoreTests {
         let first = SongProject(id: "song-a", title: "A", lyrics: "saved A")
         let second = SongProject(id: "song-b", title: "B", lyrics: "saved B")
         let localAudio = Data([0x31, 0x32, 0x33, 0x34])
-        let recordingURL = try RecordingBackupManifest.localURL(
+        let recordingURL = try RecordingFiles.localURL(
             projectId: first.id, fileName: "late-take.m4a", memosRoot: harness.memosRoot
         )
         try FileManager.default.createDirectory(at: recordingURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -884,7 +884,7 @@ struct BackupCoreTests {
         #expect(projects.first(where: { $0.id == second.id })?.lyrics == "saved B")
         #expect(viewModel.currentProjectId == second.id && viewModel.lyrics == "saved B")
         let recovered = try #require(projects.first { $0.id != first.id && $0.id != second.id && $0.lyrics == "late edit on A" })
-        let recoveredRecording = try RecordingBackupManifest.localURL(
+        let recoveredRecording = try RecordingFiles.localURL(
             projectId: recovered.id, fileName: "late-take.m4a", memosRoot: harness.memosRoot
         )
         #expect(try Data(contentsOf: recoveredRecording) == localAudio)
@@ -936,7 +936,7 @@ struct BackupCoreTests {
         let firstAudio = Data([0xa1, 0xa2, 0xa3])
         let secondAudio = Data([0xb1, 0xb2, 0xb3])
         for (project, bytes) in [(first, firstAudio), (second, secondAudio)] {
-            let url = try RecordingBackupManifest.localURL(
+            let url = try RecordingFiles.localURL(
                 projectId: project.id, fileName: "take.m4a", memosRoot: harness.memosRoot
             )
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1003,7 +1003,7 @@ struct BackupCoreTests {
         })
         #expect(viewModel.currentProjectId == recoveredB.id)
         #expect(viewModel.saveStatus == .saved)
-        let recoveredBRecording = try RecordingBackupManifest.localURL(
+        let recoveredBRecording = try RecordingFiles.localURL(
             projectId: recoveredB.id, fileName: "take.m4a", memosRoot: harness.memosRoot
         )
         #expect(try Data(contentsOf: recoveredBRecording) == secondAudio)
@@ -1013,7 +1013,7 @@ struct BackupCoreTests {
         } else {
             #expect(projects.first(where: { $0.id == second.id }) == nil)
             #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).contains { $0.projectId == second.id })
-            let oldBRecording = try RecordingBackupManifest.localURL(
+            let oldBRecording = try RecordingFiles.localURL(
                 projectId: second.id, fileName: "take.m4a", memosRoot: harness.memosRoot
             )
             #expect(!FileManager.default.fileExists(atPath: oldBRecording.path))
@@ -1022,12 +1022,12 @@ struct BackupCoreTests {
             let recoveredA = try #require(projects.first {
                 $0.id != first.id && $0.id != second.id && $0.id != recoveredB.id && $0.lyrics == "pending A"
             })
-            let recoveredARecording = try RecordingBackupManifest.localURL(
+            let recoveredARecording = try RecordingFiles.localURL(
                 projectId: recoveredA.id, fileName: "take.m4a", memosRoot: harness.memosRoot
             )
             #expect(try Data(contentsOf: recoveredARecording) == firstAudio)
         } else {
-            let oldARecording = try RecordingBackupManifest.localURL(
+            let oldARecording = try RecordingFiles.localURL(
                 projectId: first.id, fileName: "take.m4a", memosRoot: harness.memosRoot
             )
             #expect(try Data(contentsOf: oldARecording) == firstAudio)
@@ -1109,7 +1109,7 @@ struct BackupCoreTests {
         let harness = try makeHarness()
         let project = SongProject(id: "song-a", title: "A", lyrics: "saved A")
         let localAudio = Data([0x11, 0x22, 0x33, 0x44])
-        let recordingURL = try RecordingBackupManifest.localURL(
+        let recordingURL = try RecordingFiles.localURL(
             projectId: project.id, fileName: "original-take.m4a", memosRoot: harness.memosRoot
         )
         try FileManager.default.createDirectory(at: recordingURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1182,7 +1182,7 @@ struct BackupCoreTests {
         #expect(viewModel.saveStatus == .saved)
         #expect(viewModel.currentProjectId != nil && viewModel.currentProjectId != project.id)
         #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "pending local A")
-        let recoveredRecording = try RecordingBackupManifest.localURL(
+        let recoveredRecording = try RecordingFiles.localURL(
             projectId: try #require(viewModel.currentProjectId),
             fileName: "original-take.m4a", memosRoot: harness.memosRoot
         )

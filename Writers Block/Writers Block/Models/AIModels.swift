@@ -1,10 +1,10 @@
 import Foundation
 
 enum AIProvider: String, CaseIterable, Codable {
+    case local = "LOCAL"
     case gemini = "GEMINI"
     case openai = "OPENAI"
     case claude = "CLAUDE"
-    case local = "LOCAL"
 
     var displayName: String {
         switch self {
