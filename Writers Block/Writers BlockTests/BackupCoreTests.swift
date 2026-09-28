@@ -846,6 +846,41 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test func restorePreservesEditOnAThenNavigationToBDuringAwait() async throws {
+        let harness = try makeHarness()
+        let first = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        let second = SongProject(id: "song-b", title: "B", lyrics: "saved B")
+        harness.context.insert(first)
+        harness.context.insert(second)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(first)
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: first.id, title: "Remote A", lyrics: "remote A", theme: "",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.beforeManifestWrite = {
+            viewModel.lyrics = "late edit on A"
+            viewModel.triggerAutoSave()
+            viewModel.loadProject(second)
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(projects.first(where: { $0.id == first.id })?.lyrics == "remote A")
+        #expect(projects.first(where: { $0.id == second.id })?.lyrics == "saved B")
+        #expect(viewModel.currentProjectId == second.id && viewModel.lyrics == "saved B")
+        #expect(projects.contains { $0.id != first.id && $0.id != second.id && $0.lyrics == "late edit on A" })
+    }
+
+    @MainActor
     @Test func restoreKeepsEditedBAfterRecoveringOutgoingA() async throws {
         let harness = try makeHarness()
         let first = SongProject(id: "song-a", title: "A", lyrics: "saved A")
@@ -949,6 +984,87 @@ struct BackupCoreTests {
         #expect(viewModel.lyrics == "late local A")
         #expect(viewModel.currentProjectId != project.id)
         #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "late local A")
+    }
+
+    @MainActor
+    @Test(arguments: ["restoreRemote", "backupRemote", "restoreTombstone"])
+    func failedRecoverySaveKeepsRemoteIdentityAndAllowsOrdinaryRetry(_ mode: String) async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        harness.context.insert(project)
+        try harness.context.save()
+        var saveAttempts = 0
+        var failedRecoverySave = false
+        let viewModel = EditorViewModel(
+            keychainStore: InMemoryKeychainStore(),
+            backupService: harness.service,
+            saveModelContext: { context in
+                saveAttempts += 1
+                if saveAttempts == 2 {
+                    failedRecoverySave = true
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try context.save()
+            }
+        )
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        saveAttempts = 0
+        viewModel.lyrics = "pending local A"
+        let remote: SyncBlob
+        if mode == "restoreTombstone" {
+            remote = SyncBlob(deletions: [
+                SyncDeletion(projectId: project.id, deletedAt: Int64(Date().timeIntervalSince1970 * 1_000) + 3_600_000)
+            ])
+        } else {
+            remote = SyncBlob(projects: [
+                SyncSongProject(id: project.id, title: "Remote A", lyrics: "remote A", theme: "",
+                                updatedAt: Date().addingTimeInterval(3_600))
+            ])
+        }
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        if mode == "backupRemote" {
+            await viewModel.backUpNow()
+        } else {
+            await viewModel.restoreBackupNow()
+        }
+
+        #expect(failedRecoverySave && saveAttempts == 2)
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.currentProjectId == nil)
+        #expect(!viewModel.showWelcome)
+        #expect(viewModel.saveStatus == .idle)
+        #expect(viewModel.lyrics == "pending local A")
+        var projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        if mode == "restoreTombstone" {
+            #expect(projects.first(where: { $0.id == project.id }) == nil)
+            #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).contains { $0.projectId == project.id })
+        } else {
+            #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote A")
+        }
+        #expect(!projects.contains { $0.id != project.id && $0.lyrics == "pending local A" })
+
+        if mode == "backupRemote" {
+            #expect(viewModel.flushCurrentDraft())
+        } else {
+            viewModel.triggerAutoSave()
+            await viewModel.waitForPendingAutoSaveForTesting()
+        }
+
+        projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(viewModel.saveStatus == .saved)
+        #expect(viewModel.currentProjectId != nil && viewModel.currentProjectId != project.id)
+        #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "pending local A")
+        if mode == "restoreTombstone" {
+            #expect(projects.first(where: { $0.id == project.id }) == nil)
+            #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).contains { $0.projectId == project.id })
+        } else {
+            #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote A")
+        }
     }
 
     @MainActor

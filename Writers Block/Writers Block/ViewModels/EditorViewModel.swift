@@ -1963,6 +1963,11 @@ final class EditorViewModel: ObservableObject {
             return operation.savedSeparateOutgoingDraft
         } catch {
             context.rollback()
+            // A merged row may now own the old ID. Keep the visible draft detached
+            // so a later autosave or flush cannot overwrite that remote winner.
+            cancelEditorAIWork()
+            currentProjectId = nil
+            showWelcome = false
             saveStatus = .idle
             errorMessage = "Could not reconcile the backup with your open song. Your edits remain open."
             return nil
