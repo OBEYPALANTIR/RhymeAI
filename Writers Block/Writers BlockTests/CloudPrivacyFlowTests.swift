@@ -1,8 +1,10 @@
 import Foundation
+import SwiftData
 import Testing
 @testable import Writers_Block
 
 @MainActor
+@Suite(.serialized)
 struct CloudPrivacyFlowTests {
     @Test func localPromptsExcludeUnsharedLyricsAndChorusHintsWhenContextIsOff() throws {
         let service = AIService()
@@ -209,6 +211,82 @@ struct CloudPrivacyFlowTests {
         #expect(!viewModel.isLoading)
     }
 
+    @Test func rewriteCompletesWhenFirstAutoSaveAssignsProjectID() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        PrivacyURLProtocol.reset(holdResponse: true)
+        defer { PrivacyURLProtocol.releaseHeldResponse() }
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.modelContext = container.mainContext
+        viewModel.newProject()
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.title = "First save"
+        viewModel.lyrics = "Replace this phrase"
+        viewModel.selectedRange = NSRange(location: 0, length: 7)
+
+        viewModel.requestRewrite(.rephrase)
+        #expect(await Self.waitUntil { PrivacyURLProtocol.capturedBodies().count == 1 })
+        #expect(viewModel.rewriteLoading)
+        #expect(viewModel.currentProjectId == nil)
+
+        viewModel.triggerAutoSave()
+        #expect(await Self.waitUntil { viewModel.currentProjectId != nil })
+        #expect(viewModel.rewriteLoading)
+        PrivacyURLProtocol.releaseHeldResponse()
+
+        #expect(await Self.waitUntil { !viewModel.rewriteLoading })
+        #expect(viewModel.rewritePreview == "replacement")
+        #expect(viewModel.rewriteError == nil)
+    }
+
+    @Test func delayedRewriteCannotAppearAfterRealSongSwitch() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let first = SongProject(id: "rewrite-a", title: "First", lyrics: "Replace this phrase", theme: "")
+        let second = SongProject(id: "rewrite-b", title: "Second", lyrics: "Other lyric", theme: "")
+        container.mainContext.insert(first)
+        container.mainContext.insert(second)
+        try container.mainContext.save()
+        PrivacyURLProtocol.reset(holdResponse: true)
+        defer { PrivacyURLProtocol.releaseHeldResponse() }
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.modelContext = container.mainContext
+        viewModel.loadProject(first)
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.selectedRange = NSRange(location: 0, length: 7)
+
+        viewModel.requestRewrite(.rephrase)
+        #expect(await Self.waitUntil { PrivacyURLProtocol.capturedBodies().count == 1 })
+        viewModel.loadProject(second)
+        PrivacyURLProtocol.releaseHeldResponse()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(viewModel.currentProjectId == second.id)
+        #expect(viewModel.rewritePreview == nil)
+        #expect(viewModel.rewriteError == nil)
+        #expect(!viewModel.rewriteLoading)
+    }
+
     @Test func rhymeMismatchAndProviderEmptyResponsesUseDifferentMessages() async throws {
         let (mismatchDefaults, mismatchSuite) = Self.makeDefaults()
         defer { mismatchDefaults.removePersistentDomain(forName: mismatchSuite) }
@@ -282,17 +360,29 @@ private final class PrivacyURLProtocol: URLProtocol, @unchecked Sendable {
     private static let defaultSuggestionText = "One clear line\nTwo clear lines\nThree clear lines\nFour clear lines\nFive clear lines\nSix clear lines"
     nonisolated(unsafe) private static var bodies: [String] = []
     nonisolated(unsafe) private static var responseDelay: TimeInterval = 0
+    nonisolated(unsafe) private static var heldResponse: DispatchSemaphore?
     nonisolated(unsafe) private static var configuredSuggestionText = defaultSuggestionText
 
     nonisolated static func reset(
         delay: TimeInterval = 0,
-        suggestionText: String = defaultSuggestionText
+        suggestionText: String = defaultSuggestionText,
+        holdResponse: Bool = false
     ) {
         stateLock.withLock {
             bodies = []
             responseDelay = delay
             configuredSuggestionText = suggestionText
+            heldResponse = holdResponse ? DispatchSemaphore(value: 0) : nil
         }
+    }
+
+    nonisolated static func releaseHeldResponse() {
+        let gate = stateLock.withLock { () -> DispatchSemaphore? in
+            let gate = heldResponse
+            heldResponse = nil
+            return gate
+        }
+        gate?.signal()
     }
 
     nonisolated static func capturedBodies() -> [String] {
@@ -309,10 +399,11 @@ private final class PrivacyURLProtocol: URLProtocol, @unchecked Sendable {
 
     nonisolated override func startLoading() {
         let body = String(decoding: Self.bodyData(for: request), as: UTF8.self)
-        let delay = Self.stateLock.withLock { () -> TimeInterval in
+        let (delay, gate) = Self.stateLock.withLock { () -> (TimeInterval, DispatchSemaphore?) in
             Self.bodies.append(body)
-            return Self.responseDelay
+            return (Self.responseDelay, Self.heldResponse)
         }
+        gate?.wait()
         if delay > 0 {
             Thread.sleep(forTimeInterval: delay)
         }

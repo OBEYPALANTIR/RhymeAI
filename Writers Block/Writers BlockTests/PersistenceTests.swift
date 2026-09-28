@@ -63,6 +63,23 @@ struct PersistenceTests {
     }
 
     @MainActor
+    @Test func changingOnlyThemeUsesTheOneSecondAutoSave() async throws {
+        let harness = try Self.makeHarness()
+        let project = SongProject(id: "theme-only", title: "Draft", lyrics: "A line", theme: "before")
+        harness.context.insert(project)
+        try harness.context.save()
+        harness.viewModel.loadProject(project)
+
+        harness.viewModel.theme = "after"
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(project.theme == "before")
+
+        try await Task.sleep(for: .milliseconds(900))
+        #expect(project.theme == "after")
+        #expect(harness.viewModel.saveStatus == .saved)
+    }
+
+    @MainActor
     @Test func pendingAutoSaveCannotCrossIntoImportedProject() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
