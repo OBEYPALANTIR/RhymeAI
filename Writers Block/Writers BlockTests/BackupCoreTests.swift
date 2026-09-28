@@ -626,6 +626,595 @@ struct BackupCoreTests {
         #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.projectId) == ["draft"])
     }
 
+
+    @MainActor
+    @Test func restoreKeepsPendingEditorDraftWhenRemoteSongWinsMerge() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        viewModel.lyrics = "pending local line"
+        viewModel.triggerAutoSave()
+
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: project.id, title: "Remote", lyrics: "remote line", theme: "loud",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote line")
+        #expect(viewModel.lyrics == "pending local line")
+        #expect(viewModel.currentProjectId != project.id)
+        #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "pending local line")
+    }
+
+    @MainActor
+    @Test func restoreRefreshesUneditedOpenSongFromMergedStore() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: project.id, title: "Remote", lyrics: "remote line", theme: "loud",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+
+        #expect(viewModel.currentProjectId == project.id)
+        #expect(viewModel.title == "Remote")
+        #expect(viewModel.lyrics == "remote line")
+        #expect(viewModel.theme == "loud")
+    }
+
+    @MainActor
+    @Test func restoreClearsSavingStateWhenAwaitedEditIsReverted() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: project.id, title: "Local", lyrics: "saved line", theme: "calm",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.beforeManifestWrite = {
+            viewModel.lyrics = "temporary edit"
+            viewModel.triggerAutoSave()
+            viewModel.lyrics = "saved line"
+            viewModel.triggerAutoSave()
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let stored = try #require(harness.context.fetch(FetchDescriptor<SongProject>()).first)
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(viewModel.saveStatus == .saved)
+        #expect(viewModel.currentProjectId == project.id)
+        #expect(viewModel.lyrics == "saved line")
+        #expect(stored.id == project.id && stored.lyrics == "saved line")
+    }
+
+    @MainActor
+    @Test func restoreClearsSavingStateWhenPendingEditMatchesMergedSong() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        viewModel.lyrics = "pending local line"
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: project.id, title: "Local", lyrics: "pending local line", theme: "calm",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.beforeManifestWrite = {
+            viewModel.lyrics = "temporary edit"
+            viewModel.triggerAutoSave()
+            viewModel.lyrics = "pending local line"
+            viewModel.triggerAutoSave()
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let stored = try #require(harness.context.fetch(FetchDescriptor<SongProject>()).first)
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(viewModel.saveStatus == .saved)
+        #expect(viewModel.currentProjectId == project.id)
+        #expect(viewModel.lyrics == "pending local line")
+        #expect(stored.id == project.id && stored.lyrics == "pending local line")
+    }
+
+    @MainActor
+    @Test func restorePreservesEditMadeDuringAwaitWhenRemoteDeletesOpenSong() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        let remote = SyncBlob(deletions: [
+            SyncDeletion(projectId: project.id, deletedAt: Int64(Date().timeIntervalSince1970 * 1_000) + 3_600_000)
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.beforeManifestWrite = {
+            viewModel.lyrics = "typed while restore awaited"
+            viewModel.triggerAutoSave()
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(projects.first(where: { $0.id == project.id }) == nil)
+        #expect(viewModel.lyrics == "typed while restore awaited")
+        #expect(viewModel.currentProjectId != project.id)
+        #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "typed while restore awaited")
+    }
+
+
+    @MainActor
+    @Test func restoreClearsUneditedOpenSongWhenRemoteTombstoneWins() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        let remote = SyncBlob(deletions: [
+            SyncDeletion(projectId: project.id, deletedAt: Int64(Date().timeIntervalSince1970 * 1_000) + 3_600_000)
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        #expect(viewModel.currentProjectId == nil)
+        #expect(viewModel.lyrics.isEmpty)
+        #expect(viewModel.showWelcome)
+    }
+
+    @MainActor
+    @Test func restorePreservesOutgoingAWhenSwitchingToUnchangedBDuringAwait() async throws {
+        let harness = try makeHarness()
+        let first = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        let second = SongProject(id: "song-b", title: "B", lyrics: "saved B")
+        harness.context.insert(first)
+        harness.context.insert(second)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(first)
+        viewModel.lyrics = "pending A"
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: first.id, title: "Remote A", lyrics: "remote A", theme: "",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.beforeManifestWrite = { viewModel.loadProject(second) }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(projects.first(where: { $0.id == first.id })?.lyrics == "remote A")
+        #expect(projects.first(where: { $0.id == second.id })?.lyrics == "saved B")
+        #expect(viewModel.currentProjectId == second.id)
+        #expect(viewModel.lyrics == "saved B")
+        #expect(projects.contains { $0.id != first.id && $0.id != second.id && $0.lyrics == "pending A" })
+    }
+
+    @MainActor
+    @Test func restorePreservesEditOnAThenNavigationToBDuringAwait() async throws {
+        let harness = try makeHarness()
+        let first = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        let second = SongProject(id: "song-b", title: "B", lyrics: "saved B")
+        harness.context.insert(first)
+        harness.context.insert(second)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(first)
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: first.id, title: "Remote A", lyrics: "remote A", theme: "",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.beforeManifestWrite = {
+            viewModel.lyrics = "late edit on A"
+            viewModel.triggerAutoSave()
+            viewModel.loadProject(second)
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(projects.first(where: { $0.id == first.id })?.lyrics == "remote A")
+        #expect(projects.first(where: { $0.id == second.id })?.lyrics == "saved B")
+        #expect(viewModel.currentProjectId == second.id && viewModel.lyrics == "saved B")
+        #expect(projects.contains { $0.id != first.id && $0.id != second.id && $0.lyrics == "late edit on A" })
+    }
+
+    @MainActor
+    @Test func restoreKeepsEditedBAfterRecoveringOutgoingA() async throws {
+        let harness = try makeHarness()
+        let first = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        let second = SongProject(id: "song-b", title: "B", lyrics: "saved B")
+        harness.context.insert(first)
+        harness.context.insert(second)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(first)
+        viewModel.lyrics = "pending A"
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: first.id, title: "Remote A", lyrics: "remote A", theme: "",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.beforeManifestWrite = {
+            viewModel.loadProject(second)
+            viewModel.lyrics = "pending B"
+            viewModel.triggerAutoSave()
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(projects.first(where: { $0.id == first.id })?.lyrics == "remote A")
+        #expect(projects.first(where: { $0.id == second.id })?.lyrics == "pending B")
+        #expect(viewModel.currentProjectId == second.id)
+        #expect(viewModel.lyrics == "pending B")
+        #expect(projects.contains { $0.id != first.id && $0.id != second.id && $0.lyrics == "pending A" })
+    }
+
+    @MainActor
+    @Test func restoreDoesNotAutosaveOverAppliedRemoteRowDuringRecordingAwait() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        let remote = SyncBlob(
+            projects: [SyncSongProject(id: project.id, title: "Remote A", lyrics: "remote A", theme: "",
+                                       updatedAt: Date().addingTimeInterval(3_600))],
+            deletions: [SyncDeletion(projectId: "cleanup", deletedAt: Int64(Date().timeIntervalSince1970 * 1_000) + 3_600_000)]
+        )
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.afterAppliedRecordingList = {
+            viewModel.lyrics = "late local A"
+            viewModel.triggerAutoSave()
+            await viewModel.waitForPendingAutoSaveForTesting()
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote A")
+        #expect(viewModel.lyrics == "late local A")
+        #expect(viewModel.currentProjectId != project.id)
+        #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "late local A")
+    }
+
+    @MainActor
+    @Test func restoreFailureAfterApplyKeepsRemoteAndLateLocalDraft() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        let remote = SyncBlob(
+            projects: [SyncSongProject(id: project.id, title: "Remote A", lyrics: "remote A", theme: "",
+                                       updatedAt: Date().addingTimeInterval(3_600))],
+            deletions: [SyncDeletion(projectId: "cleanup", deletedAt: Int64(Date().timeIntervalSince1970 * 1_000) + 3_600_000)]
+        )
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.afterAppliedRecordingList = {
+            viewModel.lyrics = "late local A"
+            viewModel.triggerAutoSave()
+            await viewModel.waitForPendingAutoSaveForTesting()
+            throw BackupError.network("Synthetic failure after apply")
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote A")
+        #expect(viewModel.lyrics == "late local A")
+        #expect(viewModel.currentProjectId != project.id)
+        #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "late local A")
+    }
+
+    @MainActor
+    @Test(arguments: ["restoreRemote", "backupRemote", "restoreTombstone"])
+    func failedRecoverySaveKeepsRemoteIdentityAndAllowsOrdinaryRetry(_ mode: String) async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        harness.context.insert(project)
+        try harness.context.save()
+        var saveAttempts = 0
+        var failedRecoverySave = false
+        let viewModel = EditorViewModel(
+            keychainStore: InMemoryKeychainStore(),
+            backupService: harness.service,
+            saveModelContext: { context in
+                saveAttempts += 1
+                if saveAttempts == 2 {
+                    failedRecoverySave = true
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try context.save()
+            }
+        )
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        saveAttempts = 0
+        viewModel.lyrics = "pending local A"
+        let remote: SyncBlob
+        if mode == "restoreTombstone" {
+            remote = SyncBlob(deletions: [
+                SyncDeletion(projectId: project.id, deletedAt: Int64(Date().timeIntervalSince1970 * 1_000) + 3_600_000)
+            ])
+        } else {
+            remote = SyncBlob(projects: [
+                SyncSongProject(id: project.id, title: "Remote A", lyrics: "remote A", theme: "",
+                                updatedAt: Date().addingTimeInterval(3_600))
+            ])
+        }
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        if mode == "backupRemote" {
+            await viewModel.backUpNow()
+        } else {
+            await viewModel.restoreBackupNow()
+        }
+
+        #expect(failedRecoverySave && saveAttempts == 2)
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.currentProjectId == nil)
+        #expect(!viewModel.showWelcome)
+        #expect(viewModel.saveStatus == .idle)
+        #expect(viewModel.lyrics == "pending local A")
+        var projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        if mode == "restoreTombstone" {
+            #expect(projects.first(where: { $0.id == project.id }) == nil)
+            #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).contains { $0.projectId == project.id })
+        } else {
+            #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote A")
+        }
+        #expect(!projects.contains { $0.id != project.id && $0.lyrics == "pending local A" })
+
+        if mode == "backupRemote" {
+            #expect(viewModel.flushCurrentDraft())
+        } else {
+            viewModel.triggerAutoSave()
+            await viewModel.waitForPendingAutoSaveForTesting()
+        }
+
+        projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(viewModel.saveStatus == .saved)
+        #expect(viewModel.currentProjectId != nil && viewModel.currentProjectId != project.id)
+        #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "pending local A")
+        if mode == "restoreTombstone" {
+            #expect(projects.first(where: { $0.id == project.id }) == nil)
+            #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).contains { $0.projectId == project.id })
+        } else {
+            #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote A")
+        }
+    }
+
+    @MainActor
+    @Test func manualBackupFlushesPendingEditAndPreservesItWhenRemoteWins() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        viewModel.lyrics = "pending local A"
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: project.id, title: "Remote A", lyrics: "remote A", theme: "",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.backUpNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote A")
+        #expect(viewModel.lyrics == "pending local A")
+        #expect(viewModel.currentProjectId != project.id)
+        #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "pending local A")
+    }
+
+    @MainActor
+    @Test func manualBackupPreservesOutgoingAWhenSwitchingToBDuringAwait() async throws {
+        let harness = try makeHarness()
+        let first = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        let second = SongProject(id: "song-b", title: "B", lyrics: "saved B")
+        harness.context.insert(first)
+        harness.context.insert(second)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(first)
+        viewModel.lyrics = "pending A"
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: first.id, title: "Remote A", lyrics: "remote A", theme: "",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.beforeManifestWrite = { viewModel.loadProject(second) }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.backUpNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(projects.first(where: { $0.id == first.id })?.lyrics == "remote A")
+        #expect(projects.first(where: { $0.id == second.id })?.lyrics == "saved B")
+        #expect(viewModel.currentProjectId == second.id)
+        #expect(projects.contains { $0.id != first.id && $0.id != second.id && $0.lyrics == "pending A" })
+    }
+
+    @MainActor
+    @Test func manualBackupFailureAfterApplyKeepsRemoteAndLateLocalDraft() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        let remote = SyncBlob(
+            projects: [SyncSongProject(id: project.id, title: "Remote A", lyrics: "remote A", theme: "",
+                                       updatedAt: Date().addingTimeInterval(3_600))],
+            deletions: [SyncDeletion(projectId: "cleanup", deletedAt: Int64(Date().timeIntervalSince1970 * 1_000) + 3_600_000)]
+        )
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.afterAppliedRecordingList = {
+            viewModel.lyrics = "late local A"
+            viewModel.triggerAutoSave()
+            await viewModel.waitForPendingAutoSaveForTesting()
+            throw BackupError.network("Synthetic failure after apply")
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.backUpNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote A")
+        #expect(viewModel.lyrics == "late local A")
+        #expect(viewModel.currentProjectId != project.id)
+        #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "late local A")
+    }
+
+    @MainActor
+    @Test func backgroundBackupFlushesPendingOpenDraftBeforeMerge() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        viewModel.lyrics = "pending local A"
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: project.id, title: "Remote A", lyrics: "remote A", theme: "",
+                            updatedAt: Date().addingTimeInterval(3_600))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.runCloudBackupOnBackgroundIfPossible()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        #expect(projects.first(where: { $0.id == project.id })?.lyrics == "remote A")
+        #expect(viewModel.lyrics == "pending local A")
+        #expect(viewModel.currentProjectId != project.id)
+        #expect(projects.first(where: { $0.id == viewModel.currentProjectId })?.lyrics == "pending local A")
+    }
+
+    @MainActor
+    @Test func failedRestoreLeavesOpenBufferAndPendingEditSavedLocally() async throws {
+        let harness = try makeHarness()
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(project)
+        viewModel.lyrics = "pending line before failed restore"
+        viewModel.triggerAutoSave()
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.currentProjectId == project.id)
+        #expect(viewModel.lyrics == "pending line before failed restore")
+        #expect(projects.first(where: { $0.id == project.id })?.lyrics == "pending line before failed restore")
+    }
+
     @MainActor
     private func makeHarness() throws -> BackupHarness {
         try makeHarness(oauthProvider: FakeOAuthProvider())
@@ -714,6 +1303,7 @@ private final class FakeDriveClient: DriveAppDataClient {
     private var replacementsByFindCount: [String: [Int: Data]] = [:]
     private var deleteFailuresByName: [String: Int] = [:]
     var beforeManifestWrite: (@MainActor () throws -> Void)?
+    var afterAppliedRecordingList: (@MainActor () async throws -> Void)?
 
     func seed(name: String, content: Data) {
         let file = DriveAppDataFile(id: UUID().uuidString, name: name, modifiedTime: "seed-\(UUID().uuidString)", version: UUID().uuidString)
@@ -742,7 +1332,11 @@ private final class FakeDriveClient: DriveAppDataClient {
     }
 
     func listFiles(prefix: String, accessToken: String) async throws -> [DriveAppDataFile] {
-        filesByName.values.map(\.file).filter { $0.name.hasPrefix(prefix) }
+        if prefix == "rec_cleanup_", let hook = afterAppliedRecordingList {
+            afterAppliedRecordingList = nil
+            try await hook()
+        }
+        return filesByName.values.map(\.file).filter { $0.name.hasPrefix(prefix) }
     }
 
     func downloadFile(id: String, accessToken: String) async throws -> Data {
