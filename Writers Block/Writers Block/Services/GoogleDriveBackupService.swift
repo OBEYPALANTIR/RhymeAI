@@ -632,6 +632,7 @@ final class BackupService {
     private let secretStore: BackupSecretStore
     private let defaults: UserDefaults
     private let memosRoot: URL
+    var recordingRecoveryRoot: URL? { memosRoot }
     private typealias LocalRecording = (entry: SyncRecordingManifestEntry, localURL: URL)
 
     convenience init() {

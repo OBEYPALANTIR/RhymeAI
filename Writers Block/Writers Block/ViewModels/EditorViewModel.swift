@@ -24,6 +24,7 @@ protocol CloudBackupServicing: AnyObject {
     var isConfigured: Bool { get }
     var hasStoredPassphrase: Bool { get }
     var backgroundBackupFailureDescription: String? { get }
+    var recordingRecoveryRoot: URL? { get }
 
     func updatePassphrase(_ passphrase: String) throws
     func backupNow(modelContext: ModelContext) async throws
@@ -33,9 +34,61 @@ protocol CloudBackupServicing: AnyObject {
 
 extension CloudBackupServicing {
     var backgroundBackupFailureDescription: String? { nil }
+    var recordingRecoveryRoot: URL? { nil }
 }
 
 extension BackupService: CloudBackupServicing {}
+
+private final class OpenRecordingSnapshot {
+    private let recordingsRoot: URL
+    private let snapshotFolder: URL
+
+    init?(projectId: String, recordingsRoot: URL) throws {
+        let recordings = try RecordingBackupManifest.scan(projectIds: [projectId], memosRoot: recordingsRoot)
+        guard !recordings.isEmpty else { return nil }
+        self.recordingsRoot = recordingsRoot
+        let stagingRoot = recordingsRoot.deletingLastPathComponent()
+            .appendingPathComponent("recording-recovery", isDirectory: true)
+        snapshotFolder = stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: snapshotFolder, withIntermediateDirectories: true)
+        do {
+            for recording in recordings {
+                try FileManager.default.copyItem(
+                    at: recording.localURL,
+                    to: snapshotFolder.appendingPathComponent(recording.entry.fileName)
+                )
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: snapshotFolder)
+            throw error
+        }
+    }
+
+    func copy(to projectId: String) throws {
+        let destination = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: recordingsRoot)
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            throw CocoaError(.fileWriteFileExists)
+        }
+        try FileManager.default.createDirectory(
+            at: recordingsRoot, withIntermediateDirectories: true
+        )
+        do {
+            try FileManager.default.copyItem(at: snapshotFolder, to: destination)
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
+    }
+
+    func removeCopy(for projectId: String) {
+        guard let destination = try? RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: recordingsRoot) else { return }
+        try? FileManager.default.removeItem(at: destination)
+    }
+
+    func discard() {
+        try? FileManager.default.removeItem(at: snapshotFolder)
+    }
+}
 
 private struct InspectorSynonymRequestIdentity: Equatable {
     let provider: AIProvider
@@ -185,6 +238,7 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var cloudBackupHasStoredPassphrase: Bool = false
     @Published private(set) var cloudBackupIsWorking: Bool = false
     private var activeCloudEditorOperation: CloudEditorOperation?
+    private var pendingRecordingRecovery: OpenRecordingSnapshot?
     @Published private(set) var cloudBackupStatusText: String = "Google Drive backup is unavailable in this build."
     @Published private(set) var cloudBackupLastResultIsError: Bool = false
 
@@ -1589,6 +1643,13 @@ final class EditorViewModel: ObservableObject {
                 }
             } else {
                 let project = makeUntitledSongProject()
+                do {
+                    try pendingRecordingRecovery?.copy(to: project.id)
+                } catch {
+                    saveStatus = .idle
+                    errorMessage = "Couldn't preserve this song's recordings. Your edits remain open."
+                    return
+                }
                 context.insert(project)
                 createdProjectID = project.id
             }
@@ -1596,9 +1657,14 @@ final class EditorViewModel: ObservableObject {
             do {
                 try saveModelContext(context)
                 if let createdProjectID { currentProjectId = createdProjectID }
+                if createdProjectID != nil {
+                    pendingRecordingRecovery?.discard()
+                    pendingRecordingRecovery = nil
+                }
                 saveStatus = .saved
             } catch {
                 context.rollback()
+                if let createdProjectID { pendingRecordingRecovery?.removeCopy(for: createdProjectID) }
                 saveStatus = .idle
                 errorMessage = "Couldn't save this song. Your edits remain open."
             }
@@ -1617,8 +1683,8 @@ final class EditorViewModel: ObservableObject {
             return false
         }
 
+        var createdProjectID: String?
         do {
-            var createdProjectID: String?
             if let id = currentProjectId {
                 let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
                 guard let project = try context.fetch(descriptor).first else {
@@ -1634,15 +1700,21 @@ final class EditorViewModel: ObservableObject {
                 }
             } else {
                 let project = makeUntitledSongProject()
+                try pendingRecordingRecovery?.copy(to: project.id)
                 context.insert(project)
                 createdProjectID = project.id
             }
             try saveModelContext(context)
             if let createdProjectID { currentProjectId = createdProjectID }
+            if createdProjectID != nil {
+                pendingRecordingRecovery?.discard()
+                pendingRecordingRecovery = nil
+            }
             saveStatus = .saved
             return true
         } catch {
             context.rollback()
+            if let createdProjectID { pendingRecordingRecovery?.removeCopy(for: createdProjectID) }
             saveStatus = .idle
             errorMessage = "Couldn't save this song. Your edits remain open."
             return false
@@ -1768,7 +1840,7 @@ final class EditorViewModel: ObservableObject {
         cloudBackupLastResultIsError = false
         cloudBackupStatusText = "Encrypting backup for Google Drive..."
         defer {
-            activeCloudEditorOperation = nil
+            finishCloudEditorOperation()
             cloudBackupIsWorking = false
             cloudBackupConfigured = backupService.isConfigured
             cloudBackupHasStoredPassphrase = backupService.hasStoredPassphrase
@@ -1805,10 +1877,12 @@ final class EditorViewModel: ObservableObject {
         var currentBaseline: OpenDraft
         var currentHadPendingEdit: Bool
         var savedSeparateOutgoingDraft = false
+        var recordingSnapshot: OpenRecordingSnapshot?
 
-        init(currentBaseline: OpenDraft, currentHadPendingEdit: Bool) {
+        init(currentBaseline: OpenDraft, currentHadPendingEdit: Bool, recordingSnapshot: OpenRecordingSnapshot?) {
             self.currentBaseline = currentBaseline
             self.currentHadPendingEdit = currentHadPendingEdit
+            self.recordingSnapshot = recordingSnapshot
         }
     }
 
@@ -1837,9 +1911,21 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         guard flushCurrentDraft() else { return false }
+        let recordingSnapshot: OpenRecordingSnapshot?
+        do {
+            if let id = currentProjectId, let root = backupService?.recordingRecoveryRoot {
+                recordingSnapshot = try OpenRecordingSnapshot(projectId: id, recordingsRoot: root)
+            } else {
+                recordingSnapshot = pendingRecordingRecovery
+            }
+        } catch {
+            errorMessage = "Could not protect the open song's recordings. Backup was canceled."
+            return false
+        }
         activeCloudEditorOperation = CloudEditorOperation(
             currentBaseline: openDraft,
-            currentHadPendingEdit: hadPendingEdit
+            currentHadPendingEdit: hadPendingEdit,
+            recordingSnapshot: recordingSnapshot
         )
         return true
     }
@@ -1850,14 +1936,19 @@ final class EditorViewModel: ObservableObject {
         let draft = openDraft
         guard operation.currentHadPendingEdit || draft != operation.currentBaseline else { return true }
         guard let context = modelContext else { return false }
+        let recoveredID = UUID().uuidString
         do {
-            let recovered = SongProject(id: UUID().uuidString, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
+            try operation.recordingSnapshot?.copy(to: recoveredID)
+            let recovered = SongProject(id: recoveredID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
             context.insert(recovered)
             try saveModelContext(context)
             operation.savedSeparateOutgoingDraft = true
+            operation.recordingSnapshot?.discard()
+            operation.recordingSnapshot = nil
             return true
         } catch {
             context.rollback()
+            operation.recordingSnapshot?.removeCopy(for: recoveredID)
             errorMessage = "Could not save this draft before switching songs. Your edits remain open."
             return false
         }
@@ -1867,6 +1958,14 @@ final class EditorViewModel: ObservableObject {
         guard let operation = activeCloudEditorOperation else { return }
         operation.currentBaseline = openDraft
         operation.currentHadPendingEdit = isUnsaved
+    }
+
+    private func finishCloudEditorOperation() {
+        if let snapshot = activeCloudEditorOperation?.recordingSnapshot,
+           snapshot !== pendingRecordingRecovery {
+            snapshot.discard()
+        }
+        activeCloudEditorOperation = nil
     }
 
     func restoreBackupNow() async {
@@ -1884,7 +1983,7 @@ final class EditorViewModel: ObservableObject {
         cloudBackupLastResultIsError = false
         cloudBackupStatusText = "Restoring encrypted Google Drive backup..."
         defer {
-            activeCloudEditorOperation = nil
+            finishCloudEditorOperation()
             cloudBackupIsWorking = false
             cloudBackupConfigured = backupService.isConfigured
             cloudBackupHasStoredPassphrase = backupService.hasStoredPassphrase
@@ -1933,9 +2032,18 @@ final class EditorViewModel: ObservableObject {
                     saveStatus = .saved
                     return operation.savedSeparateOutgoingDraft
                 }
-                let recovered = SongProject(id: UUID().uuidString, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
+                let recoveredID = UUID().uuidString
+                try operation.recordingSnapshot?.copy(to: recoveredID)
+                let recovered = SongProject(id: recoveredID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
                 context.insert(recovered)
-                try saveModelContext(context)
+                do {
+                    try saveModelContext(context)
+                } catch {
+                    operation.recordingSnapshot?.removeCopy(for: recoveredID)
+                    throw error
+                }
+                operation.recordingSnapshot?.discard()
+                operation.recordingSnapshot = nil
                 cancelEditorAIWork()
                 currentProjectId = recovered.id
                 saveStatus = .saved
@@ -1963,6 +2071,7 @@ final class EditorViewModel: ObservableObject {
             return operation.savedSeparateOutgoingDraft
         } catch {
             context.rollback()
+            pendingRecordingRecovery = operation.recordingSnapshot
             // A merged row may now own the old ID. Keep the visible draft detached
             // so a later autosave or flush cannot overwrite that remote winner.
             cancelEditorAIWork()
@@ -1991,7 +2100,7 @@ final class EditorViewModel: ObservableObject {
         cloudBackupIsWorking = true
         await backupService.backupInBackgroundIfPossible(modelContext: context)
         let recovered = reconcileOpenDraftAfterCloudOperation(in: context)
-        activeCloudEditorOperation = nil
+        finishCloudEditorOperation()
         cloudBackupIsWorking = false
         refreshCloudBackupState()
         if recovered == nil {
