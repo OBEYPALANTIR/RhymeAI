@@ -1,3 +1,4 @@
+import SwiftData
 import Testing
 @testable import Writers_Block
 
@@ -40,10 +41,15 @@ struct EditorUndoRedoTests {
         #expect(viewModel.lyrics == "opening line")
     }
 
+    @MainActor
     @Test
-    func loadingAnotherProjectClearsHistory() {
+    func loadingAnotherProjectClearsHistory() throws {
         // Given
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
         let viewModel = EditorViewModel()
+        viewModel.modelContext = container.mainContext
         viewModel.newProject()
         viewModel.onLyricsChanged("temporary draft", timestampMilliseconds: 0)
 

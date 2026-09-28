@@ -1141,7 +1141,7 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Project Management
 
     func newProject() {
-        autoSaveTask?.cancel()
+        guard flushCurrentDraft() else { return }
         cancelEditorAIWork()
         title = ""
         lyrics = ""
@@ -1157,7 +1157,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func loadProject(_ project: SongProject) {
-        autoSaveTask?.cancel()
+        guard flushCurrentDraft() else { return }
         cancelEditorAIWork()
         title = project.title
         lyrics = project.lyrics
@@ -1183,6 +1183,7 @@ final class EditorViewModel: ObservableObject {
 
     @discardableResult
     func moveProjectToTrash(_ project: SongProject) -> Bool {
+        if currentProjectId == project.id, !flushCurrentDraft() { return false }
         guard let context = modelContext else { return false }
         autoSaveTask?.cancel()
 
@@ -1593,6 +1594,49 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func flushCurrentDraft() -> Bool {
+        autoSaveTask?.cancel()
+        guard !showWelcome || currentProjectId != nil,
+              currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return true }
+        guard let context = modelContext else {
+            saveStatus = .idle
+            errorMessage = "Couldn't save this song. Your edits remain open."
+            return false
+        }
+
+        do {
+            var createdProjectID: String?
+            if let id = currentProjectId {
+                let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
+                guard let project = try context.fetch(descriptor).first else {
+                    saveStatus = .idle
+                    errorMessage = "This song is no longer in the library. Your edits remain open."
+                    return false
+                }
+                if project.title != normalizedProjectTitle() || project.lyrics != lyrics || project.theme != theme {
+                    project.title = normalizedProjectTitle()
+                    project.lyrics = lyrics
+                    project.theme = theme
+                    project.updatedAt = Date()
+                }
+            } else {
+                let project = makeUntitledSongProject()
+                context.insert(project)
+                createdProjectID = project.id
+            }
+            try saveModelContext(context)
+            if let createdProjectID { currentProjectId = createdProjectID }
+            saveStatus = .saved
+            return true
+        } catch {
+            context.rollback()
+            saveStatus = .idle
+            errorMessage = "Couldn't save this song. Your edits remain open."
+            return false
+        }
+    }
+
     private func normalizedProjectTitle() -> String {
         title.isEmpty ? Self.untitledProjectTitle : title
     }
@@ -1721,11 +1765,48 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    private struct OpenDraft: Equatable {
+        let title: String
+        let lyrics: String
+        let theme: String
+    }
+
+    private var openDraft: OpenDraft {
+        OpenDraft(title: normalizedProjectTitle(), lyrics: lyrics, theme: theme)
+    }
+
+    private func storedDraft(id: String, in context: ModelContext) throws -> (SongProject, OpenDraft)? {
+        let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
+        guard let project = try context.fetch(descriptor).first else { return nil }
+        return (project, OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme))
+    }
+
     func restoreBackupNow() async {
         guard let backupService, let context = modelContext, canRunCloudBackup else {
             refreshCloudBackupState()
             return
         }
+
+        let beforeRestore = openDraft
+        let hadPendingEdit: Bool
+        do {
+            if let id = currentProjectId {
+                hadPendingEdit = try storedDraft(id: id, in: context)?.1 != beforeRestore
+            } else {
+                hadPendingEdit = !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty
+            }
+        } catch {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Restore canceled. Could not read the open song; your edits remain open."
+            return
+        }
+        guard flushCurrentDraft() else {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Restore canceled. Save the open song before retrying; your edits remain open."
+            return
+        }
+        let savedProjectID = currentProjectId
+        let savedDraft = openDraft
 
         cloudBackupIsWorking = true
         cloudBackupLastResultIsError = false
@@ -1736,12 +1817,92 @@ final class EditorViewModel: ObservableObject {
             cloudBackupHasStoredPassphrase = backupService.hasStoredPassphrase
         }
 
+        var restoreFailure: Error?
         do {
             try await backupService.restoreNow(modelContext: context)
-            cloudBackupStatusText = "Restore complete. Projects, trash, and missing recordings were restored."
         } catch {
+            restoreFailure = error
+        }
+
+        guard let recovered = reconcileOpenDraftAfterRestore(
+            in: context,
+            savedProjectID: savedProjectID,
+            savedDraft: savedDraft,
+            hadPendingEdit: hadPendingEdit
+        ) else {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Restore failed: \(cloudBackupErrorDescription(error))"
+            cloudBackupStatusText = "Restore finished, but the open draft could not be saved. Keep this editor open and retry saving."
+            return
+        }
+
+        if let restoreFailure {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Restore failed: \(cloudBackupErrorDescription(restoreFailure))"
+        } else if recovered {
+            cloudBackupStatusText = "Restore complete. Your open draft was saved separately from the restored song."
+        } else {
+            cloudBackupStatusText = "Restore complete. Projects, trash, and missing recordings were restored."
+        }
+    }
+
+    private func reconcileOpenDraftAfterRestore(
+        in context: ModelContext,
+        savedProjectID: String?,
+        savedDraft: OpenDraft,
+        hadPendingEdit: Bool
+    ) -> Bool? {
+        autoSaveTask?.cancel()
+        let currentDraft = openDraft
+        let switchedSong = currentProjectId != savedProjectID
+        let editedDuringRestore = currentDraft != savedDraft
+
+        do {
+            let stored = try currentProjectId.flatMap { try storedDraft(id: $0, in: context) }
+            if stored?.1 == currentDraft { return false }
+            if stored?.1 == savedDraft, editedDuringRestore, !switchedSong {
+                return flushCurrentDraft() ? false : nil
+            }
+
+            if hadPendingEdit || editedDuringRestore || switchedSong {
+                let recovered = makeUntitledSongProject()
+                context.insert(recovered)
+                do {
+                    try saveModelContext(context)
+                    cancelEditorAIWork()
+                    currentProjectId = recovered.id
+                    saveStatus = .saved
+                    showWelcome = false
+                    return true
+                } catch {
+                    context.rollback()
+                    currentProjectId = nil
+                    saveStatus = .idle
+                    errorMessage = "Your open draft was not saved. Keep this editor open and retry."
+                    return nil
+                }
+            }
+
+            if let stored {
+                cancelEditorAIWork()
+                title = stored.0.title
+                lyrics = stored.0.lyrics
+                theme = stored.0.theme
+                selectedRange = NSRange(location: 0, length: 0)
+                cursorPosition = 0
+                suggestions = []
+                errorMessage = nil
+                saveStatus = .saved
+                resetLyricsHistory()
+            } else if savedProjectID != nil {
+                clearEditorAfterProjectDelete()
+                selectedRange = NSRange(location: 0, length: 0)
+                showWelcome = true
+            }
+            return false
+        } catch {
+            saveStatus = .idle
+            errorMessage = "Could not reconcile the restored song. Your edits remain open."
+            return nil
         }
     }
 

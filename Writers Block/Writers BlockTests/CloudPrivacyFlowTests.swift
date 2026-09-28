@@ -189,16 +189,22 @@ struct CloudPrivacyFlowTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let keychain = InMemoryKeychainStore()
         keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let first = SongProject(id: "song-a", title: "First", lyrics: "Song A private draft")
+        container.mainContext.insert(first)
+        try container.mainContext.save()
         PrivacyURLProtocol.reset(delay: 0.25)
         let viewModel = EditorViewModel(
             aiService: AIService(session: Self.makeSession()),
             keychainStore: keychain,
             defaults: defaults
         )
+        viewModel.modelContext = container.mainContext
+        viewModel.loadProject(first)
         viewModel.saveProvider(.gemini)
         viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
-        viewModel.currentProjectId = "song-a"
-        viewModel.lyrics = "Song A private draft"
 
         viewModel.getSuggestions()
         #expect(await Self.waitUntil { !PrivacyURLProtocol.capturedBodies().isEmpty })

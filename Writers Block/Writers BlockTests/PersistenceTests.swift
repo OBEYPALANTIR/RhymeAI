@@ -155,6 +155,32 @@ struct PersistenceTests {
         #expect(viewModel.cloudBackupStatusText == "Restore complete. Projects, trash, and missing recordings were restored.")
     }
 
+
+    @MainActor
+    @Test func restoreDoesNotStartWhenOpenDraftCannotBeSaved() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, hasStoredPassphrase: true)
+        let harness = try Self.makeHarness(
+            backupService: backupService,
+            saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) }
+        )
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = harness.viewModel
+        viewModel.loadProject(project)
+        viewModel.lyrics = "unsaved lyric"
+        viewModel.triggerAutoSave()
+
+        await viewModel.restoreBackupNow()
+
+        #expect(backupService.restoreCalls == 0)
+        #expect(viewModel.currentProjectId == project.id)
+        #expect(viewModel.lyrics == "unsaved lyric")
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText.contains("Restore canceled"))
+        #expect(try Self.fetchProjects(harness.context).first?.lyrics == "saved line")
+    }
+
     @MainActor
     @Test func cloudBackupBackgroundSyncOnlyRunsAfterSetupExists() async throws {
         let unconfigured = FakeCloudBackupService(isConfigured: false, hasStoredPassphrase: true)
