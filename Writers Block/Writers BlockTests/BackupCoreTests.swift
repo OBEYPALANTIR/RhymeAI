@@ -928,6 +928,113 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test(arguments: ["update", "tombstone", "outgoingA", "failedRecoverySave"])
+    func restoreKeepsDestinationRecordingsWithDestinationDraft(_ mode: String) async throws {
+        let harness = try makeHarness()
+        let first = SongProject(id: "song-a", title: "A", lyrics: "saved A")
+        let second = SongProject(id: "song-b", title: "B", lyrics: "saved B")
+        let firstAudio = Data([0xa1, 0xa2, 0xa3])
+        let secondAudio = Data([0xb1, 0xb2, 0xb3])
+        for (project, bytes) in [(first, firstAudio), (second, secondAudio)] {
+            let url = try RecordingBackupManifest.localURL(
+                projectId: project.id, fileName: "take.m4a", memosRoot: harness.memosRoot
+            )
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try bytes.write(to: url)
+            harness.context.insert(project)
+        }
+        try harness.context.save()
+        var rejectedRecovery = false
+        let viewModel = EditorViewModel(
+            keychainStore: InMemoryKeychainStore(), backupService: harness.service,
+            saveModelContext: { context in
+                if mode == "failedRecoverySave" && !rejectedRecovery,
+                   try context.fetch(FetchDescriptor<SongProject>()).contains(where: {
+                       $0.id != first.id && $0.id != second.id && $0.lyrics == "pending B"
+                   }) {
+                    rejectedRecovery = true
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try context.save()
+            }
+        )
+        viewModel.modelContext = harness.context
+        viewModel.loadProject(first)
+        if mode == "outgoingA" { viewModel.lyrics = "pending A" }
+
+        let remote: SyncBlob
+        if mode == "update" {
+            remote = SyncBlob(projects: [
+                SyncSongProject(id: second.id, title: "Remote B", lyrics: "remote B", theme: "",
+                                updatedAt: Date().addingTimeInterval(3_600))
+            ])
+        } else {
+            remote = SyncBlob(deletions: [
+                SyncDeletion(projectId: second.id,
+                             deletedAt: Int64(Date().timeIntervalSince1970 * 1_000) + 3_600_000)
+            ])
+        }
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlobCrypto.sealManifest(remote, passphrase: passphrase))
+        harness.drive.beforeManifestWrite = {
+            viewModel.loadProject(second)
+            viewModel.lyrics = "pending B"
+            viewModel.triggerAutoSave()
+        }
+        try harness.service.updatePassphrase(passphrase)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        if mode == "failedRecoverySave" {
+            #expect(rejectedRecovery)
+            #expect(viewModel.cloudBackupLastResultIsError)
+            #expect(viewModel.currentProjectId == nil)
+            #expect(viewModel.lyrics == "pending B")
+            viewModel.triggerAutoSave()
+            await viewModel.waitForPendingAutoSaveForTesting()
+        } else {
+            #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
+        }
+
+        let projects = try harness.context.fetch(FetchDescriptor<SongProject>())
+        let recoveredB = try #require(projects.first {
+            $0.id != first.id && $0.id != second.id && $0.lyrics == "pending B"
+        })
+        #expect(viewModel.currentProjectId == recoveredB.id)
+        #expect(viewModel.saveStatus == .saved)
+        let recoveredBRecording = try RecordingBackupManifest.localURL(
+            projectId: recoveredB.id, fileName: "take.m4a", memosRoot: harness.memosRoot
+        )
+        #expect(try Data(contentsOf: recoveredBRecording) == secondAudio)
+        #expect(try Data(contentsOf: recoveredBRecording) != firstAudio)
+        if mode == "update" {
+            #expect(projects.first(where: { $0.id == second.id })?.lyrics == "remote B")
+        } else {
+            #expect(projects.first(where: { $0.id == second.id }) == nil)
+            #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).contains { $0.projectId == second.id })
+            let oldBRecording = try RecordingBackupManifest.localURL(
+                projectId: second.id, fileName: "take.m4a", memosRoot: harness.memosRoot
+            )
+            #expect(!FileManager.default.fileExists(atPath: oldBRecording.path))
+        }
+        if mode == "outgoingA" {
+            let recoveredA = try #require(projects.first {
+                $0.id != first.id && $0.id != second.id && $0.id != recoveredB.id && $0.lyrics == "pending A"
+            })
+            let recoveredARecording = try RecordingBackupManifest.localURL(
+                projectId: recoveredA.id, fileName: "take.m4a", memosRoot: harness.memosRoot
+            )
+            #expect(try Data(contentsOf: recoveredARecording) == firstAudio)
+        } else {
+            let oldARecording = try RecordingBackupManifest.localURL(
+                projectId: first.id, fileName: "take.m4a", memosRoot: harness.memosRoot
+            )
+            #expect(try Data(contentsOf: oldARecording) == firstAudio)
+        }
+    }
+
+    @MainActor
     @Test func restoreDoesNotAutosaveOverAppliedRemoteRowDuringRecordingAwait() async throws {
         let harness = try makeHarness()
         let project = SongProject(id: "song-a", title: "A", lyrics: "saved A")

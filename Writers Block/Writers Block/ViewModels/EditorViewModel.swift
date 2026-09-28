@@ -1213,7 +1213,24 @@ final class EditorViewModel: ObservableObject {
     }
 
     func loadProject(_ project: SongProject) {
-        guard preserveOutgoingDraftBeforeNavigation() else { return }
+        let nextRecordingSnapshot: OpenRecordingSnapshot?
+        do {
+            if activeCloudEditorOperation != nil,
+               let root = backupService?.recordingRecoveryRoot {
+                nextRecordingSnapshot = try OpenRecordingSnapshot(
+                    projectId: project.id, recordingsRoot: root
+                )
+            } else {
+                nextRecordingSnapshot = nil
+            }
+        } catch {
+            errorMessage = "Could not protect this song's recordings. Switching songs was canceled."
+            return
+        }
+        guard preserveOutgoingDraftBeforeNavigation() else {
+            nextRecordingSnapshot?.discard()
+            return
+        }
         cancelEditorAIWork()
         title = project.title
         lyrics = project.lyrics
@@ -1226,7 +1243,7 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showProjectsSheet = false
         resetLyricsHistory()
-        trackSelectedDraftDuringCloudOperation()
+        trackSelectedDraftDuringCloudOperation(recordingSnapshot: nextRecordingSnapshot)
     }
 
     private func cancelEditorAIWork() {
@@ -1876,12 +1893,15 @@ final class EditorViewModel: ObservableObject {
     private final class CloudEditorOperation {
         var currentBaseline: OpenDraft
         var currentHadPendingEdit: Bool
+        var recordingProjectId: String?
         var savedSeparateOutgoingDraft = false
         var recordingSnapshot: OpenRecordingSnapshot?
 
-        init(currentBaseline: OpenDraft, currentHadPendingEdit: Bool, recordingSnapshot: OpenRecordingSnapshot?) {
+        init(currentBaseline: OpenDraft, currentHadPendingEdit: Bool,
+             recordingProjectId: String?, recordingSnapshot: OpenRecordingSnapshot?) {
             self.currentBaseline = currentBaseline
             self.currentHadPendingEdit = currentHadPendingEdit
+            self.recordingProjectId = recordingProjectId
             self.recordingSnapshot = recordingSnapshot
         }
     }
@@ -1925,6 +1945,7 @@ final class EditorViewModel: ObservableObject {
         activeCloudEditorOperation = CloudEditorOperation(
             currentBaseline: openDraft,
             currentHadPendingEdit: hadPendingEdit,
+            recordingProjectId: currentProjectId,
             recordingSnapshot: recordingSnapshot
         )
         return true
@@ -1943,6 +1964,9 @@ final class EditorViewModel: ObservableObject {
             context.insert(recovered)
             try saveModelContext(context)
             operation.savedSeparateOutgoingDraft = true
+            if pendingRecordingRecovery === operation.recordingSnapshot {
+                pendingRecordingRecovery = nil
+            }
             operation.recordingSnapshot?.discard()
             operation.recordingSnapshot = nil
             return true
@@ -1954,10 +1978,20 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
-    private func trackSelectedDraftDuringCloudOperation(isUnsaved: Bool = false) {
+    private func trackSelectedDraftDuringCloudOperation(
+        isUnsaved: Bool = false,
+        recordingSnapshot: OpenRecordingSnapshot? = nil
+    ) {
         guard let operation = activeCloudEditorOperation else { return }
+        if let oldSnapshot = operation.recordingSnapshot,
+           oldSnapshot !== recordingSnapshot,
+           oldSnapshot !== pendingRecordingRecovery {
+            oldSnapshot.discard()
+        }
         operation.currentBaseline = openDraft
         operation.currentHadPendingEdit = isUnsaved
+        operation.recordingProjectId = currentProjectId
+        operation.recordingSnapshot = recordingSnapshot
     }
 
     private func finishCloudEditorOperation() {
@@ -2017,6 +2051,9 @@ final class EditorViewModel: ObservableObject {
         let edited = operation.currentHadPendingEdit || draft != operation.currentBaseline
 
         do {
+            guard operation.recordingProjectId == currentProjectId else {
+                throw CocoaError(.fileReadUnknown)
+            }
             let stored = try currentProjectId.flatMap { try storedDraft(id: $0, in: context) }
             if edited {
                 if stored?.1 == draft {
