@@ -131,25 +131,30 @@ enum LyricsExporter {
                 }
                 let isSection = line.hasPrefix("[") && line.hasSuffix("]")
                 let attrs = isSection ? sectionAttrs : bodyAttrs
-                let nsLine = line as NSString
-                let bounds = nsLine.boundingRect(
-                    with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
-                    options: [.usesLineFragmentOrigin],
-                    attributes: attrs,
-                    context: nil
-                )
-                let drawHeight = max(bounds.height, lineHeight)
-                if y + drawHeight > pageHeight - marginY {
+                let storage = NSTextStorage(string: line, attributes: attrs)
+                let layout = NSLayoutManager()
+                let container = NSTextContainer(size: CGSize(width: maxWidth, height: .greatestFiniteMagnitude))
+                container.lineFragmentPadding = 0
+                layout.addTextContainer(container)
+                storage.addLayoutManager(layout)
+                let glyphs = layout.glyphRange(for: container)
+                let height = max(layout.usedRect(for: container).height, lineHeight)
+                // Keep ordinary lyric lines together; paginate oversized lines by their rendered fragments.
+                if height <= pageHeight - marginY * 2 && y + height > pageHeight - marginY {
                     ctx.beginPage()
                     y = marginY
                 }
-                nsLine.draw(
-                    with: CGRect(x: marginX, y: y, width: maxWidth, height: drawHeight),
-                    options: [.usesLineFragmentOrigin],
-                    attributes: attrs,
-                    context: nil
-                )
-                y += drawHeight
+                var drawnHeight: CGFloat = 0
+                layout.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, range, _ in
+                    if y + rect.height > pageHeight - marginY {
+                        ctx.beginPage()
+                        y = marginY
+                    }
+                    layout.drawGlyphs(forGlyphRange: range, at: CGPoint(x: marginX, y: y - rect.minY))
+                    y += rect.height
+                    drawnHeight += rect.height
+                }
+                y += max(0, lineHeight - drawnHeight)
             }
         }
     }
