@@ -604,7 +604,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             .text
             ?.trim()
 
-    private suspend fun FlowCollector<SuggestedLine>.emitLinesFromTokens(
+    internal suspend fun FlowCollector<SuggestedLine>.emitLinesFromTokens(
         tokens: Flow<String>,
         constraint: SuggestionRhymeConstraint? = null
     ) {
@@ -637,7 +637,9 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
             val tier = when {
                 isHook -> 2
-                matches != null -> RhymeConstraint.rhymeTier(cleaned, matches)
+                matches != null && constraint != null -> RhymeConstraint.rhymeTier(
+                    cleaned, constraint.targetWord, matches, constraint.dictionary
+                )
                 else -> 0
             }
 
@@ -673,7 +675,9 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             ).forEach { line ->
                 val endWord = RhymeConstraint.lineEndWord(line)
                 val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-                val tier = if (matches != null) RhymeConstraint.rhymeTier(line, matches) else 0
+                val tier = RhymeConstraint.rhymeTier(
+                    line, constraint.targetWord, requireNotNull(matches), constraint.dictionary
+                )
                 emit(SuggestedLine(line, tier, isHook))
             }
         }
@@ -1376,7 +1380,9 @@ $outputRules
         return ranked.map { line ->
             val endWord = RhymeConstraint.lineEndWord(line)
             val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-            val tier = if (matches.isEmpty) 0 else RhymeConstraint.rhymeTier(line, matches)
+            val tier = RhymeConstraint.rhymeTier(
+                line, constraint.targetWord, matches, constraint.dictionary
+            )
             SuggestedLine(line, tier, isHook)
         }
     }
@@ -1468,16 +1474,20 @@ Rules:
         if (ranked.isEmpty()) {
             throw RuntimeException("Local model returned no usable suggestions. Try a different model or use a cloud provider.")
         }
+        val matches = constraint?.let {
+            ProsodyAnalyzer.findRhymes(it.targetWord, dictionary = it.dictionary)
+        }
         return ranked.map { line ->
             if (constraint == null) {
                 SuggestedLine(line, 0)
             } else {
-                val matches = ProsodyAnalyzer.findRhymes(constraint.targetWord, dictionary = constraint.dictionary)
                 val endWord = RhymeConstraint.lineEndWord(line)
                 val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS &&
                         (constraint.sectionRef.ordinal) >= 2
                 val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in constraint.chorusEndWords
-                val tier = if (matches.isEmpty) 0 else RhymeConstraint.rhymeTier(line, matches)
+                val tier = RhymeConstraint.rhymeTier(
+                    line, constraint.targetWord, requireNotNull(matches), constraint.dictionary
+                )
                 SuggestedLine(line, tier, isHook)
             }
         }

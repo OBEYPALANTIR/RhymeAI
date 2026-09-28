@@ -46,9 +46,33 @@ object RhymeConstraint {
         line: String,
         targetWord: String,
         dictionary: PronunciationDictionary = PronunciationDictionary.shared
-    ): Int = rhymeTier(line, ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary))
+    ): Int = rhymeTier(
+        line, targetWord, ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary), dictionary
+    )
 
-    // Membership overload so batch callers compute RhymeMatches once, not per line.
+    fun rhymeTier(
+        line: String,
+        targetWord: String,
+        matches: RhymeMatches,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+    ): Int {
+        val listedTier = rhymeTier(line, matches)
+        if (listedTier > 0) return listedTier
+
+        val endWord = lineEndWord(line)
+        val target = ProsodyAnalyzer.normalizeWord(targetWord)
+        if (endWord == target || dictionary.pronunciations(endWord).isEmpty() ||
+            dictionary.pronunciations(target).isEmpty()
+        ) return 0
+
+        // Display pools are capped; absence from them is not a phonetic miss.
+        // Require dictionary pronunciations so spelling fallbacks cannot certify a rhyme.
+        val targetKeys = ProsodyAnalyzer.rhymeKeys(target, maxDepth = 1, dictionary = dictionary)
+        val endKeys = ProsodyAnalyzer.rhymeKeys(endWord, maxDepth = 1, dictionary = dictionary)
+        return if (endKeys.any { it in targetKeys }) 2 else 0
+    }
+
+    // Display-pool membership only; validation callers should also supply the target word.
     fun rhymeTier(line: String, matches: RhymeMatches): Int {
         val endWord = lineEndWord(line)
         if (endWord.isEmpty()) return 0
@@ -77,14 +101,15 @@ object RhymeConstraint {
         }
         if (unique.isEmpty()) return emptyList()
 
-        val matches = ProsodyAnalyzer.findRhymes(lineEndWord(targetLine), dictionary = dictionary)
+        val targetWord = lineEndWord(targetLine)
+        val matches = ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary)
         val targetSyllables = ProsodyAnalyzer.analyzeLine(targetLine, dictionary).syllableCount
 
         data class Ranked(val line: String, val tier: Int, val syllableGap: Int, val index: Int)
         val ranked = unique.mapIndexed { index, line ->
             Ranked(
                 line = line,
-                tier = rhymeTier(line, matches),
+                tier = rhymeTier(line, targetWord, matches, dictionary),
                 syllableGap = abs(ProsodyAnalyzer.analyzeLine(line, dictionary).syllableCount - targetSyllables),
                 index = index
             )

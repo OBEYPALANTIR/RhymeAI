@@ -6,6 +6,12 @@ import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
 import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.util.RhymeConstraint
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -22,6 +28,64 @@ class AIServicePromptTest {
             "showed\tSH OW1 D"
         )
     )
+
+    @Test
+    fun serviceBatchAndStreamRetainPerfectRhymeBeyondCappedDisplayPool() = runBlocking {
+        val crowded = PronunciationDictionary.fromLines(
+            sequenceOf("rain\tR EY1 N", "pain\tP EY1 N") +
+                (0 until 65).asSequence().map { index ->
+                    "rhyme${'a' + index / 26}${'a' + index % 26}\tR EY1 N"
+                } + sequenceOf("wane\tW EY1 N", "night\tN AY1 T")
+        )
+        val service = AIService()
+        val constraint = assertNotNull(service.suggestionRhymeConstraint(
+            targetRhymeLine = "I wait beneath the rain",
+            rhymeType = RhymeType.PERFECT,
+            dictionary = crowded
+        ))
+        assertFalse("wane" in constraint.candidateWords)
+
+        val batch = service.parseSuggestionList(
+            "I wander through the night\nI watch the lanterns wane",
+            constraint
+        )
+        assertEquals("I watch the lanterns wane", batch.first().text)
+        assertEquals(2, batch.first().rhymeTier)
+        assertEquals(0, batch.last().rhymeTier)
+
+        val chunkProcessed = CompletableDeferred<Unit>()
+        val finishUpstream = CompletableDeferred<Unit>()
+        val streamed = mutableListOf<com.rhymeai.app.SuggestedLine>()
+        val collector = launch {
+            flow<com.rhymeai.app.SuggestedLine> {
+                with(service) {
+                    emitLinesFromTokens(flow {
+                        emit(
+                            "I wander through the night\n" +
+                                "I watch the lanterns wane\n" +
+                                "I wait along the shore\n" +
+                                "I watch the lanterns wane\n"
+                        )
+                        chunkProcessed.complete(Unit)
+                        finishUpstream.await()
+                    }, constraint)
+                }
+            }.collect { streamed += it }
+        }
+        try {
+            withTimeout(5_000) { chunkProcessed.await() }
+            assertEquals(listOf("I watch the lanterns wane"), streamed.map { it.text })
+            assertEquals(listOf(2), streamed.map { it.rhymeTier })
+        } finally {
+            finishUpstream.complete(Unit)
+        }
+        withTimeout(5_000) { collector.join() }
+        assertEquals(
+            listOf("I watch the lanterns wane", "I wander through the night", "I wait along the shore"),
+            streamed.map { it.text }
+        )
+        assertEquals(listOf(2, 0, 0), streamed.map { it.rhymeTier })
+    }
 
     @Test
     fun suggestionPromptShapesImmediateAndWholeSongContext() {

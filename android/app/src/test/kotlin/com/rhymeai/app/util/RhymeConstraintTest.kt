@@ -59,6 +59,82 @@ class RhymeConstraintTest {
         assertEquals(0, RhymeConstraint.rhymeTier("", "road", dictionary))
     }
 
+    private fun crowdedRainDictionary(): PronunciationDictionary = PronunciationDictionary.fromLines(
+        sequenceOf("rain\tR EY1 N", "pain\tP EY1 N") +
+            (0 until 65).asSequence().map { index ->
+                "rhyme${'a' + index / 26}${'a' + index % 26}\tR EY1 N"
+            } + sequenceOf("wane\tW EY1 N", "night\tN AY1 T")
+    )
+
+    @Test
+    fun perfectRhymeOutsideCappedPoolStillReceivesTierTwo() {
+        val crowded = crowdedRainDictionary()
+        val matches = ProsodyAnalyzer.findRhymes(
+            "rain", dictionary = crowded, wordFrequency = WordFrequency()
+        )
+
+        assertEquals(60, matches.perfect.size)
+        assertFalse("wane" in matches.perfect)
+        assertEquals(0, RhymeConstraint.rhymeTier("The lights wane", matches))
+        assertEquals(2, RhymeConstraint.rhymeTier("The lights wane", "rain", matches, crowded))
+        assertEquals(2, RhymeConstraint.rhymeTier("The lights wane!", "RAIN", crowded))
+        assertEquals(0, RhymeConstraint.rhymeTier("The dark night", "rain", matches, crowded))
+        assertEquals(12, RhymeConstraint.candidateEndWords("rain", RhymeType.PERFECT, dictionary = crowded).size)
+    }
+
+    @Test
+    fun pairwiseFallbackUsesAllPronunciationsFromTheSuppliedDictionary() {
+        val variants = PronunciationDictionary.fromLines(sequenceOf(
+            "read\tR IY1 D|R EH1 D",
+            "red\tR EH1 D",
+            "reed\tR IY1 D",
+            "rain\tR EY1 N",
+            "wane\tW AH1 N"
+        ))
+
+        assertEquals(2, RhymeConstraint.rhymeTier("Paint it red", "read", RhymeMatches.EMPTY, variants))
+        assertEquals(2, RhymeConstraint.rhymeTier("Words I read", "red", RhymeMatches.EMPTY, variants))
+        assertEquals(2, RhymeConstraint.rhymeTier("A broken reed", "read", RhymeMatches.EMPTY, variants))
+        assertEquals(0, RhymeConstraint.rhymeTier("The lights wane", "rain", RhymeMatches.EMPTY, variants))
+    }
+
+    @Test
+    fun pairwiseFallbackDoesNotCertifyTargetsStopwordsOrUnknownSpellings() {
+        val guarded = PronunciationDictionary.fromLines(sequenceOf(
+            "rain\tR EY1 N", "wane\tW EY1 N", "glow\tG L OW1", "so\tS OW1"
+        ))
+
+        assertEquals(0, RhymeConstraint.rhymeTier("The rain", "rain", RhymeMatches.EMPTY, guarded))
+        assertEquals(0, RhymeConstraint.rhymeTier("Even so", "glow", RhymeMatches.EMPTY, guarded))
+        assertEquals(0, RhymeConstraint.rhymeTier("A soft glow", "so", RhymeMatches.EMPTY, guarded))
+        assertEquals(0, RhymeConstraint.rhymeTier("Unknown spane", "rain", RhymeMatches.EMPTY, guarded))
+        assertEquals(0, RhymeConstraint.rhymeTier("The lights wane", "spane", RhymeMatches.EMPTY, guarded))
+        assertEquals(0, RhymeConstraint.rhymeTier("Unknown blane", "spane", RhymeMatches.EMPTY, guarded))
+        assertEquals(0, RhymeConstraint.rhymeTier("The lights wane", "rain", RhymeMatches.EMPTY, dictionary))
+    }
+
+    @Test
+    fun targetAwareBatchTierPreservesExistingNearAndMissClassifications() {
+        val matches = ProsodyAnalyzer.findRhymes("road", dictionary = dictionary)
+
+        assertEquals(1, RhymeConstraint.rhymeTier("Cold as stone", "road", matches, dictionary))
+        assertEquals(0, RhymeConstraint.rhymeTier("Into the night", "road", matches, dictionary))
+        assertEquals(0, RhymeConstraint.rhymeTier("The sky rains", "road", RhymeMatches.EMPTY, dictionary))
+    }
+
+    @Test
+    fun rankingDoesNotDemotePerfectRhymesOutsideTheDisplayPool() {
+        val crowded = crowdedRainDictionary()
+        val lines = listOf("My lonely journey starts to wane", "My lonely journey brings me pain")
+
+        for (type in RhymeType.entries) {
+            assertEquals(
+                listOf(lines.first()),
+                RhymeConstraint.filterAndRank(lines, "My lonely journey ends in rain", type, 1, crowded)
+            )
+        }
+    }
+
     @Test
     fun filterAndRankPrefersPerfectRhymeRegardlessOfInputOrder() {
         val lines = listOf("Walking in the night", "The window glowed")
