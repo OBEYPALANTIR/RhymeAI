@@ -97,8 +97,9 @@ release gate from the repo root:
 
 Set `ANDROID_RELEASE_CERT_SHA256` to the trusted release certificate fingerprint
 and `ANDROID_SERIAL` to an explicitly selected, already-running `emulator-NNNN`
-target without Writers Block or its test package. All Android scripts below
-refuse existing installations; they never select, create, boot, wipe, or replace
+target without Writers Block or its test package. The Android release walkthrough,
+live Gemini, visual audit, local-model smoke, and Gemma benchmark scripts also
+require an explicit empty emulator; they do not select, boot, wipe, or replace
 a device automatically. The release smoke verifies the trusted APK signer and
 scans decompressed APK/AAB entries before installation. `SKIP_INSTALL=1` performs
 artifact-only checks without a target; it still requires the trusted fingerprint.
@@ -175,12 +176,16 @@ To download and benchmark the recommended Android Gemma GGUF models:
 
 ```sh
 ./scripts/download-gemma-models.sh
-ANDROID_AVD_NAME=RhymeAI_Tablet_API_36_1 GEMMA_WIPE_AVD=1 EMULATOR_MEMORY_MB=8192 EMULATOR_PARTITION_SIZE_MB=12288 ./scripts/android-gemma-benchmark.sh
+ANDROID_SERIAL=emulator-5554 ./scripts/android-gemma-benchmark.sh
 ```
 
-The benchmark runs the local provider through raw generation, suggestions,
-rewrite, and synonyms, then saves timing, disk, instrumentation, and logcat
-evidence under `artifacts/gemma-benchmarks/`.
+Start and explicitly select a disposable emulator with no Writers Block installation
+and enough free space for each model before running the benchmark. It refuses an
+existing installation and legacy AVD boot/wipe options. The benchmark runs the
+local provider through raw generation, suggestions, rewrite, and synonyms, then
+saves timing, disk, instrumentation, and logcat evidence in a numbered directory
+per model under `artifacts/gemma-benchmarks/`, without replacing pre-existing
+model files or another model's benchmark evidence.
 
 ## iOS
 

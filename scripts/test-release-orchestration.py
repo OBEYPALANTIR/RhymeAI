@@ -35,11 +35,13 @@ if name=='adb':
  elif a[:3]==['shell','pidof','com.rhymeai.app']: print('1234')
  elif a and a[0]=='logcat' and '-d' in a:
   if mode=='log-secret': print('synthetic-runtime-secret-12345')
+ elif a[:3]==['shell','df','-h']: print('DISK_EVIDENCE')
  elif len(a)==2 and a[0]=='shell' and 'read -r key' in a[1]:
   data=sys.stdin.read().rstrip('\n')
   if mode=='input-echo':print(data)
   with open(os.environ['RECORD'],'a') as f:f.write(json.dumps({'runtime_input_matches':data=='synthetic-runtime-secret-12345'})+'\n')
- elif a[:3]==['shell','mktemp','/data/local/tmp/rhymeai-model.XXXXXX']: print('/data/local/tmp/rhymeai-model.fixture')
+ elif a[:3]==['shell','mktemp','/data/local/tmp/rhymeai-model.XXXXXX']:
+  print('/data/local/tmp/existing-user-model.gguf' if mode=='invalid-mktemp' else '/data/local/tmp/rhymeai-model.fixture')
  elif a[:3]==['shell','am','instrument']: print('OK (1 test)')
 elif name=='apksigner':
  if mode=='unsigned':sys.exit(1)
@@ -77,9 +79,9 @@ class ReleaseOrchestrationTests(unittest.TestCase):
                         RECORD=str(self.record), APP_BUILD=str(self.root / "resolved-build"),
                         LOCAL_GGUF_PATH=str(self.root / "model.gguf"), GEMINI_TEST_KEY=KEY)
 
-    def run_script(self, script, **env):
+    def run_script(self, script, *args, **env):
         self.record.unlink(missing_ok=True)
-        return subprocess.run(["bash", str(self.root / "scripts" / script)], env=self.env | env,
+        return subprocess.run(["bash", str(self.root / "scripts" / script), *args], env=self.env | env,
                               capture_output=True, text=True, timeout=30)
 
     def records(self):
@@ -112,6 +114,74 @@ class ReleaseOrchestrationTests(unittest.TestCase):
         self.assertEqual(sum(c[0] == 'install' for c in calls), 1)
         self.assertFalse(any(c[0] == 'uninstall' or c[:3] == ['shell', 'pm', 'clear'] for c in calls))
         self.assertIn(['shell', 'rm', '-f', '/data/local/tmp/rhymeai-model.fixture'], calls)
+
+    def test_benchmark_rejects_unsafe_targets_and_legacy_wipe(self):
+        model = str(self.root / "model.gguf")
+        for serial, mode, wipe in [("", "", ""), ("invalid", "", ""), ("emulator-5554", "installed", ""),
+                                   ("emulator-5554", "physical", ""), ("emulator-5554", "", "1")]:
+            with self.subTest(serial=serial, mode=mode, wipe=wipe):
+                result = self.run_script("android-gemma-benchmark.sh", model,
+                                         ANDROID_SERIAL=serial, MODE=mode, GEMMA_WIPE_AVD=wipe)
+                self.assertNotEqual(result.returncode, 0)
+                calls = self.records()
+                self.assertFalse(any(r["name"] in ("emulator", "gradlew") for r in calls))
+                self.assertFalse(any(r["args"][2:3] in (["install"], ["uninstall"], ["push"])
+                                     for r in calls if r["name"] == "adb"))
+
+    def test_benchmark_uses_owned_model_path_without_clearing_app_or_logs(self):
+        result = self.run_script("android-gemma-benchmark.sh", str(self.root / "model.gguf"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [r["args"][2:] for r in self.records() if r["name"] == "adb"]
+        self.assertIn(["shell", "mktemp", "/data/local/tmp/rhymeai-model.XXXXXX"], calls)
+        self.assertIn(["shell", "rm", "-f", "/data/local/tmp/rhymeai-model.fixture"], calls)
+        self.assertTrue(any(c[:2] == ["push", str(self.root / "model.gguf")] and
+                            c[2] == "/data/local/tmp/rhymeai-model.fixture" for c in calls))
+        self.assertFalse(any(c[0] == "uninstall" or c[:3] == ["shell", "pm", "clear"] or
+                             c[:2] == ["logcat", "-c"] for c in calls))
+
+    def test_benchmark_rejected_allocation_does_not_delete_unowned_path(self):
+        result = self.run_script("android-gemma-benchmark.sh", str(self.root / "model.gguf"),
+                                 MODE="invalid-mktemp")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Could not allocate a fresh device model path", result.stderr)
+        calls = [r["args"][2:] for r in self.records() if r["name"] == "adb"]
+        self.assertIn(["shell", "mktemp", "/data/local/tmp/rhymeai-model.XXXXXX"], calls)
+        self.assertFalse(any(c[:3] == ["shell", "rm", "-f"] or c[:1] == ["push"] or
+                             c[:3] == ["shell", "am", "instrument"] for c in calls))
+
+    def test_benchmark_isolates_same_and_suffix_colliding_labels(self):
+        models = []
+        for directory, name in (("first", "model.gguf"), ("second", "model.gguf"),
+                                ("third", "model-df-before.gguf"), ("fourth", "model-logcat.gguf")):
+            model = self.root / directory / name
+            model.parent.mkdir()
+            model.write_bytes(b"GGUFfixture")
+            models.append(str(model))
+        output = self.root / "collision-benchmark"
+        result = self.run_script("android-gemma-benchmark.sh", *models,
+                                 GEMMA_BENCHMARK_DIR=str(output))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for index, model in enumerate(models, 1):
+            label = Path(model).stem
+            self.assertTrue((output / f"{index:02d}" / f"{label}.txt").is_file())
+        self.assertEqual((output / "01/model-df-before.txt").read_text(), "DISK_EVIDENCE\n")
+        self.assertEqual((output / "03/model-df-before.txt").read_text(), "OK (1 test)\n")
+        self.assertTrue((output / "01/model-logcat.txt").is_file())
+        self.assertEqual((output / "04/model-logcat.txt").read_text(), "OK (1 test)\n")
+        self.assertEqual(sum(r["args"][2:5] == ["shell", "am", "instrument"] for r in self.records()
+                             if r["name"] == "adb"), 4)
+
+    def test_benchmark_preserves_existing_output_directory(self):
+        out = self.root / "existing-benchmark"
+        out.mkdir()
+        (out / "keep").write_text("unchanged")
+        result = self.run_script("android-gemma-benchmark.sh", str(self.root / "model.gguf"),
+                                 GEMMA_BENCHMARK_DIR=str(out))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((out / "keep").read_text(), "unchanged")
+        self.assertFalse(any(r["name"] == "gradlew" or
+                             (r["name"] == "adb" and r["args"][2:3] == ["install"])
+                             for r in self.records()))
 
     def test_both_skipped_runs_nothing(self):
         for script in ["verify.sh", "provider-live-smoke.sh"]:

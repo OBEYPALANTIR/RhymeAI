@@ -37,23 +37,42 @@ fun env(name: String): String? =
 fun Map<String, String?>.completeSigningProperties(): Map<String, String>? =
     takeIf { values.all { value -> value.isNullOrBlank().not() } }?.mapValues { it.value.orEmpty() }
 
-val releaseSigningProperties = mapOf(
-    "storeFile" to (keystoreProperties.nonBlankProperty("storeFile") ?: env("RHYMEAI_KEYSTORE_FILE")),
-    "storePassword" to (keystoreProperties.nonBlankProperty("storePassword") ?: env("RHYMEAI_STORE_PASSWORD")),
-    "keyAlias" to (keystoreProperties.nonBlankProperty("keyAlias") ?: env("RHYMEAI_KEY_ALIAS")),
-    "keyPassword" to (keystoreProperties.nonBlankProperty("keyPassword") ?: env("RHYMEAI_KEY_PASSWORD")),
-).completeSigningProperties()
+val environmentSigningProperties = mapOf(
+    "storeFile" to env("RHYMEAI_KEYSTORE_FILE"),
+    "storePassword" to env("RHYMEAI_STORE_PASSWORD"),
+    "keyAlias" to env("RHYMEAI_KEY_ALIAS"),
+    "keyPassword" to env("RHYMEAI_KEY_PASSWORD"),
+)
+val fileSigningProperties = mapOf(
+    "storeFile" to keystoreProperties.nonBlankProperty("storeFile"),
+    "storePassword" to keystoreProperties.nonBlankProperty("storePassword"),
+    "keyAlias" to keystoreProperties.nonBlankProperty("keyAlias"),
+    "keyPassword" to keystoreProperties.nonBlankProperty("keyPassword"),
+)
+val releaseSigningProperties = if (environmentSigningProperties.values.any { it != null }) {
+    environmentSigningProperties.completeSigningProperties()
+} else {
+    fileSigningProperties.completeSigningProperties()
+}
 val releaseStoreFile = releaseSigningProperties?.get("storeFile")?.let { rootProject.file(it) }
 val hasReleaseSigningConfig = releaseSigningProperties != null && releaseStoreFile?.isFile == true
+val releaseArtifactTaskNames = setOf("assembleRelease", "bundleRelease", "packageRelease", "validateSigningRelease")
+val releaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.substringAfterLast(':') in releaseArtifactTaskNames
+}
+if (releaseTaskRequested && !hasReleaseSigningConfig) {
+    throw GradleException(
+        "Release signing material missing: configure android/keystore.properties or RHYMEAI_* signing variables"
+    )
+}
 
 tasks.configureEach {
-    // bundleRelease (Play upload) still demands real signing material.
-    // assembleRelease falls back to the debug key so optimized builds can be
-    // side-loaded for performance testing without a production keystore.
-    if (name == "bundleRelease") {
+    if (name in releaseArtifactTaskNames) {
         doFirst {
             if (!hasReleaseSigningConfig) {
-                throw GradleException("Release signing material missing: create android/keystore.properties")
+                throw GradleException(
+                    "Release signing material missing: configure android/keystore.properties or RHYMEAI_* signing variables"
+                )
             }
         }
     }
@@ -98,11 +117,8 @@ android {
         }
         release {
             isMinifyEnabled = true
-            signingConfig = if (hasReleaseSigningConfig) {
-                signingConfigs.getByName("release")
-            } else {
-                // Debug-key fallback: installable for local testing; not for Play.
-                signingConfigs.getByName("debug")
+            if (hasReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
             }
             buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(""))
             buildConfigField("String", "DRIVE_OAUTH_CLIENT_ID", buildConfigString(driveOauthClientId))
