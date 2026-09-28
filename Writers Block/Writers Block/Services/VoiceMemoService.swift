@@ -2,6 +2,67 @@ import AVFoundation
 import Foundation
 import Observation
 
+// All memo audio-session mutations share one serial queue. A stop enqueues its
+// deactivation before the next activation, even when that stop does not wait.
+nonisolated final class VoiceMemoAudioSessionTransitions: @unchecked Sendable {
+    static let shared = VoiceMemoAudioSessionTransitions(
+        activateRecording: {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            try session.setActive(true)
+        },
+        activatePlayback: {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default)
+            try session.setActive(true)
+        },
+        deactivate: {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    )
+
+    private let queue = DispatchQueue(label: "com.rhymeai.audio-session", qos: .userInitiated)
+    private let recordingAction: @Sendable () throws -> Void
+    private let playbackAction: @Sendable () throws -> Void
+    private let deactivationAction: @Sendable () -> Void
+
+    init(
+        activateRecording: @escaping @Sendable () throws -> Void,
+        activatePlayback: @escaping @Sendable () throws -> Void,
+        deactivate: @escaping @Sendable () -> Void
+    ) {
+        recordingAction = activateRecording
+        playbackAction = activatePlayback
+        deactivationAction = deactivate
+    }
+
+    func activateRecording(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        perform(recordingAction, completion: completion)
+    }
+
+    func activatePlayback(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        perform(playbackAction, completion: completion)
+    }
+
+    func deactivate() {
+        queue.async(execute: deactivationAction)
+    }
+
+    private func perform(
+        _ action: @escaping @Sendable () throws -> Void,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        queue.async {
+            do {
+                try action()
+                completion(.success(()))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+    }
+}
+
 // VoiceMemoService owns the full record/play/delete lifecycle for per-song
 // voice memos. One instance per EditorViewModel — its lifetime matches the
 // view model so AVAudioSession is torn down cleanly when the VM is released.
@@ -38,10 +99,14 @@ final class VoiceMemoService {
     @ObservationIgnored private var recordingStartTime: Date?
     @ObservationIgnored private var activePlayURL: URL?
     @ObservationIgnored private var delegateForwarder: VoiceMemoDelegate?
-    nonisolated private static let audioSessionQueue = DispatchQueue(
-        label: "com.rhymeai.audio-session",
-        qos: .userInitiated
-    )
+    @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
+    @ObservationIgnored private var audioIntentRevision: UInt64 = 0
+    @ObservationIgnored private var recordingActivationRevision: UInt64?
+    @ObservationIgnored private var pendingPlayURL: URL?
+
+    init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared) {
+        self.sessionTransitions = sessionTransitions
+    }
 
     nonisolated static let maximumImportBytes = 100 * 1024 * 1024
 
@@ -214,6 +279,8 @@ final class VoiceMemoService {
     // MARK: - Record
 
     func startRecording(projectId: String) async {
+        audioIntentRevision &+= 1
+        let permissionRevision = audioIntentRevision
         #if DEBUG
         if UITestFlags.isEnabled(UITestFlags.fakeVoiceRecording) {
             stopPlayback()
@@ -226,19 +293,29 @@ final class VoiceMemoService {
         #endif
 
         guard await requestPermissionIfNeeded() else { return }
+        guard audioIntentRevision == permissionRevision else { return }
 
         stopPlayback()
+        let recordingRevision = audioIntentRevision
 
         let folder = RecordingFiles.memoFolder(for: projectId)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = RecordingFiles.newMemoURL(for: projectId)
 
         do {
-            try await Self.activateRecordingSession()
+            recordingActivationRevision = recordingRevision
+            let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                sessionTransitions.activateRecording { continuation.resume(returning: $0) }
+            }
+            try result.get()
         } catch {
+            if recordingActivationRevision == recordingRevision { recordingActivationRevision = nil }
+            guard audioIntentRevision == recordingRevision else { return }
             failToStartRecording()
             return
         }
+        if recordingActivationRevision == recordingRevision { recordingActivationRevision = nil }
+        guard audioIntentRevision == recordingRevision else { return }
 
         // AAC in an MPEG-4 container matches the Android MediaRecorder output
         // format (.m4a / AAC_ADTS) for cross-platform parity.
@@ -303,7 +380,8 @@ final class VoiceMemoService {
     }
 
     func stopRecording() {
-        let shouldDeactivateSession = audioRecorder != nil
+        audioIntentRevision &+= 1
+        let shouldDeactivateSession = audioRecorder != nil || recordingActivationRevision != nil
         audioRecorder?.stop()
         audioRecorder = nil
         elapsedTimer?.invalidate()
@@ -318,7 +396,7 @@ final class VoiceMemoService {
 
         // Deactivate so other apps (Music, Podcast) can resume their sessions.
         if shouldDeactivateSession {
-            Self.deactivateAudioSession()
+            sessionTransitions.deactivate()
         }
     }
 
@@ -334,67 +412,52 @@ final class VoiceMemoService {
         isRecording = false
         recordingElapsed = 0
         averagePowerNormalized = 0
-        Self.deactivateAudioSession()
+        sessionTransitions.deactivate()
         lastError = "Couldn't start recording. Check the microphone and try again."
-    }
-
-    nonisolated private static func activateRecordingSession() async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            audioSessionQueue.async {
-                do {
-                    let session = AVAudioSession.sharedInstance()
-                    try session.setCategory(
-                        .playAndRecord,
-                        mode: .default,
-                        options: [.defaultToSpeaker]
-                    )
-                    try session.setActive(true)
-                    continuation.resume()
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-    }
-
-    nonisolated private static func deactivateAudioSession() {
-        audioSessionQueue.async {
-            try? AVAudioSession.sharedInstance().setActive(
-                false,
-                options: .notifyOthersOnDeactivation
-            )
-        }
     }
 
     // MARK: - Playback
 
     func togglePlayback(url: URL) {
-        if isPlaying, activePlayURL == url {
+        if (isPlaying && activePlayURL == url) || pendingPlayURL == url {
             stopPlayback()
             return
         }
+        if isRecording || recordingActivationRevision != nil { stopRecording() }
         stopPlayback()
-        playMemo(url: url)
+        pendingPlayURL = url
+        let playbackRevision = audioIntentRevision
+        sessionTransitions.activatePlayback { [weak self] result in
+            Task { @MainActor [weak self] in
+                self?.finishPlaybackActivation(result, url: url, revision: playbackRevision)
+            }
+        }
     }
 
-    private func playMemo(url: URL) {
-        let session = AVAudioSession.sharedInstance()
+    private func finishPlaybackActivation(
+        _ result: Result<Void, Error>, url: URL, revision: UInt64
+    ) {
+        guard audioIntentRevision == revision else { return }
         do {
-            try session.setCategory(.playback, mode: .default)
-            try session.setActive(true)
+            try result.get()
         } catch {
+            pendingPlayURL = nil
             return
         }
+        pendingPlayURL = nil
 
         guard let player = try? AVAudioPlayer(contentsOf: url) else {
-            Self.deactivateAudioSession()
+            sessionTransitions.deactivate()
             return
         }
 
         let forwarder = VoiceMemoDelegate(service: self)
         delegateForwarder = forwarder
         player.delegate = forwarder
-        player.play()
+        guard player.play() else {
+            sessionTransitions.deactivate()
+            return
+        }
 
         audioPlayer = player
         activePlayURL = url
@@ -402,12 +465,15 @@ final class VoiceMemoService {
     }
 
     func stopPlayback() {
+        audioIntentRevision &+= 1
+        let hadPlayback = audioPlayer != nil || pendingPlayURL != nil
         audioPlayer?.stop()
         audioPlayer = nil
         activePlayURL = nil
+        pendingPlayURL = nil
         delegateForwarder = nil
         isPlaying = false
-        Self.deactivateAudioSession()
+        if hadPlayback { sessionTransitions.deactivate() }
     }
 
     // MARK: - Delete
@@ -446,22 +512,14 @@ final class VoiceMemoService {
 
     // MARK: - Callbacks from delegate forwarder
 
-    fileprivate func recordingDidFinish() {
-        isRecording = false
-        recordingElapsed = 0
-        averagePowerNormalized = 0
-        elapsedTimer?.invalidate()
-        elapsedTimer = nil
-        meteringTimer?.invalidate()
-        meteringTimer = nil
-        delegateForwarder = nil
+    fileprivate func recordingDidFinish(_ recorder: AVAudioRecorder) {
+        guard audioRecorder === recorder else { return }
+        stopRecording()
     }
 
-    fileprivate func playbackDidFinish() {
-        isPlaying = false
-        activePlayURL = nil
-        delegateForwarder = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    fileprivate func playbackDidFinish(_ player: AVAudioPlayer) {
+        guard audioPlayer === player else { return }
+        stopPlayback()
     }
 
     // MARK: - Cleanup
@@ -486,13 +544,13 @@ private final class VoiceMemoDelegate: NSObject, AVAudioRecorderDelegate, AVAudi
 
     func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
         Task { @MainActor [weak self] in
-            self?.service?.recordingDidFinish()
+            self?.service?.recordingDidFinish(recorder)
         }
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
-            self?.service?.playbackDidFinish()
+            self?.service?.playbackDidFinish(player)
         }
     }
 }

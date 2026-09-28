@@ -6,6 +6,124 @@ import Testing
 // AVAudioRecorder/Player are exercised in manual/device testing only.
 struct VoiceMemoServiceTests {
 
+    private final class TransitionEvents: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String] = []
+
+        func append(_ value: String) {
+            lock.lock()
+            values.append(value)
+            lock.unlock()
+        }
+
+        var snapshot: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return values
+        }
+    }
+
+    @Test func heldDeactivationCompletesBeforeNewPlaybackActivation() async throws {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let playbackFinished = DispatchSemaphore(value: 0)
+        let events = TransitionEvents()
+        let transitions = VoiceMemoAudioSessionTransitions(
+            activateRecording: { events.append("record") },
+            activatePlayback: { events.append("play") },
+            deactivate: {
+                events.append("deactivate-start")
+                entered.signal()
+                release.wait()
+                events.append("deactivate-end")
+            }
+        )
+
+        transitions.deactivate()
+        let didEnter = await Task.detached {
+            entered.wait(timeout: .now() + 2) == .success
+        }.value
+        #expect(didEnter)
+        // Enqueue before releasing the held stop; a delayed queue must not let
+        // the new activation overtake it.
+        transitions.activatePlayback { result in
+            if case .failure = result { events.append("play-error") }
+            playbackFinished.signal()
+        }
+        release.signal()
+        let didFinish = await Task.detached {
+            playbackFinished.wait(timeout: .now() + 2) == .success
+        }.value
+
+        #expect(didFinish)
+        #expect(events.snapshot == ["deactivate-start", "deactivate-end", "play"])
+    }
+
+    @Test func rapidRecordingPlaybackStopTransitionsRemainOrdered() async throws {
+        let events = TransitionEvents()
+        let transitions = VoiceMemoAudioSessionTransitions(
+            activateRecording: { events.append("record") },
+            activatePlayback: { events.append("play") },
+            deactivate: { events.append("stop") }
+        )
+
+        try await withCheckedThrowingContinuation { continuation in
+            transitions.activateRecording { continuation.resume(with: $0) }
+        }
+        transitions.deactivate()
+        try await withCheckedThrowingContinuation { continuation in
+            transitions.activatePlayback { continuation.resume(with: $0) }
+        }
+        transitions.deactivate()
+        try await withCheckedThrowingContinuation { continuation in
+            transitions.activateRecording { continuation.resume(with: $0) }
+        }
+        transitions.deactivate()
+        try await withCheckedThrowingContinuation { continuation in
+            transitions.activatePlayback { continuation.resume(with: $0) }
+        }
+
+        #expect(events.snapshot == ["record", "stop", "play", "stop", "record", "stop", "play"])
+    }
+
+    @Test func stoppingPendingPlaybackInvalidatesItsHeldActivation() async {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let stopped = DispatchSemaphore(value: 0)
+        let events = TransitionEvents()
+        let transitions = VoiceMemoAudioSessionTransitions(
+            activateRecording: { events.append("record") },
+            activatePlayback: {
+                events.append("play-start")
+                entered.signal()
+                release.wait()
+                events.append("play-end")
+            },
+            deactivate: {
+                events.append("stop")
+                stopped.signal()
+            }
+        )
+        let service = VoiceMemoService(sessionTransitions: transitions)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pending-\(UUID()).m4a")
+
+        service.togglePlayback(url: url)
+        let didEnter = await Task.detached {
+            entered.wait(timeout: .now() + 2) == .success
+        }.value
+        #expect(didEnter)
+        service.stopPlayback()
+        release.signal()
+        let didStop = await Task.detached {
+            stopped.wait(timeout: .now() + 2) == .success
+        }.value
+
+        #expect(didStop)
+        #expect(events.snapshot == ["play-start", "play-end", "stop"])
+        #expect(!service.isPlaying)
+        #expect(!service.isPlayingMemo(at: url))
+    }
+
     // MARK: - File Naming
 
     @Test func newMemoURLHasMp4aExtension() {
