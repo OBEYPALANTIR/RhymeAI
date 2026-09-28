@@ -99,6 +99,30 @@ class RhymeConstraintTest {
     }
 
     @Test
+    fun alternatePronunciationPerfectRhymeOverridesCachedNearTier() {
+        // Pronunciations from the bundled CMU dictionary; abuse has noun/verb variants.
+        val variants = PronunciationDictionary.fromLines(sequenceOf(
+            "abuse\tAH0 B Y UW1 S|AH0 B Y UW1 Z",
+            "news\tN UW1 Z|N Y UW1 Z",
+            "blues\tB L UW1 Z",
+            "goose\tG UW1 S",
+            "truth\tT R UW1 TH"
+        ))
+        val matches = ProsodyAnalyzer.findRhymes("abuse", dictionary = variants)
+
+        for (word in listOf("news", "blues")) {
+            assertEquals(1, RhymeConstraint.rhymeTier(word, matches))
+            assertEquals(2, RhymeConstraint.rhymeTier(word, "abuse", matches, variants))
+            assertEquals(2, RhymeConstraint.rhymeTier(word, "abuse", RhymeMatches.EMPTY, variants))
+        }
+        assertEquals(2, RhymeConstraint.rhymeTier("goose", matches))
+        assertEquals(2, RhymeConstraint.rhymeTier("goose", "abuse", matches, variants))
+        assertEquals(1, RhymeConstraint.rhymeTier("truth", matches))
+        assertEquals(1, RhymeConstraint.rhymeTier("truth", "abuse", matches, variants))
+        assertEquals(0, RhymeConstraint.rhymeTier("truth", "abuse", RhymeMatches.EMPTY, variants))
+    }
+
+    @Test
     fun pairwiseFallbackDoesNotCertifyTargetsStopwordsOrUnknownSpellings() {
         val guarded = PronunciationDictionary.fromLines(sequenceOf(
             "rain\tR EY1 N", "wane\tW EY1 N", "glow\tG L OW1", "so\tS OW1"

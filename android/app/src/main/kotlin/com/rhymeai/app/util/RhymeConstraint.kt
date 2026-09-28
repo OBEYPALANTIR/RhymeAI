@@ -57,19 +57,19 @@ object RhymeConstraint {
         dictionary: PronunciationDictionary = PronunciationDictionary.shared
     ): Int {
         val listedTier = rhymeTier(line, matches)
-        if (listedTier > 0) return listedTier
+        if (listedTier == 2) return listedTier
 
         val endWord = lineEndWord(line)
         val target = ProsodyAnalyzer.normalizeWord(targetWord)
         if (endWord == target || dictionary.pronunciations(endWord).isEmpty() ||
             dictionary.pronunciations(target).isEmpty()
-        ) return 0
+        ) return listedTier
 
-        // Display pools are capped; absence from them is not a phonetic miss.
+        // A capped near pool can include a perfect match for another pronunciation.
         // Require dictionary pronunciations so spelling fallbacks cannot certify a rhyme.
         val targetKeys = ProsodyAnalyzer.rhymeKeys(target, maxDepth = 1, dictionary = dictionary)
         val endKeys = ProsodyAnalyzer.rhymeKeys(endWord, maxDepth = 1, dictionary = dictionary)
-        return if (endKeys.any { it in targetKeys }) 2 else 0
+        return if (endKeys.any { it in targetKeys }) 2 else listedTier
     }
 
     // Display-pool membership only; validation callers should also supply the target word.
