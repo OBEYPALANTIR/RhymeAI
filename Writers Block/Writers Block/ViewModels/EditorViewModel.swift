@@ -55,7 +55,11 @@ final class EditorViewModel: ObservableObject {
             scheduleDerivedStateRefresh()
         }
     }
-    @Published var theme: String = ""
+    @Published var theme: String = "" {
+        didSet {
+            if theme != oldValue { triggerAutoSave() }
+        }
+    }
     @Published var cursorPosition: Int = 0 {
         didSet {
             scheduleDerivedStateRefresh()
@@ -768,7 +772,6 @@ final class EditorViewModel: ObservableObject {
         rewriteTask?.cancel()
         let requestID = UUID()
         rewriteRequestID = requestID
-        let projectID = currentProjectId
         rewriteAction = action
         rewriteOriginal = original
         rewriteRange = range
@@ -785,6 +788,9 @@ final class EditorViewModel: ObservableObject {
         let rejectedForRequest = rewriteRejectedCandidates
 
         rewriteTask = Task { @MainActor in
+            defer {
+                if rewriteRequestID == requestID { rewriteLoading = false }
+            }
             do {
                 let result = try await aiService.getRewrite(
                     provider: selectedProvider,
@@ -799,17 +805,12 @@ final class EditorViewModel: ObservableObject {
                     rejectedCandidates: rejectedForRequest,
                     useWholeSongContext: useWholeSongContext
                 )
-                guard !Task.isCancelled,
-                      rewriteRequestID == requestID,
-                      currentProjectId == projectID else { return }
+                guard !Task.isCancelled, rewriteRequestID == requestID else { return }
                 rewritePreview = result
             } catch {
-                guard !Task.isCancelled,
-                      rewriteRequestID == requestID,
-                      currentProjectId == projectID else { return }
+                guard !Task.isCancelled, rewriteRequestID == requestID else { return }
                 rewriteError = error.localizedDescription
             }
-            if rewriteRequestID == requestID { rewriteLoading = false }
         }
     }
 
@@ -1380,6 +1381,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func clearEditorAfterProjectDelete() {
+        cancelEditorAIWork()
         title = ""
         lyrics = ""
         theme = ""
