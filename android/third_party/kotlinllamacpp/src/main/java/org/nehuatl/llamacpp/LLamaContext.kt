@@ -194,7 +194,8 @@ class LlamaContext(
             (params["image_fds"] as? List<Int>)?.toIntArray() ?: intArrayOf(),
             PartialCompletionCallback(
                 params["emit_partial_completion"] as? Boolean ?: false
-            )
+            ),
+            params["qa_sampling_trace"] as? Boolean == true
         ).toMutableMap()
         if (result.containsKey("error")) {
             throw IllegalStateException(result["error"] as String)
@@ -296,7 +297,8 @@ class LlamaContext(
         ignore_eos: Boolean,
         logit_bias: Array<DoubleArray>,
         imageFds: IntArray,
-        partial_completion_callback: PartialCompletionCallback
+        partial_completion_callback: PartialCompletionCallback,
+        qa_sampling_trace: Boolean
     ): Map<String, Any>
 
     private external fun prepareCompletion(contextPtr: Long)

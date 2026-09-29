@@ -367,11 +367,6 @@ Java_org_nehuatl_llamacpp_LlamaContext_initContextWithFd(
     if (ok) {
         context_map[(long) llama->ctx] = llama;
         penalty_baselines[(long) llama->ctx] = jnisampling::read(llama->params.sampling);
-        {
-            const auto &baseline = penalty_baselines[(long) llama->ctx];
-            LOGI("sampling_penalties baseline last_n=%d repeat=%.4f freq=%.4f present=%.4f",
-                 baseline.last_n, baseline.repeat, baseline.freq, baseline.present);
-        }
         if (!defaultParams.mmproj.path.empty()) {
             LOGI("Initializing multimodal with mmproj: %s", defaultParams.mmproj.path.c_str());
             bool mm_ok = llama->initMultimodal(defaultParams.mmproj.path, n_gpu_layers > 0);
@@ -611,7 +606,8 @@ Java_org_nehuatl_llamacpp_LlamaContext_doCompletion(
         jboolean ignore_eos,
         jobjectArray logit_bias,
         jintArray image_fds,
-        jobject partialCompletionCallback
+        jobject partialCompletionCallback,
+        jboolean qa_sampling_trace
 ) {
     UNUSED(thiz);
     auto it = context_map.find((long) context_ptr);
@@ -642,10 +638,37 @@ Java_org_nehuatl_llamacpp_LlamaContext_doCompletion(
         );
     }
 
-    const bool sampler_ok = llama->completion->initSampling();
-    LOGI("sampling_penalties effective last_n=%d repeat=%.4f freq=%.4f present=%.4f sampler_ok=%d",
-         llama->params.sampling.penalty_last_n, llama->params.sampling.penalty_repeat,
-         llama->params.sampling.penalty_freq, llama->params.sampling.penalty_present, sampler_ok ? 1 : 0);
+    if (!llama->completion->initSampling()) {
+        auto error = createHashMap(env);
+        putStringHashMap(env, error, "error", "Failed to initialize sampler");
+        return error;
+    }
+
+    auto result = createHashMap(env);
+    if (qa_sampling_trace) {
+        const auto baseline = baselineIt != penalty_baselines.end()
+            ? baselineIt->second : jnisampling::read(llama->params.sampling);
+        putIntHashMap(env, result, "qa_baseline_last_n", baseline.last_n);
+        putDoubleHashMap(env, result, "qa_baseline_repeat", baseline.repeat);
+        putDoubleHashMap(env, result, "qa_baseline_freq", baseline.freq);
+        putDoubleHashMap(env, result, "qa_baseline_present", baseline.present);
+        putIntHashMap(env, result, "qa_effective_last_n", llama->params.sampling.penalty_last_n);
+        putDoubleHashMap(env, result, "qa_effective_repeat", llama->params.sampling.penalty_repeat);
+        putDoubleHashMap(env, result, "qa_effective_freq", llama->params.sampling.penalty_freq);
+        putDoubleHashMap(env, result, "qa_effective_present", llama->params.sampling.penalty_present);
+
+        // Inspect the sampler that initSampling actually installed, not just the requested params.
+        const auto *chain = common_sampler_get(llama->completion->ctx_sampling);
+        bool penalties_active = false;
+        for (int i = 0; chain != nullptr && i < llama_sampler_chain_n(chain); ++i) {
+            const auto *sampler = llama_sampler_chain_get(chain, i);
+            if (strcmp(llama_sampler_name(sampler), "penalties") == 0) {
+                penalties_active = true;
+                break;
+            }
+        }
+        putBooleanHashMap(env, result, "qa_penalties_sampler_active", penalties_active);
+    }
     
     std::vector<std::string> images;
     if (image_fds != nullptr) {
@@ -694,7 +717,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_doCompletion(
         LOGW("doCompletion: Caught unknown exception");
     }
 
-    return createHashMap(env);
+    return result;
 }
 
 JNIEXPORT void JNICALL
