@@ -578,7 +578,7 @@ internal fun SettingsDialog(
                                         )
                                         OutlinedButton(
                                             onClick = { onSelectSavedLocalModel(model.id) },
-                                            enabled = !localModelLoading,
+                                            enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null,
                                             modifier = Modifier.fillMaxWidth(),
                                             shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                             colors = ButtonDefaults.outlinedButtonColors(
