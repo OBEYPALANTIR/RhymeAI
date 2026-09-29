@@ -14,11 +14,11 @@ import kotlin.test.assertTrue
 class RecordingTombstoneTest {
     private val json = Json { ignoreUnknownKeys = true }
 
-    private fun entry(modifiedAt: Long, name: String = "take.m4a", project: String = "p1") =
-        RecordingManifestEntry(projectId = project, fileName = name, sizeBytes = 10L, modifiedAt = modifiedAt, sha256 = "h$modifiedAt")
+    private fun entry(modifiedAt: Long, sha: String = "h$modifiedAt", name: String = "take.m4a", project: String = "p1") =
+        RecordingManifestEntry(projectId = project, fileName = name, sizeBytes = 10L, modifiedAt = modifiedAt, sha256 = sha)
 
-    private fun tombstone(deletedAt: Long, name: String = "take.m4a", project: String = "p1") =
-        RecordingTombstone(project, name, deletedAt)
+    private fun tombstone(deletedAt: Long, sha: String? = "h100", restoredAt: Long? = null, name: String = "take.m4a", project: String = "p1") =
+        RecordingTombstone(project, name, deletedAt, sha, restoredAt)
 
     private fun tempDir(): File = Files.createTempDirectory("tombstone-test").toFile().also { it.deleteOnExit() }
 
@@ -49,84 +49,123 @@ class RecordingTombstoneTest {
         // The live manifest only lists voice-memos/, so a trashed file is absent from it.
         val liveManifest = emptyList<RecordingManifestEntry>()
 
-        assertEquals(listOf(tombstone(500L)), RecordingTombstoneStore.all(filesDir))
+        assertEquals(listOf(RecordingTombstone("p1", "take.m4a", 500L)), RecordingTombstoneStore.all(filesDir))
         assertTrue(RecordingSyncPlanner.planUploads(liveManifest, emptyList(), emptySet()).isEmpty())
     }
 
     @Test
-    fun tombstoneSuppressesRemoteEntryEvenWhenRemoteSurvivesInBlob() {
-        val remote = SyncBlob(recordings = listOf(entry(modifiedAt = 100L)), recordingTombstones = emptyList())
-        val local = SyncBlob(recordingTombstones = listOf(tombstone(deletedAt = 100L)))
-
-        val merged = SyncMerger.merge(local, remote)
-
-        assertTrue(merged.recordings.isEmpty())
-        assertEquals(listOf(tombstone(100L)), merged.recordingTombstones)
-    }
-
-    @Test
-    fun newerRemoteRecordingBeatsTombstone() {
-        val remote = SyncBlob(recordings = listOf(entry(modifiedAt = 300L)))
-        val local = SyncBlob(recordingTombstones = listOf(tombstone(deletedAt = 200L)))
-
-        val merged = SyncMerger.merge(local, remote)
-
-        assertEquals(listOf(entry(300L)), merged.recordings)
-    }
-
-    @Test
-    fun remoteTombstoneRemovesLocalManifestEntryFromMergedBlob() {
-        val local = SyncBlob(recordings = listOf(entry(modifiedAt = 100L)))
-        val remote = SyncBlob(recordingTombstones = listOf(tombstone(deletedAt = 150L)))
+    fun sameBytesStaySuppressedEvenWhenModifiedAtIsNewer() {
+        // A newer modifiedAt is not intent: the bytes are identical to the deleted recording.
+        val remote = SyncBlob(recordings = listOf(entry(modifiedAt = 900L, sha = "h100")))
+        val local = SyncBlob(recordingTombstones = listOf(tombstone(deletedAt = 200L, sha = "h100")))
 
         assertTrue(SyncMerger.merge(local, remote).recordings.isEmpty())
     }
 
     @Test
-    fun purgeKeepsTombstoneAndItSurvivesRestart() {
+    fun differentBytesUnderTheSameNameAreADifferentRecording() {
+        val remote = SyncBlob(recordings = listOf(entry(modifiedAt = 900L, sha = "h900")))
+        val local = SyncBlob(recordingTombstones = listOf(tombstone(deletedAt = 200L, sha = "h100")))
+
+        assertEquals(listOf(entry(900L, sha = "h900")), SyncMerger.merge(local, remote).recordings)
+    }
+
+    @Test
+    fun unhashedTombstoneCoversAnyBytesWithThatName() {
+        val remote = SyncBlob(recordings = listOf(entry(modifiedAt = 900L, sha = "h900")))
+        val local = SyncBlob(recordingTombstones = listOf(tombstone(deletedAt = 200L, sha = null)))
+
+        assertTrue(SyncMerger.merge(local, remote).recordings.isEmpty())
+    }
+
+    @Test
+    fun remoteTombstoneRemovesLocalManifestEntryFromMergedBlob() {
+        val local = SyncBlob(recordings = listOf(entry(modifiedAt = 100L)))
+        val remoteKnowledge = SyncBlob(recordingTombstones = listOf(tombstone(deletedAt = 150L)))
+
+        assertTrue(SyncMerger.merge(local, remoteKnowledge).recordings.isEmpty())
+    }
+
+    @Test
+    fun restoreEventLivesUntilDeletedAgainAndTiesResolveToDeleted() {
+        val live = entry(modifiedAt = 100L)
+        assertFalse(tombstone(deletedAt = 200L, restoredAt = 300L).suppresses(live))
+        assertTrue(tombstone(deletedAt = 200L, restoredAt = 200L).suppresses(live))
+        assertTrue(tombstone(deletedAt = 400L, restoredAt = 300L).suppresses(live))
+        assertTrue(tombstone(deletedAt = 200L, restoredAt = null).suppresses(live))
+    }
+
+    @Test
+    fun mergeIsAUnionWithLatestTimesAndOrderIndependent() {
+        val a = tombstone(deletedAt = 200L, restoredAt = null)
+        val b = tombstone(deletedAt = 100L, restoredAt = 300L)
+        val other = tombstone(deletedAt = 50L, sha = "h9", name = "other.m4a")
+
+        val ab = RecordingTombstone.merge(listOf(a, b, other))
+        val ba = RecordingTombstone.merge(listOf(other, b, a))
+
+        assertEquals(ab.toSet(), ba.toSet())
+        val merged = ab.first { it.fileName == "take.m4a" }
+        assertEquals(200L, merged.deletedAt)
+        assertEquals(300L, merged.restoredAt)
+        assertEquals(2, ab.size)
+    }
+
+    @Test
+    fun purgeKeepsRecordAndItSurvivesRestart() {
         val filesDir = tempDir()
         val trashDir = RecordingFiles.trashDirectory(filesDir, "p1").also { it.mkdirs() }
         val trashed = File(trashDir, "500__take.m4a").also { it.writeBytes(byteArrayOf(1)) }
-        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", 500L)
+        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", "h100", 500L)
 
-        // Purge deletes the trashed file; the persisted store still holds the deletion.
         assertTrue(trashed.delete())
         assertTrue(RecordingTombstoneStore.fromTrash(filesDir).isEmpty())
 
-        // The store is file-backed, so a fresh read (process restart) sees the same state.
-        assertEquals(listOf(tombstone(500L)), RecordingTombstoneStore.read(filesDir))
-        assertEquals(listOf(tombstone(500L)), RecordingTombstoneStore.all(filesDir))
+        assertEquals(listOf(tombstone(500L, sha = "h100")), RecordingTombstoneStore.read(filesDir))
+        assertEquals(listOf(tombstone(500L, sha = "h100")), RecordingTombstoneStore.all(filesDir))
     }
 
     @Test
-    fun restoreFromTrashClearsTombstone() {
+    fun restoreFromTrashMarksRestoredAndClearsPendingUnhashedRecordToo() {
+        val filesDir = tempDir()
+        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", "h100", 500L)
+        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", null, 500L)
+
+        RecordingTombstoneStore.markRestored(filesDir, "p1", "take.m4a", 600L)
+
+        val stored = RecordingTombstoneStore.read(filesDir)
+        assertEquals(2, stored.size)
+        assertTrue(stored.all { it.restoredAt != null && !it.isDeleted })
+        assertFalse(stored.any { it.suppresses(entry(modifiedAt = 100L, sha = "h100")) })
+    }
+
+    @Test
+    fun pendingUnhashedRecordResolvesFromTheTrashedFile() {
         val filesDir = tempDir()
         val trashDir = RecordingFiles.trashDirectory(filesDir, "p1").also { it.mkdirs() }
-        val trashed = File(trashDir, "500__take.m4a").also { it.writeBytes(byteArrayOf(1)) }
-        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", 500L)
-        assertEquals(1, RecordingTombstoneStore.all(filesDir).size)
+        val trashed = File(trashDir, "500__take.m4a").also { it.writeBytes("audio".toByteArray()) }
+        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", null, 500L)
 
-        // Restore moves the file back under its original name and clears the deletion.
-        val live = RecordingFiles.memoDirectory(filesDir, "p1").also { it.mkdirs() }
-        assertTrue(trashed.renameTo(File(live, "take.m4a")))
-        RecordingTombstoneStore.clear(filesDir, "p1", "take.m4a")
+        RecordingTombstoneStore.resolvePending(filesDir)
 
-        assertTrue(RecordingTombstoneStore.all(filesDir).isEmpty())
+        val stored = RecordingTombstoneStore.read(filesDir)
+        assertEquals(1, stored.size)
+        assertEquals(RecordingTombstoneStore.sha256Of(trashed), stored.single().sha256)
     }
 
     @Test
-    fun storeKeepsLatestDeletionPerRecordingAndIgnoresCorruptState() {
+    fun storeKeepsLatestDeletionPerKeyAndIgnoresCorruptState() {
         val filesDir = tempDir()
-        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", 500L)
-        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", 400L)
-        assertEquals(listOf(tombstone(500L)), RecordingTombstoneStore.read(filesDir))
+        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", "h100", 500L)
+        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", "h100", 400L)
+        assertEquals(listOf(tombstone(500L, sha = "h100")), RecordingTombstoneStore.read(filesDir))
 
         RecordingTombstoneStore.file(filesDir).writeText("{not json")
         assertTrue(RecordingTombstoneStore.read(filesDir).isEmpty())
     }
 
     @Test
-    fun oldBlobWithoutTombstoneFieldParsesAndDefaultsEmpty() {
+    fun oldBlobWithoutAnyTombstoneFieldParses() {
         val oldJson = """{"version":1,"projects":[],"trashed":[],"recordings":[],"savedAt":1,"savedByClientId":"legacy"}"""
 
         val decoded = json.decodeFromString<SyncBlob>(oldJson)
@@ -136,32 +175,26 @@ class RecordingTombstoneTest {
     }
 
     @Test
-    fun blobWithTombstonesRoundTripsAndKeepsVersion() {
-        val blob = SyncBlob(recordingTombstones = listOf(tombstone(500L)))
+    fun tombstonesAreNeverSerializedIntoTheSharedBlob() {
+        val encoded = json.encodeToString(SyncBlob(recordingTombstones = listOf(tombstone(500L))))
 
-        val decoded = json.decodeFromString<SyncBlob>(json.encodeToString(blob))
-
-        assertEquals(listOf(tombstone(500L)), decoded.recordingTombstones)
-        assertEquals(1, decoded.version)
+        assertFalse(encoded.contains("recordingTombstones"))
+        assertFalse(encoded.contains("take.m4a"))
+        assertEquals(1, SyncBlob.CURRENT_VERSION)
     }
 
     @Test
-    fun staleWriterThatDropsTheFieldDoesNotUndoADeletion() {
-        // A legacy writer's blob still lists the recording and has no tombstone field at all.
+    fun legacyBlobListingTheRecordingCannotUndoADeletionWhenTheRecordIsKnown() {
         val legacyRemote = json.decodeFromString<SyncBlob>(
             """{"version":1,"projects":[],"trashed":[],"recordings":[
                 {"projectId":"p1","fileName":"take.m4a","sizeBytes":10,"modifiedAt":100,"sha256":"h100"}
                ],"savedAt":1,"savedByClientId":"legacy"}"""
         )
-        // This device re-injects its persisted tombstones on every sync, so the deletion is honoured.
-        val filesDir = tempDir()
-        RecordingTombstoneStore.record(filesDir, "p1", "take.m4a", 200L)
-        val local = SyncBlob(recordingTombstones = RecordingTombstoneStore.all(filesDir))
+        val local = SyncBlob(recordingTombstones = listOf(tombstone(deletedAt = 200L, sha = "h100")))
 
         val merged = SyncMerger.merge(local, legacyRemote)
 
         assertTrue(legacyRemote.recordings.isNotEmpty())
         assertFalse(merged.recordings.any { it.fileName == "take.m4a" })
-        assertEquals(listOf(tombstone(200L)), merged.recordingTombstones)
     }
 }

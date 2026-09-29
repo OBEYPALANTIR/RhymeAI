@@ -3,6 +3,7 @@ package com.rhymeai.app.data.sync
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * The complete, sync-able snapshot of a user's library. Serialized as a single
@@ -19,7 +20,12 @@ data class SyncBlob(
     val projects: List<SongProject> = emptyList(),
     val trashed: List<TrashedSongProject> = emptyList(),
     val recordings: List<RecordingManifestEntry> = emptyList(),
-    /** Additive (schema version unchanged): deletions that keep removed recordings from being restored. */
+    /**
+     * In-memory only, never serialized into the shared blob: the deletion records this sync run
+     * knows about (local plus every per-install sidecar object). The shared blob is rewritable by
+     * legacy clients, so durable deletions live in the sidecar objects, not here.
+     */
+    @Transient
     val recordingTombstones: List<RecordingTombstone> = emptyList(),
     val savedAt: Long = System.currentTimeMillis(),
     val savedByClientId: String = ""
@@ -108,8 +114,8 @@ object SyncMerger {
         remote.validate()
         val mergedProjects = mergeProjects(local.projects, remote.projects)
         val mergedTrashed = mergeTrash(local.trashed, remote.trashed)
-        // Tombstones are never compacted by time: dropping one could bring a deleted recording back.
-        val mergedTombstones = RecordingTombstoneStore.mergeLatest(local.recordingTombstones + remote.recordingTombstones)
+        // Deletion records are never compacted by time: dropping one could bring a deleted recording back.
+        val mergedTombstones = RecordingTombstone.merge(local.recordingTombstones + remote.recordingTombstones)
         // A tombstone at least as recent as an entry removes it from the merged manifest, which is
         // what remote restores read; a strictly newer entry (re-recorded, restored) survives.
         val mergedRecordings = mergeRecordings(local.recordings, remote.recordings)

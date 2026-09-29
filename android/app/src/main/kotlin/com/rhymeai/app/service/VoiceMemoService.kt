@@ -376,9 +376,11 @@ class VoiceMemoService(private val context: Context) {
                 deletedAt++
                 target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
             }
+            // Hash before the move; if hashing fails the deletion is recorded as pending and retried.
+            val digest = runCatching { RecordingTombstoneStore.sha256Of(memo.file) }.getOrNull()
             if (memo.file.renameTo(target)) {
                 // Persist the deletion so sync never restores or re-uploads it, even after the trash is purged.
-                RecordingTombstoneStore.record(context.filesDir, projectId, memo.file.name, deletedAt)
+                RecordingTombstoneStore.record(context.filesDir, projectId, memo.file.name, digest, deletedAt)
                 trashedMemoFromFile(target, projectId)
             } else null
         }
@@ -413,7 +415,9 @@ class VoiceMemoService(private val context: Context) {
         trashed.file.renameTo(target).also { moved ->
             // Restored under its original name: the recording is live again, so the deletion no longer applies.
             if (moved && target.name == trashed.originalName) {
-                RecordingTombstoneStore.clear(context.filesDir, trashed.projectId, trashed.originalName)
+                RecordingTombstoneStore.markRestored(
+                    context.filesDir, trashed.projectId, trashed.originalName, System.currentTimeMillis()
+                )
             }
             cleanUpEmptyTrashDir(trashed.file.parentFile)
         }

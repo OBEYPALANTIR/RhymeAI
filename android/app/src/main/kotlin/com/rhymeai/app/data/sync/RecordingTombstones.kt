@@ -5,36 +5,64 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.security.MessageDigest
 
 /**
- * Records that a recording was deleted at [deletedAt]. Sync uses it so a deleted (trashed or
- * purged) recording is neither uploaded nor restored from a remote manifest that still lists it.
- * A recording with `modifiedAt > deletedAt` is newer than the deletion and wins.
+ * A deletion record for one recording. Identity is (projectId, fileName, sha256 of the deleted
+ * bytes): a newer `modifiedAt` never decides anything, and different bytes under the same name are
+ * a different recording. [sha256] is null only while the bytes could not be hashed (pending), in
+ * which case the record conservatively covers any bytes with that name.
+ *
+ * [restoredAt] is set only by an explicit restore or Undo. The record is deleted while
+ * `deletedAt >= restoredAt` (a tie resolves to deleted) or when there is no restore.
  */
 @Serializable
 data class RecordingTombstone(
     val projectId: String,
     val fileName: String,
-    val deletedAt: Long
+    val deletedAt: Long,
+    val sha256: String? = null,
+    val restoredAt: Long? = null
 ) {
     val identityKey: String
         get() = "$projectId/$fileName"
+
+    val mergeKey: String
+        get() = "$identityKey@${sha256 ?: "-"}"
+
+    val isDeleted: Boolean
+        get() = restoredAt == null || deletedAt >= restoredAt
 
     fun validate() {
         SyncIdentity.validateProjectId(projectId)
         SyncIdentity.validateFileName(fileName)
         require(deletedAt >= 0L) { "Invalid recording tombstone time" }
+        require(restoredAt == null || restoredAt >= 0L) { "Invalid recording tombstone restore time" }
+        require(sha256 == null || (sha256.isNotEmpty() && sha256.length <= 128)) { "Invalid recording tombstone digest" }
     }
 
-    /** True when this deletion is at least as recent as [entry], so [entry] must not come back. */
+    /** True when this record is a live deletion of exactly [entry]'s bytes (or of the name while unhashed). */
     fun suppresses(entry: RecordingManifestEntry): Boolean =
-        identityKey == entry.identityKey && deletedAt >= entry.modifiedAt
+        isDeleted &&
+            identityKey == entry.identityKey &&
+            (sha256 == null || sha256.equals(entry.sha256, ignoreCase = true))
+
+    companion object {
+        /** Union by (identity, digest): latest `deletedAt` and latest `restoredAt` per key. */
+        fun merge(tombstones: List<RecordingTombstone>): List<RecordingTombstone> =
+            tombstones.groupBy { it.mergeKey }.values.map { group ->
+                group.first().copy(
+                    deletedAt = group.maxOf { it.deletedAt },
+                    restoredAt = group.mapNotNull { it.restoredAt }.maxOrNull()
+                )
+            }
+    }
 }
 
 /**
- * Local persistence for recording tombstones. Trash purges delete the trashed file, so the
- * deletion time is also written here when a recording is trashed and kept after purge.
- * Unreadable or missing state reads as empty; trashed files still contribute via [fromTrash].
+ * This install's own deletion records, persisted so they survive purge, restart and sync. Records
+ * are never removed by upload, purge or time; a restore only marks them restored. Unreadable or
+ * missing state reads as empty; files still in the trash folder contribute via [fromTrash].
  */
 object RecordingTombstoneStore {
     private const val FILE_NAME = "recording-tombstones.json"
@@ -53,27 +81,45 @@ object RecordingTombstoneStore {
             .filter { runCatching { it.validate() }.isSuccess }
     }
 
+    /** Record a deletion. [sha256] is the digest of the bytes moved to the trash, or null if hashing failed. */
     @Synchronized
-    fun record(filesDir: File, projectId: String, fileName: String, deletedAt: Long) {
-        val tombstone = RecordingTombstone(projectId, fileName, deletedAt)
+    fun record(filesDir: File, projectId: String, fileName: String, sha256: String?, deletedAt: Long) {
+        val tombstone = RecordingTombstone(projectId, fileName, deletedAt, sha256)
         runCatching { tombstone.validate() }.onFailure { return }
         write(filesDir, mergeLatest(read(filesDir) + tombstone))
     }
 
-    /** Keep deletions learned from a merged remote so a later blob that lacks them cannot undo them. */
+    /** Explicit restore or Undo: every record of this recording becomes restored (restoredAt is after its deletedAt). */
     @Synchronized
-    fun recordAll(filesDir: File, tombstones: List<RecordingTombstone>) {
-        if (tombstones.isEmpty()) return
-        write(filesDir, mergeLatest(read(filesDir) + tombstones))
-    }
-
-    /** Forget a deletion, e.g. when the recording is restored from trash under its original name. */
-    @Synchronized
-    fun clear(filesDir: File, projectId: String, fileName: String) {
+    fun markRestored(filesDir: File, projectId: String, fileName: String, restoredAt: Long) {
         val key = "$projectId/$fileName"
         val current = read(filesDir)
         if (current.none { it.identityKey == key }) return
-        write(filesDir, current.filterNot { it.identityKey == key })
+        write(filesDir, current.map {
+            if (it.identityKey == key) it.copy(restoredAt = maxOf(restoredAt, it.deletedAt + 1L, it.restoredAt ?: 0L)) else it
+        })
+    }
+
+    /** Retry hashing for records whose bytes could not be hashed when they were trashed. */
+    @Synchronized
+    fun resolvePending(filesDir: File) {
+        val current = read(filesDir)
+        val pending = current.filter { it.sha256 == null && it.isDeleted }
+        if (pending.isEmpty()) return
+        val updated = current.toMutableList()
+        var changed = false
+        for (record in pending) {
+            val trashed = File(
+                RecordingFiles.trashDirectory(filesDir, record.projectId),
+                "${record.deletedAt}$TRASH_NAME_SEPARATOR${record.fileName}"
+            )
+            if (!trashed.isFile) continue
+            val digest = runCatching { sha256Of(trashed) }.getOrNull() ?: continue
+            updated.remove(record)
+            updated.add(record.copy(sha256 = digest))
+            changed = true
+        }
+        if (changed) write(filesDir, mergeLatest(updated))
     }
 
     /** Deletions implied by files currently in the trash folder (covers trash made before the store existed). */
@@ -91,12 +137,25 @@ object RecordingTombstoneStore {
         }
     }
 
-    /** Stored tombstones plus those implied by the trash folder, latest deletion per recording. */
+    /** Stored records plus those implied by the trash folder. */
     fun all(filesDir: File): List<RecordingTombstone> =
         mergeLatest(read(filesDir) + fromTrash(filesDir))
 
     internal fun mergeLatest(tombstones: List<RecordingTombstone>): List<RecordingTombstone> =
-        tombstones.groupBy { it.identityKey }.values.map { group -> group.maxByOrNull { it.deletedAt }!! }
+        RecordingTombstone.merge(tombstones)
+
+    fun sha256Of(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private fun write(filesDir: File, tombstones: List<RecordingTombstone>) {
         val target = file(filesDir)
