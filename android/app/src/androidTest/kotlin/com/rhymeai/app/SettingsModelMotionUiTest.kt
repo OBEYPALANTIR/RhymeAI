@@ -113,24 +113,29 @@ class SettingsModelMotionUiTest {
     @Test fun reducedMotionRemovesStatusAndActionImmediately() {
         loaded.value = true
         showSettings(animations = false)
+        compose.mainClock.autoAdvance = false
         compose.onNodeWithText("Unload Model").performScrollTo().performClick()
+        compose.mainClock.advanceTimeByFrame()
         compose.onNodeWithText("Unload Model").assertDoesNotExist()
         compose.onNodeWithText("Model loaded").assertDoesNotExist()
         compose.onNodeWithText("Loading model...").performScrollTo().assertIsDisplayed()
 
-        compose.runOnIdle {
+        compose.runOnUiThread {
             loading.value = false
             error.value = "Synthetic load failure"
         }
+        compose.mainClock.advanceTimeByFrame()
         savedModelButton().assertIsEnabled()
         compose.onNodeWithText("Synthetic load failure").performScrollTo().assertIsDisplayed()
 
-        compose.runOnIdle {
+        compose.runOnUiThread {
             error.value = null
             loaded.value = true
         }
+        compose.mainClock.advanceTimeByFrame()
         compose.onNodeWithText("Model loaded").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Unload Model").assertIsEnabled()
+        compose.mainClock.autoAdvance = true
     }
 
     private fun showSettings(animations: Boolean) {
