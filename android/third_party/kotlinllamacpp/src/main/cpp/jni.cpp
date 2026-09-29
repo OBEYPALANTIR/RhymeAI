@@ -41,9 +41,26 @@ static bool jstringToUtf8(JNIEnv *env, jstring input, std::string &value) {
     return true;
 }
 
-static jstring newJStringUtf8(JNIEnv *env, const char *bytes) {
-    const std::u16string units = jniutf::utf8ToUtf16(bytes, std::strlen(bytes));
+// Length-preserving: an embedded NUL in model output is kept, not cut at strlen.
+static jstring newJStringUtf8(JNIEnv *env, const std::string &bytes) {
+    const std::u16string units = jniutf::utf8ToUtf16(bytes.data(), bytes.size());
     return env->NewString(reinterpret_cast<const jchar *>(units.data()), static_cast<jsize>(units.size()));
+}
+
+// C-string form for constant keys and values that are already NUL-terminated.
+static jstring newJStringUtf8(JNIEnv *env, const char *bytes) {
+    return newJStringUtf8(env, std::string(bytes));
+}
+
+// File-system paths go to C consumers via c_str(), so an embedded NUL (which would silently
+// truncate the path) or an over-long path is rejected instead of converted.
+static bool jstringToPath(JNIEnv *env, jstring input, std::string &path) {
+    constexpr size_t kMaxPathBytes = 4096;
+    std::string converted;
+    if (!jstringToUtf8(env, input, converted)) return false;
+    if (!jniutf::acceptBounded(converted, kMaxPathBytes)) return false;
+    path = std::move(converted);
+    return true;
 }
 
 extern "C" {
@@ -57,10 +74,17 @@ static inline jobject createHashMap(JNIEnv *env) {
     return hashMap;
 }
 
+static inline void putStringHashMap(JNIEnv *env, jobject hashMap, const char *key, const std::string &value);
+
 // Helper method to put a string into a Java HashMap
 static inline void putStringHashMap(JNIEnv *env, jobject hashMap, const char *key, const char *value) {
     if (value == nullptr) return;
-    
+    putStringHashMap(env, hashMap, key, std::string(value));
+}
+
+// Length-preserving form for std::string values (model output, GGUF metadata): an embedded
+// NUL is kept instead of truncating the value at strlen.
+static inline void putStringHashMap(JNIEnv *env, jobject hashMap, const char *key, const std::string &value) {
     jclass hashMapClass = env->FindClass("java/util/HashMap");
     jmethodID putMethod = env->GetMethodID(hashMapClass, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 
@@ -316,7 +340,11 @@ Java_org_nehuatl_llamacpp_LlamaContext_initContextWithFd(
     defaultParams.use_mmap = use_mmap;
 
     std::string lora_path;
-    if (jstringToUtf8(env, lora_str, lora_path) && !lora_path.empty()) {
+    if (lora_str != nullptr && !jstringToPath(env, lora_str, lora_path)) {
+        LOGW("initContext: rejected LoRA path (embedded NUL or too long)");
+        return 0;
+    }
+    if (!lora_path.empty()) {
         defaultParams.lora_adapters.push_back({lora_path, lora_scaled, "", "", nullptr});
     }
 
@@ -383,7 +411,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_loadModelDetails(
             LOGW("loadModelDetails: skipping invalid or oversized metadata value for key %s", key);
             continue;
         }
-        putStringHashMap(env, meta, key, value.c_str());
+        putStringHashMap(env, meta, key, value);
     }
 
     auto result = createHashMap(env);
@@ -410,7 +438,7 @@ static bool readBoundedJString(
     std::string converted;
     if (!jstringToUtf8(env, input, converted)) return false;
     // An embedded NUL would truncate C-string consumers such as paths and template names.
-    if (converted.size() >= maxBytes || converted.find('\0') != std::string::npos) return false;
+    if (!jniutf::acceptBounded(converted, maxBytes)) return false;
     value = std::move(converted);
     return true;
 }
@@ -474,7 +502,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_getFormattedChat(
             throwJavaException(env, "java/lang/IllegalStateException", "Formatted chat prompt is empty or too large");
             return nullptr;
         }
-        jstring result = newJStringUtf8(env, formatted.c_str());
+        jstring result = newJStringUtf8(env, formatted);
         if (result == nullptr || env->ExceptionCheck()) {
             if (env->ExceptionCheck()) env->ExceptionClear();
             throwJavaException(env, "java/lang/IllegalStateException", "Formatted chat prompt could not be converted to a Java string");
@@ -502,7 +530,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_loadSession(
     std::string path_utf8;
     auto result = createHashMap(env);
     size_t n_token_count_out = 0;
-    if (!jstringToUtf8(env, path, path_utf8) ||
+    if (!jstringToPath(env, path, path_utf8) ||
         !llama_state_load_file(llama->ctx, path_utf8.c_str(), nullptr, 0, &n_token_count_out)) {
         putStringHashMap(env, result, "error", "Failed to load session");
         return reinterpret_cast<jobject>(result);
@@ -527,7 +555,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_saveSession(
     auto llama = it->second;
 
     std::string path_utf8;
-    if (!jstringToUtf8(env, path, path_utf8)) return -1;
+    if (!jstringToPath(env, path, path_utf8)) return -1;
     if (!llama_state_save_file(llama->ctx, path_utf8.c_str(), nullptr, 0)) return -1;
     return 0;
 }
@@ -630,7 +658,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_doCompletion(
 
             if (!to_send.empty()) {
                 auto tokenResult = createHashMap(env);
-                putStringHashMap(env, tokenResult, "token", to_send.c_str());
+                putStringHashMap(env, tokenResult, "token", to_send);
                 env->CallVoidMethod(partialCompletionCallback, onPartialCompletion, tokenResult);
                 env->DeleteLocalRef(tokenResult);
             }
@@ -706,7 +734,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_detokenize(
 
     auto text = rnllama::tokens_to_str(llama->ctx, toks.cbegin(), toks.cend());
     
-    jstring jText = newJStringUtf8(env, text.c_str());
+    jstring jText = newJStringUtf8(env, text);
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
         jText = env->NewStringUTF("");
@@ -764,7 +792,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_bench(
     auto llama = it->second;
     if (llama->completion) {
         std::string result = llama->completion->bench(pp, tg, pl, nr);
-        return newJStringUtf8(env, result.c_str());
+        return newJStringUtf8(env, result);
     }
     return env->NewStringUTF("[]"); 
 }

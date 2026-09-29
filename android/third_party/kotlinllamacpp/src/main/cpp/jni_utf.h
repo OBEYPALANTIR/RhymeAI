@@ -99,4 +99,10 @@ inline std::u16string utf8ToUtf16(const char *bytes, size_t length) {
     return out;
 }
 
+// Bound and NUL check shared by bounded string reads and file-system paths: an embedded NUL
+// would silently truncate C-string consumers, so it is rejected rather than converted.
+inline bool acceptBounded(const std::string &value, size_t maxBytes) {
+    return value.size() < maxBytes && value.find('\0') == std::string::npos;
+}
+
 }  // namespace jniutf
