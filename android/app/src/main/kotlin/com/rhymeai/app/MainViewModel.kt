@@ -102,14 +102,33 @@ internal fun formatDriveSyncSuccessStatus(
     action: DriveSyncAction,
     projectCount: Int,
     trashedCount: Int,
-    recordingCount: Int
+    recordingCount: Int,
+    restorePause: DriveSyncService.RestorePauseState = DriveSyncService.RestorePauseState()
 ): String {
+    if (restorePause.paused) {
+        // Projects did sync, but recordings from other devices were not restored: say so, and do
+        // not call it a plain success.
+        val verb = when (action) {
+            DriveSyncAction.Sync -> "Projects synced"
+            DriveSyncAction.Restore -> "Projects restored"
+        }
+        return "$verb; recording restore is paused — ${plural(projectCount, "project")}, $trashedCount trashed. " +
+            "${driveSyncPausedNotice(restorePause)} API keys stay on this device."
+    }
     val verb = when (action) {
         DriveSyncAction.Sync -> "Sync complete"
         DriveSyncAction.Restore -> "Restore complete"
     }
     return "$verb — ${plural(projectCount, "project")}, $trashedCount trashed, ${plural(recordingCount, "recording")}. API keys stay on this device."
 }
+
+internal fun driveSyncPausedNotice(restorePause: DriveSyncService.RestorePauseState): String =
+    if (restorePause.unreadableObjects > 0) {
+        "Deletion records from ${plural(restorePause.unreadableObjects, "other device")} can't be read, " +
+            "so recordings from other devices are not restored until they can."
+    } else {
+        "Deletion records couldn't be checked this time, so recordings from other devices are not restored; try again."
+    }
 
 internal fun driveSyncProgressLabel(action: DriveSyncAction?): String =
     when (action) {
@@ -669,7 +688,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     action = action,
                     projectCount = result.merged.projects.size,
                     trashedCount = result.merged.trashed.size,
-                    recordingCount = result.merged.recordings.size
+                    recordingCount = result.merged.recordings.size,
+                    restorePause = driveSyncService.recordingRestorePause.value
                 )
                 // Re-read projects into UI state since the snapshot may have changed.
                 projects = result.merged.projects
