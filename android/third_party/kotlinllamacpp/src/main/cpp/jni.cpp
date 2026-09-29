@@ -637,6 +637,8 @@ Java_org_nehuatl_llamacpp_LlamaContext_doCompletion(
             jnisampling::Penalties{penalty_last_n, penalty_repeat, penalty_freq, penalty_present}
         );
     }
+    llama->params.sampling.penalty_last_n = jnisampling::resolveLastN(
+        llama->params.sampling.penalty_last_n, llama->n_ctx);
 
     if (!llama->completion->initSampling()) {
         auto error = createHashMap(env);
@@ -656,17 +658,23 @@ Java_org_nehuatl_llamacpp_LlamaContext_doCompletion(
         putDoubleHashMap(env, result, "qa_effective_repeat", llama->params.sampling.penalty_repeat);
         putDoubleHashMap(env, result, "qa_effective_freq", llama->params.sampling.penalty_freq);
         putDoubleHashMap(env, result, "qa_effective_present", llama->params.sampling.penalty_present);
+        putIntHashMap(env, result, "qa_context_size", llama->n_ctx);
 
         // Inspect the sampler that initSampling actually installed, not just the requested params.
-        const auto *chain = common_sampler_get(llama->completion->ctx_sampling);
+        auto *chain = common_sampler_get(llama->completion->ctx_sampling);
+        bool penalties_configured = false;
         bool penalties_active = false;
         for (int i = 0; chain != nullptr && i < llama_sampler_chain_n(chain); ++i) {
             const auto *sampler = llama_sampler_chain_get(chain, i);
-            if (strcmp(llama_sampler_name(sampler), "penalties") == 0) {
+            const char *name = llama_sampler_name(sampler);
+            if (strcmp(name, "penalties") == 0) {
+                penalties_configured = true;
                 penalties_active = true;
                 break;
             }
+            if (strcmp(name, "?penalties") == 0) penalties_configured = true;
         }
+        putBooleanHashMap(env, result, "qa_penalties_sampler_configured", penalties_configured);
         putBooleanHashMap(env, result, "qa_penalties_sampler_active", penalties_active);
     }
     

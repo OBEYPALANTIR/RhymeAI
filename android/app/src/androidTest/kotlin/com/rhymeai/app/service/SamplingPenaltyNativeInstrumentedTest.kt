@@ -53,7 +53,7 @@ class SamplingPenaltyNativeInstrumentedTest {
                     "penalty_present" to 0.25
                 ))
                 val second = capture(context, chunks, "explicit_b", mapOf(
-                    "penalty_last_n" to 32,
+                    "penalty_last_n" to -1,
                     "penalty_repeat" to 1.2,
                     "penalty_freq" to -0.2,
                     "penalty_present" to 0.1
@@ -61,7 +61,7 @@ class SamplingPenaltyNativeInstrumentedTest {
                 val restored = capture(context, chunks, "restored", emptyMap())
 
                 for (result in listOf(baseline, first, second, restored)) {
-                    assertEquals(true, result["qa_penalties_sampler_active"])
+                    assertEquals(true, result["qa_penalties_sampler_configured"])
                     assertEquals(64, result["qa_baseline_last_n"])
                     assertPenalty(result, "qa_baseline_repeat", 1.0)
                     assertPenalty(result, "qa_baseline_freq", 0.0)
@@ -69,15 +69,20 @@ class SamplingPenaltyNativeInstrumentedTest {
                 }
                 assertEquals(64, baseline["qa_effective_last_n"])
                 assertPenalty(baseline, "qa_effective_repeat", 1.0)
+                assertEquals(false, baseline["qa_penalties_sampler_active"])
                 assertEquals(96, first["qa_effective_last_n"])
+                assertEquals(true, first["qa_penalties_sampler_active"])
                 assertPenalty(first, "qa_effective_repeat", 1.1)
                 assertPenalty(first, "qa_effective_freq", 0.15)
                 assertPenalty(first, "qa_effective_present", 0.25)
-                assertEquals(32, second["qa_effective_last_n"])
+                assertTrue((second["qa_context_size"] as Number).toInt() > 0)
+                assertEquals(second["qa_context_size"], second["qa_effective_last_n"])
+                assertEquals(true, second["qa_penalties_sampler_active"])
                 assertPenalty(second, "qa_effective_repeat", 1.2)
                 assertPenalty(second, "qa_effective_freq", -0.2)
                 assertPenalty(second, "qa_effective_present", 0.1)
                 assertEquals(64, restored["qa_effective_last_n"])
+                assertEquals(false, restored["qa_penalties_sampler_active"])
                 assertPenalty(restored, "qa_effective_repeat", 1.0)
                 assertPenalty(restored, "qa_effective_freq", 0.0)
                 assertPenalty(restored, "qa_effective_present", 0.0)
@@ -112,7 +117,9 @@ class SamplingPenaltyNativeInstrumentedTest {
             "baselineRepeat=${result["qa_baseline_repeat"]} baselineFreq=${result["qa_baseline_freq"]} " +
             "baselinePresent=${result["qa_baseline_present"]} effectiveLastN=${result["qa_effective_last_n"]} " +
             "effectiveRepeat=${result["qa_effective_repeat"]} effectiveFreq=${result["qa_effective_freq"]} " +
-            "effectivePresent=${result["qa_effective_present"]} penaltiesActive=${result["qa_penalties_sampler_active"]}")
+            "effectivePresent=${result["qa_effective_present"]} contextSize=${result["qa_context_size"]} " +
+            "penaltiesConfigured=${result["qa_penalties_sampler_configured"]} " +
+            "penaltiesActive=${result["qa_penalties_sampler_active"]}")
         return result
     }
 

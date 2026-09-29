@@ -44,7 +44,7 @@ class CompletionPenaltiesTest {
 
     @Test
     fun aRequestedContextSizeWindowIsNotTheUnsetSentinel() {
-        // -1 means "context size" to the sampler and is a real request; only Int.MIN_VALUE means unset.
+        // -1 is a real request that JNI resolves to the loaded context size before sampler construction.
         val penalties = CompletionPenalties.from(mapOf("penalty_last_n" to -1))
 
         assertEquals(-1, penalties.lastN)

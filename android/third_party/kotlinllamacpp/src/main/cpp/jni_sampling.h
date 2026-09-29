@@ -29,6 +29,12 @@ inline bool validLastN(int value) { return value >= -1; }
 inline bool validRepeat(float value) { return std::isfinite(value) && value > 0.0f; }
 inline bool validSigned(float value) { return std::isfinite(value); }
 
+// This vendored sampler clamps -1 to zero. Resolve the documented context-size request
+// only after apply() has selected the explicit value or model-load baseline.
+inline int resolveLastN(int value, int contextSize) {
+    return value == -1 ? contextSize : value;
+}
+
 template <class Sampling>
 Penalties read(const Sampling &sampling) {
     return {sampling.penalty_last_n, sampling.penalty_repeat, sampling.penalty_freq, sampling.penalty_present};
