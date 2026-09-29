@@ -271,4 +271,44 @@ class DeletionSidecarTest {
 
         assertEquals(1, maxActive.get())
     }
+
+    @Test
+    fun existingVerifiedRecordsSurviveAWriteFromDamagedOrMissingLocalState() = runBlocking {
+        val drive = FakeDrive()
+        val a = sidecar(drive, FakeIdentity("a".repeat(32)))
+        assertEquals(SidecarWrite.Written, a.writeOwn(token, passphrase, listOf(tomb("old.m4a", "h1", 100L))))
+
+        // Local state was lost, so only a brand-new deletion is passed in.
+        assertEquals(SidecarWrite.Written, a.writeOwn(token, passphrase, listOf(tomb("new.m4a", "h2", 200L))))
+
+        val read = sidecar(drive, FakeIdentity("f".repeat(32))).readAll(token, passphrase) as SidecarRead.Ok
+        assertTrue(read.entries.any { it.suppresses(manifest("old.m4a", "h1")) })
+        assertTrue(read.entries.any { it.suppresses(manifest("new.m4a", "h2")) })
+        assertEquals(1, drive.objects.size)
+    }
+
+    @Test
+    fun explicitRestoreIsKeptWhenMergedWithTheExistingObject() = runBlocking {
+        val drive = FakeDrive()
+        val a = sidecar(drive, FakeIdentity("a".repeat(32)))
+        a.writeOwn(token, passphrase, listOf(tomb("take.m4a", "h100", 200L)))
+
+        a.writeOwn(token, passphrase, listOf(tomb("take.m4a", "h100", 200L, restoredAt = 300L)))
+
+        val read = sidecar(drive, FakeIdentity("f".repeat(32))).readAll(token, passphrase) as SidecarRead.Ok
+        assertFalse(read.entries.any { it.suppresses(manifest("take.m4a", "h100")) })
+    }
+
+    @Test
+    fun unreadableExistingOwnObjectIsNeverOverwritten() = runBlocking {
+        val drive = FakeDrive()
+        val a = sidecar(drive, FakeIdentity("a".repeat(32)))
+        a.writeOwn(token, "another passphrase".toCharArray(), listOf(tomb("old.m4a", "h1", 100L)))
+        val before = drive.objects.values.single().second.copyOf()
+
+        val result = a.writeOwn(token, passphrase, listOf(tomb("new.m4a", "h2", 200L)))
+
+        assertEquals(SidecarWrite.ExistingUnreadable, result)
+        assertContentEquals(before, drive.objects.values.single().second)
+    }
 }

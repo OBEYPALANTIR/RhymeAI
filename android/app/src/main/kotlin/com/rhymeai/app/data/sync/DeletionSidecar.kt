@@ -93,6 +93,9 @@ sealed class SidecarWrite {
     data object Written : SidecarWrite()
     data object TooLarge : SidecarWrite()
     data object NotVerified : SidecarWrite()
+
+    /** This install's own object exists but cannot be read; it is never overwritten. */
+    data object ExistingUnreadable : SidecarWrite()
 }
 
 class DeletionSidecar(
@@ -144,18 +147,27 @@ class DeletionSidecar(
     }
 
     /**
-     * Writes only this install's object, then re-reads only that object to verify it. Throws
+     * Writes only this install's object (existing records are merged in, never dropped), then
+     * re-reads only that object to verify it. Throws
      * [DriveNetworkException] on listing or transfer failure; callers must not write the library
      * blob unless this returns [SidecarWrite.Written].
      */
     suspend fun writeOwn(accessToken: String, passphrase: CharArray, ownEntries: List<RecordingTombstone>): SidecarWrite {
         val ownName = objectName(identity.writerId())
         val existing = findOwn(accessToken, ownName)
+        // Preserve what this install already published: local state can be damaged or missing, and
+        // replacing the object with only the local list would erase an older verified deletion. An
+        // existing own object that cannot be read is never overwritten.
+        val existingEntries = if (existing == null) {
+            emptyList()
+        } else {
+            readObject(accessToken, existing.id, passphrase)?.entries ?: return SidecarWrite.ExistingUnreadable
+        }
         val nonce = newNonce()
         val payload = DeletionSidecarPayload(
             writerId = identity.writerId(),
             writeNonce = nonce,
-            entries = RecordingTombstone.merge(ownEntries)
+            entries = RecordingTombstone.merge(existingEntries + ownEntries)
         )
         val plaintext = json.encodeToString(payload).toByteArray(Charsets.UTF_8)
         if (SyncBlobCrypto.envelopeSizeForPlaintext(plaintext.size.toLong()) > maxObjectBytes) return SidecarWrite.TooLarge
