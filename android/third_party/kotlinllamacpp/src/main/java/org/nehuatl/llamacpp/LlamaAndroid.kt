@@ -28,32 +28,9 @@ class LlamaAndroid(val resolver: ContentResolver) {
                 val cpuFeatures = getCpuFeatures()
                 Log.d(NAME, "CPU features: $cpuFeatures")
 
-                val hasDotProd = cpuFeatures.contains("dotprod") || cpuFeatures.contains("asimddp")
-                val isAtLeastArmV82 = cpuFeatures.contains("asimd") && cpuFeatures.contains("crc32") && cpuFeatures.contains("aes")
-                val hasI8mm = cpuFeatures.contains("i8mm")
-
-                when {
-                    isAtLeastArmV82 && hasDotProd && hasI8mm -> {
-                        Log.d(NAME, "Loading librnllama_v8_2_dotprod_i8mm.so")
-                        System.loadLibrary("rnllama_v8_2_dotprod_i8mm")
-                    }
-                    isAtLeastArmV82 && hasDotProd -> {
-                        Log.d(NAME, "Loading librnllama_v8_2_dotprod.so")
-                        System.loadLibrary("rnllama_v8_2_dotprod")
-                    }
-                    isAtLeastArmV82 && hasI8mm -> {
-                        Log.d(NAME, "Loading librnllama_v8_2_i8mm.so")
-                        System.loadLibrary("rnllama_v8_2_i8mm")
-                    }
-                    isAtLeastArmV82 -> {
-                        Log.d(NAME, "Loading librnllama_v8_2.so")
-                        System.loadLibrary("rnllama_v8_2")
-                    }
-                    else -> {
-                        Log.d(NAME, "Loading librnllama_v8.so")
-                        System.loadLibrary("rnllama_v8")
-                    }
-                }
+                val variant = CpuVariantSelector.select(cpuFeatures)
+                Log.d(NAME, "Loading lib$variant.so")
+                System.loadLibrary(variant)
             } else if (isX86_64()) {
                 Log.d(NAME, "Loading librnllama_x86_64.so")
                 System.loadLibrary("rnllama_x86_64")
