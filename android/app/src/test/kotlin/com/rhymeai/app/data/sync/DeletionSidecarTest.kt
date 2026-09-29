@@ -204,6 +204,8 @@ class DeletionSidecarTest {
         assertFailsWith<DriveNetworkException> {
             sidecar(drive, FakeIdentity("a".repeat(32))).writeOwn(token, passphrase, listOf(tomb("take.m4a", "h100", 200L)))
         }
+        // JUnit 4 requires a void test method; assertFailsWith returns the exception.
+        Unit
     }
 
     @Test
