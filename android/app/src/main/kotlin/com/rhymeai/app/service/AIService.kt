@@ -88,6 +88,13 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
 }
 
 class AIService {
+    // Opt-in observer for synthetic parser tests; no production sink or file logging.
+    internal data class LocalSuggestionDecision(
+        val rawLine: String,
+        val candidate: String?,
+        val disposition: String
+    )
+
     internal data class SingleWordRewriteContext(
         val previousWord: String?,
         val nextWord: String?,
@@ -616,7 +623,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         tokens: Flow<String>,
         constraint: SuggestionRhymeConstraint? = null,
         excludedKeys: Set<String> = emptySet(),
-        requireExactCount: Boolean = false
+        requireExactCount: Boolean = false,
+        onDecision: ((LocalSuggestionDecision) -> Unit)? = null
     ) {
         val buffer = StringBuilder()
         val seen = mutableSetOf<String>()
@@ -635,11 +643,22 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         var emitted = 0
 
         suspend fun flushLine(rawLine: String): Boolean {
-            if (accepted >= acceptLimit || emitted >= SUGGESTION_COUNT) return false
-            val cleaned = cleanLocalSuggestionLine(rawLine) ?: return false
-            val key = normalizeSuggestionKey(cleaned)
-            if (key.isEmpty() || key in excludedKeys || !seen.add(key)) return false
+            if (!requireExactCount && (accepted >= acceptLimit || emitted >= SUGGESTION_COUNT)) return false
+            val cleaned = cleanLocalSuggestionLine(rawLine)
+            val key = cleaned?.let(::normalizeSuggestionKey).orEmpty()
+            val rejection = when {
+                cleaned == null || key.isEmpty() -> "format"
+                key in excludedKeys -> "existing_lyric"
+                !seen.add(key) -> "duplicate"
+                else -> null
+            }
+            if (rejection != null) {
+                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, rejection))
+                return false
+            }
+            checkNotNull(cleaned)
             accepted++
+            onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "accepted"))
 
             // Determine phonetic tier; treat chorus-repeat end-words as tier 2
             // so they stream immediately rather than being held.
@@ -655,16 +674,22 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
 
             if (matches != null && tier == 0 && !isHook) {
                 held += cleaned
+                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "held_for_rhyme_ranking"))
                 return true
             }
-            emit(SuggestedLine(cleaned, tier, isHook))
-            emitted++
+            if (emitted < SUGGESTION_COUNT) {
+                emit(SuggestedLine(cleaned, tier, isHook))
+                emitted++
+                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "displayed"))
+            } else {
+                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "display_limit"))
+            }
             return true
         }
 
         tokens.collect { chunk ->
             buffer.append(chunk)
-            while (accepted < acceptLimit && emitted < SUGGESTION_COUNT) {
+            while (requireExactCount || (accepted < acceptLimit && emitted < SUGGESTION_COUNT)) {
                 val newlineIdx = buffer.indexOf('\n')
                 if (newlineIdx < 0) break
                 val rawLine = buffer.substring(0, newlineIdx)
@@ -690,9 +715,10 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 )
                 emit(SuggestedLine(line, tier, isHook))
                 emitted++
+                onDecision?.invoke(LocalSuggestionDecision(line, line, "displayed_after_rhyme_ranking"))
             }
         }
-        if (requireExactCount && emitted != SUGGESTION_COUNT) {
+        if (requireExactCount && (accepted != SUGGESTION_COUNT || emitted != SUGGESTION_COUNT)) {
             throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
         }
     }
@@ -700,7 +726,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
     internal fun validatedLocalSuggestionStream(
         tokens: Flow<String>,
         lyrics: String,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        onDecision: ((LocalSuggestionDecision) -> Unit)? = null
     ): Flow<SuggestedLine> = flow {
         val existingKeys = lyrics.lines()
             .map(::normalizeSuggestionKey)
@@ -710,6 +737,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             tokens = flow {
                 tokens.collect { chunk ->
                     if (containsMarkupOrControlLeakage(chunk)) {
+                        onDecision?.invoke(LocalSuggestionDecision(chunk, null, "markup_or_control"))
                         throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
                     }
                     emit(chunk)
@@ -717,7 +745,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             },
             constraint = constraint,
             excludedKeys = existingKeys,
-            requireExactCount = true
+            requireExactCount = true,
+            onDecision = onDecision
         )
     }
 
@@ -1510,13 +1539,20 @@ Rules:
     internal fun validateLocalSuggestionResponse(
         response: String,
         lyrics: String,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        onDecision: ((LocalSuggestionDecision) -> Unit)? = null
     ): List<String> {
         if (containsMarkupOrControlLeakage(response)) {
+            onDecision?.invoke(LocalSuggestionDecision(response, null, "markup_or_control"))
             throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
         }
-        val rawResults = parseJsonArray(response, SUGGESTION_COUNT).ifEmpty { parseLines(response) }
-        val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, SUGGESTION_COUNT)
+        // Local prompts ask for exactly six, including constrained requests.
+        // Count the complete response before ranking or limiting visible items.
+        val rawResults = parseJsonArray(response, Int.MAX_VALUE).ifEmpty { response.lines() }
+        val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, onDecision)
+        if (sanitized.size != SUGGESTION_COUNT) {
+            throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
+        }
         val ranked = if (constraint == null) sanitized else RhymeConstraint.filterAndRank(
             lines = sanitized,
             targetLine = constraint.targetLine,
@@ -1642,7 +1678,7 @@ Rules:
     private fun sanitizeLocalSuggestions(
         candidates: List<String>,
         lyrics: String,
-        limit: Int = SUGGESTION_COUNT
+        onDecision: ((LocalSuggestionDecision) -> Unit)? = null
     ): List<String> {
         val existingLines = lyrics.lines()
             .map { normalizeSuggestionKey(it) }
@@ -1652,14 +1688,18 @@ Rules:
 
         return candidates
             .flatMap { it.lines() }
-            .mapNotNull { cleanLocalSuggestionLine(it) }
-            .filter { suggestion ->
-                val key = normalizeSuggestionKey(suggestion)
-                key.isNotEmpty() &&
-                    key !in existingLines &&
-                    seen.add(key)
+            .mapNotNull { rawLine ->
+                val cleaned = cleanLocalSuggestionLine(rawLine)
+                val key = cleaned?.let(::normalizeSuggestionKey).orEmpty()
+                val disposition = when {
+                    cleaned == null || key.isEmpty() -> "format"
+                    key in existingLines -> "existing_lyric"
+                    !seen.add(key) -> "duplicate"
+                    else -> "accepted"
+                }
+                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, disposition))
+                cleaned.takeIf { disposition == "accepted" }
             }
-            .take(limit)
     }
 
     private fun cleanLocalSuggestionLine(line: String): String? {
