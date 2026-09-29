@@ -1,0 +1,111 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.0.0/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:generateDebugBuildConfig
+> Task :kotlinllamacpp:preBuild UP-TO-DATE
+> Task :kotlinllamacpp:preDebugBuild UP-TO-DATE
+> Task :app:generateDebugResValues
+> Task :kotlinllamacpp:writeDebugAarMetadata
+> Task :kotlinllamacpp:generateDebugResValues
+> Task :kotlinllamacpp:generateDebugResources
+> Task :app:checkDebugAarMetadata
+> Task :kotlinllamacpp:packageDebugResources
+> Task :app:mapDebugSourceSetPaths
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:mergeDebugResources
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug
+> Task :kotlinllamacpp:extractDeepLinksDebug
+> Task :app:parseDebugLocalResources
+> Task :kotlinllamacpp:processDebugManifest
+> Task :kotlinllamacpp:compileDebugLibraryResources
+> Task :app:processDebugMainManifest
+> Task :app:processDebugManifest
+> Task :app:processDebugManifestForPackage
+> Task :kotlinllamacpp:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :kotlinllamacpp:parseDebugLocalResources
+> Task :kotlinllamacpp:javaPreCompileDebug
+> Task :app:javaPreCompileDebug
+> Task :app:preDebugUnitTestBuild UP-TO-DATE
+> Task :app:javaPreCompileDebugUnitTest
+> Task :kotlinllamacpp:generateDebugRFile
+> Task :app:processDebugResources
+
+> Task :kotlinllamacpp:compileDebugKotlin
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/third_party/kotlinllamacpp/src/main/java/org/nehuatl/llamacpp/LLamaContext.kt:127:34 Unchecked cast of 'Any?' to 'List<Int>'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/third_party/kotlinllamacpp/src/main/java/org/nehuatl/llamacpp/LLamaContext.kt:186:46 Unchecked cast of 'Any?' to 'List<List<Double>>'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/third_party/kotlinllamacpp/src/main/java/org/nehuatl/llamacpp/LLamaContext.kt:213:29 Unchecked cast of 'Any?' to 'List<String>'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/third_party/kotlinllamacpp/src/main/java/org/nehuatl/llamacpp/LLamaContext.kt:216:34 Unchecked cast of 'Any?' to 'List<Int>'.
+
+> Task :kotlinllamacpp:compileDebugJavaWithJavac NO-SOURCE
+> Task :kotlinllamacpp:bundleLibRuntimeToJarDebug
+> Task :kotlinllamacpp:bundleLibCompileToJarDebug
+> Task :kotlinllamacpp:processDebugJavaRes
+
+> Task :app:compileDebugKotlin
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:4:8 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:5:8 'class MasterKey : Any' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:25:25 'class MasterKey : Any' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:25:35 'constructor(p0: Context): MasterKey.Builder' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:26:27 'class MasterKey : Any' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:26:37 'enum class KeyScheme : Enum<MasterKey.KeyScheme!>' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:28:9 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:32:13 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:32:40 'enum class PrefKeyEncryptionScheme : Enum<EncryptedSharedPreferences.PrefKeyEncryptionScheme!>' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:33:13 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/data/repository/SecureKeyStore.kt:33:40 'enum class PrefValueEncryptionScheme : Enum<EncryptedSharedPreferences.PrefValueEncryptionScheme!>' is deprecated. Deprecated in Java.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/main/kotlin/com/rhymeai/app/service/AIService.kt:669:36 Condition is always 'true'.
+
+> Task :app:compileDebugJavaWithJavac
+> Task :app:bundleDebugClassesToCompileJar
+> Task :app:bundleDebugClassesToRuntimeJar
+> Task :app:processDebugJavaRes
+
+> Task :app:compileDebugUnitTestKotlin
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DeletionSidecarTest.kt:94:11 No cast needed.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DeletionSidecarTest.kt:136:14 No cast needed.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DeletionSidecarTest.kt:161:27 No cast needed.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DeletionSidecarTest.kt:222:26 No cast needed.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DriveSyncServiceTest.kt:263:13 Check for instance is always 'true'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DriveSyncServiceTest.kt:264:13 Check for instance is always 'false'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DriveSyncServiceTest.kt:265:13 Check for instance is always 'false'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DriveSyncServiceTest.kt:266:13 Check for instance is always 'false'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DriveSyncServiceTest.kt:352:13 Check for instance is always 'true'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DriveSyncServiceTest.kt:353:13 Check for instance is always 'false'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DriveSyncServiceTest.kt:354:13 Check for instance is always 'false'.
+w: file:///Users/tylermanring/Library/Mobile%20Documents/com~apple~CloudDocs/Developer/RhymeAI/.agents/worktrees/android-deletion-sync-20260929/android/app/src/test/kotlin/com/rhymeai/app/data/sync/DriveSyncServiceTest.kt:355:13 Check for instance is always 'false'.
+
+> Task :app:compileDebugUnitTestJavaWithJavac NO-SOURCE
+> Task :app:processDebugUnitTestJavaRes
+
+> Task :app:testDebugUnitTest
+
+DeletionSidecarTest > initializationError FAILED
+    org.junit.runners.model.InvalidTestClassError at ParentRunner.java:525
+
+382 tests completed, 1 failed, 5 skipped
+
+> Task :app:testDebugUnitTest FAILED
+
+[Incubating] Problems report is available at: file:///Users/tylermanring/.gradle-builds/RhymeAI/8d101b2b8e84801b3c7b6ac0d1cab05091964e793b86668fce9947994de61ca7/e7ac0786668e0ff0f02b62bd04f45ff636fd82db63b1104601c975dc005f3a67/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:testDebugUnitTest'.
+> There were failing tests. See the report at: file:///Users/tylermanring/.gradle-builds/RhymeAI/8d101b2b8e84801b3c7b6ac0d1cab05091964e793b86668fce9947994de61ca7/fe6d6407b0d4f368a90ae0ab936c9149337595e748643c73ad0870994d67fd3c/reports/tests/testDebugUnitTest/index.html
+
+* Try:
+> Run with --scan to generate a Build Scan (Powered by Develocity).
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.0.0/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 31s
+38 actionable tasks: 38 executed
