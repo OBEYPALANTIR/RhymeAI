@@ -17,6 +17,7 @@
 #include "rn-mtmd.hpp"
 #include "ggml.h"
 #include "jni_utf.h"
+#include "jni_sampling.h"
 
 #define UNUSED(x) (void)(x)
 #define TAG "RNLLAMA_ANDROID_JNI"
@@ -289,6 +290,8 @@ static bool readModelMetadataString(
 }
 
 std::unordered_map<long, rnllama::llama_rn_context *> context_map;
+// Load-time (GGUF-metadata-applied) penalty settings per context, restored on any request that leaves them unset.
+std::unordered_map<long, jnisampling::Penalties> penalty_baselines;
 
 JNIEXPORT jlong JNICALL
 Java_org_nehuatl_llamacpp_LlamaContext_initContextWithFd(
@@ -363,6 +366,12 @@ Java_org_nehuatl_llamacpp_LlamaContext_initContextWithFd(
 
     if (ok) {
         context_map[(long) llama->ctx] = llama;
+        penalty_baselines[(long) llama->ctx] = jnisampling::read(llama->params.sampling);
+        {
+            const auto &baseline = penalty_baselines[(long) llama->ctx];
+            LOGI("sampling_penalties baseline last_n=%d repeat=%.4f freq=%.4f present=%.4f",
+                 baseline.last_n, baseline.repeat, baseline.freq, baseline.present);
+        }
         if (!defaultParams.mmproj.path.empty()) {
             LOGI("Initializing multimodal with mmproj: %s", defaultParams.mmproj.path.c_str());
             bool mm_ok = llama->initMultimodal(defaultParams.mmproj.path, n_gpu_layers > 0);
@@ -622,7 +631,21 @@ Java_org_nehuatl_llamacpp_LlamaContext_doCompletion(
     llama->params.sampling.min_p = min_p;
     llama->params.n_predict = n_predict;
 
-    llama->completion->initSampling();
+    // Every request assigns all four penalty fields (requested value, else the load-time baseline),
+    // so settings from an earlier request cannot leak into this one.
+    const auto baselineIt = penalty_baselines.find((long) context_ptr);
+    if (baselineIt != penalty_baselines.end()) {
+        jnisampling::apply(
+            llama->params.sampling,
+            baselineIt->second,
+            jnisampling::Penalties{penalty_last_n, penalty_repeat, penalty_freq, penalty_present}
+        );
+    }
+
+    const bool sampler_ok = llama->completion->initSampling();
+    LOGI("sampling_penalties effective last_n=%d repeat=%.4f freq=%.4f present=%.4f sampler_ok=%d",
+         llama->params.sampling.penalty_last_n, llama->params.sampling.penalty_repeat,
+         llama->params.sampling.penalty_freq, llama->params.sampling.penalty_present, sampler_ok ? 1 : 0);
     
     std::vector<std::string> images;
     if (image_fds != nullptr) {
@@ -806,6 +829,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_freeContext(
     if (it == context_map.end()) return;
     auto llama = it->second;
     context_map.erase((long) llama->ctx);
+    penalty_baselines.erase((long) llama->ctx);
     delete llama;
 }
 
