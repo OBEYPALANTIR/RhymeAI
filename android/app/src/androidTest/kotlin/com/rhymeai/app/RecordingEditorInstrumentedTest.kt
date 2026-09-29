@@ -1,8 +1,9 @@
 package com.rhymeai.app
 
-import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.input.TextFieldValue
@@ -73,12 +74,14 @@ class RecordingEditorInstrumentedTest {
     }
 
     @Test fun recordingLibrarySurvivesActivityRecreation() {
-        compose.onNodeWithText("Recordings").performClick()
-        compose.waitUntil(5_000) { compose.onNodeWithText("Import recording").isDisplayed() }
-        compose.onNodeWithText("Import recording").assertIsDisplayed()
+        compose.onNodeWithTag("songActionsMenuButton").performClick()
+        compose.onNodeWithTag("songRecordings").assertIsDisplayed().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("importRecording").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("importRecording").assertIsDisplayed()
         scenario.recreate()
-        compose.waitUntil(5_000) { compose.onNodeWithText("Import recording").isDisplayed() }
-        compose.onNodeWithText("Import recording").assertIsDisplayed()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("importRecording").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("importRecording").assertIsDisplayed()
+        compose.onNodeWithTag("recordingsDone").assertIsDisplayed()
         compose.onNodeWithText("No recordings yet. Record or import audio for this song.").assertIsDisplayed()
     }
 }

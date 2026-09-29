@@ -20,6 +20,10 @@ val includeGeminiTestKey = providers.gradleProperty("includeGeminiTestKey")
     ?.toBooleanStrictOrNull()
     ?: false
 val embeddedGeminiTestKey = if (includeGeminiTestKey) geminiTestKey else ""
+val isolatedMotionQaApp = providers.gradleProperty("isolatedMotionQaApp")
+    .orNull
+    ?.toBooleanStrictOrNull()
+    ?: false
 val rewriteMotionStyleProperty = providers.gradleProperty("rewriteMotionStyle")
 val rewriteMotionStyle = rewriteMotionStyleProperty
     .getOrElse("ripple")
@@ -136,6 +140,7 @@ android {
 
     buildTypes {
         debug {
+            if (isolatedMotionQaApp) applicationIdSuffix = ".motionqa"
             versionNameSuffix = "-$rewriteMotionStyle"
             buildConfigField("String", "GEMINI_TEST_KEY", buildConfigString(embeddedGeminiTestKey))
             buildConfigField("String", "DRIVE_OAUTH_CLIENT_ID", buildConfigString(driveOauthClientId))

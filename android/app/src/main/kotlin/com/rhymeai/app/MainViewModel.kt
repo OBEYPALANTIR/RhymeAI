@@ -33,6 +33,7 @@ import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
 import com.rhymeai.app.service.LocalModelOperationGate
+import com.rhymeai.app.service.SyntheticGenerationCapture
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.EditHistory
@@ -911,6 +912,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return RhymeContextAnalyzer.currentSongSection(text, cursor)
     }
 
+    internal fun captureNextSyntheticSuggestionForTesting(capture: SyntheticGenerationCapture) {
+        check(BuildConfig.DEBUG && selectedProvider == AIProvider.LOCAL && localReady)
+        localModelService.captureNextSyntheticRequestForTesting(capture)
+    }
+
     fun getSuggestions() {
         if (lyrics.isEmpty()) return
         if (selectedProvider == AIProvider.LOCAL && !localReady) {
@@ -1226,16 +1232,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openInspector(word: String, range: TextRange) {
         inspectorSynonymsJob?.cancel()
+        // The inspector modal collapses this selection. Do it before capturing
+        // request context so opening the modal does not stale its own results.
+        clearPendingRewriteSelection()
         inspectorWord = word
         inspectorRange = range
         inspectorSynonyms = emptyList()
         inspectorSynonymsError = null
 
-        val inspectorContext = editorAIContext()
+        // Local word results remain valid when autosave assigns this song its first project ID.
+        val inspectorLyrics = lyrics
         viewModelScope.launch {
             val prosodyResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.analyzeWord(word) }
             val matchesResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.findRhymes(word) }
-            if (isCurrentAIContext(inspectorContext)) {
+            if (inspectorWord == word && inspectorRange == range && lyrics == inspectorLyrics) {
                 inspectorProsody = prosodyResult
                 inspectorMatches = matchesResult
             }

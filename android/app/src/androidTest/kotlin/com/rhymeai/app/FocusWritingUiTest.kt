@@ -9,6 +9,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
+import com.rhymeai.app.util.PronunciationDictionary
 import java.io.File
 import org.junit.*
 import org.junit.Assert.*
@@ -27,7 +28,7 @@ class FocusWritingUiTest {
         scenario!!.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
         waitUntil { vm.appearanceLoaded }
         composeRule.onNodeWithText("New Song", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.waitForIdle()
+        waitUntil { !vm.savingBeforeNavigation && !vm.showStartMenu && vm.lyrics.isEmpty() }
         onMain {
             vm.onTitleChanged("Focus writing QA")
             vm.onLyricsChanged(TextFieldValue(draft, TextRange(draft.length)))
@@ -143,6 +144,39 @@ class FocusWritingUiTest {
             vm.redoLyrics()
             vm.undoSuggestionInsertion(second.id)
             assertEquals(typed, vm.lyrics)
+        }
+    }
+
+    @Test fun wordInspectorPublishesAfterOpeningModalClearsSelection() {
+        composeRule.waitUntil(timeoutMillis = 20_000) {
+            PronunciationDictionary.shared.wordCount > 0
+        }
+        val inspectorLyrics = "The streetlights blur like stars against the rain"
+        val start = inspectorLyrics.lastIndexOf("rain")
+        val selectedWord = TextRange(start, start + "rain".length)
+        onMain {
+            vm.onLyricsChanged(TextFieldValue(inspectorLyrics, TextRange(inspectorLyrics.length)))
+            vm.onLyricsChanged(TextFieldValue(inspectorLyrics, selectedWord))
+            assertEquals("rain" to selectedWord, vm.singleWordSelection)
+        }
+
+        composeRule.onNodeWithContentDescription("Look up word").assertIsDisplayed()
+        onMain {
+            vm.openInspectorForSelection()
+            // This is the same transition EditorScreen runs when its modal opens.
+            // Keep it in one main-thread turn so IO cannot win the old race.
+            vm.clearPendingRewriteSelection()
+        }
+        composeRule.waitUntil(timeoutMillis = 8_000) {
+            vm.showInspector && vm.lyricsFieldValue.selection.collapsed
+        }
+        composeRule.waitUntil(timeoutMillis = 20_000) {
+            vm.inspectorProsody?.word == "rain" && vm.inspectorMatches?.perfect?.isNotEmpty() == true
+        }
+        onMain {
+            assertNull(vm.pendingRewriteRange)
+            assertEquals(inspectorLyrics, vm.lyrics)
+            assertEquals("rain", vm.inspectorWord)
         }
     }
 

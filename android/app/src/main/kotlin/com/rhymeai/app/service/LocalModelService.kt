@@ -3,6 +3,7 @@ package com.rhymeai.app.service
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.rhymeai.app.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +30,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 internal const val MAX_LOCAL_MODEL_BYTES = 8L * 1024L * 1024L * 1024L
 internal const val LOCAL_MODEL_ENGINE_VERSION = "0.4.0+c292c068bdd258203dd41fc6d0f08578eddd59f3"
@@ -84,6 +86,8 @@ class LocalModelService : AutoCloseable {
     private val modelMutex = Mutex()
     private val shutdownScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val closed = AtomicBoolean(false)
+    private val pendingSyntheticCapture = AtomicReference<SyntheticGenerationCapture?>(null)
+    private val nativeCapture = SyntheticNativeCaptureGate()
     private var llamaAndroid: LlamaAndroid? = null
 
     @Volatile
@@ -110,6 +114,14 @@ class LocalModelService : AutoCloseable {
         private set
 
     val isLoaded: Boolean get() = _loadedModelPath != null
+
+    internal fun captureNextSyntheticRequestForTesting(capture: SyntheticGenerationCapture) {
+        check(BuildConfig.DEBUG) { "Synthetic capture is only available in debug builds" }
+        require(capture.runId.matches(Regex("[A-Za-z0-9_-]{1,80}")))
+        require(capture.expectedPromptSha256.matches(Regex("[0-9a-f]{64}")))
+        require(capture.seed >= 0)
+        check(pendingSyntheticCapture.compareAndSet(null, capture)) { "Synthetic capture already armed" }
+    }
 
     fun initialize(context: Context) {
         check(!closed.get()) { "Service is closed" }
@@ -158,7 +170,10 @@ class LocalModelService : AutoCloseable {
                         "rope_freq_base" to 0.0,
                         "rope_freq_scale" to 0.0
                     )
-                ) { token -> activeTokenChannel?.trySend(token) }
+                ) { token ->
+                    nativeCapture.recordNativeCallback(token, System.nanoTime())
+                    activeTokenChannel?.trySend(token)
+                }
             } ?: throw IllegalStateException("Model initialization failed")
             val loadedContext = (loaded["contextId"] as? Number)?.toInt()
                 ?: throw IllegalStateException("Model initialization returned no context")
@@ -205,6 +220,16 @@ class LocalModelService : AutoCloseable {
                 if (!isLoaded || loadedContext == null || format == null || chatTemplate == null) {
                     throw IllegalStateException("No model loaded. Go to Settings to load a GGUF model file.")
                 }
+                val capture = pendingSyntheticCapture.getAndSet(null)
+                if (capture != null) {
+                    check(BuildConfig.DEBUG)
+                    val promptSha256 = MessageDigest.getInstance("SHA-256")
+                        .digest(prompt.toByteArray(Charsets.UTF_8))
+                        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+                    check(promptSha256 == capture.expectedPromptSha256) {
+                        "Synthetic capture prompt did not match the armed fixture"
+                    }
+                }
                 val renderedPrompt = formatPrompt(engine, loadedContext, prompt, chatTemplate)
 
                 val result = StringBuilder()
@@ -217,8 +242,12 @@ class LocalModelService : AutoCloseable {
                     GGUFPromptFormat.entries.map { it.stopSequence }, MAX_RESPONSE_CHARS
                 )
 
-                activeTokenChannel = tokenChannel
                 engine.prepareCompletion(loadedContext)
+                if (capture != null) {
+                    capture.onGenerationStarted(startedAtNs)
+                    nativeCapture.begin(capture, startedAtNs)
+                }
+                activeTokenChannel = tokenChannel
                 val relayJob = launch {
                     for (rawChunk in tokenChannel) {
                         val boundedChunk = generationBoundary.accept(rawChunk)
@@ -227,7 +256,9 @@ class LocalModelService : AutoCloseable {
                             if (firstChunkAtNs == null) firstChunkAtNs = System.nanoTime()
                             result.append(chunk)
                             chunkCount++
+                            val emittedAtNs = System.nanoTime()
                             send(chunk)
+                            capture?.onParserChunk?.invoke(chunk, emittedAtNs - startedAtNs)
                         }
                         if (boundedChunk.terminationReason != null) {
                             terminationReason = boundedChunk.terminationReason
@@ -241,7 +272,9 @@ class LocalModelService : AutoCloseable {
                             if (firstChunkAtNs == null) firstChunkAtNs = System.nanoTime()
                             result.append(tail.text)
                             chunkCount++
+                            val emittedAtNs = System.nanoTime()
                             send(tail.text)
+                            capture?.onParserChunk?.invoke(tail.text, emittedAtNs - startedAtNs)
                         }
                         tail.terminationReason?.let { terminationReason = it }
                     }
@@ -256,7 +289,7 @@ class LocalModelService : AutoCloseable {
                             "top_p" to TOP_P,
                             "n_predict" to N_PREDICT,
                             "ignore_eos" to IGNORE_EOS,
-                            "seed" to SEED,
+                            "seed" to (capture?.seed ?: SEED),
                             "emit_partial_completion" to true
                         )
                     ) ?: throw IllegalStateException("Local model generation failed")
@@ -285,8 +318,12 @@ class LocalModelService : AutoCloseable {
                         val stopFailure = runCatching {
                             withTimeout(STOP_TIMEOUT_MS) { engine.stopCompletion(loadedContext) }
                         }.exceptionOrNull()
-                        completionJob.cancelAndJoin()
-                        relayJob.cancelAndJoin()
+                        try {
+                            completionJob.cancelAndJoin()
+                            relayJob.cancelAndJoin()
+                        } finally {
+                            nativeCapture.finish()
+                        }
                         if (stopFailure != null) {
                             terminationReason = "error"
                         }

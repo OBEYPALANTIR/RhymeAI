@@ -31,6 +31,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,6 +42,10 @@ import com.rhymeai.app.data.model.SONG_TEMPLATES
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.appWritingSurface
 import kotlinx.coroutines.launch
+
+// The native sheet applies its travel after the caller modifier, so node bounds alone miss it.
+internal val TemplateSheetOffsetPx = SemanticsPropertyKey<Float>("TemplateSheetOffsetPx")
+private var SemanticsPropertyReceiver.templateSheetOffsetPx by TemplateSheetOffsetPx
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,6 +84,9 @@ fun TemplatesDialog(
 
     // The native sheet owns scrim, drag, Back, insets and system motion scaling.
     ModalBottomSheet(
+        modifier = Modifier.testTag("templatesSheetSurface").semantics {
+            templateSheetOffsetPx = runCatching { sheetState.requireOffset() }.getOrDefault(Float.NaN)
+        },
         onDismissRequest = ::finishClose,
         sheetState = sheetState,
         sheetMaxWidth = DesignTokens.Drawer.expandedWidth,
