@@ -13,8 +13,6 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -607,22 +605,7 @@ internal fun SettingsDialog(
 
                             // Model status
                             val loadedModelVisible = localModelLoaded && localModelPath != null
-                            AnimatedVisibility(
-                                visible = loadedModelVisible,
-                                enter = if (animationsEnabled) {
-                                    expandVertically(
-                                        tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing),
-                                        expandFrom = Alignment.Top
-                                    )
-                                } else EnterTransition.None,
-                                exit = if (animationsEnabled) {
-                                    // Hide stale success text immediately while its space collapses.
-                                    shrinkVertically(
-                                        tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing),
-                                        shrinkTowards = Alignment.Top
-                                    ) + fadeOut(tween(0))
-                                } else ExitTransition.None
-                            ) {
+                            val loadedStatusContent: @Composable () -> Unit = {
                                 Column {
                                     Row(
                                         modifier = Modifier
@@ -658,6 +641,23 @@ internal fun SettingsDialog(
                                         Text("Unload Model")
                                     }
                                 }
+                            }
+                            if (animationsEnabled) {
+                                AnimatedVisibility(
+                                    visible = loadedModelVisible,
+                                    enter = expandVertically(
+                                        tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing),
+                                        expandFrom = Alignment.Top
+                                    ),
+                                    exit = shrinkVertically(
+                                        tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing),
+                                        shrinkTowards = Alignment.Top
+                                    ) + fadeOut(tween(0))
+                                ) {
+                                    loadedStatusContent()
+                                }
+                            } else if (loadedModelVisible) {
+                                loadedStatusContent()
                             }
 
                             run {
