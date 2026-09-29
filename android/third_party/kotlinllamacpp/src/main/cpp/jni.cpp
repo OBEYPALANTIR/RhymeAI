@@ -16,6 +16,7 @@
 #include "rn-completion.h"
 #include "rn-mtmd.hpp"
 #include "ggml.h"
+#include "jni_utf.h"
 
 #define UNUSED(x) (void)(x)
 #define TAG "RNLLAMA_ANDROID_JNI"
@@ -25,6 +26,24 @@
 
 static inline int min(int a, int b) {
     return (a < b) ? a : b;
+}
+
+// Standard-UTF-8 string conversion at the JNI boundary (see jni_utf.h). Never yields a
+// null result unless the JVM cannot allocate, in which case a Java exception is pending.
+static bool jstringToUtf8(JNIEnv *env, jstring input, std::string &value) {
+    value.clear();
+    if (input == nullptr) return false;
+    const jsize length = env->GetStringLength(input);
+    const jchar *units = env->GetStringChars(input, nullptr);
+    if (units == nullptr) return false;
+    value = jniutf::utf16ToUtf8(reinterpret_cast<const char16_t *>(units), static_cast<size_t>(length));
+    env->ReleaseStringChars(input, units);
+    return true;
+}
+
+static jstring newJStringUtf8(JNIEnv *env, const char *bytes) {
+    const std::u16string units = jniutf::utf8ToUtf16(bytes, std::strlen(bytes));
+    return env->NewString(reinterpret_cast<const jchar *>(units.data()), static_cast<jsize>(units.size()));
 }
 
 extern "C" {
@@ -46,11 +65,11 @@ static inline void putStringHashMap(JNIEnv *env, jobject hashMap, const char *ke
     jmethodID putMethod = env->GetMethodID(hashMapClass, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 
     jstring jKey = env->NewStringUTF(key);
-    jstring jValue = env->NewStringUTF(value);
+    jstring jValue = newJStringUtf8(env, value);
     
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
-        LOGW("putStringHashMap: Invalid UTF-8 for key %s", key);
+        LOGW("putStringHashMap: Could not create value for key %s", key);
         jValue = env->NewStringUTF("");
     }
 
@@ -170,7 +189,7 @@ static inline void addStringArrayList(JNIEnv *env, jobject arrayList, const char
     jclass arrayListClass = env->FindClass("java/util/ArrayList");
     jmethodID addMethod = env->GetMethodID(arrayListClass, "add", "(Ljava/lang/Object;)Z");
 
-    jstring jValue = env->NewStringUTF(value);
+    jstring jValue = newJStringUtf8(env, value);
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
         jValue = env->NewStringUTF("");
@@ -296,9 +315,9 @@ Java_org_nehuatl_llamacpp_LlamaContext_initContextWithFd(
     defaultParams.use_mlock = use_mlock;
     defaultParams.use_mmap = use_mmap;
 
-    const char *lora_chars = env->GetStringUTFChars(lora_str, nullptr);
-    if (lora_chars && lora_chars[0] != '\0') {
-        defaultParams.lora_adapters.push_back({lora_chars, lora_scaled, "", "", nullptr});
+    std::string lora_path;
+    if (jstringToUtf8(env, lora_str, lora_path) && !lora_path.empty()) {
+        defaultParams.lora_adapters.push_back({lora_path, lora_scaled, "", "", nullptr});
     }
 
     if (mmproj_fd >= 0) {
@@ -326,7 +345,6 @@ Java_org_nehuatl_llamacpp_LlamaContext_initContextWithFd(
         delete llama;
     }
 
-    env->ReleaseStringUTFChars(lora_str, lora_chars);
     return ok ? reinterpret_cast<jlong>(llama->ctx) : 0;
 }
 
@@ -389,12 +407,11 @@ static bool readBoundedJString(
         std::string &value
 ) {
     if (input == nullptr) return false;
-    const jsize bytes = env->GetStringUTFLength(input);
-    if (bytes < 0 || static_cast<size_t>(bytes) >= maxBytes) return false;
-    const char *chars = env->GetStringUTFChars(input, nullptr);
-    if (chars == nullptr) return false;
-    value.assign(chars, static_cast<size_t>(bytes));
-    env->ReleaseStringUTFChars(input, chars);
+    std::string converted;
+    if (!jstringToUtf8(env, input, converted)) return false;
+    // An embedded NUL would truncate C-string consumers such as paths and template names.
+    if (converted.size() >= maxBytes || converted.find('\0') != std::string::npos) return false;
+    value = std::move(converted);
     return true;
 }
 
@@ -454,10 +471,10 @@ Java_org_nehuatl_llamacpp_LlamaContext_getFormattedChat(
             throwJavaException(env, "java/lang/IllegalStateException", "Formatted chat prompt is empty or too large");
             return nullptr;
         }
-        jstring result = env->NewStringUTF(formatted.c_str());
+        jstring result = newJStringUtf8(env, formatted.c_str());
         if (result == nullptr || env->ExceptionCheck()) {
             if (env->ExceptionCheck()) env->ExceptionClear();
-            throwJavaException(env, "java/lang/IllegalStateException", "Formatted chat prompt is not valid UTF-8");
+            throwJavaException(env, "java/lang/IllegalStateException", "Formatted chat prompt could not be converted to a Java string");
             return nullptr;
         }
         return result;
@@ -479,16 +496,14 @@ Java_org_nehuatl_llamacpp_LlamaContext_loadSession(
     auto it = context_map.find((long) context_ptr);
     if (it == context_map.end()) return nullptr;
     auto llama = it->second;
-    const char *path_chars = env->GetStringUTFChars(path, nullptr);
-
+    std::string path_utf8;
     auto result = createHashMap(env);
     size_t n_token_count_out = 0;
-    if (!llama_state_load_file(llama->ctx, path_chars, nullptr, 0, &n_token_count_out)) {
-        env->ReleaseStringUTFChars(path, path_chars);
+    if (!jstringToUtf8(env, path, path_utf8) ||
+        !llama_state_load_file(llama->ctx, path_utf8.c_str(), nullptr, 0, &n_token_count_out)) {
         putStringHashMap(env, result, "error", "Failed to load session");
         return reinterpret_cast<jobject>(result);
     }
-    env->ReleaseStringUTFChars(path, path_chars);
 
     putIntHashMap(env, result, "tokens_loaded", (int)n_token_count_out);
     putStringHashMap(env, result, "prompt", "");
@@ -508,14 +523,9 @@ Java_org_nehuatl_llamacpp_LlamaContext_saveSession(
     if (it == context_map.end()) return -1;
     auto llama = it->second;
 
-    const char *path_chars = env->GetStringUTFChars(path, nullptr);
-
-    if (!llama_state_save_file(llama->ctx, path_chars, nullptr, 0)) {
-        env->ReleaseStringUTFChars(path, path_chars);
-        return -1;
-    }
-
-    env->ReleaseStringUTFChars(path, path_chars);
+    std::string path_utf8;
+    if (!jstringToUtf8(env, path, path_utf8)) return -1;
+    if (!llama_state_save_file(llama->ctx, path_utf8.c_str(), nullptr, 0)) return -1;
     return 0;
 }
 
@@ -570,8 +580,9 @@ Java_org_nehuatl_llamacpp_LlamaContext_doCompletion(
 
     if (llama->completion == nullptr) return nullptr;
 
-    const char* prompt_chars = env->GetStringUTFChars(prompt, nullptr);
-    llama->params.prompt = prompt_chars;
+    std::string prompt_utf8;
+    if (!jstringToUtf8(env, prompt, prompt_utf8)) return nullptr;
+    llama->params.prompt = prompt_utf8;
 
     llama->params.sampling.seed = (seed == -1) ? time(NULL) : seed;
     llama->params.sampling.temp = temperature;
@@ -629,7 +640,6 @@ Java_org_nehuatl_llamacpp_LlamaContext_doCompletion(
         LOGW("doCompletion: Caught unknown exception");
     }
 
-    env->ReleaseStringUTFChars(prompt, prompt_chars);
     return createHashMap(env);
 }
 
@@ -664,9 +674,9 @@ Java_org_nehuatl_llamacpp_LlamaContext_tokenize(
     if (it == context_map.end()) return nullptr;
     auto llama = it->second;
 
-    const char *text_chars = env->GetStringUTFChars(text, nullptr);
-    auto result = llama->tokenize(text_chars, {});
-    env->ReleaseStringUTFChars(text, text_chars);
+    std::string text_utf8;
+    if (!jstringToUtf8(env, text, text_utf8)) return nullptr;
+    auto result = llama->tokenize(text_utf8, {});
 
     jobject list = createArrayList(env);
     for (const auto &tok : result.tokens) {
@@ -693,7 +703,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_detokenize(
 
     auto text = rnllama::tokens_to_str(llama->ctx, toks.cbegin(), toks.cend());
     
-    jstring jText = env->NewStringUTF(text.c_str());
+    jstring jText = newJStringUtf8(env, text.c_str());
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
         jText = env->NewStringUTF("");
@@ -720,19 +730,18 @@ Java_org_nehuatl_llamacpp_LlamaContext_embedding(
     if (it == context_map.end()) return nullptr;
     auto llama = it->second;
 
-    const char *text_chars = env->GetStringUTFChars(text, nullptr);
-    llama->params.prompt = text_chars;
+    std::string text_utf8;
+    if (!jstringToUtf8(env, text, text_utf8)) return nullptr;
+    llama->params.prompt = text_utf8;
 
     if (llama->completion) {
         auto result = llama->completion->embedding(llama->params);
-        env->ReleaseStringUTFChars(text, text_chars);
         jobject list = createArrayList(env);
         for (const auto &val : result) {
             addDoubleArrayList(env, list, (double)val);
         }
         return list;
     }
-    env->ReleaseStringUTFChars(text, text_chars);
     return createArrayList(env);
 }
 
@@ -752,7 +761,7 @@ Java_org_nehuatl_llamacpp_LlamaContext_bench(
     auto llama = it->second;
     if (llama->completion) {
         std::string result = llama->completion->bench(pp, tg, pl, nr);
-        return env->NewStringUTF(result.c_str());
+        return newJStringUtf8(env, result.c_str());
     }
     return env->NewStringUTF("[]"); 
 }
