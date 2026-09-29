@@ -12,6 +12,9 @@ import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SecureKeyStore
 import com.rhymeai.app.data.recording.RecordingFiles
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -96,6 +99,14 @@ interface DriveClient {
 
     suspend fun findFileByName(accessToken: String, name: String): DriveFileMetadata?
     suspend fun listFilesByNamePrefix(accessToken: String, namePrefix: String): List<DriveFileMetadata>
+
+    /**
+     * Every object whose name starts with [namePrefix], following all result pages. Must fail
+     * closed (throw [DriveNetworkException]) rather than return a partial list. The default
+     * delegates to [listFilesByNamePrefix], which is only complete if that call is.
+     */
+    suspend fun listAllByNamePrefix(accessToken: String, namePrefix: String): List<DriveFileMetadata> =
+        listFilesByNamePrefix(accessToken, namePrefix)
     suspend fun downloadFile(accessToken: String, fileId: String, maxBytes: Long): ByteArray
 
     suspend fun uploadNewFile(accessToken: String, content: ByteArray): String =
@@ -122,6 +133,7 @@ class RealDriveClient : DriveClient {
 
     private companion object {
         private const val DRIVE_V3 = "https://www.googleapis.com/drive/v3"
+        private const val MAX_LIST_PAGES = 20
         private const val UPLOAD_V3 = "https://www.googleapis.com/upload/drive/v3"
         private const val CONNECT_TIMEOUT_MS = 20_000
         private const val READ_TIMEOUT_MS = 30_000
@@ -139,6 +151,34 @@ class RealDriveClient : DriveClient {
     ): List<DriveFileMetadata> = withContext(Dispatchers.IO) {
         listFiles(accessToken, exactName = null, namePrefix = namePrefix)
             .filter { it.name.startsWith(namePrefix) }
+    }
+
+    override suspend fun listAllByNamePrefix(
+        accessToken: String,
+        namePrefix: String
+    ): List<DriveFileMetadata> = withContext(Dispatchers.IO) {
+        val query = "name contains '${driveQueryLiteral(namePrefix)}' and trashed = false"
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        collectAllPages(MAX_LIST_PAGES) { pageToken ->
+            val tokenParam = pageToken?.let { "&pageToken=" + URLEncoder.encode(it, "UTF-8") } ?: ""
+            val url = "$DRIVE_V3/files?spaces=appDataFolder&pageSize=1000" +
+                "&fields=nextPageToken,files(id,name,modifiedTime,version)&q=$encodedQuery$tokenParam"
+            val body = mapIoFailure("Drive list") {
+                val conn = openGet(url, accessToken)
+                try {
+                    val code = conn.responseCode
+                    if (code !in 200..299) {
+                        throwHttpFailure("Drive list", code, conn.errorBody())
+                    }
+                    conn.inputStream.bufferedReader().use { it.readText() }
+                } finally {
+                    conn.disconnect()
+                }
+            }
+            val files = parseDriveFiles(body).filter { it.name.startsWith(namePrefix) }
+            val next = driveJson.parseToJsonElement(body).jsonObject["nextPageToken"]?.jsonPrimitive?.content
+            files to next
+        }
     }
 
     override suspend fun downloadFile(accessToken: String, fileId: String, maxBytes: Long): ByteArray =
@@ -770,6 +810,64 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     return SyncDecision.MergeAndUpload(merged, sealLocal(merged), remoteBlob)
 }
 
+/** What the service needs from Android and Google Play services; a JVM test supplies its own. */
+internal data class DriveAuthorization(
+    val hasResolution: Boolean,
+    val pendingIntent: PendingIntent?,
+    val accessToken: String?
+)
+
+internal interface DriveSyncHost {
+    val filesDir: File
+    val noBackupFilesDir: File
+    fun clientId(): String
+    /** Null only if the Identity SDK is unavailable. */
+    suspend fun authorize(): DriveAuthorization?
+}
+
+/** Production host: app storage, the device id as sync client id, and Google Identity authorization. */
+internal class AndroidDriveSyncHost(
+    private val context: Context,
+    private val driveClientId: String
+) : DriveSyncHost {
+    override val filesDir: File get() = context.filesDir
+    override val noBackupFilesDir: File get() = context.noBackupFilesDir
+
+    override fun clientId(): String =
+        android.provider.Settings.Secure.getString(
+            context.contentResolver,
+            android.provider.Settings.Secure.ANDROID_ID
+        ) ?: "unknown"
+
+    override suspend fun authorize(): DriveAuthorization? =
+        suspendCancellableCoroutine { cont ->
+            val requestBuilder = AuthorizationRequest.Builder()
+                .setRequestedScopes(listOf(DRIVE_APPDATA_SCOPE))
+
+            if (driveClientId.isNotBlank()) {
+                // Server-client-id is only needed if the app also accesses a backend
+                // that validates Drive tokens. Include it when configured.
+                requestBuilder.requestOfflineAccess(driveClientId)
+            }
+
+            Identity.getAuthorizationClient(context)
+                .authorize(requestBuilder.build())
+                .addOnSuccessListener { result ->
+                    cont.resume(DriveAuthorization(result.hasResolution(), result.pendingIntent, result.accessToken))
+                }
+                .addOnFailureListener { e ->
+                    if (BuildConfig.DEBUG) {
+                        Log.w("DriveSyncService", "Authorization failed", e)
+                    }
+                    cont.resumeWithException(e)
+                }
+        }
+
+    private companion object {
+        private val DRIVE_APPDATA_SCOPE = Scope("https://www.googleapis.com/auth/drive.appdata")
+    }
+}
+
 /**
  * Orchestrates Google Drive sync for the RhymeAI projects library.
  *
@@ -815,12 +913,33 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
  * @param driveClient     Injected HTTP client; defaults to [RealDriveClient].
  * @param driveClientId   Optional OAuth web client id from local.properties.
  */
-class DriveSyncService(
-    private val context: Context,
+class DriveSyncService internal constructor(
+    private val host: DriveSyncHost,
     private val secureKeyStore: SecureKeyStore,
-    private val driveClient: DriveClient = RealDriveClient(),
-    private val driveClientId: String = ""
+    private val driveClient: DriveClient
 ) {
+    constructor(
+        context: Context,
+        secureKeyStore: SecureKeyStore,
+        driveClient: DriveClient = RealDriveClient(),
+        driveClientId: String = ""
+    ) : this(AndroidDriveSyncHost(context, driveClientId), secureKeyStore, driveClient)
+
+    /** Whether recording restore is paused because deletion records could not all be read. */
+    data class RestorePauseState(val paused: Boolean = false, val unreadableObjects: Int = 0)
+
+    private val syncSerializer = SyncSerializer()
+    private val deletionSidecar by lazy {
+        DeletionSidecar(driveClient, FileSidecarWriterIdentity(host.noBackupFilesDir))
+    }
+
+    @Volatile
+    private var recordingRestorePaused = false
+    private val restorePauseState = MutableStateFlow(RestorePauseState())
+
+    /** Owner-visible: recording restore is paused while any deletion record object cannot be read. */
+    val recordingRestorePause: StateFlow<RestorePauseState> = restorePauseState.asStateFlow()
+
     companion object {
         /** Key used in SecureKeyStore for the sync passphrase. */
         const val PASSPHRASE_KEY = "DRIVE_SYNC_PASSPHRASE"
@@ -829,9 +948,6 @@ class DriveSyncService(
         internal const val MAX_SYNC_BLOB_BYTES = 16L * 1024L * 1024L
         internal const val MAX_SYNC_RECORDING_BATCH_BYTES = 64L * 1024L * 1024L
         internal const val MIN_FREE_AFTER_RECORDING_RESTORE_BYTES = 128L * 1024L * 1024L
-
-        /** Drive appData scope — the only scope we request. */
-        private val DRIVE_APPDATA_SCOPE = Scope("https://www.googleapis.com/auth/drive.appdata")
     }
 
     /**
@@ -844,7 +960,10 @@ class DriveSyncService(
      * succeeded. If any step between download and upload fails, the local
      * state is left unchanged.
      */
-    suspend fun sync(repository: ProjectRepository): SyncResult = withContext(Dispatchers.IO) {
+    suspend fun sync(repository: ProjectRepository): SyncResult =
+        syncSerializer.run { syncLocked(repository) }
+
+    private suspend fun syncLocked(repository: ProjectRepository): SyncResult = withContext(Dispatchers.IO) {
         try {
             val passphrase = secureKeyStore.getKey(PASSPHRASE_KEY).toCharArray()
             if (passphrase.isEmpty()) {
@@ -854,7 +973,7 @@ class DriveSyncService(
             val authResult = authorize()
                 ?: return@withContext SyncResult.NotConfigured
 
-            if (authResult.hasResolution()) {
+            if (authResult.hasResolution) {
                 return@withContext SyncResult.AuthorizationRequired(
                     authResult.pendingIntent
                         ?: return@withContext SyncResult.NetworkError("Authorization pending intent missing")
@@ -865,13 +984,10 @@ class DriveSyncService(
                 ?: return@withContext SyncResult.NetworkError("No access token received from authorization")
 
             if (BuildConfig.DEBUG) {
-                Log.d(TAG, "Authorized; token length=${accessToken.length}")
+                debugLog("Authorized; token length=${accessToken.length}")
             }
 
             val localRecordingFiles = snapshotLocalRecordingFiles()
-            val localBlob = repository.snapshotForSync().copy(
-                recordings = localRecordingFiles.map { it.entry }
-            )
 
             val remoteMetadata = try {
                 driveClient.findFile(accessToken)
@@ -889,10 +1005,13 @@ class DriveSyncService(
                 null
             }
 
-            val clientId = android.provider.Settings.Secure.getString(
-                context.contentResolver,
-                android.provider.Settings.Secure.ANDROID_ID
-            ) ?: "unknown"
+            val deletionState = prepareDeletionState(accessToken, passphrase, remoteBytes)
+            val localBlob = repository.snapshotForSync().copy(
+                recordings = localRecordingFiles.map { it.entry },
+                recordingTombstones = deletionState.tombstones
+            )
+
+            val clientId = host.clientId()
 
             val initialDecision = decideSyncAction(
                 SyncDecisionInput(
@@ -924,6 +1043,11 @@ class DriveSyncService(
                 )
             } catch (e: DriveNetworkException) {
                 return@withContext SyncResult.NetworkError("Could not verify latest Drive backup: ${driveNetworkMessage(e)}")
+            }
+
+            // Wrong passphrase or a corrupt remote keep their existing results: no sidecar write.
+            if (guarded.decision !is SyncDecision.BadPassphrase && guarded.decision !is SyncDecision.CorruptRemote) {
+                writeOwnDeletionRecords(accessToken, passphrase, deletionState)?.let { return@withContext it }
             }
 
             when (val decision = guarded.decision) {
@@ -971,7 +1095,7 @@ class DriveSyncService(
                             try {
                                 driveClient.uploadNewFile(accessToken, finalDecision.sealedBytes)
                                 if (BuildConfig.DEBUG) {
-                                    Log.d(TAG, "Upload-only sync complete (first sync)")
+                                    debugLog("Upload-only sync complete (first sync)")
                                 }
                             } catch (e: DriveNetworkException) {
                                 return@withContext SyncResult.NetworkError("Upload failed: ${driveNetworkMessage(e)}")
@@ -1121,7 +1245,7 @@ class DriveSyncService(
                             localManifest = localBlob.recordings
                         )
                         if (BuildConfig.DEBUG) {
-                            Log.d(TAG, "Merge-and-upload sync complete")
+                            debugLog("Merge-and-upload sync complete")
                         }
                     } catch (e: DriveNetworkException) {
                         return@withContext SyncResult.NetworkError("Sync failed after merge: ${driveNetworkMessage(e)}")
@@ -1139,13 +1263,16 @@ class DriveSyncService(
             SyncResult.NetworkError("Drive sync failed — check your connection.")
         } catch (e: Exception) {
             if (BuildConfig.DEBUG) {
-                Log.e(TAG, "Unexpected sync error", e)
+                errorLog("Unexpected sync error", e)
             }
             SyncResult.UnknownError(e)
         }
     }
 
-    suspend fun restore(repository: ProjectRepository): SyncResult = withContext(Dispatchers.IO) {
+    suspend fun restore(repository: ProjectRepository): SyncResult =
+        syncSerializer.run { restoreLocked(repository) }
+
+    private suspend fun restoreLocked(repository: ProjectRepository): SyncResult = withContext(Dispatchers.IO) {
         try {
             val passphrase = secureKeyStore.getKey(PASSPHRASE_KEY).toCharArray()
             if (passphrase.isEmpty()) {
@@ -1155,7 +1282,7 @@ class DriveSyncService(
             val authResult = authorize()
                 ?: return@withContext SyncResult.NotConfigured
 
-            if (authResult.hasResolution()) {
+            if (authResult.hasResolution) {
                 return@withContext SyncResult.AuthorizationRequired(
                     authResult.pendingIntent
                         ?: return@withContext SyncResult.NetworkError("Authorization pending intent missing")
@@ -1178,13 +1305,12 @@ class DriveSyncService(
             }
 
             val localRecordingFiles = snapshotLocalRecordingFiles()
+            val deletionState = prepareDeletionState(accessToken, passphrase, remoteBytes)
             val localBlob = repository.snapshotForSync().copy(
-                recordings = localRecordingFiles.map { it.entry }
+                recordings = localRecordingFiles.map { it.entry },
+                recordingTombstones = deletionState.tombstones
             )
-            val clientId = android.provider.Settings.Secure.getString(
-                context.contentResolver,
-                android.provider.Settings.Secure.ANDROID_ID
-            ) ?: "unknown"
+            val clientId = host.clientId()
 
             val initialDecision = decideSyncAction(
                 SyncDecisionInput(
@@ -1213,6 +1339,10 @@ class DriveSyncService(
                 is SyncDecision.CorruptRemote -> return@withContext SyncResult.CorruptRemote
                 is SyncDecision.UploadOnly -> return@withContext SyncResult.NetworkError("No Drive backup found")
                 is SyncDecision.MergeAndUpload -> {
+                    // Same guarantee as sync(): this install's deletion records are verified in Drive
+                    // before any recording upload or library blob write.
+                    writeOwnDeletionRecords(accessToken, passphrase, deletionState)?.let { return@withContext it }
+
                     val remoteFilesByName = try {
                         driveClient.listFilesByNamePrefix(
                             accessToken,
@@ -1288,7 +1418,7 @@ class DriveSyncService(
             SyncResult.NetworkError("Drive restore failed — check your connection.")
         } catch (e: Exception) {
             if (BuildConfig.DEBUG) {
-                Log.e(TAG, "Unexpected restore error", e)
+                errorLog("Unexpected restore error", e)
             }
             SyncResult.UnknownError(e)
         }
@@ -1337,14 +1467,89 @@ class DriveSyncService(
     private fun driveAuthMessage(): String =
         "Drive authorization expired — run Sync now to re-authorize."
 
+    // android.util.Log is not available in JVM unit tests; logging must never change sync behavior.
+    private fun debugLog(message: String) {
+        runCatching { Log.d(TAG, message) }
+    }
+
+    private fun errorLog(message: String, error: Throwable) {
+        runCatching { Log.e(TAG, message, error) }
+    }
+
+    private data class DeletionState(val tombstones: List<RecordingTombstone>, val canWriteOwn: Boolean)
+
+    /**
+     * Reads every per-install deletion object, but only when the main blob opens with the current
+     * passphrase (or does not exist yet). Anything unreadable pauses recording restore; it is never
+     * treated as empty.
+     */
+    private suspend fun prepareDeletionState(
+        accessToken: String,
+        passphrase: CharArray,
+        remoteBytes: ByteArray?
+    ): DeletionState {
+        RecordingTombstoneStore.resolvePending(host.filesDir)
+        val local = RecordingTombstoneStore.all(host.filesDir)
+        val blobOpens = remoteBytes == null || runCatching { SyncBlobCrypto.open(remoteBytes, passphrase) }.isSuccess
+        if (!blobOpens) {
+            // Wrong passphrase: the existing WrongPassphrase result follows; no sidecar I/O, no restore.
+            setRestorePause(paused = true, unreadableObjects = 0)
+            return DeletionState(local, canWriteOwn = false)
+        }
+        return when (val read = deletionSidecar.readAll(accessToken, passphrase)) {
+            is SidecarRead.Ok -> {
+                setRestorePause(paused = false, unreadableObjects = 0)
+                DeletionState(RecordingTombstone.merge(local + read.entries), canWriteOwn = true)
+            }
+            is SidecarRead.Unavailable -> {
+                setRestorePause(paused = true, unreadableObjects = read.unreadableObjects)
+                DeletionState(RecordingTombstone.merge(local + read.entries), canWriteOwn = read.listingComplete)
+            }
+        }
+    }
+
+    private fun setRestorePause(paused: Boolean, unreadableObjects: Int) {
+        recordingRestorePaused = paused
+        restorePauseState.value = RestorePauseState(paused, unreadableObjects)
+    }
+
+    /**
+     * Persists this install's own deletion records before any library blob write. Returns a result
+     * to stop the sync, or null to continue. Nothing is uploaded unless the records are verified.
+     */
+    private suspend fun writeOwnDeletionRecords(
+        accessToken: String,
+        passphrase: CharArray,
+        state: DeletionState
+    ): SyncResult? {
+        val own = RecordingTombstoneStore.read(host.filesDir)
+        if (own.isEmpty()) return null
+        if (!state.canWriteOwn) {
+            return SyncResult.NetworkError("Deletion records could not be checked; nothing was uploaded")
+        }
+        return try {
+            when (deletionSidecar.writeOwn(accessToken, passphrase, own)) {
+                SidecarWrite.Written -> null
+                SidecarWrite.TooLarge ->
+                    SyncResult.NetworkError("Deletion records exceed the allowed size; nothing was uploaded")
+                SidecarWrite.NotVerified ->
+                    SyncResult.NetworkError("Deletion records could not be verified; nothing was uploaded")
+                SidecarWrite.ExistingUnreadable ->
+                    SyncResult.NetworkError("Existing deletion records could not be read; nothing was uploaded")
+            }
+        } catch (e: DriveNetworkException) {
+            SyncResult.NetworkError("Could not save deletion records: ${driveNetworkMessage(e)}")
+        }
+    }
+
     private data class LocalRecordingFile(
         val entry: RecordingManifestEntry,
         val file: File
     )
 
     private fun snapshotLocalRecordingFiles(): List<LocalRecordingFile> {
-        RecordingFileStore.recoverInterruptedRestores(context.filesDir)
-        val root = RecordingFiles.memosRoot(context.filesDir)
+        RecordingFileStore.recoverInterruptedRestores(host.filesDir)
+        val root = RecordingFiles.memosRoot(host.filesDir)
         if (!root.exists()) return emptyList()
         return root.listFiles()
             ?.asSequence()
@@ -1416,6 +1621,7 @@ class DriveSyncService(
         remoteFilesByName: Map<String, String>,
         localManifest: List<RecordingManifestEntry>
     ) {
+        if (recordingRestorePaused) return
         val plan = RecordingSyncPlanner.planRestores(
             local = localManifest,
             remoteManifest = remoteManifest,
@@ -1427,12 +1633,12 @@ class DriveSyncService(
             restoreBytes,
             MIN_FREE_AFTER_RECORDING_RESTORE_BYTES
         )
-        if (context.filesDir.usableSpace < requiredFreeBytes) {
+        if (host.filesDir.usableSpace < requiredFreeBytes) {
             throw DriveNetworkException("Not enough storage to restore recordings safely")
         }
 
         val stageDirectory = Files.createTempDirectory(
-            context.filesDir.toPath(),
+            host.filesDir.toPath(),
             RecordingFileStore.RESTORE_STAGE_PREFIX
         ).toFile()
         try {
@@ -1454,7 +1660,7 @@ class DriveSyncService(
                     plaintext
                 )
             }
-            RecordingFileStore.commitStagedRestores(context.filesDir, staged)
+            RecordingFileStore.commitStagedRestores(host.filesDir, staged)
         } catch (e: Exception) {
             if (!RecordingFileStore.hasPreparedRestore(stageDirectory)) {
                 stageDirectory.deleteRecursively()
@@ -1471,27 +1677,7 @@ class DriveSyncService(
      * with Play Services). The [AuthorizationResult] either contains an access
      * token directly or a pending intent the user must launch to grant access.
      */
-    private suspend fun authorize(): AuthorizationResult? =
-        suspendCancellableCoroutine { cont ->
-            val requestBuilder = AuthorizationRequest.Builder()
-                .setRequestedScopes(listOf(DRIVE_APPDATA_SCOPE))
-
-            if (driveClientId.isNotBlank()) {
-                // Server-client-id is only needed if the app also accesses a backend
-                // that validates Drive tokens. Include it when configured.
-                requestBuilder.requestOfflineAccess(driveClientId)
-            }
-
-            Identity.getAuthorizationClient(context)
-                .authorize(requestBuilder.build())
-                .addOnSuccessListener { result -> cont.resume(result) }
-                .addOnFailureListener { e ->
-                    if (BuildConfig.DEBUG) {
-                        Log.w(TAG, "Authorization failed", e)
-                    }
-                    cont.resumeWithException(e)
-                }
-        }
+    private suspend fun authorize(): DriveAuthorization? = host.authorize()
 
     fun setPassphrase(passphrase: String): Boolean {
         val normalized = normalizedDriveSyncPassphraseOrNull(passphrase) ?: return false

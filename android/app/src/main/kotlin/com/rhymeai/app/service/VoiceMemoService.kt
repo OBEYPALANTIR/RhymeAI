@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.recording.RecordingFiles
+import com.rhymeai.app.data.sync.RecordingTombstoneStore
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -375,7 +376,13 @@ class VoiceMemoService(private val context: Context) {
                 deletedAt++
                 target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
             }
-            if (memo.file.renameTo(target)) trashedMemoFromFile(target, projectId) else null
+            // Hash before the move; if hashing fails the deletion is recorded as pending and retried.
+            val digest = runCatching { RecordingTombstoneStore.sha256Of(memo.file) }.getOrNull()
+            if (memo.file.renameTo(target)) {
+                // Persist the deletion so sync never restores or re-uploads it, even after the trash is purged.
+                RecordingTombstoneStore.record(context.filesDir, projectId, memo.file.name, digest, deletedAt)
+                trashedMemoFromFile(target, projectId)
+            } else null
         }
     }
 
@@ -405,7 +412,15 @@ class VoiceMemoService(private val context: Context) {
         if (!dir.exists() && !dir.mkdirs()) return@withContext false
         val original = File(trashed.originalName)
         val target = RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension)
-        trashed.file.renameTo(target).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
+        trashed.file.renameTo(target).also { moved ->
+            // Restored under its original name: the recording is live again, so the deletion no longer applies.
+            if (moved && target.name == trashed.originalName) {
+                RecordingTombstoneStore.markRestored(
+                    context.filesDir, trashed.projectId, trashed.originalName, System.currentTimeMillis()
+                )
+            }
+            cleanUpEmptyTrashDir(trashed.file.parentFile)
+        }
     }
 
     /** Permanently delete a trashed recording. */
