@@ -1,0 +1,19 @@
+PR #51 JVM unit-test evidence (JUnit XML re-parsed from the retained runs)
+
+JVM_RUN_1_110dc7bd head=110dc7bdaf24c89d0568d307a1b6faaac9ff3f35 exit=1: tests=382 failures=1 errors=0 skipped=5
+  com.rhymeai.app.DriveSyncUiStateTest: tests=10 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.DeletionSidecarTest: tests=1 failures=1 errors=0 skipped=0
+  com.rhymeai.app.data.sync.DriveSyncServiceTest: tests=27 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.RecordingSyncTest: tests=15 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.RecordingTombstoneTest: tests=15 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.SyncBlobCryptoTest: tests=13 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.SyncMergerTest: tests=9 failures=0 errors=0 skipped=0
+
+JVM_RUN_2_cf9f28b2 head=cf9f28b2dfabc8f3748556207982dc5795c5ca13 exit=0: tests=395 failures=0 errors=0 skipped=5
+  com.rhymeai.app.DriveSyncUiStateTest: tests=10 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.DeletionSidecarTest: tests=14 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.DriveSyncServiceTest: tests=27 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.RecordingSyncTest: tests=15 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.RecordingTombstoneTest: tests=15 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.SyncBlobCryptoTest: tests=13 failures=0 errors=0 skipped=0
+  com.rhymeai.app.data.sync.SyncMergerTest: tests=9 failures=0 errors=0 skipped=0
