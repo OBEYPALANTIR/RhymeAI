@@ -596,7 +596,7 @@ Scrims should be dark and functional. Use them to explain modality, not to creat
 
 ## Motion
 
-Motion must explain cause, state, or spatial origin. Use 180ms for immediate feedback and dismissals, 260ms for ordinary state changes and dialogs, 340ms when assistant panels, sheets, or drawers present from their physical origin, and 420ms for drag release settle. Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
+Motion must explain cause, state, or spatial origin. Use 160ms for immediate feedback and dismissals, 260ms for ordinary state changes and panels, sheets, or drawers presenting from their physical origin, and 420ms for drag release settle. A stationary full-page fade may use the platform's 140ms token. Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
 
 ## Shapes
 

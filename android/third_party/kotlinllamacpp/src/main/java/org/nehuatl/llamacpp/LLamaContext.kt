@@ -162,6 +162,7 @@ class LlamaContext(
 
         val logitBias = params["logit_bias"] as? List<List<Double>>
         val logitBiasArray: Array<DoubleArray> = logitBias?.map { it.toDoubleArray() }?.toTypedArray() ?: emptyArray()
+        val penalties = CompletionPenalties.from(params)
 
         val result = doCompletion(
             context,
@@ -171,10 +172,10 @@ class LlamaContext(
             params["n_threads"] as? Int ?: 0,
             params["n_predict"] as? Int ?: -1,
             params["n_probs"] as? Int ?: 0,
-            params["penalty_last_n"] as? Int ?: 64,
-            (params["penalty_repeat"] as? Double)?.toFloat() ?: 1.00f,
-            (params["penalty_freq"] as? Double)?.toFloat() ?: 0.00f,
-            (params["penalty_present"] as? Double)?.toFloat() ?: 0.00f,
+            penalties.lastN,
+            penalties.repeat,
+            penalties.freq,
+            penalties.present,
             (params["mirostat"] as? Double)?.toFloat() ?: 0.00f,
             (params["mirostat_tau"] as? Double)?.toFloat() ?: 5.00f,
             (params["mirostat_eta"] as? Double)?.toFloat() ?: 0.10f,
@@ -193,7 +194,8 @@ class LlamaContext(
             (params["image_fds"] as? List<Int>)?.toIntArray() ?: intArrayOf(),
             PartialCompletionCallback(
                 params["emit_partial_completion"] as? Boolean ?: false
-            )
+            ),
+            params["qa_sampling_trace"] as? Boolean == true
         ).toMutableMap()
         if (result.containsKey("error")) {
             throw IllegalStateException(result["error"] as String)
@@ -295,7 +297,8 @@ class LlamaContext(
         ignore_eos: Boolean,
         logit_bias: Array<DoubleArray>,
         imageFds: IntArray,
-        partial_completion_callback: PartialCompletionCallback
+        partial_completion_callback: PartialCompletionCallback,
+        qa_sampling_trace: Boolean
     ): Map<String, Any>
 
     private external fun prepareCompletion(contextPtr: Long)
