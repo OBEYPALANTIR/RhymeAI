@@ -416,6 +416,9 @@ static bool readBoundedJString(
 }
 
 static void throwJavaException(JNIEnv *env, const char *className, const char *message) {
+    // Keep an already pending exception (e.g. OutOfMemoryError from GetStringChars); JNI calls
+    // made while one is pending are undefined.
+    if (env->ExceptionCheck()) return;
     jclass exceptionClass = env->FindClass(className);
     if (exceptionClass != nullptr) {
         env->ThrowNew(exceptionClass, message);
