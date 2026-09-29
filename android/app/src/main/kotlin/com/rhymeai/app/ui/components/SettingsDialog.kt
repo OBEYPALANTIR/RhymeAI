@@ -13,6 +13,9 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.MutableTransitionState
@@ -21,6 +24,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.selection.toggleable
@@ -80,6 +84,7 @@ import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -559,63 +564,99 @@ internal fun SettingsDialog(
                                 )
                                 Spacer(Modifier.height(8.dp))
                                 savedLocalModels.forEach { model ->
-                                    val isSelected = model.id == selectedLocalModelId
-                                    OutlinedButton(
-                                        onClick = { onSelectSavedLocalModel(model.id) },
-                                        enabled = !localModelLoading,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(DesignTokens.Radius.lg)
-                                    ) {
-                                        Icon(
-                                            if (isSelected) Icons.Default.CheckCircle else Icons.Default.FileOpen,
-                                            null,
-                                            modifier = Modifier.size(18.dp)
+                                    key(model.id) {
+                                        val isSelected = model.id == selectedLocalModelId
+                                        val selectionFill by animateColorAsState(
+                                            targetValue = if (isSelected) colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent,
+                                            animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0),
+                                            label = "savedModelSelectionFill"
                                         )
-                                        Text(
-                                            model.displayName,
-                                            modifier = Modifier.weight(1f).padding(start = 8.dp),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                        val selectionBorder by animateColorAsState(
+                                            targetValue = if (isSelected) colorScheme.primary else colorScheme.outlineVariant,
+                                            animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0),
+                                            label = "savedModelSelectionBorder"
                                         )
-                                        Text(if (isSelected) "Selected" else "Select", fontSize = 12.sp)
+                                        OutlinedButton(
+                                            onClick = { onSelectSavedLocalModel(model.id) },
+                                            enabled = !localModelLoading,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                                            colors = ButtonDefaults.outlinedButtonColors(
+                                                containerColor = selectionFill,
+                                                disabledContainerColor = selectionFill
+                                            ),
+                                            border = BorderStroke(1.dp, selectionBorder)
+                                        ) {
+                                            Icon(
+                                                if (isSelected) Icons.Default.CheckCircle else Icons.Default.FileOpen,
+                                                null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Text(
+                                                model.displayName,
+                                                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(if (isSelected) "Selected" else "Select", fontSize = 12.sp)
+                                        }
+                                        Spacer(Modifier.height(8.dp))
                                     }
-                                    Spacer(Modifier.height(8.dp))
                                 }
                             }
 
                             // Model status
-                            if (localModelLoaded && localModelPath != null) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(colorScheme.tertiaryContainer, RoundedCornerShape(DesignTokens.Radius.lg))
-                                        .border(1.dp, colorScheme.tertiary, RoundedCornerShape(DesignTokens.Radius.lg))
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(Icons.Default.CheckCircle, null, tint = colorScheme.onTertiaryContainer, modifier = Modifier.size(18.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text("Model loaded", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onTertiaryContainer)
-                                        Text(
-                                            savedLocalModels.firstOrNull { it.id == selectedLocalModelId }
-                                                ?.displayName ?: localModelPath.substringAfterLast("/"),
-                                            fontSize = 12.sp,
-                                            color = colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
+                            val loadedModelVisible = localModelLoaded && localModelPath != null
+                            AnimatedVisibility(
+                                visible = loadedModelVisible,
+                                enter = if (animationsEnabled) {
+                                    expandVertically(
+                                        tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing),
+                                        expandFrom = Alignment.Top
+                                    )
+                                } else EnterTransition.None,
+                                exit = if (animationsEnabled) {
+                                    // Hide stale success text immediately while its space collapses.
+                                    shrinkVertically(
+                                        tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing),
+                                        shrinkTowards = Alignment.Top
+                                    ) + fadeOut(tween(0))
+                                } else ExitTransition.None
+                            ) {
+                                Column {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(colorScheme.tertiaryContainer, RoundedCornerShape(DesignTokens.Radius.lg))
+                                            .border(1.dp, colorScheme.tertiary, RoundedCornerShape(DesignTokens.Radius.lg))
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.CheckCircle, null, tint = colorScheme.onTertiaryContainer, modifier = Modifier.size(18.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("Model loaded", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onTertiaryContainer)
+                                            Text(
+                                                savedLocalModels.firstOrNull { it.id == selectedLocalModelId }
+                                                    ?.displayName ?: localModelPath.orEmpty().substringAfterLast("/"),
+                                                fontSize = 12.sp,
+                                                color = colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
                                     }
-                                }
 
-                                Spacer(Modifier.height(8.dp))
+                                    Spacer(Modifier.height(8.dp))
 
-                                OutlinedButton(
-                                    onClick = onUnloadLocalModel,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(DesignTokens.Radius.lg)
-                                ) {
-                                    Text("Unload Model")
+                                    OutlinedButton(
+                                        onClick = onUnloadLocalModel,
+                                        enabled = loadedModelVisible,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(DesignTokens.Radius.lg)
+                                    ) {
+                                        Text("Unload Model")
+                                    }
                                 }
                             }
 
@@ -637,6 +678,11 @@ internal fun SettingsDialog(
                                         model.description
                                     }
                                     val isDownloadingThis = gemmaDownloadingModel?.fileName == model.fileName
+                                    val downloadFill by animateColorAsState(
+                                        targetValue = if (isDownloadingThis) colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent,
+                                        animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0),
+                                        label = "modelDownloadFill"
+                                    )
                                     val isRecommended = model.fileName == recommendedModel.fileName
                                     // Warn on the non-recommended model so users know it may thrash;
                                     // downloading is still allowed — just not the best fit for this device.
@@ -651,66 +697,69 @@ internal fun SettingsDialog(
                                         },
                                         enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null,
                                         modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(DesignTokens.Radius.lg)
+                                        shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            containerColor = downloadFill,
+                                            disabledContainerColor = downloadFill
+                                        )
                                     ) {
-                                        if (isDownloadingThis) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(16.dp),
-                                                color = colorScheme.primary,
-                                                strokeWidth = 2.dp
-                                            )
-                                            Text(
-                                                if (gemmaDownloadVerifying) {
-                                                    "  ${model.label} verifying..."
-                                                } else {
-                                                    "  ${model.label} ${formatDownloadProgress(gemmaDownloadProgress)}"
-                                                },
-                                                fontWeight = FontWeight.Medium
-                                            )
-                                        } else {
-                                            Icon(
-                                                if (isInstalled) Icons.Default.CheckCircle else Icons.Default.Download,
-                                                null,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Column(
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .padding(start = 8.dp),
-                                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                                            ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                                ) {
-                                                    Text(model.label, fontWeight = FontWeight.Medium)
-                                                    if (isRecommended) {
-                                                        Text(
-                                                            "Recommended",
-                                                            fontSize = 12.sp,
-                                                            fontWeight = FontWeight.Medium,
-                                                            color = colorScheme.onSurfaceVariant,
-                                                            modifier = Modifier
-                                                                .background(
-                                                                    colorScheme.surfaceVariant,
-                                                                    RoundedCornerShape(4.dp)
-                                                                )
-                                                                .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
-                                                        )
-                                                    }
-                                                }
-                                                Text(
-                                                    installedLabel,
-                                                    fontSize = 12.sp,
-                                                    color = colorScheme.onSurfaceVariant
+                                        // The model name and icon slot stay put as progress changes.
+                                        Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                                            if (isDownloadingThis) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    color = colorScheme.primary,
+                                                    strokeWidth = 2.dp
                                                 )
-                                                if (exceedsRam) {
+                                            } else {
+                                                Icon(
+                                                    if (isInstalled) Icons.Default.CheckCircle else Icons.Default.Download,
+                                                    null,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                        Column(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .padding(start = 8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(model.label, fontWeight = FontWeight.Medium)
+                                                if (isRecommended) {
                                                     Text(
-                                                        "May be slow on this device — needs more memory",
+                                                        "Recommended",
                                                         fontSize = 12.sp,
-                                                        color = colorScheme.error
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier
+                                                            .background(
+                                                                colorScheme.surfaceVariant,
+                                                                RoundedCornerShape(4.dp)
+                                                            )
+                                                            .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
                                                     )
                                                 }
+                                            }
+                                            Text(
+                                                when {
+                                                    isDownloadingThis && gemmaDownloadVerifying -> "Verifying download..."
+                                                    isDownloadingThis -> formatDownloadProgress(gemmaDownloadProgress)
+                                                    else -> installedLabel
+                                                },
+                                                fontSize = 12.sp,
+                                                color = colorScheme.onSurfaceVariant
+                                            )
+                                            if (exceedsRam) {
+                                                Text(
+                                                    "May be slow on this device — needs more memory",
+                                                    fontSize = 12.sp,
+                                                    color = colorScheme.error
+                                                )
                                             }
                                         }
                                     }
@@ -728,27 +777,26 @@ internal fun SettingsDialog(
                                         contentColor = colorScheme.onPrimary
                                     )
                                 ) {
-                                    if (copyingFile) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp),
-                                            color = colorScheme.onPrimary,
-                                            strokeWidth = 2.dp
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("Copying file...", fontWeight = FontWeight.Medium)
-                                    } else if (localModelLoading) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp),
-                                            color = colorScheme.onPrimary,
-                                            strokeWidth = 2.dp
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("Loading model...", fontWeight = FontWeight.Medium)
-                                    } else {
-                                        Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("Choose Model File", fontWeight = FontWeight.Medium)
+                                    Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                                        if (copyingFile || localModelLoading) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                color = colorScheme.onPrimary,
+                                                strokeWidth = 2.dp
+                                            )
+                                        } else {
+                                            Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(18.dp))
+                                        }
                                     }
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        when {
+                                            copyingFile -> "Copying file..."
+                                            localModelLoading -> "Loading model..."
+                                            else -> "Choose Model File"
+                                        },
+                                        fontWeight = FontWeight.Medium
+                                    )
                                 }
 
                             }
