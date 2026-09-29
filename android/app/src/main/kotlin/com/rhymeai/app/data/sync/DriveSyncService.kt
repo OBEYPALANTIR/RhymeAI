@@ -870,7 +870,8 @@ class DriveSyncService(
 
             val localRecordingFiles = snapshotLocalRecordingFiles()
             val localBlob = repository.snapshotForSync().copy(
-                recordings = localRecordingFiles.map { it.entry }
+                recordings = localRecordingFiles.map { it.entry },
+                recordingTombstones = RecordingTombstoneStore.all(context.filesDir)
             )
 
             val remoteMetadata = try {
@@ -1021,6 +1022,7 @@ class DriveSyncService(
                                 return@withContext SyncResult.NetworkError("Sync failed after remote changed: ${driveNetworkMessage(e)}")
                             }
                             repository.applySnapshot(finalDecision.merged)
+                            RecordingTombstoneStore.recordAll(context.filesDir, finalDecision.merged.recordingTombstones)
                             return@withContext SyncResult.Success(finalDecision.merged)
                         }
                     }
@@ -1128,6 +1130,7 @@ class DriveSyncService(
                     }
 
                     repository.applySnapshot(finalDecision.merged)
+                    RecordingTombstoneStore.recordAll(context.filesDir, finalDecision.merged.recordingTombstones)
                     return@withContext SyncResult.Success(finalDecision.merged)
                 }
             }
@@ -1179,7 +1182,8 @@ class DriveSyncService(
 
             val localRecordingFiles = snapshotLocalRecordingFiles()
             val localBlob = repository.snapshotForSync().copy(
-                recordings = localRecordingFiles.map { it.entry }
+                recordings = localRecordingFiles.map { it.entry },
+                recordingTombstones = RecordingTombstoneStore.all(context.filesDir)
             )
             val clientId = android.provider.Settings.Secure.getString(
                 context.contentResolver,
@@ -1274,6 +1278,7 @@ class DriveSyncService(
                             ?: return@withContext SyncResult.NetworkError("No Drive backup found")
                         driveClient.updateFile(accessToken, manifestFileId, finalDecision.sealedBytes)
                         repository.applySnapshot(finalDecision.merged)
+                        RecordingTombstoneStore.recordAll(context.filesDir, finalDecision.merged.recordingTombstones)
                         SyncResult.Success(finalDecision.merged)
                     } catch (e: DriveNetworkException) {
                         return@withContext SyncResult.NetworkError("Restore push-back failed: ${driveNetworkMessage(e)}")

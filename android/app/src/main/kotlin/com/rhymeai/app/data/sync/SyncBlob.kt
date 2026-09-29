@@ -19,6 +19,8 @@ data class SyncBlob(
     val projects: List<SongProject> = emptyList(),
     val trashed: List<TrashedSongProject> = emptyList(),
     val recordings: List<RecordingManifestEntry> = emptyList(),
+    /** Additive (schema version unchanged): deletions that keep removed recordings from being restored. */
+    val recordingTombstones: List<RecordingTombstone> = emptyList(),
     val savedAt: Long = System.currentTimeMillis(),
     val savedByClientId: String = ""
 ) {
@@ -32,6 +34,7 @@ data class SyncBlob(
         projects.forEach { SyncIdentity.validateProjectId(it.id) }
         trashed.forEach { SyncIdentity.validateProjectId(it.project.id) }
         recordings.forEach(RecordingManifestEntry::validate)
+        recordingTombstones.forEach(RecordingTombstone::validate)
     }
 }
 
@@ -100,12 +103,17 @@ data class RecordingManifestEntry(
  * Pure function, no IO, no side effects. Tested without Android.
  */
 object SyncMerger {
-    fun merge(local: SyncBlob, remote: SyncBlob): SyncBlob {
+    fun merge(local: SyncBlob, remote: SyncBlob, now: Long = System.currentTimeMillis()): SyncBlob {
         local.validate()
         remote.validate()
         val mergedProjects = mergeProjects(local.projects, remote.projects)
         val mergedTrashed = mergeTrash(local.trashed, remote.trashed)
+        // Tombstones are never compacted by time: dropping one could bring a deleted recording back.
+        val mergedTombstones = RecordingTombstoneStore.mergeLatest(local.recordingTombstones + remote.recordingTombstones)
+        // A tombstone at least as recent as an entry removes it from the merged manifest, which is
+        // what remote restores read; a strictly newer entry (re-recorded, restored) survives.
         val mergedRecordings = mergeRecordings(local.recordings, remote.recordings)
+            .filterNot { entry -> mergedTombstones.any { it.suppresses(entry) } }
 
         val (cleanProjects, cleanTrashed) = resolveActiveTrashConflicts(mergedProjects, mergedTrashed)
 
@@ -114,7 +122,8 @@ object SyncMerger {
             projects = cleanProjects.sortedByDescending { it.updatedAt },
             trashed = cleanTrashed.sortedByDescending { it.deletedAt },
             recordings = mergedRecordings.sortedWith(compareBy<RecordingManifestEntry> { it.projectId }.thenBy { it.fileName }),
-            savedAt = System.currentTimeMillis(),
+            recordingTombstones = mergedTombstones.sortedWith(compareBy<RecordingTombstone> { it.projectId }.thenBy { it.fileName }),
+            savedAt = now,
             savedByClientId = local.savedByClientId
         )
     }
