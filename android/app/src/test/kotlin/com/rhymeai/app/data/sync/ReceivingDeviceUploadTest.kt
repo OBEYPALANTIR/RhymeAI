@@ -3,6 +3,7 @@ package com.rhymeai.app.data.sync
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.SongWorkspace
+import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.recording.RecordingFiles
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SecureKeyStore
@@ -17,6 +18,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -157,6 +161,57 @@ class ReceivingDeviceUploadTest {
         } finally {
             fixture.close()
         }
+    }
+
+    @Test
+    fun outgoingRai2WireIncludesIosRequiredDefaultFieldsOnBothDecisionPaths() = runBlocking {
+        val missing = mutableListOf<String>()
+        for (merge in listOf(false, true)) {
+            val fixture = Fixture()
+            try {
+                val active = SongProject(id = "wire-active", title = "", lyrics = "", theme = "", updatedAt = 10L)
+                val trashed = SongProject(id = "wire-trashed", title = "", lyrics = "", theme = "", updatedAt = 20L)
+                fixture.repository.saveProjects(listOf(active, trashed))
+                fixture.repository.moveProjectToTrash(trashed.id, 100L)
+                val recording = fixture.memo(active.id, "take.m4a", "on-disk recording bytes")
+                val remote = if (merge) fixture.seal(SyncBlob()) else null
+
+                fixture.sync(remote)
+                val sealed = fixture.drive.manifestBytes()
+                assertEquals("RAI2", sealed.copyOfRange(0, 4).toString(Charsets.US_ASCII))
+                val opened = SyncBlobCrypto.openManifest(sealed, passphrase)
+                assertEquals(2, opened.version)
+                val wire = json.parseToJsonElement(opened.plaintext.toString(Charsets.UTF_8)).jsonObject
+                assertEquals("2", wire.getValue("version").jsonPrimitive.content)
+                assertTrue("deletions" in wire)
+                val project = wire.getValue("projects").jsonArray.single().jsonObject
+                val trash = wire.getValue("trashed").jsonArray.single().jsonObject
+                val trashProject = trash.getValue("project").jsonObject
+                val audio = wire.getValue("recordings").jsonArray.single().jsonObject
+                val path = if (merge) "MergeAndUpload" else "UploadOnly"
+                for (field in listOf("title", "lyrics", "theme")) {
+                    if (field !in project) missing += "$path.projects.$field"
+                    else assertEquals("", project.getValue(field).jsonPrimitive.content)
+                    if (field !in trashProject) missing += "$path.trashed.project.$field"
+                    else assertEquals("", trashProject.getValue(field).jsonPrimitive.content)
+                }
+                if ("deleteAfter" !in trash) missing += "$path.trashed.deleteAfter"
+                else assertEquals(
+                    (100L + TRASH_RETENTION_MILLIS).toString(),
+                    trash.getValue("deleteAfter").jsonPrimitive.content
+                )
+                if ("driveName" !in audio) missing += "$path.recordings.driveName"
+                else assertEquals(
+                    RecordingManifestEntry.driveNameFor(active.id, recording.name),
+                    audio.getValue("driveName").jsonPrimitive.content
+                )
+                assertEquals(recording.length().toString(), audio.getValue("sizeBytes").jsonPrimitive.content)
+                assertEquals(RecordingFileStore.sha256Hex(recording), audio.getValue("sha256").jsonPrimitive.content)
+            } finally {
+                fixture.close()
+            }
+        }
+        assertEquals(emptyList(), missing, "Missing iOS-required JSON keys from sealed production decisions")
     }
 
     private inner class Fixture {

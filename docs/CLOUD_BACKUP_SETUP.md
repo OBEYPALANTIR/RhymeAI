@@ -39,14 +39,15 @@ Create one OAuth client per signing certificate:
 
 ## Android project/recording sync contract
 
-The encrypted Drive `rhymeai-projects.json` snapshot uses SyncBlob version 2
-in an RAI2 envelope, matching the iOS v2/RAI2 manifest shape; native
-two-platform exchange has not yet been verified. Version 1 remains readable
-under RAI1 only when its JSON has no `deletions` key; version 2 requires that
-key, including `[]` when there are no deletions. The decoded version must
-match the authenticated envelope magic. Missing, null, mismatched, or
-unsupported shapes are rejected rather than replacing a backup. Recording
-payloads remain RAI1.
+The encrypted Drive `rhymeai-projects.json` snapshot pairs SyncBlob version 2
+with an RAI2 envelope, matching the iOS envelope/version pairing. Android now
+emits the song, trash, and recording body keys required by the iOS decoder
+even when their values equal defaults; native two-platform exchange has not
+yet been verified. Version 1 remains readable under RAI1 only when its JSON
+has no `deletions` key; version 2 requires that key, including `[]` when there
+are no deletions. The decoded version must match the authenticated envelope
+magic. Missing, null, mismatched, or unsupported shapes are rejected rather
+than replacing a backup. Recording payloads remain RAI1.
 
 Android's backed-up Preferences DataStore stores permanent-deletion tombstones
 separately from projects, trash, and pending local recording cleanup. Delete
@@ -67,6 +68,8 @@ from Drive; iOS peers do erase remote bytes, so this is not symmetric.
 Receiving-device local audio files and notebook data remain on disk after a
 remote tombstone, pending a separate cleanup decision. Incomplete cleanup
 following a local Delete Forever is tracked and retried separately.
+An upload that precedes a newly arriving remote tombstone is not undone;
+the refreshed decision prevents re-upload and final advertisement.
 
 ## Manual verification
 

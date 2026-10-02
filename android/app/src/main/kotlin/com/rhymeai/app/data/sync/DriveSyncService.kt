@@ -743,7 +743,10 @@ sealed class SyncDecision {
  * Otherwise → merge + upload.
  */
 fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
-    val json = Json { ignoreUnknownKeys = true }
+    val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true // iOS requires default-valued song, trash, and recording fields on the wire.
+    }
     val localWithId = try {
         input.local.validate()
         input.local.copy(

@@ -72,10 +72,13 @@ the next app launch or Trash purge. Recordings for pending deletions are omitted
 from new local Drive uploads; Android Auto Backup retains the pending record with
 any remaining files so cleanup resumes after restore.
 
-Android now writes the iOS v2/RAI2 manifest envelope shape, but a native
-two-platform exchange has not been verified. On Android v2 sync, tombstoned
-songs are hidden and their recordings are no longer uploaded or advertised by
-the receiving device, even if an older copy is edited later. Its local audio
+Android now pairs the iOS v2 envelope version with RAI2 and emits the required
+song, trash, and recording body keys even when their values equal defaults.
+Native two-platform exchange has not been verified. On Android v2 sync,
+tombstoned songs are hidden and their recordings are no longer uploaded or
+advertised by the receiving device, even if an older copy is edited later.
+An upload that precedes a newly arriving remote tombstone is not undone;
+the refreshed decision prevents re-upload and final advertisement. Local audio
 files and notebook data are retained pending a separate cleanup decision.
 Android does not erase previously uploaded recording bytes from Drive; iOS
 peers do erase remote bytes, so the two platforms currently differ there.
