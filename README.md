@@ -66,6 +66,13 @@ Run from `/Users/tylermanring/Documents/RhymeAI/android`:
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
+When permanent song deletion cannot remove every recording, Android keeps a
+pending cleanup record and reports that deletion is incomplete. It retries on
+the next app launch or Trash purge. Recordings for pending deletions are omitted
+from new local Drive uploads; Android Auto Backup retains the pending record with
+any remaining files so cleanup resumes after restore. This does not erase a
+recording that was already uploaded to Drive before the deletion.
+
 Release builds are minified. To produce signed release artifacts, create a gitignored
 `android/keystore.properties`:
 

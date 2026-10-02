@@ -1536,15 +1536,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 trashedProjects = committed
                 pendingProjectCreationIds.remove(id)
                 workspaces = workspaces - id
-                val memosRemoved = try {
-                    voiceMemoService.deleteMemoDirectory(id)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    false
-                }
-                if (!memosRemoved) {
-                    persistenceError = "The song was removed, but some recording files could not be deleted. Deletion is incomplete."
+                if (!retryPendingRecordingDeletions(id)) {
+                    persistenceError = "The song was removed, but some recording files could not be deleted. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
                 }
                 scheduleTrashPurge()
             } catch (cancelled: CancellationException) {
@@ -1575,22 +1568,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val committed = repo.purgeExpiredTrashedProjects(now)
                 trashedProjects = committed.trashedProjects
                 workspaces = workspaces - committed.purgedIds.toSet()
-                for (id in committed.purgedIds) {
-                    pendingProjectCreationIds.remove(id)
-                    val removed = try {
-                        voiceMemoService.deleteMemoDirectory(id)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        false
-                    }
-                    if (!removed) memoDirectoryFailure = true
-                }
+                for (id in committed.purgedIds) pendingProjectCreationIds.remove(id)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 songPurgeError = error
             }
+            // Retry every committed deletion, including leftovers from earlier launches.
+            // The repository checks current song membership before touching either directory.
+            if (!retryPendingRecordingDeletions()) memoDirectoryFailure = true
             // Recording Trash has its own expiry; a corrupt song/notebook store
             // must not prevent the independent recording cleanup from running.
             val recordingExpiryComplete = try {
@@ -1606,18 +1592,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         corruptLibraryMessage(songPurgeError)
                     else "Songs due for deletion and their notebook data were retained. Try again."
                     "Scheduled song deletion did not complete. $reason" +
-                        if (recordingExpiryComplete) "" else " Expired recording cleanup also failed."
+                        (if (memoDirectoryFailure) " Previously deleted songs also have recording files awaiting retry." else "") +
+                        (if (recordingExpiryComplete) "" else " Expired recording cleanup also failed.")
                 }
                 memoDirectoryFailure && !recordingExpiryComplete ->
-                    "Some expired songs were removed, but their recording files could not all be deleted. Expired recording cleanup also failed."
+                    "Some deleted songs still have recording files. Expired recording cleanup also failed. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
                 memoDirectoryFailure ->
-                    "Some expired songs were removed, but their recording files could not all be deleted. Deletion is incomplete."
+                    "Some deleted songs still have recording files. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
                 !recordingExpiryComplete ->
                     "Expired recording cleanup did not complete. Some trashed recording files remain."
                 else -> persistenceError
             }
             scheduleTrashPurge()
         }
+    }
+
+    private suspend fun retryPendingRecordingDeletions(onlyId: String? = null): Boolean = try {
+        repo.retryPendingRecordingDeletions(onlyId, voiceMemoService::deleteMemoDirectory)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
     }
 
     private fun reportMissingTrashProject() {

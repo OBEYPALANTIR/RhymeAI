@@ -7,6 +7,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.SongWorkspace
+import com.rhymeai.app.data.recording.RecordingFiles
+import com.rhymeai.app.data.sync.snapshotLocalRecordingFiles
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.io.IOException
@@ -24,6 +26,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ProjectRepositoryTest {
     @Test
@@ -252,6 +255,220 @@ class ProjectRepositoryTest {
             }
         } finally {
             firstScope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun partialRecordingDeletionRemainsPendingAcrossReopenAndOnlyRetriesDeletedSong() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-pending-memos").toFile()
+        val file = File(directory, "prefs.preferences_pb")
+        val filesDir = File(directory, "files")
+        val deletedId = "deleted-song"
+        val retainedId = "active-song"
+        val live = RecordingFiles.memoDirectory(filesDir, deletedId).apply { mkdirs() }
+        val trash = RecordingFiles.trashDirectory(filesDir, deletedId).apply { mkdirs() }
+        val retained = RecordingFiles.memoDirectory(filesDir, retainedId).apply { mkdirs() }
+        File(live, "live.m4a").writeText("live recording")
+        File(trash, "old.m4a").writeText("trashed recording")
+        File(retained, "keep.m4a").writeText("recoverable recording")
+        val untracked = RecordingFiles.memoDirectory(filesDir, "untracked").apply { mkdirs() }
+        File(untracked, "unsaved.m4a").writeText("unsaved draft recording")
+        val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = firstScope) { file }, testKeyStore()
+            )
+            repository.saveProjects(listOf(SongProject(id = deletedId, title = "Delete"),
+                SongProject(id = retainedId, title = "Keep")))
+            repository.moveProjectToTrash(deletedId, 10L)
+            repository.permanentlyDeleteTrashedProject(deletedId)
+            assertEquals(setOf(deletedId), repository.pendingRecordingDeletionIds())
+            assertEquals(false, repository.retryPendingRecordingDeletions { id ->
+                assertEquals(deletedId, id)
+                trash.deleteRecursively()
+                false // Deletion failed with the live directory still present.
+            })
+            assertEquals(setOf(deletedId), repository.pendingRecordingDeletionIds())
+            assertTrue(File(live, "live.m4a").exists())
+            firstScope.coroutineContext[Job]!!.cancelAndJoin()
+
+            val reopenedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            try {
+                val reopened = ProjectRepository(
+                    PreferenceDataStoreFactory.create(scope = reopenedScope) { file }, testKeyStore()
+                )
+                assertEquals(setOf(deletedId), reopened.pendingRecordingDeletionIds())
+                val upload = snapshotLocalRecordingFiles(filesDir, reopened.pendingRecordingDeletionIds())
+                assertEquals(listOf(retainedId, "untracked"), upload.map { it.entry.projectId })
+                assertTrue(reopened.retryPendingRecordingDeletions { id ->
+                    RecordingFiles.memoDirectory(filesDir, id).deleteRecursively() &&
+                        RecordingFiles.trashDirectory(filesDir, id).deleteRecursively()
+                })
+                assertEquals(emptySet(), reopened.pendingRecordingDeletionIds())
+                assertEquals(false, live.exists())
+                assertEquals(emptyList(), reopened.trashedProjectsFlow.first())
+                assertEquals(listOf(retainedId), reopened.projectsFlow.first().map { it.id })
+                assertEquals("recoverable recording", File(retained, "keep.m4a").readText())
+                assertEquals("unsaved draft recording", File(untracked, "unsaved.m4a").readText())
+            } finally {
+                reopenedScope.cancel()
+            }
+        } finally {
+            firstScope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun reactivatedSongCancelsPendingDeletionAndKeepsItsRecordingInDriveCollection() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-reactivated-memos").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val filesDir = File(directory, "files")
+        val song = SongProject(id = "reactivated", title = "Recovered")
+        val recording = File(RecordingFiles.memoDirectory(filesDir, song.id).apply { mkdirs() }, "take.m4a")
+        recording.writeText("restore me")
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") },
+                testKeyStore()
+            )
+            repository.saveProjects(listOf(song))
+            repository.moveProjectToTrash(song.id, 10L)
+            repository.permanentlyDeleteTrashedProject(song.id)
+            assertEquals(emptyList(), snapshotLocalRecordingFiles(filesDir, repository.pendingRecordingDeletionIds()))
+
+            repository.saveProjects(listOf(song))
+            assertEquals(emptySet(), repository.pendingRecordingDeletionIds())
+            assertEquals(listOf(song.id), snapshotLocalRecordingFiles(
+                filesDir, repository.pendingRecordingDeletionIds()
+            ).map { it.entry.projectId })
+            assertTrue(repository.retryPendingRecordingDeletions { id ->
+                RecordingFiles.memoDirectory(filesDir, id).deleteRecursively()
+            })
+            assertEquals("restore me", recording.readText())
+        } finally {
+            scope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun backedUpPendingDeletionCompletesAfterFilesAndDataStoreRestore() = runBlocking {
+        val source = kotlin.io.path.createTempDirectory("rhymeai-backup-source").toFile()
+        val restored = kotlin.io.path.createTempDirectory("rhymeai-backup-restored").toFile()
+        val filesDir = File(source, "files")
+        val preferences = File(filesDir, "datastore/rhymeai_prefs.preferences_pb")
+        preferences.parentFile!!.mkdirs()
+        val song = SongProject(id = "backup-pending", title = "Removed")
+        val audio = File(RecordingFiles.memoDirectory(filesDir, song.id).apply { mkdirs() }, "take.m4a")
+        audio.writeText("pending private recording")
+        val sourceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = sourceScope) { preferences }, testKeyStore()
+            )
+            repository.saveProjects(listOf(song))
+            repository.moveProjectToTrash(song.id, 10L)
+            repository.permanentlyDeleteTrashedProject(song.id)
+            assertEquals(false, repository.retryPendingRecordingDeletions { false })
+            assertEquals(setOf(song.id), repository.pendingRecordingDeletionIds())
+            sourceScope.coroutineContext[Job]!!.cancelAndJoin()
+
+            // Simulate an Auto Backup restore of app files, including DataStore and memo bytes.
+            filesDir.copyRecursively(restored, overwrite = true)
+            val restoredAudio = RecordingFiles.memoFile(restored, song.id, "take.m4a")
+            assertEquals("pending private recording", restoredAudio.readText())
+            val restoredScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            try {
+                val restoredRepo = ProjectRepository(
+                    PreferenceDataStoreFactory.create(scope = restoredScope) {
+                        File(restored, "datastore/rhymeai_prefs.preferences_pb")
+                    },
+                    testKeyStore()
+                )
+                assertEquals(setOf(song.id), restoredRepo.pendingRecordingDeletionIds())
+                assertTrue(restoredRepo.retryPendingRecordingDeletions { id ->
+                    val live = RecordingFiles.memoDirectory(restored, id)
+                    val trash = RecordingFiles.trashDirectory(restored, id)
+                    (!live.exists() || live.deleteRecursively()) &&
+                        (!trash.exists() || trash.deleteRecursively())
+                })
+                assertEquals(emptySet(), restoredRepo.pendingRecordingDeletionIds())
+                assertEquals(false, restoredAudio.exists())
+                assertEquals("pending private recording", audio.readText())
+            } finally {
+                restoredScope.cancel()
+            }
+        } finally {
+            sourceScope.cancel()
+            source.deleteRecursively()
+            restored.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun expiryPurgeRetriesEarlierFailuresAndRemovesRecordingResidue() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-expiry-memos").toFile()
+        val filesDir = File(directory, "files")
+        val leftover = RecordingFiles.memoDirectory(filesDir, "expired").apply { mkdirs() }
+        File(leftover, "take.m4a").writeText("expired audio")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") },
+                testKeyStore()
+            )
+            val expired = SongProject(id = "expired", title = "Expired")
+            repository.saveProjects(listOf(expired))
+            repository.moveProjectToTrash(expired.id, 10L)
+            val now = 10L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+            repository.purgeExpiredTrashedProjects(now)
+            assertEquals(setOf(expired.id), repository.pendingRecordingDeletionIds())
+            assertEquals(false, repository.retryPendingRecordingDeletions {
+                throw IOException("injected recording deletion failure")
+            })
+            assertEquals(setOf(expired.id), repository.pendingRecordingDeletionIds())
+            assertTrue(File(leftover, "take.m4a").exists())
+            assertEquals(emptyList(), repository.purgeExpiredTrashedProjects(now).purgedIds)
+            assertTrue(repository.retryPendingRecordingDeletions { id ->
+                RecordingFiles.memoDirectory(filesDir, id).deleteRecursively()
+            })
+            assertEquals(emptySet(), repository.pendingRecordingDeletionIds())
+            assertEquals(false, leftover.exists())
+        } finally {
+            scope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun manualDeletionOnlyRetriesItsOwnDirectoryWhenAnotherDeletionIsPending() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-manual-pending").toFile()
+        val filesDir = File(directory, "files")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") },
+                testKeyStore()
+            )
+            val earlier = SongProject(id = "earlier", title = "Earlier")
+            val current = SongProject(id = "current", title = "Current")
+            repository.saveProjects(listOf(earlier, current))
+            for (song in listOf(earlier, current)) {
+                repository.moveProjectToTrash(song.id, 10L)
+                repository.permanentlyDeleteTrashedProject(song.id)
+                File(RecordingFiles.memoDirectory(filesDir, song.id).apply { mkdirs() }, "take.m4a")
+                    .writeText(song.title)
+            }
+            assertTrue(repository.retryPendingRecordingDeletions(onlyId = current.id) { id ->
+                RecordingFiles.memoDirectory(filesDir, id).deleteRecursively()
+            })
+            assertEquals(setOf(earlier.id), repository.pendingRecordingDeletionIds())
+            assertEquals(false, RecordingFiles.memoDirectory(filesDir, current.id).exists())
+            assertEquals("Earlier", RecordingFiles.memoFile(filesDir, earlier.id, "take.m4a").readText())
+        } finally {
+            scope.cancel()
             directory.deleteRecursively()
         }
     }

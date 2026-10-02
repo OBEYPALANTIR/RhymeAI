@@ -770,6 +770,41 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     return SyncDecision.MergeAndUpload(merged, sealLocal(merged), remoteBlob)
 }
 
+internal data class LocalRecordingFile(val entry: RecordingManifestEntry, val file: File)
+
+/** Never turn a pending local deletion into a durable remote recording. */
+internal fun snapshotLocalRecordingFiles(
+    filesDir: File,
+    pendingDeletionIds: Set<String>
+): List<LocalRecordingFile> {
+    RecordingFileStore.recoverInterruptedRestores(filesDir)
+    val root = RecordingFiles.memosRoot(filesDir)
+    if (!root.exists()) return emptyList()
+    return root.listFiles()
+        ?.asSequence()
+        ?.filter { it.isDirectory && it.name !in pendingDeletionIds }
+        ?.flatMap { projectDir ->
+            projectDir.listFiles()
+                ?.asSequence()
+                ?.filter { RecordingFiles.isMemoFile(it) }
+                ?.map { file ->
+                    val entry = RecordingManifestEntry(
+                        projectId = projectDir.name,
+                        fileName = file.name,
+                        driveName = RecordingManifestEntry.driveNameFor(projectDir.name, file.name),
+                        sizeBytes = file.length(),
+                        modifiedAt = file.lastModified(),
+                        sha256 = RecordingFileStore.sha256Hex(file)
+                    )
+                    LocalRecordingFile(entry, file)
+                }
+                ?: emptySequence()
+        }
+        ?.sortedWith(compareBy<LocalRecordingFile> { it.entry.projectId }.thenBy { it.entry.fileName })
+        ?.toList()
+        ?: emptyList()
+}
+
 /**
  * Orchestrates Google Drive sync for the RhymeAI projects library.
  *
@@ -868,10 +903,10 @@ class DriveSyncService(
                 Log.d(TAG, "Authorized; token length=${accessToken.length}")
             }
 
-            val localRecordingFiles = snapshotLocalRecordingFiles()
-            val localBlob = repository.snapshotForSync().copy(
-                recordings = localRecordingFiles.map { it.entry }
-            )
+            val snapshot = repository.snapshotForSync()
+            val pendingDeletionIds = repository.pendingRecordingDeletionIds()
+            val localRecordingFiles = snapshotLocalRecordingFiles(context.filesDir, pendingDeletionIds)
+            val localBlob = snapshot.copy(recordings = localRecordingFiles.map { it.entry })
 
             val remoteMetadata = try {
                 driveClient.findFile(accessToken)
@@ -1177,10 +1212,10 @@ class DriveSyncService(
                 return@withContext SyncResult.NetworkError("Could not download sync file: ${driveNetworkMessage(e)}")
             }
 
-            val localRecordingFiles = snapshotLocalRecordingFiles()
-            val localBlob = repository.snapshotForSync().copy(
-                recordings = localRecordingFiles.map { it.entry }
-            )
+            val snapshot = repository.snapshotForSync()
+            val pendingDeletionIds = repository.pendingRecordingDeletionIds()
+            val localRecordingFiles = snapshotLocalRecordingFiles(context.filesDir, pendingDeletionIds)
+            val localBlob = snapshot.copy(recordings = localRecordingFiles.map { it.entry })
             val clientId = android.provider.Settings.Secure.getString(
                 context.contentResolver,
                 android.provider.Settings.Secure.ANDROID_ID
@@ -1337,39 +1372,6 @@ class DriveSyncService(
     private fun driveAuthMessage(): String =
         "Drive authorization expired — run Sync now to re-authorize."
 
-    private data class LocalRecordingFile(
-        val entry: RecordingManifestEntry,
-        val file: File
-    )
-
-    private fun snapshotLocalRecordingFiles(): List<LocalRecordingFile> {
-        RecordingFileStore.recoverInterruptedRestores(context.filesDir)
-        val root = RecordingFiles.memosRoot(context.filesDir)
-        if (!root.exists()) return emptyList()
-        return root.listFiles()
-            ?.asSequence()
-            ?.filter { it.isDirectory }
-            ?.flatMap { projectDir ->
-                projectDir.listFiles()
-                    ?.asSequence()
-                    ?.filter { RecordingFiles.isMemoFile(it) }
-                    ?.map { file ->
-                        val entry = RecordingManifestEntry(
-                            projectId = projectDir.name,
-                            fileName = file.name,
-                            driveName = RecordingManifestEntry.driveNameFor(projectDir.name, file.name),
-                            sizeBytes = file.length(),
-                            modifiedAt = file.lastModified(),
-                            sha256 = RecordingFileStore.sha256Hex(file)
-                        )
-                        LocalRecordingFile(entry, file)
-                    }
-                    ?: emptySequence()
-            }
-            ?.sortedWith(compareBy<LocalRecordingFile> { it.entry.projectId }.thenBy { it.entry.fileName })
-            ?.toList()
-            ?: emptyList()
-    }
 
     private suspend fun uploadRecordingFiles(
         accessToken: String,

@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.rhymeai.app.data.model.AnalysisPresentation
@@ -15,6 +16,7 @@ import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -67,6 +69,7 @@ class ProjectRepository internal constructor(
         private val WORKSPACES_KEY = stringPreferencesKey("local_song_workspaces_json")
         private val PROJECTS_KEY = stringPreferencesKey("projects_json")
         private val TRASHED_PROJECTS_KEY = stringPreferencesKey("trashed_projects_json")
+        private val PENDING_RECORDING_DELETIONS_KEY = stringSetPreferencesKey("pending_recording_deletions")
         private val CURRENT_PROJECT_ID_KEY = stringPreferencesKey("current_project_id")
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
@@ -182,6 +185,10 @@ class ProjectRepository internal constructor(
                 }
             }
             if (project != null) prefs[PROJECTS_KEY] = json.encodeToString(next)
+            if (project != null && createIfMissing) {
+                prefs[PENDING_RECORDING_DELETIONS_KEY] =
+                    (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - project.id
+            }
             if (project == null) prefs.remove(CURRENT_PROJECT_ID_KEY)
             else prefs[CURRENT_PROJECT_ID_KEY] = project.id
             prefs[CURRENT_TITLE_KEY] = title
@@ -210,6 +217,8 @@ class ProjectRepository internal constructor(
         dataStore.edit { prefs ->
             projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")
             prefs[PROJECTS_KEY] = encoded
+            prefs[PENDING_RECORDING_DELETIONS_KEY] =
+                (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - projects.map { it.id }.toSet()
         }
     }
 
@@ -217,6 +226,8 @@ class ProjectRepository internal constructor(
         val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
         dataStore.edit { prefs ->
             trashedProjectsStore.requireWritable(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+            prefs[PENDING_RECORDING_DELETIONS_KEY] =
+                (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - projects.map { it.project.id }.toSet()
             prefs[TRASHED_PROJECTS_KEY] = encoded
         }
     }
@@ -241,6 +252,8 @@ class ProjectRepository internal constructor(
             val wasCurrent = prefs[CURRENT_PROJECT_ID_KEY] == id
             prefs[PROJECTS_KEY] = json.encodeToString(nextActive)
             prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            prefs[PENDING_RECORDING_DELETIONS_KEY] =
+                (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
             if (wasCurrent) {
                 prefs.remove(CURRENT_PROJECT_ID_KEY)
                 prefs[CURRENT_TITLE_KEY] = ""
@@ -261,6 +274,8 @@ class ProjectRepository internal constructor(
             val nextActive = listOf(entry.project.copy(updatedAt = now)) + active.filterNot { it.id == id }
             val nextTrash = trash.filterNot { it.project.id == id }
             prefs[PROJECTS_KEY] = json.encodeToString(nextActive)
+            prefs[PENDING_RECORDING_DELETIONS_KEY] =
+                (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
             prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
             committed = TrashTransition(nextActive, nextTrash)
         }
@@ -276,6 +291,8 @@ class ProjectRepository internal constructor(
             val nextTrash = trash.filterNot { it.project.id == id }
             prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
             prefs[WORKSPACES_KEY] = json.encodeToString(workspaces - id)
+            prefs[PENDING_RECORDING_DELETIONS_KEY] =
+                (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + id
             committed = nextTrash
         }
         committed
@@ -291,11 +308,58 @@ class ProjectRepository internal constructor(
                 val workspaces = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
                 prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(retained)
                 prefs[WORKSPACES_KEY] = json.encodeToString(workspaces - expired.toSet())
+                prefs[PENDING_RECORDING_DELETIONS_KEY] =
+                    (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + expired
             }
             committed = TrashPurge(retained, expired)
         }
         committed
     }
+
+    /** A deletion becomes retryable in the same commit that removes its song and notebook. */
+    suspend fun pendingRecordingDeletionIds(): Set<String> =
+        dataStore.data.first()[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()
+
+    /**
+     * Serialize cleanup with project transitions: never remove recordings for an ID
+     * that has become active or trashed again (for example after a Drive restore).
+     * A failed or interrupted directory removal leaves its durable pending marker.
+     */
+    suspend fun retryPendingRecordingDeletions(
+        onlyId: String? = null,
+        deleteDirectory: suspend (String) -> Boolean
+    ): Boolean =
+        projectSaveMutex.withLock {
+            var complete = true
+            for (id in pendingRecordingDeletionIds()) {
+                if (onlyId != null && id != onlyId) continue
+                val prefs = dataStore.data.first()
+                val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+                val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+                if (active.any { it.id == id } || trash.any { it.project.id == id }) {
+                    complete = false
+                    continue
+                }
+                val removed = try {
+                    deleteDirectory(id)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
+                if (!removed) {
+                    complete = false
+                    continue
+                }
+                dataStore.edit { current ->
+                    projectsStore.decode(current[PROJECTS_KEY] ?: "[]")
+                    trashedProjectsStore.decode(current[TRASHED_PROJECTS_KEY] ?: "[]")
+                    current[PENDING_RECORDING_DELETIONS_KEY] =
+                        (current[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
+                }
+            }
+            complete
+        }
 
     suspend fun setCurrentProjectId(id: String?) {
         dataStore.edit { prefs ->
