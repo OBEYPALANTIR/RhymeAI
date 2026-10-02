@@ -12,7 +12,6 @@ import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SecureKeyStore
 import com.rhymeai.app.data.recording.RecordingFiles
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -903,9 +902,9 @@ class DriveSyncService(
                 Log.d(TAG, "Authorized; token length=${accessToken.length}")
             }
 
-            val snapshot = repository.snapshotForSync()
-            val pendingDeletionIds = repository.pendingRecordingDeletionIds()
-            val localRecordingFiles = snapshotLocalRecordingFiles(context.filesDir, pendingDeletionIds)
+            val base = repository.snapshotLocalSyncBase()
+            val snapshot = base.blob
+            val localRecordingFiles = snapshotLocalRecordingFiles(context.filesDir, base.pendingIds)
             val localBlob = snapshot.copy(recordings = localRecordingFiles.map { it.entry })
 
             val remoteMetadata = try {
@@ -1055,8 +1054,8 @@ class DriveSyncService(
                             } catch (e: DriveNetworkException) {
                                 return@withContext SyncResult.NetworkError("Sync failed after remote changed: ${driveNetworkMessage(e)}")
                             }
-                            repository.applySnapshot(finalDecision.merged)
-                            return@withContext SyncResult.Success(finalDecision.merged)
+                            val committed = repository.applySyncResult(finalDecision.merged, base)
+                            return@withContext SyncResult.Success(committed)
                         }
                     }
                 }
@@ -1110,8 +1109,8 @@ class DriveSyncService(
                             } catch (e: DriveNetworkException) {
                                 return@withContext SyncResult.NetworkError("Sync failed after merge: ${driveNetworkMessage(e)}")
                             }
-                            repository.applySnapshot(refreshed.local)
-                            return@withContext SyncResult.Success(refreshed.local)
+                            val committed = repository.applySyncResult(refreshed.local, base)
+                            return@withContext SyncResult.Success(committed)
                         }
                         is SyncDecision.MergeAndUpload -> refreshed
                     }
@@ -1162,8 +1161,8 @@ class DriveSyncService(
                         return@withContext SyncResult.NetworkError("Sync failed after merge: ${driveNetworkMessage(e)}")
                     }
 
-                    repository.applySnapshot(finalDecision.merged)
-                    return@withContext SyncResult.Success(finalDecision.merged)
+                    val committed = repository.applySyncResult(finalDecision.merged, base)
+                    return@withContext SyncResult.Success(committed)
                 }
             }
         } catch (e: DriveAuthException) {
@@ -1212,9 +1211,9 @@ class DriveSyncService(
                 return@withContext SyncResult.NetworkError("Could not download sync file: ${driveNetworkMessage(e)}")
             }
 
-            val snapshot = repository.snapshotForSync()
-            val pendingDeletionIds = repository.pendingRecordingDeletionIds()
-            val localRecordingFiles = snapshotLocalRecordingFiles(context.filesDir, pendingDeletionIds)
+            val base = repository.snapshotLocalSyncBase()
+            val snapshot = base.blob
+            val localRecordingFiles = snapshotLocalRecordingFiles(context.filesDir, base.pendingIds)
             val localBlob = snapshot.copy(recordings = localRecordingFiles.map { it.entry })
             val clientId = android.provider.Settings.Secure.getString(
                 context.contentResolver,
@@ -1308,8 +1307,8 @@ class DriveSyncService(
                         val manifestFileId = finalGuarded.metadata?.id
                             ?: return@withContext SyncResult.NetworkError("No Drive backup found")
                         driveClient.updateFile(accessToken, manifestFileId, finalDecision.sealedBytes)
-                        repository.applySnapshot(finalDecision.merged)
-                        SyncResult.Success(finalDecision.merged)
+                        val committed = repository.applySyncResult(finalDecision.merged, base)
+                        SyncResult.Success(committed)
                     } catch (e: DriveNetworkException) {
                         return@withContext SyncResult.NetworkError("Restore push-back failed: ${driveNetworkMessage(e)}")
                     }
@@ -1503,33 +1502,4 @@ class DriveSyncService(
 
     /** True if a passphrase has been stored. */
     fun hasPassphrase(): Boolean = secureKeyStore.getKey(PASSPHRASE_KEY).isNotEmpty()
-}
-
-// ---------------------------------------------------------------------------
-// ProjectRepository extensions: snapshot and apply, kept here so they stay
-// co-located with the sync logic and do not pollute the repo's public surface.
-// ---------------------------------------------------------------------------
-
-/**
- * Produce a [SyncBlob] from the repository's current persisted state.
- * Reads the DataStore on IO; must be called from a coroutine.
- */
-suspend fun ProjectRepository.snapshotForSync(): SyncBlob {
-    val projects = projectsFlow.first()
-    val trashed = trashedProjectsFlow.first()
-    return SyncBlob(
-        projects = projects,
-        trashed = trashed,
-        savedAt = System.currentTimeMillis()
-    )
-}
-
-/**
- * Write the merged [SyncBlob] back to the repository. Called only after
- * the upload to Drive has confirmed success, so local state never diverges
- * from what Drive holds.
- */
-suspend fun ProjectRepository.applySnapshot(blob: SyncBlob) {
-    saveProjects(blob.projects)
-    saveTrashedProjects(blob.trashed)
 }

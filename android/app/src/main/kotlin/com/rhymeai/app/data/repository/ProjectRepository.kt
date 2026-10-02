@@ -15,6 +15,7 @@ import com.rhymeai.app.data.model.SongWorkspace
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
+import com.rhymeai.app.data.sync.SyncBlob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.withLock
@@ -36,6 +37,13 @@ internal class CorruptLibraryException(
 
 internal class MissingActiveProjectException(id: String) :
     IllegalStateException("Song $id is no longer active")
+
+/** A coherent local membership and deletion view captured before Drive network work. */
+internal data class LocalSyncBase(
+    val blob: SyncBlob,
+    val baseIds: Set<String>,
+    val pendingIds: Set<String>
+)
 
 internal class FailClosedStoredJson<T>(
     private val area: String,
@@ -319,6 +327,59 @@ class ProjectRepository internal constructor(
     /** A deletion becomes retryable in the same commit that removes its song and notebook. */
     suspend fun pendingRecordingDeletionIds(): Set<String> =
         dataStore.data.first()[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()
+
+    /** Read all sync-relevant repository fields from one DataStore generation. */
+    internal suspend fun snapshotLocalSyncBase(): LocalSyncBase {
+        val prefs = dataStore.data.first()
+        val projects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+        val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+        val ids = buildSet {
+            projects.forEach { add(it.id) }
+            trash.forEach { add(it.project.id) }
+        }
+        return LocalSyncBase(
+            blob = SyncBlob(projects = projects, trashed = trash, savedAt = System.currentTimeMillis()),
+            baseIds = ids,
+            pendingIds = prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()
+        )
+    }
+
+    /**
+     * Reconcile the uploaded result with locally committed membership in one edit.
+     * IDs deleted after the base read stay deleted even if their cleanup marker
+     * was cleared before the upload finished. New local IDs stay in their place.
+     */
+    internal suspend fun applySyncResult(merged: SyncBlob, base: LocalSyncBase): SyncBlob =
+        projectSaveMutex.withLock {
+            lateinit var committed: SyncBlob
+            dataStore.edit { prefs ->
+                val currentProjects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+                val currentTrash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+                val currentIds = buildSet {
+                    currentProjects.forEach { add(it.id) }
+                    currentTrash.forEach { add(it.project.id) }
+                }
+                val removed = base.baseIds - currentIds
+                val mergedIds = buildSet {
+                    merged.projects.forEach { add(it.id) }
+                    merged.trashed.forEach { add(it.project.id) }
+                }
+                val addedProjects = currentProjects.filter { it.id !in base.baseIds && it.id !in mergedIds }
+                val addedTrash = currentTrash.filter { it.project.id !in base.baseIds && it.project.id !in mergedIds }
+                val nextProjects = merged.projects.filterNot { it.id in removed } + addedProjects
+                val nextTrash = merged.trashed.filterNot { it.project.id in removed } + addedTrash
+                val writtenIds = buildSet {
+                    nextProjects.forEach { add(it.id) }
+                    nextTrash.forEach { add(it.project.id) }
+                }
+                prefs[PROJECTS_KEY] = json.encodeToString(nextProjects)
+                prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+                prefs[PENDING_RECORDING_DELETIONS_KEY] =
+                    (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - writtenIds
+                committed = merged.copy(projects = nextProjects, trashed = nextTrash)
+            }
+            committed
+        }
 
     /**
      * Serialize cleanup with project transitions: never remove recordings for an ID

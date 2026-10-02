@@ -720,9 +720,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     trashedCount = result.merged.trashed.size,
                     recordingCount = result.merged.recordings.size
                 )
-                // Re-read projects into UI state since the snapshot may have changed.
-                projects = result.merged.projects
-                trashedProjects = result.merged.trashed
             }
             is SyncResult.AuthorizationRequired -> {
                 driveSyncAuthorizedForNonInteractive = false
@@ -1592,15 +1589,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         corruptLibraryMessage(songPurgeError)
                     else "Songs due for deletion and their notebook data were retained. Try again."
                     "Scheduled song deletion did not complete. $reason" +
-                        (if (memoDirectoryFailure) " Previously deleted songs also have recording files awaiting retry." else "") +
+                        (if (memoDirectoryFailure) " Previously deleted songs may also have recording files awaiting retry." else "") +
                         (if (recordingExpiryComplete) "" else " Expired recording cleanup also failed.")
                 }
                 memoDirectoryFailure && !recordingExpiryComplete ->
-                    "Some deleted songs still have recording files. Expired recording cleanup also failed. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
+                    "Some deleted songs may still have recording files. Expired recording cleanup also failed. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
                 memoDirectoryFailure ->
-                    "Some deleted songs still have recording files. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
+                    "Some deleted songs may still have recording files. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
                 !recordingExpiryComplete ->
-                    "Expired recording cleanup did not complete. Some trashed recording files remain."
+                    "Expired recording cleanup did not complete. Some trashed recording files may remain."
                 else -> persistenceError
             }
             scheduleTrashPurge()

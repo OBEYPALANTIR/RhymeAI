@@ -1096,7 +1096,7 @@ internal fun SettingsDialog(
                 Column {
                 Spacer(Modifier.height(DesignTokens.Spacing.sm))
                 Text(
-                    "Backs up projects, trash, and recordings to Google Drive. API keys stay on this device. Backup is encrypted with your passphrase.",
+                    "Backs up projects, trash, and recordings to Google Drive. A later sync may restore previously synced recordings of a deleted song to this device. API keys stay on this device. Backup is encrypted with your passphrase.",
                     fontSize = 12.sp,
                     color = subtleColor,
                     lineHeight = 16.sp

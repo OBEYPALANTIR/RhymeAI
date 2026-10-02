@@ -73,6 +73,8 @@ from new local Drive uploads; Android Auto Backup retains the pending record wit
 any remaining files so cleanup resumes after restore. This does not erase a
 recording that was already uploaded to Drive before the deletion.
 
+A later sync may restore previously synced recordings of a deleted song to this device.
+
 Release builds are minified. To produce signed release artifacts, create a gitignored
 `android/keystore.properties`:
 
