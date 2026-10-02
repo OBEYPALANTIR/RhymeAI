@@ -33,6 +33,7 @@ class DriveSyncServiceDeletionTest {
         val objects = linkedMapOf<String, Pair<String, ByteArray>>()
         val ops = mutableListOf<String>()
         var failUploadPrefix: String? = null
+        val failDownloadIds = mutableSetOf<String>()
         private var nextId = 0
 
         fun put(name: String, bytes: ByteArray): String {
@@ -48,6 +49,7 @@ class DriveSyncServiceDeletionTest {
             objects.filter { it.value.first.startsWith(namePrefix) }.map { DriveFileMetadata(it.key, it.value.first) }
 
         override suspend fun downloadFile(accessToken: String, fileId: String, maxBytes: Long): ByteArray {
+            if (fileId in failDownloadIds) throw DriveNetworkException("download failed")
             val bytes = objects.getValue(fileId).second
             if (bytes.size > maxBytes) throw DriveNetworkException("too large")
             return bytes
@@ -228,6 +230,71 @@ class DriveSyncServiceDeletionTest {
                 assertTrue(result is SyncResult.NetworkError, result.toString())
                 assertContentEquals(foreign, env.drive.objects.getValue(ownId).second)
                 assertFalse(env.drive.ops.contains("update:${SyncBlob.DRIVE_FILE_NAME}"), "blob must not be written: ${env.drive.ops}")
+            }
+        } finally {
+            env.close()
+        }
+    }
+
+    @Test
+    fun genuinelyUnreadableOwnObjectKeepsItsMessageAndTheIdentity() {
+        val env = Env(passphraseText)
+        try {
+            runBlocking {
+                seedMainBlob(env)
+                val identity = FileSidecarWriterIdentity(env.noBackupDir)
+                val writerBefore = identity.writerId()
+                val foreign = SyncBlobCrypto.seal("x".toByteArray(), "another passphrase".toCharArray())
+                val ownId = env.drive.put(DeletionSidecar.objectName(writerBefore), foreign)
+                RecordingTombstoneStore.record(env.filesDir, "p1", "take.m4a", "h100", 200L)
+
+                val result = env.service.sync(env.repository)
+
+                assertTrue(result is SyncResult.NetworkError, result.toString())
+                assertTrue((result as SyncResult.NetworkError).message.contains("could not be read"), result.message)
+                assertEquals(writerBefore, FileSidecarWriterIdentity(env.noBackupDir).writerId(), "no id rotation on an unreadable object")
+                assertContentEquals(foreign, env.drive.objects.getValue(ownId).second)
+                assertEquals(2, env.drive.objects.size, "main blob plus the untouched own object")
+            }
+        } finally {
+            env.close()
+        }
+    }
+
+    @Test
+    fun transientDownloadFailureOfTheOwnObjectIsNotReportedAsUnreadableAndRecoversOnTheNextSync() {
+        val env = Env(passphraseText)
+        try {
+            runBlocking {
+                seedMainBlob(env)
+                RecordingTombstoneStore.record(env.filesDir, "p1", "take.m4a", "h100", 200L)
+                assertTrue(env.service.sync(env.repository) is SyncResult.Success)
+                val writerId = FileSidecarWriterIdentity(env.noBackupDir).writerId()
+                val ownId = env.drive.objects.entries.single { it.value.first == DeletionSidecar.objectName(writerId) }.key
+                val ownBefore = env.drive.objects.getValue(ownId).second.copyOf()
+                val objectCount = env.drive.objects.size
+                val opsBefore = env.drive.ops.size
+                RecordingTombstoneStore.record(env.filesDir, "p1", "new.m4a", "h2", 300L)
+                env.drive.failDownloadIds += ownId
+
+                val failed = env.service.sync(env.repository)
+
+                assertTrue(failed is SyncResult.NetworkError, failed.toString())
+                failed as SyncResult.NetworkError
+                assertFalse(failed.message.contains("could not be read"), "a transient failure must not claim the object is unreadable: ${failed.message}")
+                assertTrue(failed.message.startsWith("Could not save deletion records"), failed.message)
+                assertEquals(writerId, FileSidecarWriterIdentity(env.noBackupDir).writerId(), "no id rotation on a transient failure")
+                assertContentEquals(ownBefore, env.drive.objects.getValue(ownId).second)
+                assertEquals(objectCount, env.drive.objects.size)
+                assertEquals(opsBefore, env.drive.ops.size, "nothing may be written: ${env.drive.ops}")
+
+                // The failure clears: the next sync succeeds on the same identity and keeps both deletions.
+                env.drive.failDownloadIds.clear()
+                assertTrue(env.service.sync(env.repository) is SyncResult.Success)
+                assertEquals(writerId, FileSidecarWriterIdentity(env.noBackupDir).writerId())
+                val read = readSidecar(env)
+                assertTrue(read.entries.any { it.suppresses(manifest("take.m4a", "h100")) }, "old deletion lost")
+                assertTrue(read.entries.any { it.suppresses(manifest("new.m4a", "h2")) }, "new deletion missing")
             }
         } finally {
             env.close()

@@ -94,7 +94,7 @@ sealed class SidecarWrite {
     data object TooLarge : SidecarWrite()
     data object NotVerified : SidecarWrite()
 
-    /** This install's own object exists but cannot be read; it is never overwritten. */
+    /** This install's own object was fetched but cannot be read; it is never overwritten. A transient download failure is not this: it throws. */
     data object ExistingUnreadable : SidecarWrite()
 }
 
@@ -161,7 +161,10 @@ class DeletionSidecar(
         val existingEntries = if (existing == null) {
             emptyList()
         } else {
-            readObject(accessToken, existing.id, passphrase)?.entries ?: return SidecarWrite.ExistingUnreadable
+            // A download failure here propagates as DriveNetworkException (transient: nothing is written,
+            // nothing is rotated, the next sync retries). Only an object that was fetched and cannot be
+            // read is ExistingUnreadable.
+            readObjectStrict(accessToken, existing.id, passphrase)?.entries ?: return SidecarWrite.ExistingUnreadable
         }
         val nonce = newNonce()
         val payload = DeletionSidecarPayload(
@@ -189,20 +192,32 @@ class DeletionSidecar(
             .filter { it.name == ownName }
             .minByOrNull { it.id }
 
-    private suspend fun readObject(accessToken: String, fileId: String, passphrase: CharArray): DeletionSidecarPayload? =
+    /**
+     * Fetches and opens one object. A download failure throws [DriveNetworkException]: the object may be
+     * perfectly readable, so that is a transient failure and never a statement about its content. `null`
+     * means the object was fetched but cannot be read (wrong passphrase, malformed, unsupported format,
+     * invalid entry).
+     */
+    private suspend fun readObjectStrict(accessToken: String, fileId: String, passphrase: CharArray): DeletionSidecarPayload? =
         try {
             val plaintext = SyncBlobCrypto.open(driveClient.downloadFile(accessToken, fileId, maxObjectBytes), passphrase)
             val payload = json.decodeFromString<DeletionSidecarPayload>(String(plaintext, Charsets.UTF_8))
             require(payload.format == 1) { "Unsupported deletion record format" }
             payload.entries.forEach(RecordingTombstone::validate)
             payload
-        } catch (e: DriveNetworkException) {
-            null
         } catch (e: SyncBlobSealException) {
             null
         } catch (e: SerializationException) {
             null
         } catch (e: IllegalArgumentException) {
+            null
+        }
+
+    /** Unchanged behaviour for the callers that treat every failure as "not readable" (fail closed). */
+    private suspend fun readObject(accessToken: String, fileId: String, passphrase: CharArray): DeletionSidecarPayload? =
+        try {
+            readObjectStrict(accessToken, fileId, passphrase)
+        } catch (e: DriveNetworkException) {
             null
         }
 }

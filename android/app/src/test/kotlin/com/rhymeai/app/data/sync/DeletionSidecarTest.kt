@@ -311,4 +311,53 @@ class DeletionSidecarTest {
         assertEquals(SidecarWrite.ExistingUnreadable, result)
         assertContentEquals(before, drive.objects.values.single().second)
     }
+
+    @Test
+    fun unreadableExistingOwnObjectFailsClosedWithoutRotatingTheIdentity() = runBlocking {
+        val drive = FakeDrive()
+        val identity = FakeIdentity("a".repeat(32))
+        val a = sidecar(drive, identity)
+        a.writeOwn(token, "another passphrase".toCharArray(), listOf(tomb("old.m4a", "h1", 100L)))
+
+        assertEquals(SidecarWrite.ExistingUnreadable, a.writeOwn(token, passphrase, listOf(tomb("new.m4a", "h2", 200L))))
+
+        assertEquals(0, identity.rotations)
+        assertEquals(1, drive.objects.size)
+    }
+
+    @Test
+    fun transientDownloadFailureOfTheExistingOwnObjectThrowsInsteadOfClaimingItIsUnreadable() = runBlocking {
+        val drive = FakeDrive()
+        val identity = FakeIdentity("a".repeat(32))
+        val a = sidecar(drive, identity)
+        a.writeOwn(token, passphrase, listOf(tomb("old.m4a", "h1", 100L)))
+        val ownId = drive.objects.keys.single()
+        val before = drive.objects.getValue(ownId).second.copyOf()
+        drive.failDownloads += ownId
+
+        assertFailsWith<DriveNetworkException> { a.writeOwn(token, passphrase, listOf(tomb("new.m4a", "h2", 200L))) }
+
+        assertContentEquals(before, drive.objects.getValue(ownId).second)
+        assertEquals(1, drive.objects.size)
+        assertEquals(0, identity.rotations)
+
+        // Once the download works again the same call succeeds and the older record is merged in, not dropped.
+        drive.failDownloads.clear()
+        assertEquals(SidecarWrite.Written, a.writeOwn(token, passphrase, listOf(tomb("new.m4a", "h2", 200L))))
+        val read = sidecar(drive, FakeIdentity("f".repeat(32))).readAll(token, passphrase) as SidecarRead.Ok
+        assertTrue(read.entries.any { it.suppresses(manifest("old.m4a", "h1")) })
+        assertTrue(read.entries.any { it.suppresses(manifest("new.m4a", "h2")) })
+    }
+
+    @Test
+    fun readAllStillTreatsADownloadFailureAsUnreadableAndPausesRestore() = runBlocking {
+        val drive = FakeDrive()
+        sidecar(drive, FakeIdentity("a".repeat(32))).writeOwn(token, passphrase, listOf(tomb("take.m4a", "h100", 200L)))
+        drive.failDownloads += drive.objects.keys.single()
+
+        val read = sidecar(drive, FakeIdentity("f".repeat(32))).readAll(token, passphrase)
+
+        assertTrue(read is SidecarRead.Unavailable)
+        assertEquals(1, (read as SidecarRead.Unavailable).unreadableObjects)
+    }
 }
