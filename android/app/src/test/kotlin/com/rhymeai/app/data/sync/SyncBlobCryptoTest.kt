@@ -5,6 +5,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import java.util.Base64
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.security.MessageDigest
 import org.junit.Test
 
 class SyncBlobCryptoTest {
@@ -126,5 +131,97 @@ class SyncBlobCryptoTest {
     fun ciphertextDoesNotLeakPlaintext() {
         val envelope = SyncBlobCrypto.seal(payload, passphrase)
         assertFalse(String(envelope, Charsets.ISO_8859_1).contains("Midnight Notes"))
+    }
+
+    private val referenceVectors by lazy {
+        val stream = requireNotNull(javaClass.classLoader!!.getResourceAsStream("sync-envelope-vectors.json"))
+        val fixture = Json.parseToJsonElement(stream.bufferedReader().use { it.readText() }).jsonObject
+        fixture.getValue("vectors").jsonArray.map { it.jsonObject }
+    }
+
+    @Test
+    fun v2ManifestUsesRai2WhileRecordingEncryptionRemainsRai1() {
+        val v2 = referenceVectors.single { it.getValue("magic").jsonPrimitive.content == "RAI2" }
+        val bytes = v2.getValue("plaintext").jsonPrimitive.content.toByteArray(Charsets.UTF_8)
+        val manifest = SyncBlobCrypto.sealManifest(bytes, passphrase)
+        assertEquals("RAI2", String(manifest, 0, 4, Charsets.US_ASCII))
+        assertEquals(2, SyncBlobCrypto.openManifest(manifest, passphrase).version)
+        assertArrayEquals(bytes, SyncBlobCrypto.openManifest(manifest, passphrase).plaintext)
+        assertThrows(SyncBlobSealException::class.java) {
+            SyncBlobCrypto.openManifest(manifest, "wrong passphrase".toCharArray())
+        }
+        val recording = SyncBlobCrypto.seal(bytes, passphrase)
+        assertEquals("RAI1", String(recording, 0, 4, Charsets.US_ASCII))
+        assertArrayEquals(bytes, SyncBlobCrypto.open(recording, passphrase))
+    }
+
+    @Test
+    fun independentPythonVectorsOpenAndSealByteIdenticallyForBothEnvelopeVersions() {
+        val salt = ByteArray(16) { it.toByte() }
+        val iv = ByteArray(12) { (0x10 + it).toByte() }
+        for (vector in referenceVectors) {
+            val plaintext = vector.getValue("plaintext").jsonPrimitive.content.toByteArray(Charsets.UTF_8)
+            val expected = Base64.getDecoder().decode(vector.getValue("envelope_base64").jsonPrimitive.content)
+            val sha = MessageDigest.getInstance("SHA-256").digest(expected).joinToString("") { "%02x".format(it) }
+            assertEquals(vector.getValue("envelope_sha256").jsonPrimitive.content, sha)
+            val magic = vector.getValue("magic").jsonPrimitive.content
+            assertEquals(magic, String(expected, 0, 4, Charsets.US_ASCII))
+            val sealed = if (magic == "RAI1") SyncBlobCrypto.seal(plaintext, passphrase, salt, iv)
+                else SyncBlobCrypto.sealManifest(plaintext, passphrase, salt, iv)
+            assertArrayEquals(expected, sealed)
+            val opened = SyncBlobCrypto.openManifest(expected, passphrase)
+            assertEquals(if (magic == "RAI1") 1 else 2, opened.version)
+            assertArrayEquals(plaintext, opened.plaintext)
+        }
+        assertArrayEquals(
+            Base64.getDecoder().decode(goldenEnvelopeBase64),
+            Base64.getDecoder().decode(referenceVectors.single {
+                it.getValue("magic").jsonPrimitive.content == "RAI1"
+            }.getValue("envelope_base64").jsonPrimitive.content)
+        )
+    }
+
+    @Test
+    fun rai2HeaderBodyAndTagTamperingFailsClosed() {
+        val original = Base64.getDecoder().decode(referenceVectors.single {
+            it.getValue("magic").jsonPrimitive.content == "RAI2"
+        }.getValue("envelope_base64").jsonPrimitive.content)
+        for (index in listOf(3, 5, 21, 32, original.lastIndex)) {
+            val tampered = original.clone()
+            tampered[index] = (tampered[index].toInt() xor 1).toByte()
+            assertThrows(SyncBlobSealException::class.java) {
+                SyncBlobCrypto.openManifest(tampered, passphrase)
+            }
+        }
+        val swappedHeader = original.clone()
+        swappedHeader[3] = '1'.code.toByte()
+        assertThrows(SyncBlobSealException::class.java) {
+            SyncBlobCrypto.openManifest(swappedHeader, passphrase)
+        }
+    }
+
+    @Test
+    fun unknownAndTruncatedManifestHeadersAreDistinctFromAuthenticationFailure() {
+        val original = Base64.getDecoder().decode(referenceVectors.single {
+            it.getValue("magic").jsonPrimitive.content == "RAI2"
+        }.getValue("envelope_base64").jsonPrimitive.content)
+        for (magic in listOf("RAI3", "RAI9")) {
+            val changed = original.clone()
+            magic.toByteArray(Charsets.US_ASCII).copyInto(changed)
+            assertEquals("Unsupported envelope version", assertThrows(SyncBlobFormatException::class.java) {
+                SyncBlobCrypto.openManifest(changed, passphrase)
+            }.message)
+        }
+        val changed = original.clone()
+        "XXXX".toByteArray(Charsets.US_ASCII).copyInto(changed)
+        assertEquals("Unrecognized envelope format", assertThrows(SyncBlobFormatException::class.java) {
+            SyncBlobCrypto.openManifest(changed, passphrase)
+        }.message)
+        assertEquals("Envelope is truncated", assertThrows(SyncBlobFormatException::class.java) {
+            SyncBlobCrypto.openManifest(byteArrayOf('R'.code.toByte()), passphrase)
+        }.message)
+        assertThrows(SyncBlobFormatException::class.java) {
+            SyncBlobCrypto.openManifest(original.copyOfRange(0, 35), passphrase)
+        }
     }
 }

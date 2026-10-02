@@ -1,0 +1,25 @@
+{
+  "generator": "python3 scripts/generate-sync-envelope-vectors.py android/app/src/test/resources/sync-envelope-vectors.json",
+  "cryptography_version": "50.0.2",
+  "kdf": "PBKDF2-HMAC-SHA256/210000/32",
+  "cipher": "AES-256-GCM, 12-byte IV, 16-byte tag, AAD=actual magic||salt||IV",
+  "passphrase": "correct horse battery staple",
+  "salt_hex": "000102030405060708090a0b0c0d0e0f",
+  "iv_hex": "101112131415161718191a1b",
+  "vectors": [
+    {
+      "magic": "RAI1",
+      "plaintext": "{\"version\":1,\"projects\":[],\"trashed\":[],\"recordings\":[],\"savedAt\":1700000000000,\"savedByClientId\":\"android-fixture\"}",
+      "plaintext_sha256": "07190f6c892616485e6be96c13cfa8438410e97d63e38ac8d08dd4445745c116",
+      "envelope_base64": "UkFJMQABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhtizcOcwuED9qmh1u+pIuacjCXfzEdC4XqsUgnAZ08InG+/2sOGiVfCbTNTgVs/qDX5tg+Xq/8BEH3xh/kmBcKKyayJPnin4qkQQO5xj50WFhaXKsgIOrAWlBrJcXMfe1Y6EmdzpzG87TFCQgajLtF4GAU5Pgh+VRicHt164bxqXJ5xxeE=",
+      "envelope_sha256": "8d8f5427bd78303ea441f5294f48cef7ea4461ddb7093603bff4dc7f4ad65ae8"
+    },
+    {
+      "magic": "RAI2",
+      "plaintext": "{\"version\":2,\"projects\":[],\"trashed\":[],\"recordings\":[],\"deletions\":[{\"projectId\":\"gone\",\"fileName\":null,\"deletedAt\":1},{\"projectId\":\"gone\",\"fileName\":null,\"deletedAt\":2},{\"projectId\":\"gone\",\"fileName\":\"take.m4a\",\"deletedAt\":9223372036854775807},{\"projectId\":\"keep\",\"fileName\":\"removed.m4a\",\"deletedAt\":3}],\"savedAt\":2000000000000,\"savedByClientId\":\"deleter\"}",
+      "plaintext_sha256": "1bb3b9d307d3afcf19afcdb5a11a798cac48aab00de3c924bf1ecb0e1aa32769",
+      "envelope_base64": "UkFJMgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhtizcOcwuED9qmh1uypIuacjCXfzEdC4XqsUgnAZ08InG+/2sOGiVfCbTNTgVs/qDX5tg+Xq/8BEH3mg+MmFeqRheWaMxPs8OlSH7Qk3NlvXhbeadkCMJdN+1TGfXEOfFN1TWcopyCi7nQECwWmM9FoDiFvYdpO9FASv9DMzSzf8bhV9h1x7JyXsCmK9D5Q3b2bgUDXlofE+sOt6C+iD7+DG8H3T/+zR/1o2Xh8ayaScLc2ZoYtTAGPW/MU2kSBrBcVy6A/zgS0sVDgzEFSOF9a2oSxDPsg7pdytAc4nSzgapIddeo97OUTNUhdGRgfs6m1UKjsLc5AcYfWeY8OuuCHLTrLc+4qTwxdp5UKYWRmsrIJXKK8kT1ftiMuN8iECTTtrL42ClJyEx5RnRomdPWaOtR06dGOz0kZng7Pz7Fnt1QvRzLSLEAuDYJ00d3pqyAXeX5r8CCNHXb7H+6jdn9PDipjpjuI9WJNxc2AozZ/Gp1a6j6E73k=",
+      "envelope_sha256": "cd86304f5702d9c25ed830d076e62c8fae3fbea8765604851e64444cd02a68c6"
+    }
+  ]
+}

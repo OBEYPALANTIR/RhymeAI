@@ -39,29 +39,34 @@ Create one OAuth client per signing certificate:
 
 ## Android project/recording sync contract
 
-The encrypted Drive `rhymeai-projects.json` snapshot uses SyncBlob version 2.
-Version 1 remains readable only when its JSON has no `deletions` key; version 2
-requires that key, including `[]` when there are no deletions. Missing, null, or
-unsupported version shapes are rejected rather than silently replacing a backup.
-Android's backed-up Preferences DataStore stores permanent-deletion tombstones
-separately from projects, trash, and pending local recording cleanup.
+The encrypted Drive `rhymeai-projects.json` snapshot uses SyncBlob version 2
+in an RAI2 envelope, matching the iOS v2/RAI2 manifest shape; native
+two-platform exchange has not yet been verified. Version 1 remains readable
+under RAI1 only when its JSON has no `deletions` key; version 2 requires that
+key, including `[]` when there are no deletions. The decoded version must
+match the authenticated envelope magic. Missing, null, mismatched, or
+unsupported shapes are rejected rather than replacing a backup. Recording
+payloads remain RAI1.
 
-Delete Forever and expiry purge write a project tombstone in the same DataStore
+Android's backed-up Preferences DataStore stores permanent-deletion tombstones
+separately from projects, trash, and pending local recording cleanup. Delete
+Forever and expiry purge write a project tombstone in the same DataStore
 transaction that removes each trashed song. These tombstones are never pruned:
 merging retains the newest deletion timestamp per identity, and a project
-tombstone subsumes its recording-specific tombstones. Every participating v2
-client suppresses tombstoned projects, trash entries, and recording manifests
-on its next sync, regardless of a later content edit timestamp. A stale offline
-edit to that project will not revive it; this is an intentional cross-device
-deletion precedence rule. Android reads current local tombstones again when
-applying a sync result, so a deletion committed during the network window is
-not lost to the older snapshot.
+tombstone subsumes its recording-specific tombstones. On Android v2 sync, a
+tombstoned song is hidden and its recordings are no longer uploaded or
+advertised by the receiving device, regardless of a later content edit
+timestamp. A stale offline edit cannot revive the song in the synced list.
+Android reads current local tombstones again when applying a sync result, so
+a deletion committed during the network window is not lost to the older
+snapshot.
 
 Android does not yet create recording-specific tombstones when deleting an
 individual recording, nor does it erase previously uploaded recording bytes
-from Drive. A tombstone removes manifest entries and prevents their restoration
-from that merged manifest; it is not remote-byte erasure. Incomplete local
-recording-directory cleanup is tracked and retried separately.
+from Drive; iOS peers do erase remote bytes, so this is not symmetric.
+Receiving-device local audio files and notebook data remain on disk after a
+remote tombstone, pending a separate cleanup decision. Incomplete cleanup
+following a local Delete Forever is tracked and retried separately.
 
 ## Manual verification
 

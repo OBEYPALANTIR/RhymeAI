@@ -361,6 +361,24 @@ internal fun requireRecordingBatchWithinLimit(entries: List<RecordingManifestEnt
     return totalBytes
 }
 
+/** Remote tombstones must be applied before local files are considered for upload. */
+internal fun recordingsAllowedForUpload(
+    recordings: List<RecordingManifestEntry>,
+    localDeletions: List<SyncDeletion>,
+    remoteDeletions: List<SyncDeletion>
+): List<RecordingManifestEntry> {
+    if (localDeletions.isEmpty() && remoteDeletions.isEmpty()) return recordings
+    val projects = HashSet<String>()
+    val files = HashSet<Pair<String, String>>()
+    for (deletion in localDeletions + remoteDeletions) {
+        if (deletion.fileName == null) projects.add(deletion.projectId)
+        else files.add(deletion.projectId to deletion.fileName)
+    }
+    return recordings.filterNot {
+        it.projectId in projects || (it.projectId to it.fileName) in files
+    }
+}
+
 object RecordingSyncPlanner {
     fun planUploads(
         local: List<RecordingManifestEntry>,
@@ -730,6 +748,9 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
         input.local.validate()
         input.local.copy(
             version = SyncBlob.CURRENT_VERSION,
+            recordings = recordingsAllowedForUpload(
+                input.local.recordings, input.local.deletions, emptyList()
+            ),
             savedByClientId = input.local.savedByClientId.ifBlank { input.clientId }
         )
     } catch (e: IllegalArgumentException) {
@@ -742,24 +763,28 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
         if (SyncBlobCrypto.envelopeSizeForPlaintext(plaintext.size.toLong()) > DriveSyncService.MAX_SYNC_BLOB_BYTES) {
             throw DriveNetworkException("Drive backup exceeds the allowed size")
         }
-        SyncBlobCrypto.seal(plaintext, input.passphrase)
+        require(blob.version == SyncBlob.CURRENT_VERSION) { "Only v2 manifests may be sealed as RAI2" }
+        SyncBlobCrypto.sealManifest(plaintext, input.passphrase)
     }
 
     if (input.remoteBytes == null) {
         return SyncDecision.UploadOnly(sealLocal(localWithId), localWithId)
     }
 
-    val remotePlaintext = try {
-        SyncBlobCrypto.open(input.remoteBytes, input.passphrase)
+    val opened = try {
+        SyncBlobCrypto.openManifest(input.remoteBytes, input.passphrase)
+    } catch (e: SyncBlobFormatException) {
+        return SyncDecision.CorruptRemote
     } catch (e: SyncBlobSealException) {
         return SyncDecision.BadPassphrase
     }
 
     val remoteBlob = try {
-        json.decodeFromString<SyncBlob>(remotePlaintext.toString(Charsets.UTF_8))
+        json.decodeFromString<SyncBlob>(opened.plaintext.toString(Charsets.UTF_8))
     } catch (e: Exception) {
         return SyncDecision.CorruptRemote
     }
+    if (remoteBlob.version != opened.version) return SyncDecision.CorruptRemote
 
     val merged = SyncMerger.merge(localWithId, remoteBlob)
     return SyncDecision.MergeAndUpload(merged, sealLocal(merged), remoteBlob)
@@ -799,6 +824,36 @@ internal fun snapshotLocalRecordingFiles(
         ?.toList()
         ?: emptyList()
 }
+
+/** Upload executor shared by the service and filesystem-backed JVM regressions. */
+internal suspend fun uploadRecordingFilesToDrive(
+    driveClient: DriveClient,
+    accessToken: String,
+    passphrase: CharArray,
+    uploads: List<RecordingManifestEntry>,
+    localFiles: List<LocalRecordingFile>,
+    remoteFilesByName: Map<String, String>
+): Map<String, String> {
+    requireRecordingBatchWithinLimit(uploads)
+    val localByIdentity = localFiles.associateBy { it.entry.identityKey }
+    val uploaded = mutableMapOf<String, String>()
+    for (entry in uploads) {
+        val file = localByIdentity[entry.identityKey]?.file
+            ?: throw DriveNetworkException("Recording ${entry.driveName} is no longer available for upload")
+        val encrypted = SyncBlobCrypto.seal(RecordingFileStore.readForUpload(file, entry), passphrase)
+        val existingId = remoteFilesByName[entry.driveName]
+        if (existingId != null) {
+            driveClient.updateFile(accessToken, existingId, RecordingManifestEntry.MIME_TYPE, encrypted)
+            uploaded[entry.driveName] = existingId
+        } else {
+            uploaded[entry.driveName] = driveClient.uploadNewFile(
+                accessToken, entry.driveName, RecordingManifestEntry.MIME_TYPE, encrypted
+            )
+        }
+    }
+    return uploaded
+}
+
 
 /**
  * Orchestrates Google Drive sync for the RhymeAI projects library.
@@ -970,7 +1025,8 @@ class DriveSyncService(
 
                 is SyncDecision.UploadOnly -> {
                     val uploadedFilesByName = try {
-                        uploadRecordingFiles(
+                        uploadRecordingFilesToDrive(
+                            driveClient = driveClient,
                             accessToken = accessToken,
                             passphrase = passphrase,
                             uploads = decision.local.recordings,
@@ -1018,11 +1074,14 @@ class DriveSyncService(
                                 return@withContext SyncResult.NetworkError("Could not list recording files: ${driveNetworkMessage(e)}")
                             }
                             val finalUploadedFilesByName = try {
-                                uploadRecordingFiles(
+                                uploadRecordingFilesToDrive(
+                                    driveClient = driveClient,
                                     accessToken = accessToken,
                                     passphrase = passphrase,
                                     uploads = RecordingSyncPlanner.planUploads(
-                                        local = localBlob.recordings,
+                                        local = recordingsAllowedForUpload(
+                                            localBlob.recordings, localBlob.deletions, finalDecision.remote.deletions
+                                        ),
                                         remoteManifest = finalDecision.remote.recordings,
                                         remoteDriveNames = finalRemoteFilesByName.keys
                                     ),
@@ -1067,11 +1126,14 @@ class DriveSyncService(
                     }
 
                     val uploadedFilesByName = try {
-                        uploadRecordingFiles(
+                        uploadRecordingFilesToDrive(
+                            driveClient = driveClient,
                             accessToken = accessToken,
                             passphrase = passphrase,
                             uploads = RecordingSyncPlanner.planUploads(
-                                local = localBlob.recordings,
+                                local = recordingsAllowedForUpload(
+                                    localBlob.recordings, localBlob.deletions, decision.remote.deletions
+                                ),
                                 remoteManifest = decision.remote.recordings,
                                 remoteDriveNames = remoteFilesByName.keys
                             ),
@@ -1120,11 +1182,14 @@ class DriveSyncService(
                         return@withContext SyncResult.NetworkError("Could not list recording files: ${driveNetworkMessage(e)}")
                     }
                     val finalUploadedFilesByName = try {
-                        uploadRecordingFiles(
+                        uploadRecordingFilesToDrive(
+                            driveClient = driveClient,
                             accessToken = accessToken,
                             passphrase = passphrase,
                             uploads = RecordingSyncPlanner.planUploads(
-                                local = localBlob.recordings,
+                                local = recordingsAllowedForUpload(
+                                    localBlob.recordings, localBlob.deletions, finalDecision.remote.deletions
+                                ),
                                 remoteManifest = finalDecision.remote.recordings,
                                 remoteDriveNames = finalRemoteFilesByName.keys
                             ),
@@ -1260,11 +1325,14 @@ class DriveSyncService(
                             remoteFilesByName = remoteFilesByName,
                             localManifest = localBlob.recordings
                         )
-                        uploadRecordingFiles(
+                        uploadRecordingFilesToDrive(
+                            driveClient = driveClient,
                             accessToken = accessToken,
                             passphrase = passphrase,
                             uploads = RecordingSyncPlanner.planUploads(
-                                local = localBlob.recordings,
+                                local = recordingsAllowedForUpload(
+                                    localBlob.recordings, localBlob.deletions, decision.remote.deletions
+                                ),
                                 remoteManifest = decision.remote.recordings,
                                 remoteDriveNames = remoteFilesByName.keys
                             ),
@@ -1289,11 +1357,14 @@ class DriveSyncService(
                             accessToken,
                             RecordingManifestEntry.DRIVE_PREFIX
                         ).associate { it.name to it.id }
-                        uploadRecordingFiles(
+                        uploadRecordingFilesToDrive(
+                            driveClient = driveClient,
                             accessToken = accessToken,
                             passphrase = passphrase,
                             uploads = RecordingSyncPlanner.planUploads(
-                                local = localBlob.recordings,
+                                local = recordingsAllowedForUpload(
+                                    localBlob.recordings, localBlob.deletions, finalDecision.remote.deletions
+                                ),
                                 remoteManifest = finalDecision.remote.recordings,
                                 remoteDriveNames = finalRemoteFilesByName.keys
                             ),
@@ -1368,43 +1439,6 @@ class DriveSyncService(
         "Drive authorization expired — run Sync now to re-authorize."
 
 
-    private suspend fun uploadRecordingFiles(
-        accessToken: String,
-        passphrase: CharArray,
-        uploads: List<RecordingManifestEntry>,
-        localFiles: List<LocalRecordingFile>,
-        remoteFilesByName: Map<String, String>
-    ): Map<String, String> {
-        requireRecordingBatchWithinLimit(uploads)
-        val localByIdentity = localFiles.associateBy { it.entry.identityKey }
-        val uploaded = mutableMapOf<String, String>()
-        for (entry in uploads) {
-            val file = localByIdentity[entry.identityKey]?.file
-                ?: throw DriveNetworkException("Recording ${entry.driveName} is no longer available for upload")
-            val encrypted = SyncBlobCrypto.seal(
-                RecordingFileStore.readForUpload(file, entry),
-                passphrase
-            )
-            val existingId = remoteFilesByName[entry.driveName]
-            if (existingId != null) {
-                driveClient.updateFile(
-                    accessToken,
-                    existingId,
-                    RecordingManifestEntry.MIME_TYPE,
-                    encrypted
-                )
-                uploaded[entry.driveName] = existingId
-            } else {
-                uploaded[entry.driveName] = driveClient.uploadNewFile(
-                    accessToken,
-                    entry.driveName,
-                    RecordingManifestEntry.MIME_TYPE,
-                    encrypted
-                )
-            }
-        }
-        return uploaded
-    }
 
     private suspend fun restoreRemoteRecordings(
         accessToken: String,
