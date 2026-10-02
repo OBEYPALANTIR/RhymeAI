@@ -37,6 +37,32 @@ Create one OAuth client per signing certificate:
 5. Add the reversed-client-id as a URL scheme in `Writers Block/Writers-Block-Info.plist`.
 6. Configure the iOS app with the client id where `DriveOAuthService` reads it.
 
+## Android project/recording sync contract
+
+The encrypted Drive `rhymeai-projects.json` snapshot uses SyncBlob version 2.
+Version 1 remains readable only when its JSON has no `deletions` key; version 2
+requires that key, including `[]` when there are no deletions. Missing, null, or
+unsupported version shapes are rejected rather than silently replacing a backup.
+Android's backed-up Preferences DataStore stores permanent-deletion tombstones
+separately from projects, trash, and pending local recording cleanup.
+
+Delete Forever and expiry purge write a project tombstone in the same DataStore
+transaction that removes each trashed song. These tombstones are never pruned:
+merging retains the newest deletion timestamp per identity, and a project
+tombstone subsumes its recording-specific tombstones. Every participating v2
+client suppresses tombstoned projects, trash entries, and recording manifests
+on its next sync, regardless of a later content edit timestamp. A stale offline
+edit to that project will not revive it; this is an intentional cross-device
+deletion precedence rule. Android reads current local tombstones again when
+applying a sync result, so a deletion committed during the network window is
+not lost to the older snapshot.
+
+Android does not yet create recording-specific tombstones when deleting an
+individual recording, nor does it erase previously uploaded recording bytes
+from Drive. A tombstone removes manifest entries and prevents their restoration
+from that merged manifest; it is not remote-byte erasure. Incomplete local
+recording-directory cleanup is tracked and retried separately.
+
 ## Manual verification
 
 After both OAuth clients exist:

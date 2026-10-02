@@ -7,9 +7,14 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.SongWorkspace
+import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.data.recording.RecordingFiles
 import com.rhymeai.app.data.sync.snapshotLocalRecordingFiles
 import com.rhymeai.app.data.sync.SyncBlob
+import com.rhymeai.app.data.sync.RecordingManifestEntry
+import com.rhymeai.app.data.sync.RecordingSyncPlanner
+import com.rhymeai.app.data.sync.SyncDeletion
+import com.rhymeai.app.data.sync.SyncMerger
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.io.IOException
@@ -768,6 +773,190 @@ class ProjectRepositoryTest {
             directory.deleteRecursively()
         }
     }
+
+    @Test
+    fun permanentDeleteWritesTombstoneBeforeSyncAndSurvivesRepositoryReopen() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-sync-forever-v2").toFile()
+        val file = File(directory, "prefs.preferences_pb")
+        val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val song = SongProject(id = "forever-v2", title = "Delete", updatedAt = 100L)
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = firstScope) { file }, testKeyStore()
+            )
+            repository.saveProjects(listOf(song))
+            repository.moveProjectToTrash(song.id, 10L)
+            repository.permanentlyDeleteTrashedProject(song.id)
+            firstScope.coroutineContext[Job]!!.cancelAndJoin()
+
+            val reopenedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            try {
+                val reopened = ProjectRepository(
+                    PreferenceDataStoreFactory.create(scope = reopenedScope) { file }, testKeyStore()
+                )
+                val base = reopened.snapshotLocalSyncBase()
+                assertEquals(listOf(song.id), base.blob.deletions.map { it.projectId })
+                assertEquals(null, base.blob.deletions.single().fileName)
+                val stale = SyncBlob(
+                    projects = listOf(song.copy(updatedAt = Long.MAX_VALUE)),
+                    trashed = listOf(TrashedSongProject(song, 20L)),
+                    recordings = listOf(syncedRecording(song.id))
+                )
+                val merged = SyncMerger.merge(base.blob, stale)
+                assertEquals(emptyList(), merged.projects)
+                assertEquals(emptyList(), merged.trashed)
+                assertEquals(emptyList(), merged.recordings)
+                assertEquals(base.blob.deletions, merged.deletions)
+            } finally {
+                reopenedScope.cancel()
+            }
+        } finally {
+            firstScope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun expiryPurgeWritesTombstonesForBothSongsBeforeRemoteMerge() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-sync-expiry-v2").toFile()
+        val file = File(directory, "prefs.preferences_pb")
+        val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val expired = listOf(SongProject(id = "expired-v2-a", updatedAt = 100L),
+            SongProject(id = "expired-v2-b", updatedAt = 100L))
+        val retained = SongProject(id = "retained-v2", updatedAt = 100L)
+        val now = 10L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = firstScope) { file }, testKeyStore()
+            )
+            repository.saveProjects(expired + retained)
+            expired.forEach { repository.moveProjectToTrash(it.id, 10L) }
+            assertEquals(expired.map { it.id }.toSet(),
+                repository.purgeExpiredTrashedProjects(now).purgedIds.toSet())
+            firstScope.coroutineContext[Job]!!.cancelAndJoin()
+
+            val reopenedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            try {
+                val reopened = ProjectRepository(
+                    PreferenceDataStoreFactory.create(scope = reopenedScope) { file }, testKeyStore()
+                )
+                val base = reopened.snapshotLocalSyncBase()
+                assertEquals(expired.map { it.id }.toSet(), base.blob.deletions.map { it.projectId }.toSet())
+                assertEquals(setOf(now), base.blob.deletions.map { it.deletedAt }.toSet())
+                val stale = SyncBlob(
+                    projects = expired.map { it.copy(updatedAt = Long.MAX_VALUE) },
+                    trashed = expired.map { TrashedSongProject(it, 20L) },
+                    recordings = expired.map { syncedRecording(it.id) }
+                )
+                val merged = SyncMerger.merge(base.blob, stale)
+                assertEquals(listOf(retained.id), merged.projects.map { it.id })
+                assertEquals(emptyList(), merged.trashed)
+                assertEquals(emptyList(), merged.recordings)
+            } finally {
+                reopenedScope.cancel()
+            }
+        } finally {
+            firstScope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deletionCommittedAfterBaseReadSurvivesSyncApplyAndLaterUpload() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-sync-delete-window-v2").toFile()
+        val file = File(directory, "prefs.preferences_pb")
+        val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val song = SongProject(id = "during-sync-v2", title = "Delete during sync", updatedAt = 100L)
+        val remoteTombstone = SyncDeletion("another-device", deletedAt = 200L)
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = firstScope) { file }, testKeyStore()
+            )
+            repository.saveProjects(listOf(song))
+            repository.moveProjectToTrash(song.id, 10L)
+            val base = repository.snapshotLocalSyncBase()
+            repository.permanentlyDeleteTrashedProject(song.id)
+            // This result was computed before the local deletion and still contains the song.
+            val staleResult = SyncBlob(
+                trashed = listOf(TrashedSongProject(song, 10L)),
+                deletions = listOf(remoteTombstone)
+            )
+            repository.applySyncResult(staleResult, base)
+            firstScope.coroutineContext[Job]!!.cancelAndJoin()
+
+            val reopenedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            try {
+                val reopened = ProjectRepository(
+                    PreferenceDataStoreFactory.create(scope = reopenedScope) { file }, testKeyStore()
+                )
+                assertEquals(emptyList(), reopened.projectsFlow.first())
+                assertEquals(emptyList(), reopened.trashedProjectsFlow.first())
+                assertEquals(setOf(song.id), reopened.pendingRecordingDeletionIds())
+                val laterUpload = reopened.snapshotLocalSyncBase().blob
+                assertEquals(setOf(song.id, remoteTombstone.projectId),
+                    laterUpload.deletions.map { it.projectId }.toSet())
+                val stalePeer = SyncBlob(version = 1, projects = listOf(song.copy(updatedAt = Long.MAX_VALUE)))
+                assertEquals(emptyList(), SyncMerger.merge(laterUpload, stalePeer).projects)
+            } finally {
+                reopenedScope.cancel()
+            }
+        } finally {
+            firstScope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun remoteProjectTombstoneRemovesPostSnapshotLocalSongAndRestorePlan() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-sync-remote-delete-v2").toFile()
+        val file = File(directory, "prefs.preferences_pb")
+        val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val song = SongProject(id = "remote-deleted-v2", title = "Late local edit", updatedAt = Long.MAX_VALUE)
+        val recording = syncedRecording(song.id)
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = firstScope) { file }, testKeyStore()
+            )
+            val base = repository.snapshotLocalSyncBase()
+            repository.saveActiveState(song, true, song.title, song.lyrics, song.theme)
+            assertEquals(listOf(song.id), repository.projectsFlow.first().map { it.id })
+            val merged = SyncMerger.merge(
+                base.blob,
+                SyncBlob(
+                    recordings = listOf(recording),
+                    deletions = listOf(SyncDeletion(song.id, deletedAt = 1L))
+                )
+            )
+            assertEquals(emptyList(), merged.recordings)
+            assertEquals(emptyList(), RecordingSyncPlanner.planRestores(
+                local = emptyList(),
+                remoteManifest = merged.recordings,
+                remoteFilesByName = mapOf(recording.driveName to "uploaded-byte-id")
+            ))
+            repository.applySyncResult(merged, base)
+            assertEquals(emptyList(), repository.projectsFlow.first())
+            firstScope.coroutineContext[Job]!!.cancelAndJoin()
+
+            val reopenedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            try {
+                val reopened = ProjectRepository(
+                    PreferenceDataStoreFactory.create(scope = reopenedScope) { file }, testKeyStore()
+                )
+                assertEquals(emptyList(), reopened.projectsFlow.first())
+                assertEquals(listOf(SyncDeletion(song.id, deletedAt = 1L)),
+                    reopened.snapshotLocalSyncBase().blob.deletions)
+            } finally {
+                reopenedScope.cancel()
+            }
+        } finally {
+            firstScope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    private fun syncedRecording(id: String) = RecordingManifestEntry(
+        projectId = id, fileName = "take.m4a", sizeBytes = 3L, modifiedAt = 500L, sha256 = "synthetic"
+    )
 
     private fun gateFirstWrite(
         store: DataStore<Preferences>,

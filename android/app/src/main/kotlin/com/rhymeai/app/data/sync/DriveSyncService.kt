@@ -726,13 +726,12 @@ sealed class SyncDecision {
  */
 fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     val json = Json { ignoreUnknownKeys = true }
-    val localWithId = if (input.local.savedByClientId.isBlank()) {
-        input.local.copy(savedByClientId = input.clientId)
-    } else {
-        input.local
-    }
-    try {
-        localWithId.validate()
+    val localWithId = try {
+        input.local.validate()
+        input.local.copy(
+            version = SyncBlob.CURRENT_VERSION,
+            savedByClientId = input.local.savedByClientId.ifBlank { input.clientId }
+        )
     } catch (e: IllegalArgumentException) {
         throw DriveNetworkException("Local Drive backup contains unsupported data", e)
     }
@@ -757,10 +756,7 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     }
 
     val remoteBlob = try {
-        json.decodeFromString<SyncBlob>(remotePlaintext.toString(Charsets.UTF_8)).also { blob ->
-            require(blob.version == SyncBlob.CURRENT_VERSION) { "Unsupported sync version" }
-            blob.validate()
-        }
+        json.decodeFromString<SyncBlob>(remotePlaintext.toString(Charsets.UTF_8))
     } catch (e: Exception) {
         return SyncDecision.CorruptRemote
     }

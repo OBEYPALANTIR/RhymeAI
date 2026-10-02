@@ -70,10 +70,27 @@ When permanent song deletion cannot remove every recording, Android keeps a
 pending cleanup record and reports that deletion is incomplete. It retries on
 the next app launch or Trash purge. Recordings for pending deletions are omitted
 from new local Drive uploads; Android Auto Backup retains the pending record with
-any remaining files so cleanup resumes after restore. This does not erase a
-recording that was already uploaded to Drive before the deletion.
+any remaining files so cleanup resumes after restore.
 
-A later sync may restore previously synced recordings of a deleted song to this device.
+On participating v2 clients, permanent song deletion propagates on the next
+sync and suppresses the deleted song and its recording manifest entries, even
+if another device later edits its old copy. Previously uploaded recording bytes
+are not erased from Drive.
+
+The v2 deletion regressions run in `:app:testDebugUnitTest`. Their test source
+uses `SyncDeletion` and `SyncBlob.deletions`, so it does not compile unchanged
+against the pre-v2 base `3a0e8971`; the table identifies the behavioral
+assertion that base could not satisfy rather than claiming a base test run.
+
+| Case | Regression test | Base behavior contradicted |
+| --- | --- | --- |
+| T-1 | `SyncMergerTest.permanentDeletionsConvergeAgainstNewerProjectTrashAndRecordingContent` | A newer stale project/trash/recording survives instead of the tombstone winning. |
+| T-2 | `DriveSyncServiceTest.supportedV1AndV2RemoteShapesMergeIntoV2WithoutRestoringDeletedSong` and `unsupportedVersionShapesNeverBecomeRemoteOrReplaceLocalData` | A valid v2 blob is rejected; v1 with a deletion key is not rejected as a shape error. |
+| T-3 | `ProjectRepositoryTest.permanentDeleteWritesTombstoneBeforeSyncAndSurvivesRepositoryReopen` | Reopen has no persisted project tombstone; a stale remote copy returns on merge. |
+| T-4 | `ProjectRepositoryTest.expiryPurgeWritesTombstonesForBothSongsBeforeRemoteMerge` | Neither purged ID has a persisted tombstone; stale copies return on merge. |
+| T-5 | `ProjectRepositoryTest.deletionCommittedAfterBaseReadSurvivesSyncApplyAndLaterUpload` | The later sync snapshot has no deletion marker for the post-base Delete Forever. |
+| T-6 | `ProjectRepositoryTest.remoteProjectTombstoneRemovesPostSnapshotLocalSongAndRestorePlan` | A remote tombstone cannot suppress the local song and recording restore plan. |
+| T-7 | `DriveSyncServiceTest.uploadOnlyWritesV2AndExplicitEmptyDeletionArrayEvenFromLegacyLocalBlob` | UploadOnly writes v1 without an explicit empty `deletions` array. |
 
 Release builds are minified. To produce signed release artifacts, create a gitignored
 `android/keystore.properties`:
