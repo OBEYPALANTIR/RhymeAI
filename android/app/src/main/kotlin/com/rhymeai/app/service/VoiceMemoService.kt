@@ -416,11 +416,13 @@ class VoiceMemoService(private val context: Context) {
         }
     }
 
-    /** Delete every trashed recording whose retention window has passed. */
-    suspend fun purgeExpiredTrashedMemos(now: Long = System.currentTimeMillis()) {
-        trashedMemos()
-            .filter { it.deleteAfter <= now }
-            .forEach { permanentlyDeleteTrashedMemo(it) }
+    /** Delete expired trashed recordings on their own clock, reporting partial failures. */
+    suspend fun purgeExpiredTrashedMemos(now: Long = System.currentTimeMillis()): Boolean {
+        var complete = true
+        for (memo in trashedMemos().filter { it.deleteAfter <= now }) {
+            if (!permanentlyDeleteTrashedMemo(memo)) complete = false
+        }
+        return complete
     }
 
     /** Earliest deleteAfter among trashed recordings, or null when trash is empty. */
@@ -461,19 +463,20 @@ class VoiceMemoService(private val context: Context) {
      * Delete the entire memo directory for [projectId] — live and trashed. Called
      * when a project is permanently deleted so orphaned audio files do not accumulate.
      */
-    suspend fun deleteMemoDirectory(projectId: String) {
+    suspend fun deleteMemoDirectory(projectId: String): Boolean {
         val (dir, trash) = runCatching {
             RecordingFiles.memoDirectory(context.filesDir, projectId) to RecordingFiles.trashDirectory(context.filesDir, projectId)
-        }.getOrNull() ?: return
+        }.getOrNull() ?: return false
         val playing = playingFile
         val playingPath = playing?.let { runCatching { it.canonicalFile.toPath() }.getOrNull() }
         if (playingPath != null && (playingPath.startsWith(dir.toPath()) || playingPath.startsWith(trash.toPath()))) {
             stopPlayback()
         }
 
-        withContext(Dispatchers.IO) {
-            dir.deleteRecursively()
-            trash.deleteRecursively()
+        return withContext(Dispatchers.IO) {
+            val liveRemoved = !dir.exists() || dir.deleteRecursively()
+            val trashRemoved = !trash.exists() || trash.deleteRecursively()
+            liveRemoved && trashRemoved
         }
     }
 

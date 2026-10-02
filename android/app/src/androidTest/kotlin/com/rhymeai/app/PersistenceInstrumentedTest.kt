@@ -16,6 +16,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -125,6 +126,61 @@ class PersistenceInstrumentedTest {
                 restoredViewModel.theme == savedProject.theme
         }
     }
+
+    @Test
+    fun remoteTrashWhileOpenSavesDraftUnderNewIdentityBeforeNavigation() {
+        val original = SongProject("remote-trashed", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        onMain {
+            viewModel.showStartMenu = false
+            viewModel.lyricsFieldValue = TextFieldValue("local unsaved lyric")
+        }
+        runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+        waitUntil { viewModel.projects.none { it.id == original.id } }
+        val navigated = java.util.concurrent.atomic.AtomicBoolean()
+        onMain { viewModel.newProject { navigated.set(true) } }
+        waitUntil { navigated.get() }
+
+        val replacement = runBlocking { repo.projectsFlow.first().single() }
+        assertNotEquals(original.id, replacement.id)
+        assertEquals("local unsaved lyric", replacement.lyrics)
+        assertEquals(original.id, runBlocking { repo.trashedProjectsFlow.first().single().project.id })
+        assertEquals("", viewModel.lyrics)
+        assertTrue(viewModel.persistenceError.orEmpty().contains("saved as a new song"))
+    }
+
+    @Test
+    fun remoteTrashWhileOpenAutosavesNextEditUnderNewIdentity() {
+        val original = SongProject("remote-autosave", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        onMain {
+            viewModel.showStartMenu = false
+            viewModel.lyricsFieldValue = TextFieldValue("edited after remote trash")
+        }
+        runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+        waitUntil { viewModel.projects.none { it.id == original.id } }
+        onMain { viewModel.triggerAutoSave() }
+        waitUntil {
+            runBlocking {
+                repo.projectsFlow.first().any { it.id != original.id && it.lyrics == "edited after remote trash" }
+            }
+        }
+
+        val replacement = runBlocking { repo.projectsFlow.first().single() }
+        assertNotEquals(original.id, replacement.id)
+        assertEquals(replacement.id, viewModel.currentProjectId)
+        assertEquals(replacement.id, runBlocking { repo.currentProjectIdFlow.first() })
+        assertEquals("edited after remote trash", runBlocking { repo.editorStateFlow().first().second })
+        assertEquals(original.id, runBlocking { repo.trashedProjectsFlow.first().single().project.id })
+        assertTrue(viewModel.persistenceError.orEmpty().contains("saved as a new song"))
+    }
+
 
     @Test
     fun customLocalModelRegistrationAndSelectionSurviveRepositoryRecreation() = runBlocking {

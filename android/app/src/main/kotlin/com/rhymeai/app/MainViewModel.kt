@@ -24,6 +24,7 @@ import com.rhymeai.app.data.model.TrashedSongProject
 import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.CorruptLibraryException
+import com.rhymeai.app.data.repository.MissingActiveProjectException
 import com.rhymeai.app.data.sync.DriveSyncService
 import com.rhymeai.app.data.sync.DRIVE_SYNC_PASSPHRASE_REQUIREMENT_MESSAGE
 import com.rhymeai.app.data.sync.SyncResult
@@ -228,6 +229,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var trashedProjects by mutableStateOf<List<TrashedSongProject>>(emptyList())
     var currentProjectId by mutableStateOf<String?>(null)
     private var positionSaveJob: Job? = null
+    private val pendingProjectCreationIds = mutableSetOf<String>()
     private var workspaces by mutableStateOf<Map<String, SongWorkspace>>(emptyMap())
     val songWorkspace: SongWorkspace get() = workspaces[currentProjectId] ?: SongWorkspace()
     var editorScrollOffset by mutableStateOf(0f)
@@ -251,12 +253,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else -> "Choose a model"
     }
 
+    private suspend fun saveWorkspaceForActiveIdentity(id: String, workspace: SongWorkspace) {
+        if (id in pendingProjectCreationIds) {
+            val project = projects.firstOrNull { it.id == id } ?: throw MissingActiveProjectException(id)
+            persistActiveProjectSnapshot(
+                project.copy(title = title.ifEmpty { "Untitled Song" }, lyrics = lyrics, theme = theme),
+                title, lyrics, theme
+            )
+        }
+        repo.saveWorkspace(id, workspace)
+    }
+
     private fun updateWorkspace(id: String, transform: (SongWorkspace) -> SongWorkspace) {
         if (notebookError != null || restoringDraft) return
         val next = transform(workspaces[id] ?: SongWorkspace())
         workspaces = workspaces + (id to next)
         viewModelScope.launch {
-            try { repo.saveWorkspace(id, next) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again." }
+            try {
+                saveWorkspaceForActiveIdentity(id, next)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: MissingActiveProjectException) {
+                if (currentProjectId == id) persistenceError = "This song is no longer active. Notebook changes were not saved."
+            } catch (_: Exception) {
+                notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again."
+            }
         }
     }
 
@@ -269,7 +290,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         positionSaveJob?.cancel()
         positionSaveJob = viewModelScope.launch {
             delay(250)
-            try { workspaces[id]?.let { repo.saveWorkspace(id, it) } } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again." }
+            try {
+                workspaces[id]?.let { saveWorkspaceForActiveIdentity(id, it) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: MissingActiveProjectException) {
+                if (currentProjectId == id) persistenceError = "This song is no longer active. Notebook changes were not saved."
+            } catch (_: Exception) {
+                notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again."
+            }
         }
     }
 
@@ -316,7 +345,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         var restored = false
         viewModelScope.launch {
             try {
-                repo.saveWorkspace(id, preserved)
+                saveWorkspaceForActiveIdentity(id, preserved)
                 if (currentProjectId != id || projects.none { it.id == id } || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
                 workspaces = workspaces + (id to preserved)
                 dismissRewrite()
@@ -338,6 +367,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun detachMissingActiveProject(id: String) {
+        pendingProjectCreationIds.remove(id)
+        currentProjectId = null
+        positionSaveJob?.cancel()
+        saveStatus = SaveStatus.IDLE
+    }
+
+    private fun reportRecoveredDraft() {
+        val message = "This song is no longer active. Your draft was saved as a new song."
+        persistenceError = listOfNotNull(persistenceError, message).joinToString("\n")
+    }
+
     fun flushCurrentDraft(onSaved: () -> Unit = {}) {
         if (restoringDraft || savingBeforeNavigation) return
         if (!appearanceLoaded || showStartMenu) { onSaved(); return }
@@ -346,27 +387,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (title.isBlank() && lyrics.isBlank() && theme.isBlank() && currentProjectId == null) { onSaved(); return }
         val now = System.currentTimeMillis()
         val existing = projects.firstOrNull { it.id == currentProjectId }
+        val missingId = currentProjectId?.takeIf { existing == null }
+        if (missingId != null) {
+            detachMissingActiveProject(missingId)
+            if (title.isBlank() && lyrics.isBlank() && theme.isBlank()) { onSaved(); return }
+        }
         val project = existing?.copy(
             title = title.ifEmpty { "Untitled Song" }, lyrics = lyrics, theme = theme,
             updatedAt = if (existing.lyrics == lyrics && existing.title == title.ifEmpty { "Untitled Song" } && existing.theme == theme) existing.updatedAt else now
-        ) ?: createUntitledProjectSnapshot()
+        ) ?: createUntitledProjectSnapshot().also {
+            pendingProjectCreationIds.add(it.id)
+        }
         currentProjectId = project.id
-        projects = listOf(project) + projects.filterNot { it.id == project.id }
+        if (existing == null) projects = listOf(project) + projects
         rememberEditorPosition()
         updateWorkspace(project.id) { it.checkpoint(title, lyrics, theme, now, force = true) }
-        val savedProjects = projects
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
         savingBeforeNavigation = true
         viewModelScope.launch {
             try {
-                persistActiveProjectSnapshot(project.id, savedProjects, savedTitle, savedLyrics, savedTheme)
+                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme)
                 if (currentProjectId == project.id && title == savedTitle && lyrics == savedLyrics && theme == savedTheme) {
+                    if (missingId != null) reportRecoveredDraft()
                     onSaved()
                 }
-            } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {
-                persistenceError = "Your draft could not be saved. It is still open. Free up storage and try again."
+            } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+                reconcileFailedProjectSave(project, error)
             } finally {
                 savingBeforeNavigation = false
             }
@@ -882,7 +930,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Observe project changes
             launch {
                 try {
-                    repo.projectsFlow.collect { projects = it }
+                    repo.projectsFlow.collect { stored ->
+                        val pending = projects.filter { it.id in pendingProjectCreationIds &&
+                            stored.none { saved -> saved.id == it.id } }
+                        projects = pending + stored
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: CorruptLibraryException) {
@@ -1378,135 +1430,204 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun newProject(onReady: () -> Unit = {}) {
         flushCurrentDraft {
             autoSaveJob?.cancel()
-            dismissRewrite()
-            title = ""
-            lyricsFieldValue = TextFieldValue("")
-            theme = ""
-            currentProjectId = null
-            restoreEditorPosition()
-            suggestions = emptyList()
-            showProjectsDialog = false
-            showStartMenu = false
-            resetLyricsHistory()
             viewModelScope.launch {
-                repo.saveActiveState(projects, null, "", "", "")
+                try {
+                    val committed = repo.saveActiveState(null, false, "", "", "")
+                    dismissRewrite()
+                    title = ""
+                    lyricsFieldValue = TextFieldValue("")
+                    theme = ""
+                    currentProjectId = null
+                    projects = committed
+                    restoreEditorPosition()
+                    suggestions = emptyList()
+                    showProjectsDialog = false
+                    showStartMenu = false
+                    resetLyricsHistory()
+                    onReady()
+                } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+                    persistenceError = trashFailureMessage("open a new song", error)
+                }
             }
-
-            onReady()
         }
     }
 
     fun loadProject(requestedProject: SongProject, onReady: () -> Unit = {}) {
         flushCurrentDraft {
-            val project = projects.firstOrNull { it.id == requestedProject.id } ?: requestedProject
             autoSaveJob?.cancel()
-            dismissRewrite()
-            title = project.title
-            lyricsFieldValue = TextFieldValue(project.lyrics)
-            theme = project.theme
-            currentProjectId = project.id
-            restoreEditorPosition()
-            suggestions = emptyList()
-            showProjectsDialog = false
-            showStartMenu = false
-            resetLyricsHistory()
             viewModelScope.launch {
-                repo.saveActiveState(projects, project.id, project.title, project.lyrics, project.theme)
+                try {
+                    val project = repo.selectProject(requestedProject.id)
+                    dismissRewrite()
+                    title = project.title
+                    lyricsFieldValue = TextFieldValue(project.lyrics)
+                    theme = project.theme
+                    currentProjectId = project.id
+                    restoreEditorPosition()
+                    suggestions = emptyList()
+                    showProjectsDialog = false
+                    showStartMenu = false
+                    resetLyricsHistory()
+                    onReady()
+                } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+                    persistenceError = trashFailureMessage("open the song", error)
+                }
             }
-
-            onReady()
         }
     }
 
-    fun moveProjectToTrash(id: String) {
+    fun moveProjectToTrash(id: String, onCommitted: (Boolean) -> Unit = {}) {
         if (restoringDraft || savingBeforeNavigation) return
-        if (currentProjectId == id) { flushCurrentDraft { moveSavedProjectToTrash(id) }; return }
-        moveSavedProjectToTrash(id)
+        if (currentProjectId == id) {
+            flushCurrentDraft { moveSavedProjectToTrash(id, onCommitted) }
+        } else {
+            moveSavedProjectToTrash(id, onCommitted)
+        }
     }
 
-    private fun moveSavedProjectToTrash(id: String) {
-        val project = projects.firstOrNull { it.id == id } ?: return
-        val now = System.currentTimeMillis()
-        val wasCurrentProject = currentProjectId == id
-        autoSaveJob?.cancel()
-
-        val updatedProjects = projects.filter { it.id != id }
-        val updatedTrashedProjects = listOf(
-            TrashedSongProject(
-                project = project,
-                deletedAt = now,
-                deleteAfter = now + TRASH_RETENTION_MILLIS
-            )
-        ) + trashedProjects.filter { it.project.id != id }
-        projects = updatedProjects
-        trashedProjects = updatedTrashedProjects
-
-        if (wasCurrentProject) {
-            clearEditorAfterProjectDelete()
-        }
-
+    private fun moveSavedProjectToTrash(id: String, onCommitted: (Boolean) -> Unit) {
+        if (projects.none { it.id == id }) return
+        if (currentProjectId == id) autoSaveJob?.cancel()
         viewModelScope.launch {
-            repo.saveProjects(updatedProjects)
-            repo.saveTrashedProjects(updatedTrashedProjects)
-            if (wasCurrentProject) {
-                repo.setCurrentProjectId(null)
-                repo.saveEditorState("", "", "")
+            try {
+                val committed = repo.moveProjectToTrash(id, System.currentTimeMillis())
+                if (committed == null) {
+                    reportMissingTrashProject()
+                    onCommitted(false)
+                    return@launch
+                }
+                pendingProjectCreationIds.remove(id)
+                projects = committed.projects
+                trashedProjects = committed.trashedProjects
+                if (currentProjectId == id) clearEditorAfterProjectDelete()
+                scheduleTrashPurge()
+                onCommitted(true)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                persistenceError = trashFailureMessage("move the song to Trash", error)
+                onCommitted(false)
             }
         }
-        scheduleTrashPurge()
     }
 
     fun restoreTrashedProject(id: String) {
-        val trashedProject = trashedProjects.firstOrNull { it.project.id == id } ?: return
-        val restoredProject = trashedProject.project.copy(updatedAt = System.currentTimeMillis())
-        val updatedTrashedProjects = trashedProjects.filter { it.project.id != id }
-        val updatedProjects = listOf(restoredProject) + projects.filter { it.id != id }
-        trashedProjects = updatedTrashedProjects
-        projects = updatedProjects
         viewModelScope.launch {
-            repo.saveProjects(updatedProjects)
-            repo.saveTrashedProjects(updatedTrashedProjects)
+            try {
+                val committed = repo.restoreTrashedProject(id, System.currentTimeMillis())
+                    ?: return@launch reportMissingTrashProject()
+                projects = committed.projects
+                trashedProjects = committed.trashedProjects
+                scheduleTrashPurge()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                persistenceError = trashFailureMessage("restore the song", error)
+            }
         }
-        scheduleTrashPurge()
     }
 
     fun permanentlyDeleteTrashedProject(id: String) {
         if (restoringDraft || savingBeforeNavigation) return
-        val updatedTrashedProjects = trashedProjects.filter { it.project.id != id }
-        trashedProjects = updatedTrashedProjects
-        workspaces = workspaces - id
         viewModelScope.launch {
-            repo.saveTrashedProjects(updatedTrashedProjects)
-            // Remove any recorded memos that belonged to this project.
-            if (notebookError == null) try { repo.saveWorkspace(id, null) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { notebookError = "Song Notebook could not be updated." }
-            voiceMemoService.deleteMemoDirectory(id)
+            try {
+                val committed = repo.permanentlyDeleteTrashedProject(id)
+                    ?: return@launch reportMissingTrashProject()
+                trashedProjects = committed
+                pendingProjectCreationIds.remove(id)
+                workspaces = workspaces - id
+                val memosRemoved = try {
+                    voiceMemoService.deleteMemoDirectory(id)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
+                if (!memosRemoved) {
+                    persistenceError = "The song was removed, but some recording files could not be deleted. Deletion is incomplete."
+                }
+                scheduleTrashPurge()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                persistenceError = trashFailureMessage("permanently delete the song", error)
+            }
         }
-        scheduleTrashPurge()
+    }
+
+    fun reportRecordingPurgeFailure() {
+        val detail = "Expired recording cleanup did not complete. Some trashed recording files remain."
+        val existing = persistenceError
+        persistenceError = when {
+            existing == null -> detail
+            detail in existing -> existing
+            else -> "$existing $detail"
+        }
     }
 
     fun purgeExpiredTrashedProjects() {
         if (restoringDraft) return
-        val now = System.currentTimeMillis()
-        val retainedProjects = trashedProjects.filter { it.deleteAfter > now }
-        if (retainedProjects.size != trashedProjects.size) {
-            val purgedIds = trashedProjects
-                .filter { it.deleteAfter <= now }
-                .map { it.project.id }
-            workspaces = workspaces - purgedIds.toSet()
-            trashedProjects = retainedProjects
-            viewModelScope.launch {
-                repo.saveTrashedProjects(retainedProjects)
-                // Purge memo directories for each project that was permanently removed.
-                purgedIds.forEach {
-                    if (notebookError == null) try { repo.saveWorkspace(it, null) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { notebookError = "Song Notebook could not be updated." }
-                    voiceMemoService.deleteMemoDirectory(it)
-                }
-            }
-        }
         viewModelScope.launch {
-            voiceMemoService.purgeExpiredTrashedMemos(now)
+            val now = System.currentTimeMillis()
+            var songPurgeError: Exception? = null
+            var memoDirectoryFailure = false
+            try {
+                val committed = repo.purgeExpiredTrashedProjects(now)
+                trashedProjects = committed.trashedProjects
+                workspaces = workspaces - committed.purgedIds.toSet()
+                for (id in committed.purgedIds) {
+                    pendingProjectCreationIds.remove(id)
+                    val removed = try {
+                        voiceMemoService.deleteMemoDirectory(id)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (!removed) memoDirectoryFailure = true
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                songPurgeError = error
+            }
+            // Recording Trash has its own expiry; a corrupt song/notebook store
+            // must not prevent the independent recording cleanup from running.
+            val recordingExpiryComplete = try {
+                voiceMemoService.purgeExpiredTrashedMemos(now)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            persistenceError = when {
+                songPurgeError != null -> {
+                    val reason = if (songPurgeError is CorruptLibraryException)
+                        corruptLibraryMessage(songPurgeError)
+                    else "Songs due for deletion and their notebook data were retained. Try again."
+                    "Scheduled song deletion did not complete. $reason" +
+                        if (recordingExpiryComplete) "" else " Expired recording cleanup also failed."
+                }
+                memoDirectoryFailure && !recordingExpiryComplete ->
+                    "Some expired songs were removed, but their recording files could not all be deleted. Expired recording cleanup also failed."
+                memoDirectoryFailure ->
+                    "Some expired songs were removed, but their recording files could not all be deleted. Deletion is incomplete."
+                !recordingExpiryComplete ->
+                    "Expired recording cleanup did not complete. Some trashed recording files remain."
+                else -> persistenceError
+            }
+            scheduleTrashPurge()
         }
-        scheduleTrashPurge()
+    }
+
+    private fun reportMissingTrashProject() {
+        persistenceError = "The selected song was not found in storage. No changes were made."
+    }
+
+    private fun trashFailureMessage(action: String, error: Exception): String = when (error) {
+        is CorruptLibraryException -> corruptLibraryMessage(error)
+        is MissingActiveProjectException -> "The song is no longer active. No changes were made."
+        else -> "Could not $action. Stored songs were left untouched. Try again."
     }
 
     private fun scheduleTrashPurge() {
@@ -1530,6 +1651,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun clearEditorAfterProjectDelete() {
         autoSaveJob?.cancel()
+        positionSaveJob?.cancel()
         dismissRewrite()
         title = ""
         lyricsFieldValue = TextFieldValue("")
@@ -1545,12 +1667,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun importProject(imported: SongProject, onReady: () -> Unit = {}) {
         flushCurrentDraft {
             dismissRewrite()
-            val newId = java.util.UUID.randomUUID().toString()
             val project = imported.copy(
-                id = newId,
+                id = java.util.UUID.randomUUID().toString(),
                 title = imported.title.ifBlank { "Imported Song" },
                 updatedAt = System.currentTimeMillis()
             )
+            pendingProjectCreationIds.add(project.id)
             projects = listOf(project) + projects
             title = project.title
             lyricsFieldValue = TextFieldValue(project.lyrics)
@@ -1562,16 +1684,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             showStartMenu = false
             resetLyricsHistory()
             viewModelScope.launch {
-                persistActiveProjectSnapshot(
-                    projectId = project.id,
-                    projectList = projects,
-                    editorTitle = project.title,
-                    editorLyrics = project.lyrics,
-                    editorTheme = project.theme
-                )
+                try {
+                    persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme)
+                    onReady()
+                } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+                    reconcileFailedProjectSave(project, error)
+                }
             }
-
-            onReady()
         }
     }
 
@@ -1610,13 +1729,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun persistActiveProjectSnapshot(
-        projectId: String,
-        projectList: List<SongProject>,
+        project: SongProject,
         editorTitle: String,
         editorLyrics: String,
         editorTheme: String
-    ) {
-        repo.saveActiveState(projectList, projectId, editorTitle, editorLyrics, editorTheme)
+    ): List<SongProject> {
+        if (currentProjectId != project.id) throw CancellationException("Song changed")
+        val committed = repo.saveActiveState(
+            project, project.id in pendingProjectCreationIds, editorTitle, editorLyrics, editorTheme
+        )
+        pendingProjectCreationIds.remove(project.id)
+        if (currentProjectId == project.id) projects = committed
+        return committed
+    }
+
+    private suspend fun reconcileFailedProjectSave(project: SongProject, error: Exception) {
+        val missing = error is MissingActiveProjectException
+        if (missing) pendingProjectCreationIds.remove(project.id)
+        try {
+            val stored = repo.projectsFlow.first()
+            projects = if (!missing && currentProjectId == project.id &&
+                project.id in pendingProjectCreationIds && stored.none { it.id == project.id }
+            ) listOf(project) + stored else stored
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (corrupt: CorruptLibraryException) {
+            persistenceError = corruptLibraryMessage(corrupt)
+            return
+        }
+        if (missing && currentProjectId == project.id) {
+            currentProjectId = null
+            positionSaveJob?.cancel()
+            saveStatus = SaveStatus.IDLE
+        }
+        persistenceError = when (error) {
+            is MissingActiveProjectException -> "This song is no longer active. The unsaved draft remains in the editor; no deleted song was restored."
+            is CorruptLibraryException -> corruptLibraryMessage(error)
+            else -> "Your draft could not be saved. It is still open. Try again."
+        }
     }
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String, onReady: () -> Unit = {}) {
@@ -1637,6 +1787,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun reserveProjectIdentity(): String = currentProjectId ?: createUntitledProjectSnapshot().let { project ->
+        pendingProjectCreationIds.add(project.id)
         projects = listOf(project) + projects
         currentProjectId = project.id
         showStartMenu = false
@@ -1646,12 +1797,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun ensureProjectForNotebook(): String {
         currentProjectId?.let { return it }
         val projectId = reserveProjectIdentity()
-        val savedProjects = projects
+        val project = projects.first { it.id == projectId }
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
         viewModelScope.launch {
-            persistActiveProjectSnapshot(projectId, savedProjects, savedTitle, savedLyrics, savedTheme)
+            try {
+                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme)
+            } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+                reconcileFailedProjectSave(project, error)
+            }
         }
         return projectId
     }
@@ -1660,7 +1815,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Persist retries too: a failed save must not admit an orphaned recording.
     suspend fun ensureProjectForRecording(): String {
         val projectId = reserveProjectIdentity()
-        repo.saveActiveState(projects, projectId, title, lyrics, theme)
+        val project = (projects.firstOrNull { it.id == projectId }
+            ?: createUntitledProjectSnapshot(title, lyrics, theme, id = projectId)).copy(
+            title = title.ifEmpty { "Untitled Song" },
+            lyrics = lyrics,
+            theme = theme,
+            updatedAt = System.currentTimeMillis()
+        )
+        persistActiveProjectSnapshot(project, title, lyrics, theme)
         if (currentProjectId != projectId) throw CancellationException("Song changed")
         return projectId
     }
@@ -1684,54 +1846,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // debounce; saving the stale snapshot now would clobber the newly
             // loaded project or resurrect a deleted one.
             if (currentProjectId != projectIdAtTrigger) return@launch
-            if (projectIdAtTrigger != null && projects.none { it.id == projectIdAtTrigger }) return@launch
+            val missingId = projectIdAtTrigger?.takeIf { projects.none { project -> project.id == it } }
+            if (missingId != null) detachMissingActiveProject(missingId)
 
             saveStatus = SaveStatus.SAVING
-            try {
-                val updatedProjectId: String
-                val updatedProjects = if (projectIdAtTrigger == null) {
-                    val newProject = createUntitledProjectSnapshot(
-                        title = currentTitle,
-                        lyrics = currentLyrics,
-                        theme = currentTheme
-                    )
-                    updatedProjectId = newProject.id
-                    listOf(newProject) + projects
-                } else {
-                    updatedProjectId = projectIdAtTrigger
-                    projects.map {
-                        if (it.id == projectIdAtTrigger) it.copy(
-                            title = currentTitle.ifEmpty { "Untitled Song" },
-                            lyrics = currentLyrics,
-                            theme = currentTheme,
-                            updatedAt = System.currentTimeMillis()
-                        ) else it
-                    }
+            val project = if (projectIdAtTrigger == null || missingId != null) {
+                createUntitledProjectSnapshot(
+                    title = currentTitle, lyrics = currentLyrics, theme = currentTheme
+                ).also {
+                    pendingProjectCreationIds.add(it.id)
+                    projects = listOf(it) + projects
+                    currentProjectId = it.id
                 }
-
-                projects.firstOrNull { it.id == updatedProjectId }?.let { previous ->
-                    if (previous.lyrics != currentLyrics || previous.title != currentTitle || previous.theme != currentTheme) {
-                        updateWorkspace(updatedProjectId) { it.checkpoint(previous.title, previous.lyrics, previous.theme, System.currentTimeMillis(), force = false) }
-                    }
-                }
-                projects = updatedProjects
-                currentProjectId = updatedProjectId
-                rememberEditorPosition()
-
-                persistActiveProjectSnapshot(
-                    projectId = updatedProjectId,
-                    projectList = updatedProjects,
-                    editorTitle = currentTitle,
-                    editorLyrics = currentLyrics,
-                    editorTheme = currentTheme
+            } else {
+                projects.first { it.id == projectIdAtTrigger }.copy(
+                    title = currentTitle.ifEmpty { "Untitled Song" },
+                    lyrics = currentLyrics,
+                    theme = currentTheme,
+                    updatedAt = System.currentTimeMillis()
                 )
-
+            }
+            try {
+                projects.firstOrNull { it.id == project.id && it.id !in pendingProjectCreationIds }?.let { previous ->
+                    if (previous.lyrics != currentLyrics || previous.title != currentTitle || previous.theme != currentTheme) {
+                        updateWorkspace(project.id) { it.checkpoint(previous.title, previous.lyrics, previous.theme, System.currentTimeMillis(), force = false) }
+                    }
+                }
+                rememberEditorPosition()
+                persistActiveProjectSnapshot(project, currentTitle, currentLyrics, currentTheme)
+                if (missingId != null) reportRecoveredDraft()
                 delay(SAVE_STATUS_VISIBLE_MILLIS)
-                saveStatus = SaveStatus.SAVED
+                if (currentProjectId == project.id && title == currentTitle &&
+                    lyrics == currentLyrics && theme == currentTheme
+                ) saveStatus = SaveStatus.SAVED
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                persistenceError = "Your draft could not be saved. It is still open. Free up storage and try again."
+            } catch (error: Exception) {
+                reconcileFailedProjectSave(project, error)
             } finally {
                 // Cancellation mid-save would otherwise leave the indicator stuck on SAVING.
                 if (saveStatus == SaveStatus.SAVING) saveStatus = SaveStatus.IDLE

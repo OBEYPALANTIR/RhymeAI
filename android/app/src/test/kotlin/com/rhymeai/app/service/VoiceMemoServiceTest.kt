@@ -8,13 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/**
- * Unit tests for pure, platform-independent logic in VoiceMemoService:
- * list ordering, purge, deletion, and the companion formatting helpers.
- *
- * MediaRecorder and MediaPlayer are Android-framework classes that cannot run on
- * the JVM; tests that would require them are instrumented tests instead.
- */
+/** Pure tests for VoiceMemoService formatting and file-deletion helpers. */
 class VoiceMemoServiceTest {
 
     @get:Rule
@@ -48,118 +42,6 @@ class VoiceMemoServiceTest {
     fun formatMemoLabelIsNonEmptyForCurrentTime() {
         val label = VoiceMemoService.formatMemoLabel(System.currentTimeMillis())
         assertTrue(label.isNotBlank())
-    }
-
-    // ---------------------------------------------------------------------------
-    // Listing: newest-first ordering
-    // ---------------------------------------------------------------------------
-
-    @Test
-    fun memosReturnedNewestFirst() {
-        val dir = File(tempFolder.root, "voice-memos/proj-sort")
-        dir.mkdirs()
-
-        val ts1 = 1_000L
-        val ts2 = 2_000L
-        val ts3 = 3_000L
-
-        listOf(ts1, ts2, ts3).forEach { ts ->
-            val f = File(dir, "$ts.m4a")
-            f.createNewFile()
-            f.setLastModified(ts)
-        }
-
-        // Mirror VoiceMemoService.memosForProject sort without needing a real Context.
-        val sorted = dir.listFiles()
-            ?.filter { it.isFile && it.name.endsWith(".m4a") }
-            ?.sortedByDescending { it.lastModified() }
-            ?: emptyList()
-
-        assertEquals(3, sorted.size)
-        assertEquals("$ts3.m4a", sorted[0].name)
-        assertEquals("$ts2.m4a", sorted[1].name)
-        assertEquals("$ts1.m4a", sorted[2].name)
-    }
-
-    @Test
-    fun memosEmptyWhenDirectoryDoesNotExist() {
-        val dir = File(tempFolder.root, "voice-memos/nonexistent-project")
-        assertFalse(dir.exists())
-
-        // Mirror the VoiceMemoService early-return guard.
-        val result: List<File> = if (!dir.exists()) emptyList() else listOf()
-        assertTrue(result.isEmpty())
-    }
-
-    // ---------------------------------------------------------------------------
-    // Purge: deleteRecursively removes the whole project directory
-    // ---------------------------------------------------------------------------
-
-    @Test
-    fun deleteMemoDirectoryRemovesAllFilesAndDir() {
-        val dir = File(tempFolder.root, "voice-memos/proj-purge")
-        dir.mkdirs()
-        File(dir, "1000.m4a").createNewFile()
-        File(dir, "2000.m4a").createNewFile()
-
-        assertTrue(dir.exists())
-        assertEquals(2, dir.listFiles()?.size)
-
-        // VoiceMemoService.deleteMemoDirectory delegates to File.deleteRecursively.
-        dir.deleteRecursively()
-
-        assertFalse(dir.exists())
-    }
-
-    @Test
-    fun deleteMemoDirectoryOnNonexistentDirIsSafe() {
-        val dir = File(tempFolder.root, "voice-memos/ghost-project")
-        assertFalse(dir.exists())
-
-        // deleteRecursively does not throw on a non-existent path; the directory
-        // must still not exist after the call (which is trivially true here).
-        dir.deleteRecursively()
-        assertFalse(dir.exists())
-    }
-
-    @Test
-    fun purgingOneProjectLeavesOtherProjectIntact() {
-        val dirA = File(tempFolder.root, "voice-memos/proj-a")
-        val dirB = File(tempFolder.root, "voice-memos/proj-b")
-        dirA.mkdirs()
-        dirB.mkdirs()
-        File(dirA, "1000.m4a").createNewFile()
-        File(dirB, "2000.m4a").createNewFile()
-
-        dirA.deleteRecursively()
-
-        assertFalse(dirA.exists())
-        assertTrue(dirB.exists())
-        assertEquals(1, dirB.listFiles()?.size)
-    }
-
-    // ---------------------------------------------------------------------------
-    // Task 2 — delete bug: memo list must rescan after deletion
-    // ---------------------------------------------------------------------------
-
-    @Test
-    fun memoListRescanAfterDeleteReflectsDeletion() {
-        val dir = File(tempFolder.root, "voice-memos/proj-delete")
-        dir.mkdirs()
-        val fileA = File(dir, "1000.m4a").also { it.createNewFile() }
-        File(dir, "2000.m4a").createNewFile()
-
-        // Before deletion: 2 files.
-        val before = dir.listFiles()?.filter { it.name.endsWith(".m4a") } ?: emptyList()
-        assertEquals(2, before.size)
-
-        // Simulate deleteMemo (pure file deletion — service not instantiated in JVM tests).
-        fileA.delete()
-
-        // After deletion, a fresh filesystem scan returns 1.
-        val after = dir.listFiles()?.filter { it.name.endsWith(".m4a") } ?: emptyList()
-        assertEquals(1, after.size)
-        assertFalse(after.any { it.name == "1000.m4a" })
     }
 
     @Test

@@ -11,6 +11,7 @@ import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.SongWorkspace
+import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
 import kotlinx.coroutines.sync.Mutex
@@ -30,6 +31,9 @@ internal class CorruptLibraryException(
     val area: String,
     cause: Throwable
 ) : IllegalStateException("Stored $area data could not be read", cause)
+
+internal class MissingActiveProjectException(id: String) :
+    IllegalStateException("Song $id is no longer active")
 
 internal class FailClosedStoredJson<T>(
     private val area: String,
@@ -105,6 +109,9 @@ class ProjectRepository internal constructor(
     private val trashedProjectsStore = FailClosedStoredJson("trash") {
         json.decodeFromString<List<TrashedSongProject>>(it)
     }
+    private val workspacesStore = FailClosedStoredJson("song notebook") {
+        json.decodeFromString<Map<String, SongWorkspace>>(it)
+    }
     private val localModelsStore = FailClosedStoredJson("saved local models") {
         json.decodeFromString<List<SavedLocalModel>>(it)
     }
@@ -122,28 +129,80 @@ class ProjectRepository internal constructor(
     }.flowOn(Dispatchers.Default)
 
     val workspacesFlow: Flow<Map<String, SongWorkspace>> = dataStore.data.map { prefs ->
-        prefs[WORKSPACES_KEY]?.let { json.decodeFromString<Map<String, SongWorkspace>>(it) } ?: emptyMap()
+        workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
     }
 
     suspend fun saveWorkspace(id: String, workspace: SongWorkspace?) {
         dataStore.edit { prefs ->
-            val current = prefs[WORKSPACES_KEY]?.let { json.decodeFromString<Map<String, SongWorkspace>>(it) } ?: emptyMap()
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            if (active.none { it.id == id }) throw MissingActiveProjectException(id)
+            val current = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
             prefs[WORKSPACES_KEY] = json.encodeToString(
                 if (workspace == null) current - id else current + (id to workspace)
             )
         }
     }
 
-    suspend fun saveActiveState(projects: List<SongProject>, id: String?, title: String, lyrics: String, theme: String) = projectSaveMutex.withLock {
-        val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
+    /**
+     * Persist only the intended editor entry against the latest library snapshot.
+     * A caller's in-memory list may predate a Trash transition; it must never
+     * replace membership committed by that transition.
+     */
+    suspend fun saveActiveState(
+        project: SongProject?,
+        createIfMissing: Boolean,
+        title: String,
+        lyrics: String,
+        theme: String
+    ): List<SongProject> = projectSaveMutex.withLock {
+        var committed: List<SongProject>? = null
         dataStore.edit { prefs ->
-            projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")
-            prefs[PROJECTS_KEY] = encoded
-            if (id == null) prefs.remove(CURRENT_PROJECT_ID_KEY) else prefs[CURRENT_PROJECT_ID_KEY] = id
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            val next = if (project == null) {
+                active
+            } else {
+                val stored = active.firstOrNull { it.id == project.id }
+                if (stored == null) {
+                    if (!createIfMissing ||
+                        trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+                            .any { it.project.id == project.id }
+                    ) throw MissingActiveProjectException(project.id)
+                    listOf(project) + active
+                } else {
+                    active.map { current ->
+                        if (current.id != project.id) current else current.copy(
+                            title = project.title,
+                            lyrics = project.lyrics,
+                            theme = project.theme,
+                            updatedAt = if (current.title == project.title &&
+                                current.lyrics == project.lyrics && current.theme == project.theme
+                            ) current.updatedAt else maxOf(current.updatedAt, project.updatedAt)
+                        )
+                    }
+                }
+            }
+            if (project != null) prefs[PROJECTS_KEY] = json.encodeToString(next)
+            if (project == null) prefs.remove(CURRENT_PROJECT_ID_KEY)
+            else prefs[CURRENT_PROJECT_ID_KEY] = project.id
             prefs[CURRENT_TITLE_KEY] = title
             prefs[CURRENT_LYRICS_KEY] = lyrics
             prefs[CURRENT_THEME_KEY] = theme
+            committed = next
         }
+        checkNotNull(committed)
+    }
+
+    suspend fun selectProject(id: String): SongProject = projectSaveMutex.withLock {
+        lateinit var selected: SongProject
+        dataStore.edit { prefs ->
+            selected = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+                .firstOrNull { it.id == id } ?: throw MissingActiveProjectException(id)
+            prefs[CURRENT_PROJECT_ID_KEY] = id
+            prefs[CURRENT_TITLE_KEY] = selected.title
+            prefs[CURRENT_LYRICS_KEY] = selected.lyrics
+            prefs[CURRENT_THEME_KEY] = selected.theme
+        }
+        selected
     }
 
     suspend fun saveProjects(projects: List<SongProject>) = projectSaveMutex.withLock {
@@ -154,12 +213,88 @@ class ProjectRepository internal constructor(
         }
     }
 
-    suspend fun saveTrashedProjects(projects: List<TrashedSongProject>) {
+    suspend fun saveTrashedProjects(projects: List<TrashedSongProject>) = projectSaveMutex.withLock {
         val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
         dataStore.edit { prefs ->
             trashedProjectsStore.requireWritable(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
             prefs[TRASHED_PROJECTS_KEY] = encoded
         }
+    }
+
+    data class TrashTransition(
+        val projects: List<SongProject>,
+        val trashedProjects: List<TrashedSongProject>,
+        val wasCurrent: Boolean = false
+    )
+
+    data class TrashPurge(val trashedProjects: List<TrashedSongProject>, val purgedIds: List<String>)
+
+    suspend fun moveProjectToTrash(id: String, now: Long): TrashTransition? = projectSaveMutex.withLock {
+        var committed: TrashTransition? = null
+        dataStore.edit { prefs ->
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+            val project = active.firstOrNull { it.id == id } ?: return@edit
+            val nextActive = active.filterNot { it.id == id }
+            val nextTrash = listOf(TrashedSongProject(project, now, now + TRASH_RETENTION_MILLIS)) +
+                trash.filterNot { it.project.id == id }
+            val wasCurrent = prefs[CURRENT_PROJECT_ID_KEY] == id
+            prefs[PROJECTS_KEY] = json.encodeToString(nextActive)
+            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            if (wasCurrent) {
+                prefs.remove(CURRENT_PROJECT_ID_KEY)
+                prefs[CURRENT_TITLE_KEY] = ""
+                prefs[CURRENT_LYRICS_KEY] = ""
+                prefs[CURRENT_THEME_KEY] = ""
+            }
+            committed = TrashTransition(nextActive, nextTrash, wasCurrent)
+        }
+        committed
+    }
+
+    suspend fun restoreTrashedProject(id: String, now: Long): TrashTransition? = projectSaveMutex.withLock {
+        var committed: TrashTransition? = null
+        dataStore.edit { prefs ->
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+            val entry = trash.firstOrNull { it.project.id == id } ?: return@edit
+            val nextActive = listOf(entry.project.copy(updatedAt = now)) + active.filterNot { it.id == id }
+            val nextTrash = trash.filterNot { it.project.id == id }
+            prefs[PROJECTS_KEY] = json.encodeToString(nextActive)
+            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            committed = TrashTransition(nextActive, nextTrash)
+        }
+        committed
+    }
+
+    suspend fun permanentlyDeleteTrashedProject(id: String): List<TrashedSongProject>? = projectSaveMutex.withLock {
+        var committed: List<TrashedSongProject>? = null
+        dataStore.edit { prefs ->
+            val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+            val workspaces = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
+            if (trash.none { it.project.id == id }) return@edit
+            val nextTrash = trash.filterNot { it.project.id == id }
+            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            prefs[WORKSPACES_KEY] = json.encodeToString(workspaces - id)
+            committed = nextTrash
+        }
+        committed
+    }
+
+    suspend fun purgeExpiredTrashedProjects(now: Long): TrashPurge = projectSaveMutex.withLock {
+        lateinit var committed: TrashPurge
+        dataStore.edit { prefs ->
+            val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+            val expired = trash.filter { it.deleteAfter <= now }.map { it.project.id }
+            val retained = trash.filter { it.deleteAfter > now }
+            if (expired.isNotEmpty()) {
+                val workspaces = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
+                prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(retained)
+                prefs[WORKSPACES_KEY] = json.encodeToString(workspaces - expired.toSet())
+            }
+            committed = TrashPurge(retained, expired)
+        }
+        committed
     }
 
     suspend fun setCurrentProjectId(id: String?) {

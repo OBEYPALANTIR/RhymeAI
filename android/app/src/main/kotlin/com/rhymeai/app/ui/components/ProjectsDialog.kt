@@ -140,10 +140,11 @@ fun ProjectsDrawer(
     currentProjectId: String?,
     onLoadProject: (SongProject) -> Unit,
     onNewProject: () -> Unit,
-    onDeleteProject: (String) -> Unit,
+    onDeleteProject: (String, (Boolean) -> Unit) -> Unit,
     onRestoreProject: (String) -> Unit,
     onPermanentlyDeleteProject: (String) -> Unit,
     onPurgeExpiredTrash: () -> Unit,
+    onRecordingPurgeIncomplete: () -> Unit,
     onImportProject: (SongProject) -> Unit,
     onDismiss: () -> Unit,
     service: VoiceMemoService? = null
@@ -431,15 +432,16 @@ fun ProjectsDrawer(
                                                 closeDrawer { onLoadProject(selected) }
                                             },
                                             onDeleteProject = { project ->
-                                                onDeleteProject(project.id)
-                                                scope.launch {
-                                                    val result = snackbarHostState.showSnackbar(
-                                                        message = "\"${project.title.ifEmpty { "Untitled Song" }}\" moved to Trash",
-                                                        actionLabel = "Undo",
-                                                        duration = SnackbarDuration.Short
-                                                    )
-                                                    if (result == SnackbarResult.ActionPerformed) {
-                                                        onRestoreProject(project.id)
+                                                onDeleteProject(project.id) { committed ->
+                                                    if (committed) scope.launch {
+                                                        val result = snackbarHostState.showSnackbar(
+                                                            message = "\"${project.title.ifEmpty { "Untitled Song" }}\" moved to Trash",
+                                                            actionLabel = "Undo",
+                                                            duration = SnackbarDuration.Short
+                                                        )
+                                                        if (result == SnackbarResult.ActionPerformed) {
+                                                            onRestoreProject(project.id)
+                                                        }
                                                     }
                                                 }
                                             }
@@ -527,6 +529,7 @@ fun ProjectsDrawer(
                     trashedProjects = trashedProjects,
                     onRestoreProject = onRestoreProject,
                     onPermanentlyDeleteProject = onPermanentlyDeleteProject,
+                    onRecordingPurgeIncomplete = onRecordingPurgeIncomplete,
                     onDismiss = ::closeTrashBin,
                     service = service,
                     projects = projects
@@ -556,10 +559,11 @@ fun ProjectsDialog(
     currentProjectId: String?,
     onLoadProject: (SongProject) -> Unit,
     onNewProject: () -> Unit,
-    onDeleteProject: (String) -> Unit,
+    onDeleteProject: (String, (Boolean) -> Unit) -> Unit,
     onRestoreProject: (String) -> Unit,
     onPermanentlyDeleteProject: (String) -> Unit,
     onPurgeExpiredTrash: () -> Unit,
+    onRecordingPurgeIncomplete: () -> Unit,
     onImportProject: (SongProject) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -574,6 +578,7 @@ fun ProjectsDialog(
         onPermanentlyDeleteProject = onPermanentlyDeleteProject,
         onPurgeExpiredTrash = onPurgeExpiredTrash,
         onImportProject = onImportProject,
+        onRecordingPurgeIncomplete = onRecordingPurgeIncomplete,
         onDismiss = onDismiss
     )
 }
@@ -884,6 +889,7 @@ private fun TrashBinPage(
     trashedProjects: List<TrashedSongProject>,
     onRestoreProject: (String) -> Unit,
     onPermanentlyDeleteProject: (String) -> Unit,
+    onRecordingPurgeIncomplete: () -> Unit,
     onDismiss: () -> Unit,
     service: VoiceMemoService?,
     projects: List<SongProject>
@@ -912,7 +918,14 @@ private fun TrashBinPage(
         service,
         trashedMemoVersion
     ) {
-        service?.purgeExpiredTrashedMemos()
+        val complete = try {
+            service?.purgeExpiredTrashedMemos() ?: true
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+        if (!complete) onRecordingPurgeIncomplete()
         value = service?.trashedMemos() ?: emptyList()
     }
     val memoPaths = remember(trashedMemos) {

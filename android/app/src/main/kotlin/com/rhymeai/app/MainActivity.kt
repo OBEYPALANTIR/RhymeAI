@@ -193,7 +193,7 @@ class MainActivity : ComponentActivity() {
                     viewModel.persistenceError?.let { message ->
                         androidx.compose.material3.AlertDialog(
                             onDismissRequest = { viewModel.persistenceError = null },
-                            title = { androidx.compose.material3.Text("Draft not saved") },
+                            title = { androidx.compose.material3.Text("Could not complete action") },
                             text = { androidx.compose.material3.Text(message) },
                             confirmButton = { androidx.compose.material3.TextButton(onClick = { viewModel.persistenceError = null }) { androidx.compose.material3.Text("OK") } }
                         )
@@ -229,10 +229,11 @@ class MainActivity : ComponentActivity() {
                                 }
                                 }
                             },
-                            onDeleteProject = { viewModel.moveProjectToTrash(it) },
+                            onDeleteProject = { id, onCommitted -> viewModel.moveProjectToTrash(id, onCommitted) },
                             onRestoreProject = { viewModel.restoreTrashedProject(it) },
                             onPermanentlyDeleteProject = { viewModel.permanentlyDeleteTrashedProject(it) },
                             onPurgeExpiredTrash = { viewModel.purgeExpiredTrashedProjects() },
+                            onRecordingPurgeIncomplete = viewModel::reportRecordingPurgeFailure,
                             onImportProject = { project ->
                                 viewModel.importProject(project) {
                                 if (navController.currentDestination?.route == Routes.EDITOR) {
