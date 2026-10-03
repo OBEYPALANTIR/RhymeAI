@@ -545,7 +545,7 @@ internal fun SettingsDialog(
                             Text("On-Device Model", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "Load a GGUF model to run AI entirely on your device. No data leaves your phone. You can choose your own file or download a recommended Gemma model from Hugging Face.",
+                                "Load a Gemma GGUF model to run AI entirely on your device. No data leaves your phone. You can choose your own Gemma file or download a recommended one from Hugging Face; other model families are not supported.",
                                 fontSize = 12.sp,
                                 color = subtleColor,
                                 lineHeight = 16.sp
