@@ -140,12 +140,12 @@ class SyncBlobCryptoTest {
     }
 
     @Test
-    fun v2ManifestUsesRai2WhileRecordingEncryptionRemainsRai1() {
-        val v2 = referenceVectors.single { it.getValue("magic").jsonPrimitive.content == "RAI2" }
-        val bytes = v2.getValue("plaintext").jsonPrimitive.content.toByteArray(Charsets.UTF_8)
+    fun manifestUsesRai3WhileRecordingEncryptionRemainsRai1() {
+        val v3 = referenceVectors.single { it.getValue("magic").jsonPrimitive.content == "RAI3" }
+        val bytes = v3.getValue("plaintext").jsonPrimitive.content.toByteArray(Charsets.UTF_8)
         val manifest = SyncBlobCrypto.sealManifest(bytes, passphrase)
-        assertEquals("RAI2", String(manifest, 0, 4, Charsets.US_ASCII))
-        assertEquals(2, SyncBlobCrypto.openManifest(manifest, passphrase).version)
+        assertEquals("RAI3", String(manifest, 0, 4, Charsets.US_ASCII))
+        assertEquals(3, SyncBlobCrypto.openManifest(manifest, passphrase).version)
         assertArrayEquals(bytes, SyncBlobCrypto.openManifest(manifest, passphrase).plaintext)
         assertThrows(SyncBlobSealException::class.java) {
             SyncBlobCrypto.openManifest(manifest, "wrong passphrase".toCharArray())
@@ -156,7 +156,7 @@ class SyncBlobCryptoTest {
     }
 
     @Test
-    fun independentPythonVectorsOpenAndSealByteIdenticallyForBothEnvelopeVersions() {
+    fun independentPythonVectorsOpenForEveryEnvelopeVersionAndSealByteIdenticallyForWrittenOnes() {
         val salt = ByteArray(16) { it.toByte() }
         val iv = ByteArray(12) { (0x10 + it).toByte() }
         for (vector in referenceVectors) {
@@ -166,11 +166,13 @@ class SyncBlobCryptoTest {
             assertEquals(vector.getValue("envelope_sha256").jsonPrimitive.content, sha)
             val magic = vector.getValue("magic").jsonPrimitive.content
             assertEquals(magic, String(expected, 0, 4, Charsets.US_ASCII))
-            val sealed = if (magic == "RAI1") SyncBlobCrypto.seal(plaintext, passphrase, salt, iv)
-                else SyncBlobCrypto.sealManifest(plaintext, passphrase, salt, iv)
-            assertArrayEquals(expected, sealed)
+            // RAI2 is read-only now: Android writes recordings as RAI1 and manifests as RAI3.
+            when (magic) {
+                "RAI1" -> assertArrayEquals(expected, SyncBlobCrypto.seal(plaintext, passphrase, salt, iv))
+                "RAI3" -> assertArrayEquals(expected, SyncBlobCrypto.sealManifest(plaintext, passphrase, salt, iv))
+            }
             val opened = SyncBlobCrypto.openManifest(expected, passphrase)
-            assertEquals(if (magic == "RAI1") 1 else 2, opened.version)
+            assertEquals(mapOf("RAI1" to 1, "RAI2" to 2, "RAI3" to 3).getValue(magic), opened.version)
             assertArrayEquals(plaintext, opened.plaintext)
         }
         assertArrayEquals(
@@ -182,9 +184,13 @@ class SyncBlobCryptoTest {
     }
 
     @Test
-    fun rai2HeaderBodyAndTagTamperingFailsClosed() {
+    fun manifestHeaderBodyAndTagTamperingFailsClosed() {
+        for (magic in listOf("RAI2", "RAI3")) manifestTamperingFailsClosed(magic)
+    }
+
+    private fun manifestTamperingFailsClosed(magic: String) {
         val original = Base64.getDecoder().decode(referenceVectors.single {
-            it.getValue("magic").jsonPrimitive.content == "RAI2"
+            it.getValue("magic").jsonPrimitive.content == magic
         }.getValue("envelope_base64").jsonPrimitive.content)
         for (index in listOf(3, 5, 21, 32, original.lastIndex)) {
             val tampered = original.clone()
@@ -205,7 +211,7 @@ class SyncBlobCryptoTest {
         val original = Base64.getDecoder().decode(referenceVectors.single {
             it.getValue("magic").jsonPrimitive.content == "RAI2"
         }.getValue("envelope_base64").jsonPrimitive.content)
-        for (magic in listOf("RAI3", "RAI9")) {
+        for (magic in listOf("RAI4", "RAI9")) {
             val changed = original.clone()
             magic.toByteArray(Charsets.US_ASCII).copyInto(changed)
             assertEquals("Unsupported envelope version", assertThrows(SyncBlobFormatException::class.java) {

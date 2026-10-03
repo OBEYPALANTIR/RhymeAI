@@ -11,13 +11,14 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * Passphrase-derived AES-GCM envelopes shared with iOS.
  *
- * Recording payloads retain RAI1. Project manifests use RAI2 for v2 while
- * legacy v1 manifests remain readable under RAI1. The actual header bytes
+ * Recording payloads retain RAI1. Project manifests are written as v3 under
+ * RAI3; v2 under RAI2 and v1 under RAI1 remain readable. The actual header bytes
  * (magic, salt and IV) are authenticated as AAD.
  */
 object SyncBlobCrypto {
     private val RECORDING_MAGIC = "RAI1".toByteArray(Charsets.US_ASCII)
-    private val MANIFEST_MAGIC = "RAI2".toByteArray(Charsets.US_ASCII)
+    private val LEGACY_MANIFEST_MAGIC = "RAI2".toByteArray(Charsets.US_ASCII)
+    private val MANIFEST_MAGIC = "RAI3".toByteArray(Charsets.US_ASCII)
     private const val SALT_BYTES = 16
     private const val IV_BYTES = 12
     private const val TAG_BITS = 128
@@ -83,7 +84,8 @@ object SyncBlobCrypto {
         val magic = envelope.copyOfRange(0, RECORDING_MAGIC.size)
         val version = when {
             magic.contentEquals(RECORDING_MAGIC) -> 1
-            magic.contentEquals(MANIFEST_MAGIC) -> 2
+            magic.contentEquals(LEGACY_MANIFEST_MAGIC) -> 2
+            magic.contentEquals(MANIFEST_MAGIC) -> 3
             magic[0] == 'R'.code.toByte() &&
                 magic[1] == 'A'.code.toByte() &&
                 magic[2] == 'I'.code.toByte() ->

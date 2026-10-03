@@ -20,6 +20,13 @@
       "plaintext_sha256": "1bb3b9d307d3afcf19afcdb5a11a798cac48aab00de3c924bf1ecb0e1aa32769",
       "envelope_base64": "UkFJMgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhtizcOcwuED9qmh1uypIuacjCXfzEdC4XqsUgnAZ08InG+/2sOGiVfCbTNTgVs/qDX5tg+Xq/8BEH3mg+MmFeqRheWaMxPs8OlSH7Qk3NlvXhbeadkCMJdN+1TGfXEOfFN1TWcopyCi7nQECwWmM9FoDiFvYdpO9FASv9DMzSzf8bhV9h1x7JyXsCmK9D5Q3b2bgUDXlofE+sOt6C+iD7+DG8H3T/+zR/1o2Xh8ayaScLc2ZoYtTAGPW/MU2kSBrBcVy6A/zgS0sVDgzEFSOF9a2oSxDPsg7pdytAc4nSzgapIddeo97OUTNUhdGRgfs6m1UKjsLc5AcYfWeY8OuuCHLTrLc+4qTwxdp5UKYWRmsrIJXKK8kT1ftiMuN8iECTTtrL42ClJyEx5RnRomdPWaOtR06dGOz0kZng7Pz7Fnt1QvRzLSLEAuDYJ00d3pqyAXeX5r8CCNHXb7H+6jdn9PDipjpjuI9WJNxc2AozZ/Gp1a6j6E73k=",
       "envelope_sha256": "cd86304f5702d9c25ed830d076e62c8fae3fbea8765604851e64444cd02a68c6"
+    },
+    {
+      "magic": "RAI3",
+      "plaintext": "{\"version\":3,\"projects\":[],\"trashed\":[],\"recordings\":[],\"deletions\":[{\"projectId\":\"gone\",\"fileName\":null,\"deletedAt\":1},{\"projectId\":\"gone\",\"fileName\":null,\"deletedAt\":2},{\"projectId\":\"gone\",\"fileName\":\"take.m4a\",\"deletedAt\":9223372036854775807},{\"projectId\":\"keep\",\"fileName\":\"removed.m4a\",\"deletedAt\":3}],\"savedAt\":2000000000000,\"savedByClientId\":\"deleter\"}",
+      "plaintext_sha256": "61788de83dda51fb06311385b3d9a75efb47996ffede1be63102fea592f7d2f4",
+      "envelope_base64": "UkFJMwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhtizcOcwuED9qmh1u2pIuacjCXfzEdC4XqsUgnAZ08InG+/2sOGiVfCbTNTgVs/qDX5tg+Xq/8BEH3mg+MmFeqRheWaMxPs8OlSH7Qk3NlvXhbeadkCMJdN+1TGfXEOfFN1TWcopyCi7nQECwWmM9FoDiFvYdpO9FASv9DMzSzf8bhV9h1x7JyXsCmK9D5Q3b2bgUDXlofE+sOt6C+iD7+DG8H3T/+zR/1o2Xh8ayaScLc2ZoYtTAGPW/MU2kSBrBcVy6A/zgS0sVDgzEFSOF9a2oSxDPsg7pdytAc4nSzgapIddeo97OUTNUhdGRgfs6m1UKjsLc5AcYfWeY8OuuCHLTrLc+4qTwxdp5UKYWRmsrIJXKK8kT1ftiMuN8iECTTtrL42ClJyEx5RnRomdPWaOtR06dGOz0kZng7Pz7Fnt1QvRzLSLEAuDYJ00d3pqyAXeX5r8CCNHXb7H+6jdn9PDipjpjuI9ctCGzSnOi9Z6HVLrPhP4xI=",
+      "envelope_sha256": "7e46a8d77d81389c2e95674a506e9a234b44cce3da991febb6f7f2f4dc950894"
     }
   ]
 }

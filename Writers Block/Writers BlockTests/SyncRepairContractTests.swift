@@ -13,6 +13,7 @@ struct SyncRepairContractTests {
     @Test func strictManifestSchemaAndPaths() throws { try SyncRepairContractChecks.validation() }
     @Test func authenticatedEnvelopeVersions() throws { try SyncRepairContractChecks.crypto() }
     @Test func legacyManifestsRemainReadable() throws { try SyncRepairContractChecks.legacyManifests() }
+    @Test func androidWrittenV3ManifestOpens() throws { try SyncRepairContractChecks.androidWrittenManifest() }
     @Test func importedAudioUsesV3ManifestAndRetainsDeletionSemantics() throws { try SyncRepairContractChecks.importedAudio() }
 }
 #endif
@@ -125,6 +126,16 @@ enum SyncRepairContractChecks {
         let audio = Data([0, 1, 2, 3])
         let recording = try SyncBlobCrypto.seal(audio, passphrase: passphrase, salt: salt, iv: iv)
         try require(recording.prefix(4) == Data("RAI1".utf8) && SyncBlobCrypto.open(recording, passphrase: passphrase) == audio, "recording compatibility failed")
+    }
+
+    static func androidWrittenManifest() throws {
+        // The RAI3 vector in android/app/src/test/resources/sync-envelope-vectors.json;
+        // Android's SyncBlobCryptoTest seals these exact bytes.
+        let androidV3Base64 = "UkFJMwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhtizcOcwuED9qmh1u2pIuacjCXfzEdC4XqsUgnAZ08InG+/2sOGiVfCbTNTgVs/qDX5tg+Xq/8BEH3mg+MmFeqRheWaMxPs8OlSH7Qk3NlvXhbeadkCMJdN+1TGfXEOfFN1TWcopyCi7nQECwWmM9FoDiFvYdpO9FASv9DMzSzf8bhV9h1x7JyXsCmK9D5Q3b2bgUDXlofE+sOt6C+iD7+DG8H3T/+zR/1o2Xh8ayaScLc2ZoYtTAGPW/MU2kSBrBcVy6A/zgS0sVDgzEFSOF9a2oSxDPsg7pdytAc4nSzgapIddeo97OUTNUhdGRgfs6m1UKjsLc5AcYfWeY8OuuCHLTrLc+4qTwxdp5UKYWRmsrIJXKK8kT1ftiMuN8iECTTtrL42ClJyEx5RnRomdPWaOtR06dGOz0kZng7Pz7Fnt1QvRzLSLEAuDYJ00d3pqyAXeX5r8CCNHXb7H+6jdn9PDipjpjuI9ctCGzSnOi9Z6HVLrPhP4xI="
+        guard let fixture = Data(base64Encoded: androidV3Base64) else { throw Failure(message: "invalid RAI3 fixture") }
+        let blob = try SyncBlobCrypto.openManifest(fixture, passphrase: passphrase)
+        try require(blob.version == 3 && blob.savedByClientId == "deleter", "Android RAI3 manifest did not open as v3")
+        try require(blob.deletions.contains { $0.projectId == "keep" && $0.fileName == "removed.m4a" }, "Android RAI3 deletion lost")
     }
 
     static func legacyManifests() throws {

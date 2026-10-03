@@ -38,14 +38,14 @@ data class SyncBlob(
     val savedByClientId: String = ""
 ) {
     companion object {
-        const val CURRENT_VERSION = 2
+        const val CURRENT_VERSION = 3
         const val DRIVE_FILE_NAME = "rhymeai-projects.json"
         const val DRIVE_MIME_TYPE = "application/json"
     }
 
     fun validate() {
         require(version in 1..CURRENT_VERSION) { "Unsupported sync version" }
-        require(version == CURRENT_VERSION || deletions.isEmpty()) { "Invalid sync version shape" }
+        require(version >= 2 || deletions.isEmpty()) { "Invalid sync version shape" }
         projects.forEach { SyncIdentity.validateProjectId(it.id) }
         trashed.forEach { SyncIdentity.validateProjectId(it.project.id) }
         recordings.forEach(RecordingManifestEntry::validate)
@@ -91,7 +91,7 @@ object SyncBlobSerializer : KSerializer<SyncBlob> {
             ?: throw SerializationException("Missing sync version")
         if (version !in 1..SyncBlob.CURRENT_VERSION ||
             (version == 1 && "deletions" in fields) ||
-            (version == 2 && (fields["deletions"] == null || fields["deletions"] is JsonNull))
+            (version >= 2 && (fields["deletions"] == null || fields["deletions"] is JsonNull))
         ) {
             throw SerializationException("Invalid sync version shape")
         }

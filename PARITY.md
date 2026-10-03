@@ -61,8 +61,8 @@ This tracks behavior that must stay aligned between Android and iOS.
   `RAI1 | salt(16) | iv(12) | ciphertext | tag(16)` envelope with the header
   bound as AAD. The shared RAI1 golden vector is now pinned by unit tests on
   both platforms (`BackupCoreTests` on iOS, `SyncBlobCryptoTest` on Android). Current
-  manifests have since diverged: Android writes v2/RAI2 and iOS writes v3/RAI3,
-  which Android does not read yet.
+  manifests are v3 under RAI3 on both platforms, pinned by a shared RAI3 vector;
+  v2/RAI2 and v1/RAI1 remain readable.
 - Backup passphrase rules: both platforms trim the ASCII set space/tab/CR/LF
   and require at least 8 printable ASCII (0x20–0x7E) characters, unit-verified
   on both sides including tab/newline-padded and interior-tab cases.
