@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  unit-tests:
+  ios-unit-tests:
     runs-on: macos-26
     timeout-minutes: 45
     steps:
