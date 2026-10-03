@@ -820,8 +820,9 @@ struct Writers_BlockTests {
     }
 
     @MainActor
-    @Test func geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey() async throws {
-        let apiKey = try #require(Self.geminiTestKey, "GEMINI_TEST_KEY is required for live Gemini service verification")
+    @Test(.enabled(if: Self.geminiTestKey != nil, "GEMINI_TEST_KEY is required for live Gemini service verification"))
+    func geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey() async throws {
+        let apiKey = try #require(Self.geminiTestKey)
 
         let service = AIService()
         let lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
@@ -880,8 +881,9 @@ struct Writers_BlockTests {
     }
 
     @MainActor
-    @Test func geminiStreamingCanBeCancelledAfterFirstSuggestionWithDebugKey() async throws {
-        let apiKey = try #require(Self.geminiTestKey, "GEMINI_TEST_KEY is required for live Gemini cancellation verification")
+    @Test(.enabled(if: Self.geminiTestKey != nil, "GEMINI_TEST_KEY is required for live Gemini cancellation verification"))
+    func geminiStreamingCanBeCancelledAfterFirstSuggestionWithDebugKey() async throws {
+        let apiKey = try #require(Self.geminiTestKey)
 
         let service = AIService()
         let lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
