@@ -39,15 +39,14 @@ Create one OAuth client per signing certificate:
 
 ## Android project/recording sync contract
 
-The encrypted Drive `rhymeai-projects.json` snapshot pairs SyncBlob version 2
-with an RAI2 envelope, which iOS can read. iOS itself now writes SyncBlob
-version 3 under an RAI3 envelope, which Android cannot read yet: after iOS
-uploads, Android reports the backup as unreadable and leaves it untouched.
-Android now
+The encrypted Drive `rhymeai-projects.json` snapshot is SyncBlob version 3
+under an RAI3 envelope on both Android and iOS. Both still read v2/RAI2 and
+v1/RAI1, and a shared RAI3 test vector is opened by unit tests on both
+platforms. Android
 emits the song, trash, and recording body keys required by the iOS decoder
 even when their values equal defaults; native two-platform exchange has not
 yet been verified. Version 1 remains readable under RAI1 only when its JSON
-has no `deletions` key; version 2 requires that key, including `[]` when there
+has no `deletions` key; versions 2 and 3 require that key, including `[]` when there
 are no deletions. The decoded version must match the authenticated envelope
 magic. Missing, null, mismatched, or unsupported shapes are rejected rather
 than replacing a backup. Recording payloads remain RAI1.
@@ -57,7 +56,7 @@ separately from projects, trash, and pending local recording cleanup. Delete
 Forever and expiry purge write a project tombstone in the same DataStore
 transaction that removes each trashed song. These tombstones are never pruned:
 merging retains the newest deletion timestamp per identity, and a project
-tombstone subsumes its recording-specific tombstones. On Android v2 sync, a
+tombstone subsumes its recording-specific tombstones. On Android sync, a
 tombstoned song is hidden and its recordings are no longer uploaded or
 advertised by the receiving device, regardless of a later content edit
 timestamp. A stale offline edit cannot revive the song in the synced list.

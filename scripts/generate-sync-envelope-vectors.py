@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the deterministic iOS/Android RAI1 and RAI2 test vectors.
+"""Generate the deterministic iOS/Android RAI1, RAI2 and RAI3 test vectors.
 
 From the repository root:
   python3 scripts/generate-sync-envelope-vectors.py android/app/src/test/resources/sync-envelope-vectors.json
@@ -27,6 +27,8 @@ V2 = ('{"version":2,"projects":[],"trashed":[],"recordings":[],"deletions":['
       '{"projectId":"gone","fileName":"take.m4a","deletedAt":9223372036854775807},'
       '{"projectId":"keep","fileName":"removed.m4a","deletedAt":3}],'
       '"savedAt":2000000000000,"savedByClientId":"deleter"}')
+# v3 keeps the v2 body shape; the version marks manifests that may list imported recordings.
+V3 = V2.replace('"version":2', '"version":3', 1)
 
 
 def vector(magic: str, plaintext: str) -> dict:
@@ -53,7 +55,7 @@ def main() -> None:
         "passphrase": PASSPHRASE,
         "salt_hex": SALT.hex(),
         "iv_hex": IV.hex(),
-        "vectors": [vector("RAI1", V1), vector("RAI2", V2)],
+        "vectors": [vector("RAI1", V1), vector("RAI2", V2), vector("RAI3", V3)],
     }
     Path(sys.argv[1]).write_text(json.dumps(output, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 

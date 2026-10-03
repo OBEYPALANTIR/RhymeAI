@@ -164,7 +164,7 @@ class ReceivingDeviceUploadTest {
     }
 
     @Test
-    fun outgoingRai2WireIncludesIosRequiredDefaultFieldsOnBothDecisionPaths() = runBlocking {
+    fun outgoingRai3WireIncludesIosRequiredDefaultFieldsOnBothDecisionPaths() = runBlocking {
         val missing = mutableListOf<String>()
         for (merge in listOf(false, true)) {
             val fixture = Fixture()
@@ -178,11 +178,11 @@ class ReceivingDeviceUploadTest {
 
                 fixture.sync(remote)
                 val sealed = fixture.drive.manifestBytes()
-                assertEquals("RAI2", sealed.copyOfRange(0, 4).toString(Charsets.US_ASCII))
+                assertEquals("RAI3", sealed.copyOfRange(0, 4).toString(Charsets.US_ASCII))
                 val opened = SyncBlobCrypto.openManifest(sealed, passphrase)
-                assertEquals(2, opened.version)
+                assertEquals(3, opened.version)
                 val wire = json.parseToJsonElement(opened.plaintext.toString(Charsets.UTF_8)).jsonObject
-                assertEquals("2", wire.getValue("version").jsonPrimitive.content)
+                assertEquals("3", wire.getValue("version").jsonPrimitive.content)
                 assertTrue("deletions" in wire)
                 val project = wire.getValue("projects").jsonArray.single().jsonObject
                 val trash = wire.getValue("trashed").jsonArray.single().jsonObject

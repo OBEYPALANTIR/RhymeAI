@@ -766,7 +766,7 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
         if (SyncBlobCrypto.envelopeSizeForPlaintext(plaintext.size.toLong()) > DriveSyncService.MAX_SYNC_BLOB_BYTES) {
             throw DriveNetworkException("Drive backup exceeds the allowed size")
         }
-        require(blob.version == SyncBlob.CURRENT_VERSION) { "Only v2 manifests may be sealed as RAI2" }
+        require(blob.version == SyncBlob.CURRENT_VERSION) { "Only v3 manifests may be sealed as RAI3" }
         SyncBlobCrypto.sealManifest(plaintext, input.passphrase)
     }
 
