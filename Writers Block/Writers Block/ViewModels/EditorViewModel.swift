@@ -1110,30 +1110,17 @@ final class EditorViewModel: ObservableObject {
         )
     }
 
-    private func currentLine(for range: NSRange) -> String {
+    func currentLine(for range: NSRange) -> String {
+        // UITextView ranges are UTF-16; stay in NSString offsets throughout.
         let ns = lyrics as NSString
         guard range.location <= ns.length else { return "" }
         let safeLoc = min(range.location, ns.length)
         let safeEnd = min(range.location + range.length, ns.length)
-        let prefix = ns.substring(with: NSRange(location: 0, length: safeLoc))
-        let lineStartOffset: Int
-        if let lastNewline = prefix.range(of: "\n", options: .backwards)?.upperBound {
-            lineStartOffset = prefix.distance(from: prefix.startIndex, to: lastNewline)
-        } else {
-            lineStartOffset = 0
-        }
-        let lineEndOffset: Int
-        if safeEnd >= ns.length {
-            lineEndOffset = ns.length
-        } else {
-            let suffix = ns.substring(with: NSRange(location: safeEnd, length: ns.length - safeEnd))
-            if let nextNewline = suffix.range(of: "\n")?.lowerBound {
-                lineEndOffset = safeEnd + suffix.distance(from: suffix.startIndex, to: nextNewline)
-            } else {
-                lineEndOffset = ns.length
-            }
-        }
-        guard lineStartOffset <= lineEndOffset, lineEndOffset <= ns.length else { return "" }
+        let previousNewline = ns.range(of: "\n", options: .backwards, range: NSRange(location: 0, length: safeLoc))
+        let lineStartOffset = previousNewline.location == NSNotFound ? 0 : NSMaxRange(previousNewline)
+        let nextNewline = ns.range(of: "\n", options: [], range: NSRange(location: safeEnd, length: ns.length - safeEnd))
+        let lineEndOffset = nextNewline.location == NSNotFound ? ns.length : nextNewline.location
+        guard lineStartOffset <= lineEndOffset else { return "" }
         return ns.substring(with: NSRange(location: lineStartOffset, length: lineEndOffset - lineStartOffset))
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
