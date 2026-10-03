@@ -1,5 +1,13 @@
 # Release Notes
 
+## Pending Android backup format
+
+Android writes Google Drive backups in the same v3/RAI3 format as iOS and still
+reads the two earlier formats, so a backup last written by iOS no longer shows
+as unreadable on Android. Older Android builds cannot read a backup once a newer
+build has written it. A shared test vector is checked on both platforms; a live
+exchange between an Android and an iOS device has not been verified.
+
 ## Pending release-tooling safety
 
 Release scripts require explicit empty emulator targets, preserve existing app
