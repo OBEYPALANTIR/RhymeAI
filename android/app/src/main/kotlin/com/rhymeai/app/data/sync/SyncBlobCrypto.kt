@@ -9,28 +9,20 @@ import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Sealed-envelope encryption for the Drive sync blob.
+ * Passphrase-derived AES-GCM envelopes shared with iOS.
  *
- * The blob must be readable on a user's *other* devices, so the key cannot
- * live in the Android Keystore (keys don't travel) — it is derived from a
- * user passphrase instead. AES-GCM provides confidentiality and integrity in
- * one primitive: the GCM tag is the tamper check, and the header (magic,
- * salt, IV) is bound as AAD so it can't be swapped either. A tampered or
- * wrong-passphrase envelope fails closed with [SyncBlobSealException].
- *
- * Envelope layout: magic "RAI1" (4) | salt (16) | IV (12) | ciphertext+tag.
- *
- * Pure JVM (javax.crypto only) so it is unit-testable without a device. Android
- * and iOS must keep this RAI1 envelope byte-compatible for Drive backup restore.
+ * Recording payloads retain RAI1. Project manifests use RAI2 for v2 while
+ * legacy v1 manifests remain readable under RAI1. The actual header bytes
+ * (magic, salt and IV) are authenticated as AAD.
  */
 object SyncBlobCrypto {
-
-    /** Bumping the magic is the envelope's schema version. */
-    private val MAGIC = "RAI1".toByteArray(Charsets.US_ASCII)
+    private val RECORDING_MAGIC = "RAI1".toByteArray(Charsets.US_ASCII)
+    private val MANIFEST_MAGIC = "RAI2".toByteArray(Charsets.US_ASCII)
     private const val SALT_BYTES = 16
     private const val IV_BYTES = 12
     private const val TAG_BITS = 128
     private const val KEY_BITS = 256
+    internal const val ENVELOPE_OVERHEAD_BYTES = 4 + SALT_BYTES + IV_BYTES + (TAG_BITS / 8)
 
     // OWASP 2023 floor for PBKDF2-HmacSHA256. Derivation runs once per
     // sync push/pull, so the ~0.5s cost on a phone is acceptable.
@@ -38,45 +30,91 @@ object SyncBlobCrypto {
 
     private val random = SecureRandom()
 
-    fun seal(plaintext: ByteArray, passphrase: CharArray): ByteArray {
-        val salt = ByteArray(SALT_BYTES).also(random::nextBytes)
-        val iv = ByteArray(IV_BYTES).also(random::nextBytes)
-        return seal(plaintext, passphrase, salt, iv)
+    internal fun envelopeSizeForPlaintext(plaintextBytes: Long): Long {
+        require(plaintextBytes >= 0) { "Plaintext size must be non-negative" }
+        return Math.addExact(plaintextBytes, ENVELOPE_OVERHEAD_BYTES.toLong())
     }
+
+    /** Recording payloads must remain byte-compatible with the existing RAI1 format. */
+    fun seal(plaintext: ByteArray, passphrase: CharArray): ByteArray =
+        sealWithMagic(plaintext, passphrase, randomSalt(), randomIv(), RECORDING_MAGIC)
 
     internal fun seal(
         plaintext: ByteArray,
         passphrase: CharArray,
         salt: ByteArray,
         iv: ByteArray
+    ): ByteArray = sealWithMagic(plaintext, passphrase, salt, iv, RECORDING_MAGIC)
+
+    fun sealManifest(plaintext: ByteArray, passphrase: CharArray): ByteArray =
+        sealWithMagic(plaintext, passphrase, randomSalt(), randomIv(), MANIFEST_MAGIC)
+
+    internal fun sealManifest(
+        plaintext: ByteArray,
+        passphrase: CharArray,
+        salt: ByteArray,
+        iv: ByteArray
+    ): ByteArray = sealWithMagic(plaintext, passphrase, salt, iv, MANIFEST_MAGIC)
+
+    private fun randomSalt() = ByteArray(SALT_BYTES).also(random::nextBytes)
+    private fun randomIv() = ByteArray(IV_BYTES).also(random::nextBytes)
+
+    private fun sealWithMagic(
+        plaintext: ByteArray,
+        passphrase: CharArray,
+        salt: ByteArray,
+        iv: ByteArray,
+        magic: ByteArray
     ): ByteArray {
         requirePortablePassphrase(passphrase)
         require(salt.size == SALT_BYTES) { "Salt must be $SALT_BYTES bytes" }
         require(iv.size == IV_BYTES) { "IV must be $IV_BYTES bytes" }
-        val header = MAGIC + salt + iv
-
+        val header = magic + salt + iv
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, deriveKey(passphrase, salt), GCMParameterSpec(TAG_BITS, iv))
         cipher.updateAAD(header)
         return header + cipher.doFinal(plaintext)
     }
 
-    fun open(envelope: ByteArray, passphrase: CharArray): ByteArray {
+    data class OpenedManifest(val plaintext: ByteArray, val version: Int)
+
+    fun openManifest(envelope: ByteArray, passphrase: CharArray): OpenedManifest {
+        if (envelope.size < RECORDING_MAGIC.size) throw SyncBlobFormatException("Envelope is truncated")
+        val magic = envelope.copyOfRange(0, RECORDING_MAGIC.size)
+        val version = when {
+            magic.contentEquals(RECORDING_MAGIC) -> 1
+            magic.contentEquals(MANIFEST_MAGIC) -> 2
+            magic[0] == 'R'.code.toByte() &&
+                magic[1] == 'A'.code.toByte() &&
+                magic[2] == 'I'.code.toByte() ->
+                throw SyncBlobFormatException("Unsupported envelope version")
+            else -> throw SyncBlobFormatException("Unrecognized envelope format")
+        }
+        return OpenedManifest(openWithMagic(envelope, passphrase, magic), version)
+    }
+
+    /** Recording files deliberately accept only the original RAI1 envelope. */
+    fun open(envelope: ByteArray, passphrase: CharArray): ByteArray =
+        openWithMagic(envelope, passphrase, RECORDING_MAGIC)
+
+    private fun openWithMagic(
+        envelope: ByteArray,
+        passphrase: CharArray,
+        magic: ByteArray
+    ): ByteArray {
         if (!isPortablePassphrase(passphrase)) {
             throw SyncBlobSealException("Passphrase uses unsupported characters for cross-platform Drive sync")
         }
-        val headerLength = MAGIC.size + SALT_BYTES + IV_BYTES
-        if (envelope.size <= headerLength) {
-            throw SyncBlobSealException("Envelope is truncated (${envelope.size} bytes)")
+        val headerLength = magic.size + SALT_BYTES + IV_BYTES
+        if (envelope.size < headerLength + TAG_BITS / 8) {
+            throw SyncBlobFormatException("Envelope is truncated (${envelope.size} bytes)")
         }
-        val magic = envelope.copyOfRange(0, MAGIC.size)
-        if (!magic.contentEquals(MAGIC)) {
-            throw SyncBlobSealException("Unrecognized envelope format — refusing to interpret")
+        if (!envelope.copyOfRange(0, magic.size).contentEquals(magic)) {
+            throw SyncBlobFormatException("Unrecognized envelope format")
         }
-        val salt = envelope.copyOfRange(MAGIC.size, MAGIC.size + SALT_BYTES)
-        val iv = envelope.copyOfRange(MAGIC.size + SALT_BYTES, headerLength)
+        val salt = envelope.copyOfRange(magic.size, magic.size + SALT_BYTES)
+        val iv = envelope.copyOfRange(magic.size + SALT_BYTES, headerLength)
         val header = envelope.copyOfRange(0, headerLength)
-
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, deriveKey(passphrase, salt), GCMParameterSpec(TAG_BITS, iv))
         cipher.updateAAD(header)
@@ -104,4 +142,5 @@ object SyncBlobCrypto {
         passphrase.isNotEmpty() && passphrase.all { it.code in 0x20..0x7E }
 }
 
-class SyncBlobSealException(message: String, cause: Throwable? = null) : Exception(message, cause)
+open class SyncBlobSealException(message: String, cause: Throwable? = null) : Exception(message, cause)
+class SyncBlobFormatException(message: String) : SyncBlobSealException(message)

@@ -8,8 +8,8 @@ struct LyricsDynamicTypeTests {
         let standardTraits = UITraitCollection(preferredContentSizeCategory: .large)
         let accessibilityTraits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraLarge)
 
-        let standardFont = LyricsTextView.scaledBodyFont(compatibleWith: standardTraits)
-        let accessibilityFont = LyricsTextView.scaledBodyFont(compatibleWith: accessibilityTraits)
+        let standardFont = LyricsTextView.lyricsFont(for: standardTraits.preferredContentSizeCategory)
+        let accessibilityFont = LyricsTextView.lyricsFont(for: accessibilityTraits.preferredContentSizeCategory)
 
         #expect(accessibilityFont.pointSize > standardFont.pointSize)
     }

@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
+set +x
 set -euo pipefail
+umask 077
+gemini_key="${GEMINI_TEST_KEY:-}"
+export -n gemini_key
+unset GEMINI_TEST_KEY
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
+source "$ROOT_DIR/scripts/android-release-common.sh"
 PACKAGE="com.rhymeai.app"
-APK="$ANDROID_DIR/app/build/outputs/apk/release/app-release.apk"
 
 if [[ -z "${JAVA_HOME:-}" && -d "/Applications/Android Studio.app/Contents/jbr/Contents/Home" ]]; then
   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
@@ -25,7 +30,8 @@ if [[ ! -x "$ADB" ]]; then
   ADB="adb"
 fi
 
-gemini_key="${GEMINI_TEST_KEY:-}"
+require_empty_android_target
+
 if [[ -z "$gemini_key" ]]; then
   gemini_key="$(sed -n 's/^geminiTestKey=//p' "$ANDROID_DIR/local.properties" 2>/dev/null | tail -1)"
 fi
@@ -35,35 +41,14 @@ if [[ -z "$gemini_key" ]]; then
   exit 1
 fi
 
-serial="${ANDROID_SERIAL:-}"
-if [[ -z "$serial" ]]; then
-  serial="$("$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1; exit }')"
-fi
-
-if [[ -z "$serial" ]]; then
-  echo "No adb device is attached for the Android release live Gemini walkthrough." >&2
-  echo "Boot an emulator or attach a device, then rerun this script." >&2
-  exit 1
-fi
+serial="$ANDROID_SERIAL"
 
 SKIP_INSTALL=1 "$ROOT_DIR/scripts/android-release-smoke.sh"
+APP_BUILD_DIR="$(android_app_build_directory)"
+APK="$APP_BUILD_DIR/outputs/apk/release/app-release.apk"
+printf '%s' "$gemini_key" | python3 "$ROOT_DIR/scripts/scan-release-content.py" --secret-stdin "$APK" "$APP_BUILD_DIR/outputs/bundle/release/app-release.aab"
 
-scan_dir="$(mktemp -d)"
-trap 'rm -rf "$scan_dir"' EXIT
-unzip -oqq "$APK" -d "$scan_dir/apk"
-unzip -oqq "$ANDROID_DIR/app/build/outputs/bundle/release/app-release.aab" -d "$scan_dir/aab"
-if rg -a -q 'AI[z]a[0-9A-Za-z_-]+' "$scan_dir"; then
-  echo "Release artifact contains a Gemini API key pattern after unzip scan." >&2
-  exit 1
-fi
-if rg -a -F -q "$gemini_key" "$scan_dir"; then
-  echo "Release artifact contains the runtime Gemini key after unzip scan." >&2
-  exit 1
-fi
-
-"$ADB" -s "$serial" uninstall "$PACKAGE" >/dev/null 2>&1 || true
-"$ADB" -s "$serial" install "$APK"
-"$ADB" -s "$serial" shell pm clear "$PACKAGE" >/dev/null
+install_release_apk "$APK"
 "$ADB" -s "$serial" logcat -c
 "$ADB" -s "$serial" shell am start -W -n "$PACKAGE/.MainActivity" >/dev/null
 
@@ -76,10 +61,6 @@ dump_ui() {
   "$ADB" -s "$serial" shell cat /sdcard/rhymeai-window.xml | tr -d '\r'
 }
 
-redacted_dump_ui() {
-  dump_ui | perl -pe 's/AI[z]a[0-9A-Za-z_-]+/[REDACTED_GEMINI_KEY]/g' |
-    perl -0pe 'BEGIN { $key = $ENV{"RHYMEAI_RUNTIME_GEMINI_KEY"} // "" } if ($key ne "") { s/\Q$key\E/[REDACTED_RUNTIME_KEY]/g }'
-}
 
 node_bounds() {
   local mode="$1"
@@ -112,7 +93,7 @@ wait_for_node() {
   local deadline=$((SECONDS + timeout))
   until node_bounds "$mode" "$needle" >/dev/null; do
     if (( SECONDS >= deadline )); then
-      RHYMEAI_RUNTIME_GEMINI_KEY="$gemini_key" redacted_dump_ui >&2 || true
+      echo "UI diagnostic content withheld to protect runtime credentials." >&2
       echo "Timed out waiting for UI node: $needle" >&2
       exit 1
     fi
@@ -127,7 +108,7 @@ wait_for_node_with_scroll() {
   local deadline=$((SECONDS + timeout))
   until node_bounds "$mode" "$needle" >/dev/null; do
     if (( SECONDS >= deadline )); then
-      RHYMEAI_RUNTIME_GEMINI_KEY="$gemini_key" redacted_dump_ui >&2 || true
+      echo "UI diagnostic content withheld to protect runtime credentials." >&2
       echo "Timed out waiting for UI node after scrolling: $needle" >&2
       exit 1
     fi
@@ -192,22 +173,31 @@ input_text() {
 
 assert_process_alive() {
   local pid
-  pid="$("$ADB" -s "$serial" shell pidof "$PACKAGE" | tr -d '\r' || true)"
+  pid="$("$ADB" -s "$serial" shell pidof "$PACKAGE" | tr -d '\r')" || return 1
   if [[ -z "$pid" ]]; then
-    "$ADB" -s "$serial" logcat -d -t 500 | rg -n 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError' || true
-    echo "Release app process is not running." >&2
-    exit 1
+    echo "Release app process is not running; log content withheld." >&2
+    return 1
   fi
 }
 
 assert_no_crash_markers() {
-  if "$ADB" -s "$serial" logcat -d -t 1000 | rg -n 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError'; then
-    echo "Release live Gemini walkthrough emitted crash markers." >&2
-    exit 1
+  local logs scan_status
+  logs="$("$ADB" -s "$serial" logcat -d -t 1000 2>/dev/null)" || {
+    echo "Could not read release diagnostics." >&2; return 1;
+  }
+  if printf '%s\n' "$logs" | rg 'FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|UnsatisfiedLinkError' >/dev/null; then
+    echo "Release live Gemini walkthrough emitted crash markers; content withheld." >&2
+    return 1
+  else
+    scan_status=$?
+    [[ "$scan_status" == 1 ]] || return 1
   fi
-  if "$ADB" -s "$serial" logcat -d -t 1000 | rg -F -q "$gemini_key"; then
+  if printf '%s\n' "$logs" | rg -F -f <(printf '%s\n' "$gemini_key") >/dev/null; then
     echo "Release live Gemini walkthrough leaked the runtime key to logcat." >&2
-    exit 1
+    return 1
+  else
+    scan_status=$?
+    [[ "$scan_status" == 1 ]] || return 1
   fi
 }
 
@@ -219,7 +209,10 @@ tap_node exact "Settings"
 wait_for_node exact "AI Provider" 20
 wait_for_node exact "Paste your API key here..." 20
 tap_node exact "Paste your API key here..."
-input_text "$gemini_key"
+if ! printf '%s\n' "$gemini_key" | "$ADB" -s "$serial" shell 'IFS= read -r key; input text "$key"' >/dev/null 2>&1; then
+  echo "Could not enter the runtime key; device response withheld." >&2
+  exit 1
+fi
 "$ADB" -s "$serial" shell input keyevent KEYCODE_BACK >/dev/null || true
 tap_node exact "Save Settings"
 wait_for_node exact "Settings saved successfully." 20

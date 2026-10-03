@@ -7,8 +7,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
@@ -18,13 +21,18 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.platform.LocalDensity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
 import com.rhymeai.app.ui.components.LocalImeBottom
 import com.rhymeai.app.ui.components.LocalNavBottom
@@ -40,9 +48,12 @@ import com.rhymeai.app.util.WordFrequency
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalComposeUiApi::class)
 class MainActivity : ComponentActivity() {
+    private val mainViewModel: MainViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+        installSplashScreen().setKeepOnScreenCondition { !mainViewModel.appearanceLoaded }
         super.onCreate(savedInstanceState)
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
@@ -62,14 +73,27 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
         setContent {
-            RhymeAITheme {
+            val viewModel = mainViewModel
+            RhymeAITheme(
+                appearance = viewModel.appAppearance,
+                analysisPresentation = viewModel.analysisPresentation
+            ) {
+                val darkSystemBars = viewModel.appAppearance.isDark
+                DisposableEffect(window, darkSystemBars) {
+                    WindowInsetsControllerCompat(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !darkSystemBars
+                        isAppearanceLightNavigationBars = !darkSystemBars
+                    }
+                    onDispose {}
+                }
                 val density = LocalDensity.current
-                val viewModel: MainViewModel = viewModel()
                 val lifecycleOwner = LocalLifecycleOwner.current
 
                 DisposableEffect(lifecycleOwner, viewModel) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_STOP) {
+                            viewModel.onBackground()
+                            viewModel.flushCurrentDraft()
                             viewModel.triggerBackgroundDriveSync()
                         }
                     }
@@ -125,12 +149,55 @@ class MainActivity : ComponentActivity() {
 
                     // Determine start destination
                     val startDest = if (viewModel.showStartMenu) Routes.WELCOME else Routes.EDITOR
+                    val navModifier =
+                        if (
+                            viewModel.showProjectsDialog ||
+                            viewModel.showTemplatesDialog ||
+                            viewModel.showSettingsDialog
+                        ) {
+                            Modifier.clearAndSetSemantics {}
+                        } else {
+                            Modifier
+                        }
 
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .semantics {
+                                testTagsAsResourceId = BuildConfig.BENCHMARK
+                            }
+                    ) {
                     RhymeNavGraph(
                         navController = navController,
                         viewModel = viewModel,
-                        startDestination = startDest
+                        startDestination = startDest,
+                        modifier = navModifier
                     )
+
+                    viewModel.cloudAISharingRequest?.let { request ->
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = viewModel::cancelCloudAISharing,
+                            title = { androidx.compose.material3.Text("Share ${request.scope.label.lowercase()} with ${request.provider.displayName}?") },
+                            text = {
+                                androidx.compose.material3.Text(
+                                    "For ${request.purpose}, suggestions share the target line, theme and rhyme settings; rewrites share the selected passage; synonyms share the selected word and current line. " +
+                                    (if (request.scope == CloudAISharingScope.WHOLE_SONG) "This request also shares your full lyric. " else "") +
+                                    "Your API key is sent directly to ${request.provider.displayName} for authentication. Permission applies to this provider and scope. You can revoke it in Settings."
+                                )
+                            },
+                            confirmButton = { androidx.compose.material3.TextButton(onClick = { viewModel.approveCloudAISharing(request) }, enabled = !viewModel.cloudAIConsentSaving) { androidx.compose.material3.Text("Allow sharing") } },
+                            dismissButton = { androidx.compose.material3.TextButton(onClick = viewModel::cancelCloudAISharing) { androidx.compose.material3.Text("Cancel") } }
+                        )
+                    }
+
+                    viewModel.persistenceError?.let { message ->
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { viewModel.persistenceError = null },
+                            title = { androidx.compose.material3.Text("Could not complete action") },
+                            text = { androidx.compose.material3.Text(message) },
+                            confirmButton = { androidx.compose.material3.TextButton(onClick = { viewModel.persistenceError = null }) { androidx.compose.material3.Text("OK") } }
+                        )
+                    }
 
                     // Handle dialog navigation to the editor without rebuilding it unnecessarily.
                     if (viewModel.showProjectsDialog) {
@@ -139,7 +206,7 @@ class MainActivity : ComponentActivity() {
                             trashedProjects = viewModel.trashedProjects,
                             currentProjectId = viewModel.currentProjectId,
                             onLoadProject = { project ->
-                                viewModel.loadProject(project)
+                                viewModel.loadProject(project) {
                                 if (navController.currentDestination?.route == Routes.EDITOR) {
                                     // State update only; keep the existing editor destination alive.
                                 } else {
@@ -147,10 +214,11 @@ class MainActivity : ComponentActivity() {
                                         launchSingleTop = true
                                         popUpTo(Routes.WELCOME) { inclusive = true }
                                     }
+                                }
                                 }
                             },
                             onNewProject = {
-                                viewModel.newProject()
+                                viewModel.newProject() {
                                 if (navController.currentDestination?.route == Routes.EDITOR) {
                                     // State update only; keep the existing editor destination alive.
                                 } else {
@@ -159,13 +227,15 @@ class MainActivity : ComponentActivity() {
                                         popUpTo(Routes.WELCOME) { inclusive = true }
                                     }
                                 }
+                                }
                             },
-                            onDeleteProject = { viewModel.moveProjectToTrash(it) },
+                            onDeleteProject = { id, onCommitted -> viewModel.moveProjectToTrash(id, onCommitted) },
                             onRestoreProject = { viewModel.restoreTrashedProject(it) },
                             onPermanentlyDeleteProject = { viewModel.permanentlyDeleteTrashedProject(it) },
                             onPurgeExpiredTrash = { viewModel.purgeExpiredTrashedProjects() },
+                            onRecordingPurgeIncomplete = viewModel::reportRecordingPurgeFailure,
                             onImportProject = { project ->
-                                viewModel.importProject(project)
+                                viewModel.importProject(project) {
                                 if (navController.currentDestination?.route == Routes.EDITOR) {
                                     // State update only; keep the existing editor destination alive.
                                 } else {
@@ -173,6 +243,7 @@ class MainActivity : ComponentActivity() {
                                         launchSingleTop = true
                                         popUpTo(Routes.WELCOME) { inclusive = true }
                                     }
+                                }
                                 }
                             },
                             onDismiss = { viewModel.showProjectsDialog = false },
@@ -183,7 +254,7 @@ class MainActivity : ComponentActivity() {
                     if (viewModel.showTemplatesDialog) {
                         TemplatesDialog(
                             onSelectTemplate = { name, theme, lyrics ->
-                                viewModel.applyTemplate(name, theme, lyrics)
+                                viewModel.applyTemplate(name, theme, lyrics) {
                                 if (navController.currentDestination?.route == Routes.EDITOR) {
                                     // State update only; keep the existing editor destination alive.
                                 } else {
@@ -192,6 +263,7 @@ class MainActivity : ComponentActivity() {
                                         popUpTo(Routes.WELCOME) { inclusive = true }
                                     }
                                 }
+                                }
                             },
                             onDismiss = { viewModel.showTemplatesDialog = false }
                         )
@@ -199,6 +271,10 @@ class MainActivity : ComponentActivity() {
 
                     if (viewModel.showSettingsDialog) {
                         SettingsDialog(
+                            currentAppearance = viewModel.appAppearance,
+                            onAppearanceChange = viewModel::setAppAppearance,
+                            currentAnalysisPresentation = viewModel.analysisPresentation,
+                            onAnalysisPresentationChange = viewModel::setAnalysisPresentation,
                             apiKeyPresence = viewModel.apiKeyPresence,
                             currentProvider = viewModel.selectedProvider,
                             currentModel = viewModel.selectedModel,
@@ -206,16 +282,25 @@ class MainActivity : ComponentActivity() {
                             localModelLoaded = viewModel.localModelLoaded,
                             localModelPath = viewModel.localModelPath,
                             localModelError = viewModel.localModelError,
-                            onSaveApiKey = { provider, key -> viewModel.saveApiKey(provider, key) },
+                            savedLocalModels = viewModel.savedLocalModels,
+                            selectedLocalModelId = viewModel.selectedLocalModelId,
+                            onApplyAISettings = viewModel::applyAISettings,
+                            hasCloudAISharingConsent = viewModel::hasCloudAISharingConsent,
+                            onCloudAISharingConsentChange = viewModel::setCloudAISharingConsent,
                             onSaveProvider = { viewModel.saveProvider(it) },
                             onSaveModel = { viewModel.saveModel(it) },
-                            onLoadLocalModel = { viewModel.loadLocalModel(it) },
+                            onRegisterLocalModel = { path, name ->
+                                viewModel.registerAndSelectLocalModel(path, name, isCustom = true)
+                            },
+                            onSelectSavedLocalModel = viewModel::selectSavedLocalModel,
                             onUnloadLocalModel = { viewModel.unloadLocalModel() },
                             gemmaDownloadingModel = viewModel.gemmaDownloadingModel,
                             gemmaDownloadProgress = viewModel.gemmaDownloadProgress,
+                            gemmaDownloadVerifying = viewModel.gemmaDownloadVerifying,
                             gemmaDownloadError = viewModel.gemmaDownloadError,
                             gemmaLastDownloadAttempt = viewModel.gemmaLastDownloadAttempt,
                             gemmaDownloadRevision = viewModel.gemmaDownloadRevision,
+                            verifiedGemmaFileNames = viewModel.verifiedGemmaFileNames,
                             onStartGemmaDownload = { viewModel.startGemmaDownload(it) },
                             onUseDownloadedGemma = { viewModel.useDownloadedGemma(it) },
                             syncPassphraseStored = viewModel.syncPassphraseStored,
@@ -227,7 +312,7 @@ class MainActivity : ComponentActivity() {
                             onRestoreNow = { viewModel.triggerRestore() },
                             // Editor toggles — each change is persisted via viewModel.persistEditorToggles().
                             useWholeSongContext = viewModel.useWholeSongContext,
-                            onWholeSongContextChange = { viewModel.useWholeSongContext = it; viewModel.persistEditorToggles() },
+                            onWholeSongContextChange = viewModel::saveUseWholeSongContext,
                             isStressPreviewEnabled = viewModel.isStressPreviewEnabled,
                             onStressPreviewChange = { viewModel.isStressPreviewEnabled = it; viewModel.persistEditorToggles() },
                             isHighlightEnabled = viewModel.isHighlightEnabled,
@@ -240,6 +325,7 @@ class MainActivity : ComponentActivity() {
                             onBeatGridChange = { viewModel.isBeatGridEnabled = it; viewModel.persistEditorToggles() },
                             onDismiss = { viewModel.showSettingsDialog = false }
                         )
+                    }
                     }
                 }
             }

@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""Orchestration fixtures only: no real SDK, devices, builds, or provider calls."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+SCRIPTS = Path(__file__).resolve().parent
+KEY = "synthetic-runtime-secret-12345"
+CERT = "a" * 64
+FAKE = r'''#!/usr/bin/env python3
+import html,json,os,sys,zipfile
+from pathlib import Path
+name=Path(sys.argv[0]).name
+args=sys.argv[1:]
+with open(os.environ['RECORD'],'a') as f:
+ f.write(json.dumps({'name':name,'args':args,'key_env':os.environ.get('GEMINI_TEST_KEY'),'private_env':os.environ.get('gemini_key')})+'\n')
+mode=os.environ.get('MODE','')
+if name=='adb':
+ a=args[2:]
+ if a and a[0]=='install' and mode=='install-mismatch': sys.exit('INSTALL_FAILED_UPDATE_INCOMPATIBLE')
+ elif a==['get-state']: print('offline' if mode=='offline' else 'device')
+ elif a[:3]==['shell','getprop','ro.kernel.qemu']: print('0' if mode=='physical' else '1')
+ elif a[:5]==['shell','pm','list','packages','com.rhymeai.app']:
+  if mode=='probe-fail': sys.exit(1)
+  if mode=='installed': print('package:com.rhymeai.app')
+ elif a[:4]==['shell','settings','get','system']: print(os.environ.get('FONT','null'))
+ elif a==['shell','cmd','uimode','night']: print('Night mode: '+os.environ.get('NIGHT','auto'))
+ elif a[:3]==['shell','cat','/sdcard/rhymeai-window.xml']:
+  labels=['New Song','Settings','AI Provider','Paste your API key here...','Save Settings','Settings saved successfully.','Close','Song Title...','Start writing your lyrics here...','Saved','UnBlock','Suggest Next Line','AI-generated','borrowed train','Rephrase','Previewing Rephrase','Cancel']
+  print('<hierarchy>'+''.join('<node text="'+html.escape(s,quote=True)+'" bounds="[0,0][100,100]"/>' for s in labels)+'</hierarchy>')
+ elif a[:3]==['shell','pidof','com.rhymeai.app']:
+  if mode!='dead-process': print('1234')
+ elif a and a[0]=='logcat' and '-d' in a:
+  if mode=='log-secret': print('synthetic-runtime-secret-12345')
+  if '-v' in a and mode in ('stale-crash','other-app-crash','fresh-app-crash','fresh-app-crash-large','prior-run-log','missing-marker',''):
+   print('09-27 21:00:00.000  1234  1234 E AndroidRuntime: FATAL EXCEPTION: stale')
+   if mode=='prior-run-log': print('09-27 21:00:00.500  1234  1234 I RhymeAI: PRIOR_RUN')
+   markers=[r['args'][6] for r in (json.loads(line) for line in Path(os.environ['RECORD']).read_text().splitlines())
+            if r.get('name')=='adb' and r.get('args',[])[2:5]==['shell','log','-t']]
+   if mode!='missing-marker':
+    for marker in markers:
+     print('09-27 21:00:01.000  5555  5555 I RhymeMarker: '+marker)
+     print('09-27 21:00:02.000  1234  1234 I RhymeAI: CURRENT_RUN')
+   if mode=='other-app-crash': print('09-27 21:00:03.000  9999  9999 E AndroidRuntime: FATAL EXCEPTION: other')
+   if mode in ('fresh-app-crash','fresh-app-crash-large'):
+    print('09-27 21:00:03.000  1234  1234 E AndroidRuntime: FATAL EXCEPTION: current')
+    if mode=='fresh-app-crash-large':
+     print('09-27 21:00:04.000  1234  1234 I RhymeAI: ordinary following output\n' * 100000)
+ elif a[:3]==['shell','df','-h']: print('DISK_EVIDENCE')
+ elif len(a)==2 and a[0]=='shell' and 'read -r key' in a[1]:
+  data=sys.stdin.read().rstrip('\n')
+  if mode=='input-echo':print(data)
+  with open(os.environ['RECORD'],'a') as f:f.write(json.dumps({'runtime_input_matches':data=='synthetic-runtime-secret-12345'})+'\n')
+ elif a[:3]==['shell','mktemp','/data/local/tmp/rhymeai-model.XXXXXX']:
+  print('/data/local/tmp/existing-user-model.gguf' if mode=='invalid-mktemp' else '/data/local/tmp/rhymeai-model.fixture')
+ elif a[:3]==['shell','am','instrument']:
+  print('OK (1 test)')
+  if mode=='missing-marker':
+   print('COMPLETED_WITH_MISSING_LOG_MARKER')
+   sys.exit(7)
+elif name=='apksigner':
+ if mode=='unsigned':sys.exit(1)
+ print('Signer #1 certificate SHA-256 digest: '+('b'*64 if mode=='wrong-signer' else 'a'*64))
+elif name=='gradlew':
+ root=Path(os.environ['APP_BUILD'])
+ if ':app:properties' in args: print('buildDir: '+str(root))
+ else:
+  for name in ['outputs/apk/release/app-release.apk','outputs/bundle/release/app-release.aab']:
+   p=root/name;p.parent.mkdir(parents=True,exist_ok=True)
+   with zipfile.ZipFile(p,'w',zipfile.ZIP_DEFLATED) as z:z.writestr('classes.dex','synthetic-runtime-secret-12345' if mode=='artifact-secret' else 'benign fixture')
+elif name in ['emulator','xcrun','xcodebuild']:sys.exit('Unexpected platform command')
+'''
+
+
+class ReleaseOrchestrationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        shutil.copytree(SCRIPTS, self.root / "scripts")
+        sdk = self.root / "sdk"
+        for name in ["platform-tools/adb", "build-tools/36.1.0/apksigner", "build-tools/36.1.0/aapt2", "emulator/emulator"]:
+            p = sdk / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(FAKE)
+            p.chmod(0o755)
+        (self.root / "android").mkdir()
+        (self.root / "android/gradlew").write_text(FAKE)
+        (self.root / "android/gradlew").chmod(0o755)
+        (self.root / "model.gguf").write_bytes(b"GGUFfixture")
+        self.record = self.root / "commands.jsonl"
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith(("ANDROID_", "IOS_", "GEMINI_", "SKIP_", "RUN_", "SIMCTL_CHILD_"))}
+        self.env.update(ANDROID_HOME=str(sdk), ANDROID_SERIAL="emulator-5554", ANDROID_RELEASE_CERT_SHA256=CERT,
+                        RECORD=str(self.record), APP_BUILD=str(self.root / "resolved-build"),
+                        LOCAL_GGUF_PATH=str(self.root / "model.gguf"), GEMINI_TEST_KEY=KEY)
+
+    def run_script(self, script, *args, **env):
+        self.record.unlink(missing_ok=True)
+        return subprocess.run(["bash", str(self.root / "scripts" / script), *args], env=self.env | env,
+                              capture_output=True, text=True, timeout=30)
+
+    def records(self):
+        return [json.loads(line) for line in self.record.read_text().splitlines()] if self.record.exists() else []
+
+    def test_rejected_targets_never_build_or_mutate(self):
+        scripts = ["android-release-smoke.sh", "android-release-walkthrough.sh", "android-release-visual-audit.sh",
+                   "android-release-live-gemini.sh", "android-local-model-smoke.sh"]
+        for script in scripts:
+            for serial, mode in [("", ""), ("invalid", ""), ("emulator-5554", "offline"),
+                                 ("emulator-5554", "installed"), ("emulator-5554", "probe-fail"), ("emulator-5554", "physical")]:
+                with self.subTest(script=script, serial=serial, mode=mode):
+                    result = self.run_script(script, ANDROID_SERIAL=serial, MODE=mode)
+                    self.assertNotEqual(result.returncode, 0)
+                    for record in self.records():
+                        self.assertEqual(record['name'], 'adb')
+                        self.assertIn(record['args'][2:], [["get-state"], ["shell", "getprop", "ro.kernel.qemu"],
+                                                          ["shell", "pm", "list", "packages", "com.rhymeai.app"]])
+
+    def test_bad_signer_never_installs(self):
+        for mode in ["wrong-signer", "unsigned"]:
+            result = self.run_script("android-release-smoke.sh", MODE=mode)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(any('install' in r['args'] for r in self.records()))
+
+    def test_release_launch_ignores_stale_and_unrelated_crashes(self):
+        for mode in ['stale-crash', 'other-app-crash']:
+            with self.subTest(mode=mode):
+                result = self.run_script('android-release-smoke.sh', MODE=mode)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.run_script('android-release-smoke.sh', MODE='fresh-app-crash')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Release launch emitted crash markers', result.stderr)
+        result = self.run_script('android-release-smoke.sh', MODE='fresh-app-crash-large')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Release launch emitted crash markers', result.stderr)
+        result = self.run_script('android-release-smoke.sh', MODE='missing-marker')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Could not verify the release launch log boundary', result.stderr)
+
+    def test_local_signature_mismatch_has_no_destructive_retry(self):
+        result = self.run_script('android-local-model-smoke.sh', MODE='install-mismatch')
+        self.assertNotEqual(result.returncode, 0)
+        calls = [r['args'][2:] for r in self.records() if r['name'] == 'adb']
+        self.assertEqual(sum(c[0] == 'install' for c in calls), 1)
+        self.assertFalse(any(c[0] == 'uninstall' or c[:3] == ['shell', 'pm', 'clear'] for c in calls))
+        self.assertIn(['shell', 'rm', '-f', '/data/local/tmp/rhymeai-model.fixture'], calls)
+
+    def test_benchmark_rejects_unsafe_targets_and_legacy_wipe(self):
+        model = str(self.root / "model.gguf")
+        for serial, mode, wipe in [("", "", ""), ("invalid", "", ""), ("emulator-5554", "installed", ""),
+                                   ("emulator-5554", "physical", ""), ("emulator-5554", "", "1")]:
+            with self.subTest(serial=serial, mode=mode, wipe=wipe):
+                result = self.run_script("android-gemma-benchmark.sh", model,
+                                         ANDROID_SERIAL=serial, MODE=mode, GEMMA_WIPE_AVD=wipe)
+                self.assertNotEqual(result.returncode, 0)
+                calls = self.records()
+                self.assertFalse(any(r["name"] in ("emulator", "gradlew") for r in calls))
+                self.assertFalse(any(r["args"][2:3] in (["install"], ["uninstall"], ["push"])
+                                     for r in calls if r["name"] == "adb"))
+
+    def test_benchmark_uses_owned_model_path_without_clearing_app_or_logs(self):
+        result = self.run_script("android-gemma-benchmark.sh", str(self.root / "model.gguf"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [r["args"][2:] for r in self.records() if r["name"] == "adb"]
+        self.assertIn(["shell", "mktemp", "/data/local/tmp/rhymeai-model.XXXXXX"], calls)
+        self.assertIn(["shell", "rm", "-f", "/data/local/tmp/rhymeai-model.fixture"], calls)
+        self.assertTrue(any(c[:2] == ["push", str(self.root / "model.gguf")] and
+                            c[2] == "/data/local/tmp/rhymeai-model.fixture" for c in calls))
+        self.assertFalse(any(c[0] == "uninstall" or c[:3] == ["shell", "pm", "clear"] or
+                             c[:2] == ["logcat", "-c"] for c in calls))
+
+    def test_benchmark_log_contains_only_current_run(self):
+        output = self.root / 'run-log'
+        result = self.run_script('android-gemma-benchmark.sh', str(self.root / 'model.gguf'),
+                                 MODE='prior-run-log', GEMMA_BENCHMARK_DIR=str(output))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        log = (output / '01/model-logcat.txt').read_text()
+        self.assertIn('CURRENT_RUN', log)
+        self.assertNotIn('PRIOR_RUN', log)
+        self.assertNotIn('FATAL EXCEPTION: stale', log)
+        result = self.run_script('android-gemma-benchmark.sh', str(self.root / 'model.gguf'),
+                                 MODE='missing-marker', GEMMA_BENCHMARK_DIR=str(self.root / 'missing-log'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Could not verify the benchmark log boundary', result.stderr)
+        self.assertIn('COMPLETED_WITH_MISSING_LOG_MARKER',
+                      (self.root / 'missing-log/01/model.txt').read_text())
+        self.assertEqual((self.root / 'missing-log/01/model-exit-status.txt').read_text(), '7\n')
+
+    def test_benchmark_rejected_allocation_does_not_delete_unowned_path(self):
+        result = self.run_script("android-gemma-benchmark.sh", str(self.root / "model.gguf"),
+                                 MODE="invalid-mktemp")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Could not allocate a fresh device model path", result.stderr)
+        calls = [r["args"][2:] for r in self.records() if r["name"] == "adb"]
+        self.assertIn(["shell", "mktemp", "/data/local/tmp/rhymeai-model.XXXXXX"], calls)
+        self.assertFalse(any(c[:3] == ["shell", "rm", "-f"] or c[:1] == ["push"] or
+                             c[:3] == ["shell", "am", "instrument"] for c in calls))
+
+    def test_benchmark_isolates_same_and_suffix_colliding_labels(self):
+        models = []
+        for directory, name in (("first", "model.gguf"), ("second", "model.gguf"),
+                                ("third", "model-df-before.gguf"), ("fourth", "model-logcat.gguf")):
+            model = self.root / directory / name
+            model.parent.mkdir()
+            model.write_bytes(b"GGUFfixture")
+            models.append(str(model))
+        output = self.root / "collision-benchmark"
+        result = self.run_script("android-gemma-benchmark.sh", *models,
+                                 GEMMA_BENCHMARK_DIR=str(output))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for index, model in enumerate(models, 1):
+            label = Path(model).stem
+            self.assertTrue((output / f"{index:02d}" / f"{label}.txt").is_file())
+        self.assertEqual((output / "01/model-df-before.txt").read_text(), "DISK_EVIDENCE\n")
+        self.assertEqual((output / "03/model-df-before.txt").read_text(), "OK (1 test)\n")
+        self.assertTrue((output / "01/model-logcat.txt").is_file())
+        self.assertEqual((output / "04/model-logcat.txt").read_text(), "OK (1 test)\n")
+        self.assertEqual(sum(r["args"][2:5] == ["shell", "am", "instrument"] for r in self.records()
+                             if r["name"] == "adb"), 4)
+
+    def test_benchmark_preserves_existing_output_directory(self):
+        out = self.root / "existing-benchmark"
+        out.mkdir()
+        (out / "keep").write_text("unchanged")
+        result = self.run_script("android-gemma-benchmark.sh", str(self.root / "model.gguf"),
+                                 GEMMA_BENCHMARK_DIR=str(out))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((out / "keep").read_text(), "unchanged")
+        self.assertFalse(any(r["name"] == "gradlew" or
+                             (r["name"] == "adb" and r["args"][2:3] == ["install"])
+                             for r in self.records()))
+
+    def test_both_skipped_runs_nothing(self):
+        for script in ["verify.sh", "provider-live-smoke.sh"]:
+            result = self.run_script(script, SKIP_ANDROID="1", SKIP_IOS="1")
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("Both platforms are skipped", result.stderr)
+            self.assertEqual(self.records(), [])
+
+    def test_existing_visual_output_is_preserved(self):
+        out = self.root / "existing"
+        out.mkdir()
+        (out / "keep").write_text("unchanged")
+        result = self.run_script("android-release-visual-audit.sh", ANDROID_VISUAL_OUTPUT_DIR=str(out))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.records(), [])
+        self.assertEqual((out / "keep").read_text(), "unchanged")
+
+    def test_original_visual_state_is_restored(self):
+        common = self.root / "scripts/android-release-common.sh"
+        adb = self.root / "sdk/platform-tools/adb"
+        for font in ['null', '1.3']:
+            for night in ['auto', 'yes', 'no', 'custom']:
+                self.record.unlink(missing_ok=True)
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c',
+                    'source "$1"; ADB="$2"; capture_android_visual_state; restore_android_visual_state',
+                    'fixture', str(common), str(adb)], env=self.env | {'FONT': font, 'NIGHT': night}, capture_output=True)
+                self.assertEqual(result.returncode, 0)
+                calls = [r['args'][2:] for r in self.records()]
+                self.assertIn(['shell', 'settings', 'delete', 'system', 'font_scale'] if font == 'null' else
+                              ['shell', 'settings', 'put', 'system', 'font_scale', font], calls)
+                self.assertIn(['shell', 'cmd', 'uimode', 'night', night], calls)
+
+    def test_runtime_key_never_reaches_host_argv_build_env_or_diagnostics(self):
+        for mode, status in [('', 0), ('input-echo', 0), ('artifact-secret', 1), ('log-secret', 1)]:
+            result = self.run_script('android-release-live-gemini.sh', MODE=mode)
+            self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+            self.assertNotIn(KEY, result.stdout + result.stderr)
+            self.assertNotIn(KEY, json.dumps(self.records()))
+            if mode == 'artifact-secret':
+                self.assertFalse(any('install' in r.get('args', []) for r in self.records()))
+            else:
+                self.assertTrue(any(r.get('runtime_input_matches') for r in self.records()))
+
+
+if __name__ == '__main__':
+    unittest.main()

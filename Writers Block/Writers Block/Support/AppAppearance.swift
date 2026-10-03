@@ -48,6 +48,16 @@ enum AppAppearanceStyle: String, CaseIterable, Hashable, Identifiable {
         ]
     }
 
+    var analysisSyllableHexValues: [UInt32] {
+        if usesDarkAnalysisPalette {
+            return [0x6EE7B7, 0x93C5FD, 0xD8B4FE, 0xFDA4AF]
+        }
+        return [0x047857, 0x0369A1, 0x7E22CE, 0xB91C1C]
+    }
+
+    var editorWordCountHexValue: UInt32 { analysisSyllableHexValues[0] }
+    var editorSyllableCountHexValue: UInt32 { analysisSyllableHexValues[3] }
+
     var statusSuccessHexValue: UInt32 { usesDarkAnalysisPalette ? 0x6EE7B7 : 0x047857 }
     var statusWarningHexValue: UInt32 { usesDarkAnalysisPalette ? 0xFFB95B : 0x92400E }
     var statusErrorHexValue: UInt32 { usesDarkAnalysisPalette ? 0xFFB4AB : 0xB3261E }

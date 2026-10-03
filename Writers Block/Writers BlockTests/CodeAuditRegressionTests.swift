@@ -29,6 +29,17 @@ struct CodeAuditRegressionTests {
         #expect(context.targetLine == "🔥🔥 first light")
     }
 
+    @Test func currentLineUsesUTF16OffsetsAfterEmoji() {
+        let viewModel = EditorViewModel()
+        viewModel.lyrics = "🔥🔥 first light\nsecond night\nthird sight"
+        let ns = viewModel.lyrics as NSString
+        let word = ns.range(of: "night")
+
+        // A Character-count line start would land mid-line-one and return both lines.
+        #expect(viewModel.currentLine(for: word) == "second night")
+        #expect(viewModel.currentLine(for: NSRange(location: ns.length, length: 0)) == "third sight")
+    }
+
     @Test func characterOffsetClampsAndConvertsUTF16Offsets() {
         let text = "🔥abc"
         #expect(EditorViewModel.characterOffset(forUTF16Offset: 0, in: text) == 0)

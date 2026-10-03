@@ -1,7 +1,9 @@
 package com.rhymeai.app.data.sync
 
+import com.rhymeai.app.data.recording.RecordingFiles
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import java.io.File
 import java.security.MessageDigest
 import java.nio.file.Files
 import kotlin.test.Test
@@ -31,6 +33,51 @@ class RecordingSyncTest {
     }
 
     @Test
+    fun recordingManifestRejectsSizesThatCannotBeSafelyRestored() {
+        recording("p1", "clip.m4a", modifiedAt = 1L, sha256 = "digest", sizeBytes = 0L).validate()
+        recording(
+            "p1",
+            "clip.m4a",
+            modifiedAt = 1L,
+            sha256 = "digest",
+            sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES
+        ).validate()
+
+        assertFailsWith<IllegalArgumentException> {
+            recording("p1", "clip.m4a", modifiedAt = 1L, sha256 = "digest", sizeBytes = -1L).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            recording(
+                "p1",
+                "clip.m4a",
+                modifiedAt = 1L,
+                sha256 = "digest",
+                sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1L
+            ).validate()
+        }
+    }
+
+    @Test
+    fun recordingBatchLimitAppliesBeforeUploadOrRestore() {
+        val atLimit = List(4) { index ->
+            recording(
+                "p$index",
+                "clip.m4a",
+                modifiedAt = index.toLong(),
+                sha256 = "digest-$index",
+                sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES
+            )
+        }
+        assertEquals(DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES, requireRecordingBatchWithinLimit(atLimit))
+
+        assertFailsWith<DriveNetworkException> {
+            requireRecordingBatchWithinLimit(
+                atLimit + recording("overflow", "clip.m4a", 5L, "digest", 1L)
+            )
+        }
+    }
+
+    @Test
     fun recordingRemoteNamesUseInteropFormatFromProjectAndFileStem() {
         val driveName = RecordingManifestEntry.driveNameFor(
             projectId = "project-123",
@@ -38,6 +85,28 @@ class RecordingSyncTest {
         )
 
         assertEquals("rec_project-123_take 1_final.m4a.enc", driveName)
+    }
+
+    @Test
+    fun importedFormatsPreserveExtensionAndCannotCollideWithM4aBackupNames() {
+        val wav = RecordingManifestEntry.driveNameFor("song", "take.wav")
+        val m4a = RecordingManifestEntry.driveNameFor("song", "take.wav.m4a")
+        assertEquals("rec_song_take.wav.enc", wav)
+        assertEquals("rec_song_take.wav.m4a.enc", m4a)
+        assertFalse(wav == m4a)
+    }
+
+    @Test
+    fun importedFormatsPassManifestValidationWithoutRelaxingFilenameSafety() {
+        listOf("m4a", "mp3", "wav", "aac").forEach { extension ->
+            recording("song", "take.$extension", 1L, "digest").validate()
+            assertFailsWith<IllegalArgumentException> {
+                recording("song", "../take.$extension", 1L, "digest").validate()
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            recording("song", "take.mp4", 1L, "digest").validate()
+        }
     }
 
     @Test
@@ -127,6 +196,141 @@ class RecordingSyncTest {
             assertFalse(existing.parentFile?.listFiles()?.any { it.name.endsWith(".tmp") } ?: false)
         } finally {
             root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun stagedRestoreRollsBackEarlierReplacementWhenLaterCommitFails() {
+        val root = Files.createTempDirectory("rhymeai-recording-batch").toFile()
+        val stage = Files.createTempDirectory(root.toPath(), ".restore-").toFile()
+        try {
+            val firstTarget = RecordingFileStore.targetFile(root, "p1", "first.m4a")
+            firstTarget.parentFile?.mkdirs()
+            firstTarget.writeText("original")
+            val replacement = "replacement".toByteArray()
+            val first = recording(
+                "p1",
+                "first.m4a",
+                2L,
+                sha256Hex(replacement),
+                replacement.size.toLong()
+            )
+            val stagedFirst = RecordingFileStore.stageRestore(stage, 0, first, replacement)
+            val missingSecond = RecordingFileStore.StagedRecording(
+                recording("p2", "second.m4a", 3L, sha256Hex("second".toByteArray()), 6L),
+                File(stage, "missing.tmp")
+            )
+
+            assertFailsWith<DriveNetworkException> {
+                RecordingFileStore.commitStagedRestores(root, listOf(stagedFirst, missingSecond))
+            }
+
+            assertEquals("original", firstTarget.readText())
+            assertFalse(RecordingFileStore.targetFile(root, "p2", "second.m4a").exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun interruptedRestoreRollsBackEveryRecordingInMixedBatch() {
+        val root = Files.createTempDirectory("rhymeai-recording-recovery").toFile()
+        val stage = Files.createTempDirectory(root.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
+        try {
+            val firstTarget = RecordingFileStore.targetFile(root, "p1", "first.m4a")
+            val secondTarget = RecordingFileStore.targetFile(root, "p2", "second.m4a")
+            firstTarget.parentFile?.mkdirs()
+            secondTarget.parentFile?.mkdirs()
+            firstTarget.writeText("first original")
+            secondTarget.writeText("second original")
+            val firstBytes = "first replacement".toByteArray()
+            val secondBytes = "second replacement".toByteArray()
+            val staged = listOf(
+                RecordingFileStore.stageRestore(
+                    stage,
+                    0,
+                    recording("p1", "first.m4a", 2L, sha256Hex(firstBytes), firstBytes.size.toLong()),
+                    firstBytes
+                ),
+                RecordingFileStore.stageRestore(
+                    stage,
+                    1,
+                    recording("p2", "second.m4a", 2L, sha256Hex(secondBytes), secondBytes.size.toLong()),
+                    secondBytes
+                )
+            )
+            RecordingFileStore.prepareRestoreTransaction(root, stage, staged)
+            Files.move(
+                staged.first().file.toPath(),
+                firstTarget.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE
+            )
+
+            RecordingFileStore.recoverInterruptedRestores(root)
+
+            assertEquals("first original", firstTarget.readText())
+            assertEquals("second original", secondTarget.readText())
+            assertFalse(stage.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun uploadReadRejectsGrowthShrinkAndSameSizeReplacement() {
+        val root = Files.createTempDirectory("rhymeai-recording-upload").toFile()
+        try {
+            val file = File(root, "clip.m4a")
+            val original = "original".toByteArray()
+            val entry = recording("p1", "clip.m4a", 1L, sha256Hex(original), original.size.toLong())
+
+            file.writeBytes(original)
+            assertTrue(RecordingFileStore.readForUpload(file, entry).contentEquals(original))
+
+            file.appendText("growth")
+            assertFailsWith<DriveNetworkException> { RecordingFileStore.readForUpload(file, entry) }
+
+            file.writeText("short")
+            assertFailsWith<DriveNetworkException> { RecordingFileStore.readForUpload(file, entry) }
+
+            file.writeText("replaced")
+            assertFailsWith<DriveNetworkException> { RecordingFileStore.readForUpload(file, entry) }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun recordingFileStoreRejectsTraversalBeforeCreatingDirectories() {
+        val root = Files.createTempDirectory("rhymeai-recording-traversal").toFile()
+        try {
+            assertFailsWith<IllegalArgumentException> {
+                RecordingFileStore.targetFile(root, "../escape", "clip.m4a")
+            }
+            assertFailsWith<IllegalArgumentException> {
+                RecordingFileStore.targetFile(root, "safe", "../clip.m4a")
+            }
+            assertFalse(File(root.parentFile, "escape").exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun recordingFileStoreRejectsSymlinkedProjectDirectory() {
+        val root = Files.createTempDirectory("rhymeai-recording-symlink").toFile()
+        val external = Files.createTempDirectory("rhymeai-recording-external").toFile()
+        try {
+            val memosRoot = RecordingFiles.memosRoot(root).apply { mkdirs() }
+            Files.createSymbolicLink(File(memosRoot, "safe").toPath(), external.toPath())
+
+            assertFailsWith<IllegalArgumentException> {
+                RecordingFileStore.targetFile(root, "safe", "clip.m4a")
+            }
+        } finally {
+            root.deleteRecursively()
+            external.deleteRecursively()
         }
     }
 

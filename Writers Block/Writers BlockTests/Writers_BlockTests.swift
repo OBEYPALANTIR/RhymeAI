@@ -192,7 +192,7 @@ struct Writers_BlockTests {
 
         #expect(prosody.syllableCount == 4)
         #expect(prosody.stressPattern == [1, 0, 1, 0])
-        #expect(prosody.feet == "ˈDA da ˈDA da")
+        #expect(prosody.feet == "ˈDA da | ˈDA da")
     }
 
     @Test func prosodyAnalyzerRendersIpaPreview() {
@@ -207,7 +207,7 @@ struct Writers_BlockTests {
 
         #expect(prosody.ipa == "ˈreɪdiˌoʊ")
         #expect(prosody.stressPattern == [1, 0, 2])
-        #expect(ProsodyAnalyzer.metricFeet(prosody.stressPattern) == "ˈDA da ˌDA")
+        #expect(ProsodyAnalyzer.metricFeet(prosody.stressPattern) == "ˈDA da | ˌDA")
         #expect(prosody.isFallback == false)
     }
 
@@ -820,8 +820,9 @@ struct Writers_BlockTests {
     }
 
     @MainActor
-    @Test func geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey() async throws {
-        let apiKey = try #require(Self.geminiTestKey, "GEMINI_TEST_KEY is required for live Gemini service verification")
+    @Test(.enabled(if: Self.geminiTestKey != nil, "GEMINI_TEST_KEY is required for live Gemini service verification"))
+    func geminiSuggestionRewriteAndStreamingPathsWorkWithDebugKey() async throws {
+        let apiKey = try #require(Self.geminiTestKey)
 
         let service = AIService()
         let lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
@@ -880,8 +881,9 @@ struct Writers_BlockTests {
     }
 
     @MainActor
-    @Test func geminiStreamingCanBeCancelledAfterFirstSuggestionWithDebugKey() async throws {
-        let apiKey = try #require(Self.geminiTestKey, "GEMINI_TEST_KEY is required for live Gemini cancellation verification")
+    @Test(.enabled(if: Self.geminiTestKey != nil, "GEMINI_TEST_KEY is required for live Gemini cancellation verification"))
+    func geminiStreamingCanBeCancelledAfterFirstSuggestionWithDebugKey() async throws {
+        let apiKey = try #require(Self.geminiTestKey)
 
         let service = AIService()
         let lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"

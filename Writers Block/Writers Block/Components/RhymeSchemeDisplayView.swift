@@ -7,31 +7,31 @@ struct RhymeSchemeDisplayView: View {
     let activeScheme: String
 
     var body: some View {
-        let schemeLetters = Array(activeScheme)
+        let rows = rhymeSchemeRows(context: rhymeContext, scheme: activeScheme)
 
-        if schemeLetters.isEmpty || rhymeContext.stanzaLines.isEmpty {
+        if rows.isEmpty {
             EmptyView()
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.hairline) {
-                    ForEach(Array(rhymeContext.stanzaLines.enumerated()), id: \.offset) { index, line in
-                        let letter = String(schemeLetters[index % schemeLetters.count])
-                        let isCurrent = index == rhymeContext.currentLineIndex
+                    ForEach(rows.indices, id: \.self) { index in
+                        let row = rows[index]
+                        let isCurrent = row.isCurrent
 
                         HStack(spacing: RhymeAITokens.Spacing.sm) {
-                            Text(letter)
+                            Text(row.letter ?? "")
                                 .font(.system(.caption, design: .monospaced))
                                 .fontWeight(.bold)
                                 .foregroundColor(isCurrent ? appearance.palette.action : appearance.palette.secondaryInk.opacity(0.75))
                                 .frame(width: RhymeAITokens.Spacing.md, alignment: .leading)
 
-                            if line.trimmingCharacters(in: .whitespaces).isEmpty && isCurrent {
+                            if row.line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isCurrent {
                                 Text("Typing here...")
                                     .font(.system(.caption, design: .monospaced))
                                     .italic()
                                     .foregroundColor(.secondary.opacity(0.5))
                             } else {
-                                Text(line)
+                                Text(row.line)
                                     .font(.system(.caption, design: .monospaced))
                                     .foregroundColor(.primary.opacity(isCurrent ? 0.9 : 0.6))
                                     .lineLimit(1)

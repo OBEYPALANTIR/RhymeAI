@@ -23,6 +23,28 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.RhymeContext
+import com.rhymeai.app.util.SectionMap
+
+internal data class RhymeSchemeRow(
+    val line: String,
+    val letter: String?,
+    val isCurrent: Boolean
+)
+
+internal fun rhymeSchemeRows(context: RhymeContext, scheme: String): List<RhymeSchemeRow> {
+    val letters = scheme.toList()
+    if (letters.isEmpty()) return emptyList()
+    var lyricIndex = 0
+    return context.stanzaLines.mapIndexed { rowIndex, line ->
+        val isCurrent = rowIndex == context.currentLineIndex
+        val letter = when {
+            SectionMap.headerTitle(line) != null -> null
+            line.isBlank() -> context.currentLetter.takeIf { isCurrent }
+            else -> letters[lyricIndex++ % letters.size].toString()
+        }
+        RhymeSchemeRow(line, letter, isCurrent)
+    }
+}
 
 @Composable
 fun RhymeSchemeDisplay(
@@ -31,8 +53,8 @@ fun RhymeSchemeDisplay(
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val schemeLetters = activeScheme.toList()
-    if (schemeLetters.isEmpty() || rhymeContext.stanzaLines.isEmpty()) return
+    val rows = rhymeSchemeRows(rhymeContext, activeScheme)
+    if (rows.isEmpty()) return
 
     Surface(
         modifier = modifier
@@ -48,9 +70,8 @@ fun RhymeSchemeDisplay(
                 .padding(12.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            rhymeContext.stanzaLines.forEachIndexed { i, line ->
-                val letter = schemeLetters[i % schemeLetters.size].toString()
-                val isCurrent = i == rhymeContext.currentLineIndex
+            rows.forEach { row ->
+                val isCurrent = row.isCurrent
                 val alpha = if (isCurrent) 1f else 0.65f
 
                 Row(
@@ -58,18 +79,22 @@ fun RhymeSchemeDisplay(
                         .fillMaxWidth()
                         .padding(vertical = 1.dp)
                 ) {
-                    Text(
-                        text = letter,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
-                        color = if (isCurrent) colorScheme.primary else colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(16.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    if (line.isNotEmpty()) {
+                    if (row.letter != null) {
                         Text(
-                            text = line,
+                            text = row.letter,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = if (isCurrent) colorScheme.primary else colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(16.dp)
+                        )
+                    } else {
+                        Spacer(Modifier.width(16.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    if (row.line.isNotEmpty()) {
+                        Text(
+                            text = row.line,
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
                             color = colorScheme.onSurface.copy(alpha = alpha),

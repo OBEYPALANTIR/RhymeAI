@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
+source "$ROOT_DIR/scripts/android-release-common.sh"
 MODEL_DIR="${GEMMA_MODEL_DIR:-$ROOT_DIR/artifacts/gemma-local-models}"
 ARTIFACT_DIR="${GEMMA_BENCHMARK_DIR:-$ROOT_DIR/artifacts/gemma-benchmarks/$(date +%Y%m%d-%H%M%S)}"
+if [[ "$ARTIFACT_DIR" != /* ]]; then
+  ARTIFACT_DIR="$ROOT_DIR/$ARTIFACT_DIR"
+fi
+
+if [[ -n "${GEMMA_WIPE_AVD:-}" || -n "${ANDROID_AVD_NAME:-}" ||
+      -n "${EMULATOR_MEMORY_MB:-}" || -n "${EMULATOR_PARTITION_SIZE_MB:-}" ]]; then
+  echo "The benchmark does not boot or wipe an AVD. Start an empty disposable emulator yourself and set ANDROID_SERIAL." >&2
+  exit 1
+fi
 
 if [[ -z "${JAVA_HOME:-}" && -d "/Applications/Android Studio.app/Contents/jbr/Contents/Home" ]]; then
   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
@@ -21,69 +32,12 @@ if [[ -z "${ANDROID_HOME:-}" || ! -d "$ANDROID_HOME" ]]; then
 fi
 
 ADB="$ANDROID_HOME/platform-tools/adb"
-EMULATOR="$ANDROID_HOME/emulator/emulator"
 if [[ ! -x "$ADB" ]]; then
   ADB="adb"
 fi
 
-wait_for_device() {
-  local deadline=$((SECONDS + 180))
-  while [[ $SECONDS -lt $deadline ]]; do
-    local found
-    found="$("$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1; exit }')"
-    if [[ -n "$found" ]]; then
-      echo "$found"
-      return 0
-    fi
-    sleep 2
-  done
-  return 1
-}
-
-wait_for_boot_completed() {
-  local serial="$1"
-  local deadline=$((SECONDS + 240))
-  while [[ $SECONDS -lt $deadline ]]; do
-    local boot_completed
-    boot_completed="$("$ADB" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-    if [[ "$boot_completed" == "1" ]]; then
-      "$ADB" -s "$serial" shell input keyevent 82 >/dev/null 2>&1 || true
-      return 0
-    fi
-    sleep 2
-  done
-  echo "Timed out waiting for Android boot completion on $serial." >&2
-  return 1
-}
-
-serial="${ANDROID_SERIAL:-}"
-if [[ -z "$serial" ]]; then
-  serial="$("$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1; exit }')"
-fi
-
-if [[ -z "$serial" && -x "$EMULATOR" ]]; then
-  avd_name="${ANDROID_AVD_NAME:-Medium_Phone_API_36.1}"
-  echo "No adb device attached; booting AVD $avd_name"
-  emulator_args=(-avd "$avd_name" -no-snapshot-load -no-boot-anim)
-  if [[ -n "${EMULATOR_MEMORY_MB:-}" ]]; then
-    emulator_args+=(-memory "$EMULATOR_MEMORY_MB")
-  fi
-  if [[ -n "${EMULATOR_PARTITION_SIZE_MB:-}" ]]; then
-    emulator_args+=(-partition-size "$EMULATOR_PARTITION_SIZE_MB")
-  fi
-  if [[ -n "${GEMMA_WIPE_AVD:-}" ]]; then
-    emulator_args+=(-wipe-data)
-  fi
-  "$EMULATOR" "${emulator_args[@]}" >/tmp/rhymeai-gemma-emulator.log 2>&1 &
-  serial="$(wait_for_device || true)"
-fi
-
-if [[ -z "$serial" ]]; then
-  echo "No adb device is attached for Gemma benchmark." >&2
-  exit 1
-fi
-
-wait_for_boot_completed "$serial"
+require_empty_android_target
+serial="$ANDROID_SERIAL"
 
 model_paths=("$@")
 if [[ ${#model_paths[@]} -eq 0 ]]; then
@@ -96,64 +50,58 @@ for i in "${!model_paths[@]}"; do
   if [[ "${model_paths[$i]}" != /* ]]; then
     model_paths[$i]="$ROOT_DIR/${model_paths[$i]}"
   fi
+  if [[ ! -r "${model_paths[$i]}" ||
+        "$(LC_ALL=C head -c 4 "${model_paths[$i]}" 2>/dev/null)" != "GGUF" ]]; then
+    echo "Model is missing, unreadable, or has no GGUF header: ${model_paths[$i]}" >&2
+    exit 1
+  fi
 done
 
-mkdir -p "$ARTIFACT_DIR"
+if [[ -e "$ARTIFACT_DIR" ]]; then
+  echo "Benchmark output already exists; choose a new GEMMA_BENCHMARK_DIR: $ARTIFACT_DIR" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$ARTIFACT_DIR")"
+mkdir "$ARTIFACT_DIR"
 cd "$ANDROID_DIR"
 ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+APP_BUILD_DIR="$(android_app_build_directory)"
 
-"$ADB" -s "$serial" uninstall com.rhymeai.app >/dev/null 2>&1 || true
-"$ADB" -s "$serial" uninstall com.rhymeai.app.test >/dev/null 2>&1 || true
+require_empty_android_target
+"$ADB" -s "$serial" install "$APP_BUILD_DIR/outputs/apk/debug/app-debug.apk"
+"$ADB" -s "$serial" install "$APP_BUILD_DIR/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 
-install_apk() {
-  local apk="$1"
-  local output
-  if output="$("$ADB" -s "$serial" install -r "$apk" 2>&1)"; then
-    printf '%s\n' "$output"
-    return 0
+device_model_path=""
+cleanup() {
+  if [[ -n "$device_model_path" ]]; then
+    "$ADB" -s "$serial" shell rm -f "$device_model_path" >/dev/null 2>&1 || true
   fi
-
-  if [[ "$output" == *"INSTALL_FAILED_UPDATE_INCOMPATIBLE"* ]]; then
-    echo "$output" >&2
-    echo "Existing RhymeAI install has a different signature; uninstalling app/test packages and retrying." >&2
-    "$ADB" -s "$serial" uninstall com.rhymeai.app >/dev/null 2>&1 || true
-    "$ADB" -s "$serial" uninstall com.rhymeai.app.test >/dev/null 2>&1 || true
-    "$ADB" -s "$serial" install -r "$apk"
-    return 0
-  fi
-
-  echo "$output" >&2
-  return 1
 }
+trap cleanup EXIT
 
-install_apk app/build/outputs/apk/debug/app-debug.apk
-install_apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-
-for host_model_path in "${model_paths[@]}"; do
-  if [[ ! -r "$host_model_path" ]]; then
-    echo "Model is not readable: $host_model_path" >&2
-    exit 1
-  fi
-  if [[ "$(LC_ALL=C head -c 4 "$host_model_path")" != "GGUF" ]]; then
-    echo "Model does not start with a GGUF header: $host_model_path" >&2
-    exit 1
-  fi
-
+for i in "${!model_paths[@]}"; do
+  host_model_path="${model_paths[$i]}"
   model_file="$(basename "$host_model_path")"
   model_label="${model_file%.gguf}"
-  device_model_path="/data/local/tmp/rhymeai-$model_file"
-  output_file="$ARTIFACT_DIR/$model_label.txt"
-  logcat_file="$ARTIFACT_DIR/$model_label-logcat.txt"
+  model_artifact_dir="$ARTIFACT_DIR/$(printf '%02d' "$((i + 1))")"
+  mkdir "$model_artifact_dir"
+  allocated_model_path="$("$ADB" -s "$serial" shell mktemp /data/local/tmp/rhymeai-model.XXXXXX | tr -d '\r')"
+  if [[ ! "$allocated_model_path" =~ ^/data/local/tmp/rhymeai-model\.[[:alnum:]]+$ ]]; then
+    echo "Could not allocate a fresh device model path." >&2
+    exit 1
+  fi
+  device_model_path="$allocated_model_path"
+  output_file="$model_artifact_dir/$model_label.txt"
+  logcat_file="$model_artifact_dir/$model_label-logcat.txt"
 
-  "$ADB" -s "$serial" shell rm -f "$device_model_path" >/dev/null 2>&1 || true
-  "$ADB" -s "$serial" shell df -h /data /data/local/tmp | tee "$ARTIFACT_DIR/$model_label-df-before.txt"
+  "$ADB" -s "$serial" shell df -h /data /data/local/tmp | tee "$model_artifact_dir/$model_label-df-before.txt"
   "$ADB" -s "$serial" push "$host_model_path" "$device_model_path"
-  "$ADB" -s "$serial" shell df -h /data /data/local/tmp | tee "$ARTIFACT_DIR/$model_label-df-after-push.txt"
+  "$ADB" -s "$serial" shell chmod 644 "$device_model_path"
+  "$ADB" -s "$serial" shell df -h /data /data/local/tmp | tee "$model_artifact_dir/$model_label-df-after-push.txt"
 
   echo "Running Gemma benchmark for $model_label on $serial"
-  "$ADB" -s "$serial" logcat -c || true
-  "$ADB" -s "$serial" logcat > "$logcat_file" 2>&1 &
-  logcat_pid=$!
+  log_marker="rhymeai-benchmark-$i-$$-$(date +%s)"
+  "$ADB" -s "$serial" shell log -t RhymeAIBenchmark "$log_marker"
   set +e
   instrumentation_output="$("$ADB" -s "$serial" shell am instrument -w \
     -e class com.rhymeai.app.LocalModelInstrumentedTest \
@@ -162,11 +110,18 @@ for host_model_path in "${model_paths[@]}"; do
     com.rhymeai.app.test/androidx.test.runner.AndroidJUnitRunner 2>&1)"
   instrumentation_status=$?
   set -e
-  kill "$logcat_pid" >/dev/null 2>&1 || true
-  wait "$logcat_pid" >/dev/null 2>&1 || true
   printf '%s\n' "$instrumentation_output" | tee "$output_file"
-
+  printf '%s\n' "$instrumentation_status" > "$model_artifact_dir/$model_label-exit-status.txt"
+  if ! "$ADB" -s "$serial" logcat -d -v threadtime | awk -v marker="$log_marker" '
+    index($0, marker) { started = 1; next }
+    started { print }
+    END { if (!started) exit 1 }
+  ' > "$logcat_file"; then
+    echo "Could not verify the benchmark log boundary for $model_label." >&2
+    exit 1
+  fi
   "$ADB" -s "$serial" shell rm -f "$device_model_path" >/dev/null 2>&1 || true
+  device_model_path=""
 
   if [[ $instrumentation_status -ne 0 || "$instrumentation_output" == *"FAILURES!!!"* || "$instrumentation_output" != *"OK ("* ]]; then
     echo "Gemma benchmark failed for $model_label. Output saved to $output_file" >&2

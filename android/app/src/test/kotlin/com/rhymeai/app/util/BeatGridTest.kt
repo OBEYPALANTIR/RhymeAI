@@ -153,4 +153,11 @@ class BeatGridTest {
         val result = BeatGrid.compute("hello", bpm = 90)
         assertEquals(90, result.bpm)
     }
+
+    @Test
+    fun visualBeatSegmentsStayBoundedForLongLines() {
+        assertEquals(4, BeatGrid.visualSegmentCount(1.0))
+        assertEquals(7, BeatGrid.visualSegmentCount(7.0))
+        assertEquals(8, BeatGrid.visualSegmentCount(100.0))
+    }
 }

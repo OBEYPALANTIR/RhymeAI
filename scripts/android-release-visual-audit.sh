@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
+source "$ROOT_DIR/scripts/android-release-common.sh"
 PACKAGE="com.rhymeai.app"
-APK="$ANDROID_DIR/app/build/outputs/apk/release/app-release.apk"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUTPUT_DIR="${ANDROID_VISUAL_OUTPUT_DIR:-$ROOT_DIR/artifacts/android-release-visual-audit/$RUN_ID}"
 SCREENSHOT_DIR="$OUTPUT_DIR/screenshots"
 REPORT="$OUTPUT_DIR/report.txt"
+if [[ -e "$OUTPUT_DIR" || -L "$OUTPUT_DIR" ]]; then
+  echo "Refusing to reuse existing visual audit output: $OUTPUT_DIR" >&2
+  exit 1
+fi
 
 if [[ -z "${JAVA_HOME:-}" && -d "/Applications/Android Studio.app/Contents/jbr/Contents/Home" ]]; then
   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
@@ -25,19 +30,18 @@ if [[ -z "${ANDROID_HOME:-}" || ! -d "$ANDROID_HOME" ]]; then
 fi
 
 ADB="$ANDROID_HOME/platform-tools/adb"
-EMULATOR="$ANDROID_HOME/emulator/emulator"
 if [[ ! -x "$ADB" ]]; then
   ADB="adb"
 fi
-if [[ ! -x "$EMULATOR" ]]; then
-  EMULATOR="emulator"
-fi
+require_empty_android_target
 
-mkdir -p "$SCREENSHOT_DIR"
+mkdir -p "$(dirname "$OUTPUT_DIR")"
+mkdir "$OUTPUT_DIR"
+mkdir "$SCREENSHOT_DIR"
 
 serial="${ANDROID_SERIAL:-}"
-owned_emulator=0
 original_font_scale=""
+original_night_mode=""
 device_class="phone"
 wm_size=""
 wm_density=""
@@ -46,74 +50,19 @@ model_name=""
 screen_width=1080
 screen_height=2400
 
-device_serial() {
-  "$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1; exit }'
-}
-
-wait_for_boot() {
-  local target="$1"
-  local timeout="${2:-180}"
-  local deadline=$((SECONDS + timeout))
-  "$ADB" -s "$target" wait-for-device
-  until [[ "$("$ADB" -s "$target" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do
-    if (( SECONDS >= deadline )); then
-      echo "Timed out waiting for Android device boot: $target" >&2
-      exit 1
-    fi
-    sleep 2
-  done
-  "$ADB" -s "$target" shell input keyevent KEYCODE_WAKEUP >/dev/null || true
-  "$ADB" -s "$target" shell wm dismiss-keyguard >/dev/null || true
-}
-
-if [[ -z "$serial" ]]; then
-  serial="$(device_serial)"
-fi
-
-if [[ -z "$serial" ]]; then
-  avd_name="${ANDROID_AVD_NAME:-}"
-  if [[ -z "$avd_name" ]]; then
-    avd_name="$("$EMULATOR" -list-avds 2>/dev/null | head -1 || true)"
-  fi
-  if [[ -z "$avd_name" ]]; then
-    echo "No adb device is attached and no Android AVD is available." >&2
-    exit 1
-  fi
-  "$EMULATOR" -avd "$avd_name" -no-snapshot-save -no-audio -no-boot-anim \
-    >"$OUTPUT_DIR/emulator.log" 2>&1 &
-  owned_emulator=1
-
-  deadline=$((SECONDS + 120))
-  until serial="$(device_serial)"; [[ -n "$serial" ]]; do
-    if (( SECONDS >= deadline )); then
-      echo "Timed out waiting for emulator device from AVD: $avd_name" >&2
-      exit 1
-    fi
-    sleep 2
-  done
-fi
-
+capture_android_visual_state
 cleanup() {
-  if [[ -n "${serial:-}" ]]; then
-    if [[ -n "$original_font_scale" && "$original_font_scale" != "null" ]]; then
-      "$ADB" -s "$serial" shell settings put system font_scale "$original_font_scale" >/dev/null 2>&1 || true
-    fi
-    "$ADB" -s "$serial" shell cmd uimode night no >/dev/null 2>&1 || true
-  fi
-  if [[ "$owned_emulator" == "1" && "${ANDROID_VISUAL_SHUTDOWN_EMULATOR:-0}" == "1" ]]; then
-    "$ADB" -s "$serial" emu kill >/dev/null 2>&1 || true
-  fi
+  local result=$?
+  trap - EXIT
+  restore_android_visual_state || result=1
+  exit "$result"
 }
 trap cleanup EXIT
 
-wait_for_boot "$serial"
-original_font_scale="$("$ADB" -s "$serial" shell settings get system font_scale 2>/dev/null | tr -d '\r' || true)"
-
 SKIP_INSTALL=1 "$ROOT_DIR/scripts/android-release-smoke.sh"
+APK="$(android_app_build_directory)/outputs/apk/release/app-release.apk"
 
-"$ADB" -s "$serial" uninstall "$PACKAGE" >/dev/null 2>&1 || true
-"$ADB" -s "$serial" install "$APK"
-"$ADB" -s "$serial" shell pm clear "$PACKAGE" >/dev/null
+install_release_apk "$APK"
 "$ADB" -s "$serial" logcat -c
 
 dump_ui() {
@@ -334,7 +283,7 @@ capture_populated_flow() {
   if [[ "$device_class" == "tablet" ]]; then
     echo "Tablet coverage: exercised by this tablet-profile audit."
   else
-    echo "Tablet coverage: not exercised by this phone-profile audit; rerun with ANDROID_SERIAL or ANDROID_AVD_NAME pointed at a tablet emulator/device."
+    echo "Tablet coverage: not exercised by this phone-profile audit; rerun with ANDROID_SERIAL pointed at a fresh disposable tablet emulator."
   fi
   echo
 } >"$REPORT"

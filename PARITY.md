@@ -51,6 +51,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 ## Rhyme context checks
 
 - Android and iOS unit-verified that section headers do not consume rhyme-scheme positions, latest previous lyric lines with the same scheme letter become the rhyme target, current section detection reaches prompt shaping, and empty lyrics use the first active scheme letter. Android pure seam additionally verifies cursor clamping and empty-scheme fallback to `A`.
+- Rhyme-scheme display row accounting follows Android `RhymeSchemeDisplay.kt` (`rhymeSchemeRows` at #55 candidate `5d401dff`): section headers and non-current blank/whitespace rows show no letter and consume no scheme position; the current blank shows `currentLetter` without consuming one; lyric rows advance and wrap through the scheme. iOS source/host verification is tracked in the G6 handoff; simulator/UI parity remains unverified.
 
 ## Cloud backup parity checks
 
@@ -59,7 +60,9 @@ This tracks behavior that must stay aligned between Android and iOS.
   AES-256-GCM with a 128-bit tag, and the byte-identical
   `RAI1 | salt(16) | iv(12) | ciphertext | tag(16)` envelope with the header
   bound as AAD. The shared RAI1 golden vector is now pinned by unit tests on
-  both platforms (`BackupCoreTests` on iOS, `SyncBlobCryptoTest` on Android).
+  both platforms (`BackupCoreTests` on iOS, `SyncBlobCryptoTest` on Android). Current
+  manifests have since diverged: Android writes v2/RAI2 and iOS writes v3/RAI3,
+  which Android does not read yet.
 - Backup passphrase rules: both platforms trim the ASCII set space/tab/CR/LF
   and require at least 8 printable ASCII (0x20–0x7E) characters, unit-verified
   on both sides including tab/newline-padded and interior-tab cases.

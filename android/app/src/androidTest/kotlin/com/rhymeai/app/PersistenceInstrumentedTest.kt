@@ -7,15 +7,21 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.model.SongProject
+import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.repository.ProjectRepository
+import com.rhymeai.app.service.AIProvider
+import com.rhymeai.app.service.AIModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class PersistenceInstrumentedTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -121,12 +127,119 @@ class PersistenceInstrumentedTest {
         }
     }
 
+    @Test
+    fun remoteTrashWhileOpenSavesDraftUnderNewIdentityBeforeNavigation() {
+        val original = SongProject("remote-trashed", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        onMain {
+            viewModel.showStartMenu = false
+            viewModel.lyricsFieldValue = TextFieldValue("local unsaved lyric")
+        }
+        runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+        waitUntil { viewModel.projects.none { it.id == original.id } }
+        val navigated = java.util.concurrent.atomic.AtomicBoolean()
+        onMain { viewModel.newProject { navigated.set(true) } }
+        waitUntil { navigated.get() }
+
+        val replacement = runBlocking { repo.projectsFlow.first().single() }
+        assertNotEquals(original.id, replacement.id)
+        assertEquals("local unsaved lyric", replacement.lyrics)
+        assertEquals(original.id, runBlocking { repo.trashedProjectsFlow.first().single().project.id })
+        assertEquals("", viewModel.lyrics)
+        assertTrue(viewModel.persistenceError.orEmpty().contains("saved as a new song"))
+    }
+
+    @Test
+    fun remoteTrashWhileOpenAutosavesNextEditUnderNewIdentity() {
+        val original = SongProject("remote-autosave", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        onMain {
+            viewModel.showStartMenu = false
+            viewModel.lyricsFieldValue = TextFieldValue("edited after remote trash")
+        }
+        runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+        waitUntil { viewModel.projects.none { it.id == original.id } }
+        onMain { viewModel.triggerAutoSave() }
+        waitUntil {
+            runBlocking {
+                repo.projectsFlow.first().any { it.id != original.id && it.lyrics == "edited after remote trash" }
+            }
+        }
+
+        val replacement = runBlocking { repo.projectsFlow.first().single() }
+        assertNotEquals(original.id, replacement.id)
+        assertEquals(replacement.id, viewModel.currentProjectId)
+        assertEquals(replacement.id, runBlocking { repo.currentProjectIdFlow.first() })
+        assertEquals("edited after remote trash", runBlocking { repo.editorStateFlow().first().second })
+        assertEquals(original.id, runBlocking { repo.trashedProjectsFlow.first().single().project.id })
+        assertTrue(viewModel.persistenceError.orEmpty().contains("saved as a new song"))
+    }
+
+
+    @Test
+    fun customLocalModelRegistrationAndSelectionSurviveRepositoryRecreation() = runBlocking {
+        val model = SavedLocalModel(
+            id = "custom-night-drive",
+            displayName = "Night Drive",
+            fileName = "custom-night-drive.gguf",
+            isCustom = true
+        )
+
+        repo.saveLocalModels(listOf(model))
+        repo.saveSelectedLocalModelId(model.id)
+
+        val restoredRepository = ProjectRepository(app)
+        assertEquals(listOf(model), restoredRepository.localModelsFlow.first())
+        assertEquals(model.id, restoredRepository.selectedLocalModelIdFlow.first())
+    }
+
+    @Test
+    fun selectedLocalModelIsRestoredWhenLocalProviderStarts() {
+        val modelFile = app.filesDir.resolve("startup-custom.gguf")
+        modelFile.writeBytes(
+            ByteBuffer.allocate(24)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .put("GGUF".toByteArray())
+                .putInt(3)
+                .putLong(1)
+                .putLong(1)
+                .array()
+        )
+        val model = SavedLocalModel(
+            id = "startup-custom",
+            displayName = "Startup Custom",
+            fileName = modelFile.name,
+            isCustom = true
+        )
+        runBlocking {
+            repo.saveSelectedProvider(AIProvider.LOCAL.name)
+            repo.saveModelId(AIModel.LOCAL_MODEL.id)
+            repo.saveLocalModels(listOf(model))
+            repo.saveSelectedLocalModelId(model.id)
+        }
+
+        val restoredViewModel = MainViewModel(app)
+
+        waitUntil { restoredViewModel.localModelPath == modelFile.absolutePath }
+        modelFile.delete()
+    }
+
     private fun resetRepository() {
         runBlocking {
             repo.saveProjects(emptyList())
             repo.saveTrashedProjects(emptyList())
             repo.setCurrentProjectId(null)
             repo.saveEditorState("", "", "")
+            repo.saveSelectedProvider(AIProvider.LOCAL.name)
+            repo.saveModelId(AIModel.DEFAULT.id)
+            repo.saveLocalModels(emptyList())
+            repo.saveSelectedLocalModelId(null)
         }
     }
 

@@ -18,7 +18,7 @@ enum class SongSection(
     ),
     UNKNOWN(
         "Unmarked section",
-        "Section direction: no verse, chorus, or bridge header was detected. Fit the immediate stanza and surrounding lyric context."
+        "Section direction: follow any explicit section label that is provided; otherwise fit the immediate stanza and surrounding lyric context."
     );
 
     companion object {

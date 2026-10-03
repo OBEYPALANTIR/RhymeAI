@@ -63,7 +63,24 @@ struct PersistenceTests {
     }
 
     @MainActor
-    @Test func pendingAutoSaveCannotCrossIntoImportedProject() async throws {
+    @Test func changingOnlyThemeUsesTheOneSecondAutoSave() async throws {
+        let harness = try Self.makeHarness()
+        let project = SongProject(id: "theme-only", title: "Draft", lyrics: "A line", theme: "before")
+        harness.context.insert(project)
+        try harness.context.save()
+        harness.viewModel.loadProject(project)
+
+        harness.viewModel.theme = "after"
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(project.theme == "before")
+
+        try await Task.sleep(for: .milliseconds(900))
+        #expect(project.theme == "after")
+        #expect(harness.viewModel.saveStatus == .saved)
+    }
+
+    @MainActor
+    @Test func pendingAutoSaveFlushesOriginalBeforeImportWithoutCrossingIntoImportedProject() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
         let original = SongProject(
@@ -93,7 +110,7 @@ struct PersistenceTests {
         let projects = try Self.fetchProjects(harness.context)
         let persistedOriginal = try #require(projects.first { $0.id == "song-a" })
         let imported = try #require(projects.first { $0.id == viewModel.currentProjectId })
-        #expect(persistedOriginal.lyrics == "persisted original")
+        #expect(persistedOriginal.lyrics == "unsaved editor change")
         #expect(imported.lyrics == "imported lyric")
         #expect(viewModel.lyrics == "imported lyric")
     }
@@ -136,6 +153,56 @@ struct PersistenceTests {
         #expect(backupService.backupCalls == 1)
         #expect(backupService.restoreCalls == 1)
         #expect(viewModel.cloudBackupStatusText == "Restore complete. Projects, trash, and missing recordings were restored.")
+    }
+
+
+    @MainActor
+    @Test func restoreDoesNotStartWhenOpenDraftCannotBeSaved() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, hasStoredPassphrase: true)
+        let harness = try Self.makeHarness(
+            backupService: backupService,
+            saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) }
+        )
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = harness.viewModel
+        viewModel.loadProject(project)
+        viewModel.lyrics = "unsaved lyric"
+        viewModel.triggerAutoSave()
+
+        await viewModel.restoreBackupNow()
+
+        #expect(backupService.restoreCalls == 0)
+        #expect(viewModel.currentProjectId == project.id)
+        #expect(viewModel.lyrics == "unsaved lyric")
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText.contains("Restore canceled"))
+        #expect(try Self.fetchProjects(harness.context).first?.lyrics == "saved line")
+    }
+
+    @MainActor
+    @Test func manualBackupDoesNotStartWhenOpenDraftCannotBeSaved() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, hasStoredPassphrase: true)
+        let harness = try Self.makeHarness(
+            backupService: backupService,
+            saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) }
+        )
+        let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line")
+        harness.context.insert(project)
+        try harness.context.save()
+        let viewModel = harness.viewModel
+        viewModel.loadProject(project)
+        viewModel.lyrics = "unsaved lyric"
+
+        await viewModel.backUpNow()
+
+        #expect(backupService.backupCalls == 0)
+        #expect(viewModel.currentProjectId == project.id)
+        #expect(viewModel.lyrics == "unsaved lyric")
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText.contains("Backup canceled"))
+        #expect(try Self.fetchProjects(harness.context).first?.lyrics == "saved line")
     }
 
     @MainActor
