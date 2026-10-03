@@ -74,7 +74,9 @@ any remaining files so cleanup resumes after restore.
 
 Android now pairs the iOS v2 envelope version with RAI2 and emits the required
 song, trash, and recording body keys even when their values equal defaults.
-Native two-platform exchange has not been verified. On Android v2 sync,
+iOS reads that format but writes v3 under RAI3, which Android cannot read yet,
+so a backup last written by iOS shows as unreadable on Android and is left
+untouched. Native two-platform exchange has not been verified. On Android v2 sync,
 tombstoned songs are hidden and their recordings are no longer uploaded or
 advertised by the receiving device, even if an older copy is edited later.
 An upload that precedes a newly arriving remote tombstone is not undone;

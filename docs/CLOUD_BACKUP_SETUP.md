@@ -40,7 +40,10 @@ Create one OAuth client per signing certificate:
 ## Android project/recording sync contract
 
 The encrypted Drive `rhymeai-projects.json` snapshot pairs SyncBlob version 2
-with an RAI2 envelope, matching the iOS envelope/version pairing. Android now
+with an RAI2 envelope, which iOS can read. iOS itself now writes SyncBlob
+version 3 under an RAI3 envelope, which Android cannot read yet: after iOS
+uploads, Android reports the backup as unreadable and leaves it untouched.
+Android now
 emits the song, trash, and recording body keys required by the iOS decoder
 even when their values equal defaults; native two-platform exchange has not
 yet been verified. Version 1 remains readable under RAI1 only when its JSON
