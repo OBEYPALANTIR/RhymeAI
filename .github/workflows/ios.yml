@@ -1,0 +1,60 @@
+name: iOS
+
+# macOS minutes are billed at a multiple of Linux minutes on private
+# repositories, so this only runs when iOS sources change.
+on:
+  pull_request:
+    paths:
+      - "Writers Block/**"
+      - "shared/**"
+      - ".github/workflows/ios.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Writers Block/**"
+      - "shared/**"
+      - ".github/workflows/ios.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain
+        run: xcodebuild -version
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          udid=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in runtimes if "SimRuntime.iOS" in k), reverse=True)
+          for runtime in ios:
+              for device in runtimes[runtime]:
+                  if device["name"].startswith("iPhone"):
+                      print(device["udid"]); sys.exit(0)
+          sys.exit("no iPhone simulator available")')
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - name: Unit tests
+        run: |
+          xcodebuild test \
+            -project "Writers Block/Writers Block.xcodeproj" \
+            -scheme "Writers Block" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -only-testing:"Writers BlockTests" \
+            -resultBundlePath "$RUNNER_TEMP/ios-unit.xcresult"
+      - name: Upload result bundle
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-unit-xcresult
+          path: ${{ runner.temp }}/ios-unit.xcresult
+          retention-days: 7
