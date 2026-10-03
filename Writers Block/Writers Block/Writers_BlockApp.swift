@@ -81,8 +81,24 @@ private struct ModelContainerBootstrap {
     let usesCloudBackedStore: Bool
 }
 
+
+final class ModelDownloadAppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        guard identifier == GGUFDownloadManager.backgroundIdentifier else {
+            completionHandler()
+            return
+        }
+        GGUFDownloadManager.shared.backgroundCompletionHandler = completionHandler
+    }
+}
+
 @main
 struct Writers_BlockApp: App {
+    @UIApplicationDelegateAdaptor(ModelDownloadAppDelegate.self) private var downloadDelegate
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppAppearanceStyle.storageKey)
     private var appearanceRawValue = AppAppearanceStyle.ink.rawValue
@@ -90,6 +106,7 @@ struct Writers_BlockApp: App {
     private var analysisPresentationRawValue = AnalysisPresentationStyle.color.rawValue
     @StateObject private var viewModel = EditorViewModel(backupService: BackupService.shared)
     @StateObject private var persistenceState: AppPersistenceState
+    @StateObject private var ggufDownloadManager = GGUFDownloadManager.shared
 
     private let sharedModelContainer: ModelContainer?
 
@@ -100,7 +117,10 @@ struct Writers_BlockApp: App {
     private var appearanceBinding: Binding<AppAppearanceStyle> {
         Binding(
             get: { appearance },
-            set: { appearanceRawValue = $0.rawValue }
+            set: { newAppearance in
+                guard newAppearance != appearance else { return }
+                appearanceRawValue = newAppearance.rawValue
+            }
         )
     }
 
@@ -150,6 +170,7 @@ struct Writers_BlockApp: App {
             }
             .environmentObject(viewModel)
             .environmentObject(persistenceState)
+            .environmentObject(ggufDownloadManager)
             .environment(\.appAppearanceStyle, appearance)
             .environment(\.appAppearanceBinding, appearanceBinding)
             .environment(\.analysisPresentationStyle, analysisPresentation)
@@ -192,6 +213,7 @@ struct Writers_BlockApp: App {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+            .foregroundStyle(appearance.palette.primaryInk)
             .background(appearance.palette.surface)
         }
     }
@@ -228,20 +250,24 @@ struct Writers_BlockApp: App {
         // CloudKit init can fail at runtime (signed-out iCloud, entitlement change,
         // corrupted store). Falling back keeps the app usable instead of crash-looping;
         // a CloudKit-less container still reads/writes the same local store.
-        let cloudKit = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .private("iCloud.ShaydeTree.Writers-Block")
-        )
-        do {
-            return ModelContainerBootstrap(
-                container: try ModelContainer(for: schema, configurations: [cloudKit]),
-                persistenceDegraded: false,
-                cloudSyncStatus: AppPersistenceState.initialCloudSyncStatus(usesCloudBackedStore: true),
-                usesCloudBackedStore: true
+        // The unsigned persistent UI-test bundle cannot initialize CloudKit's
+        // asynchronous store setup. Keep its relaunch test local to its own app data.
+        if !ProcessInfo.processInfo.arguments.contains("--ui-test-local-store") {
+            let cloudKit = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: false,
+                cloudKitDatabase: .private("iCloud.ShaydeTree.Writers-Block")
             )
-        } catch {
-            logger.error("CloudKit ModelContainer failed, falling back to local-only: \(error)")
+            do {
+                return ModelContainerBootstrap(
+                    container: try ModelContainer(for: schema, configurations: [cloudKit]),
+                    persistenceDegraded: false,
+                    cloudSyncStatus: AppPersistenceState.initialCloudSyncStatus(usesCloudBackedStore: true),
+                    usesCloudBackedStore: true
+                )
+            } catch {
+                logger.error("CloudKit ModelContainer failed, falling back to local-only: \(error)")
+            }
         }
 
         let localOnly = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)

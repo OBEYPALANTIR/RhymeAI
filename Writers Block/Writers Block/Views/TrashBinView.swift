@@ -328,7 +328,7 @@ struct TrashBinView: View {
     }
 
     private func reloadTrashedMemos() {
-        trashedMemos = VoiceMemoService.trashedMemos()
+        trashedMemos = RecordingFiles.trashedMemos()
         selectedMemoIds.formIntersection(Set(trashedMemos.map(\.id)))
     }
 

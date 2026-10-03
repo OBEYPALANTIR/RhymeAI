@@ -238,6 +238,28 @@ nonisolated struct PronunciationDictionary: Sendable {
     }
 }
 
+nonisolated enum LexicalWordValidator {
+    static func isKnownSpelling(_ word: String) -> Bool {
+        let spelling = canonicalSpelling(word)
+        let dictionaryKey = ProsodyAnalyzer.normalizeWord(spelling)
+        return spelling == dictionaryKey
+            && !PronunciationDictionary.shared.pronunciations(for: dictionaryKey).isEmpty
+    }
+
+    private static func canonicalSpelling(_ word: String) -> String {
+        word.precomposedStringWithCompatibilityMapping.unicodeScalars.reduce(into: "") { result, scalar in
+            switch scalar.value {
+            case 0x2018, 0x2019, 0x02BC, 0xFF07:
+                result.append("'")
+            case 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212:
+                result.append("-")
+            default:
+                result.unicodeScalars.append(scalar)
+            }
+        }.lowercased(with: Locale(identifier: "en_US_POSIX"))
+    }
+}
+
 nonisolated enum ProsodyAnalyzer {
     private static let vowels: Set<String> = [
         "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY",
@@ -411,31 +433,31 @@ nonisolated enum ProsodyAnalyzer {
     ) -> RhymeType? {
         let normalizedCandidate = normalizeWord(candidateWord)
         let normalizedTarget = normalizeWord(targetWord)
-        guard normalizedCandidate != normalizedTarget,
-              let targetPhones = dictionary.pronunciations(for: normalizedTarget).first,
-              let targetTail = rhymeTailForPhones(targetPhones) else {
-            return nil
-        }
-
-        let targetKeys = rhymeKeysForPhones(targetPhones, maxDepth: 2)
-        guard let targetKey = targetKeys.first else { return nil }
-        let targetMultiKey = targetKeys.dropFirst().first
+        guard normalizedCandidate != normalizedTarget else { return nil }
+        let candidatePronunciations = dictionary.pronunciations(for: normalizedCandidate)
         var near = false
         var slant = false
-        for candidatePhones in dictionary.pronunciations(for: normalizedCandidate) {
-            let candidateKeys = rhymeKeysForPhones(candidatePhones, maxDepth: 2)
-            if candidateKeys.first == targetKey ||
-                (targetMultiKey != nil && candidateKeys.dropFirst().first == targetMultiKey) {
-                return .perfect
-            }
-            guard let candidateTail = rhymeTailForPhones(candidatePhones) else { continue }
-            if candidateTail.vowel == targetTail.vowel,
-               hasSingleCodaEdit(targetTail.coda, candidateTail.coda) {
-                near = true
-            } else if !targetTail.coda.isEmpty,
-                      candidateTail.vowel != targetTail.vowel,
-                      candidateTail.coda == targetTail.coda {
-                slant = true
+        for targetPhones in dictionary.pronunciations(for: normalizedTarget) {
+            let targetKeys = rhymeKeysForPhones(targetPhones, maxDepth: 2)
+            guard let targetKey = targetKeys.first,
+                  let targetTail = rhymeTailForPhones(targetPhones) else { continue }
+            let targetMultiKey = targetKeys.dropFirst().first
+
+            for candidatePhones in candidatePronunciations {
+                let candidateKeys = rhymeKeysForPhones(candidatePhones, maxDepth: 2)
+                if candidateKeys.first == targetKey ||
+                    (targetMultiKey != nil && candidateKeys.dropFirst().first == targetMultiKey) {
+                    return .perfect
+                }
+                guard let candidateTail = rhymeTailForPhones(candidatePhones) else { continue }
+                if candidateTail.vowel == targetTail.vowel,
+                   hasSingleCodaEdit(targetTail.coda, candidateTail.coda) {
+                    near = true
+                } else if !targetTail.coda.isEmpty,
+                          candidateTail.vowel != targetTail.vowel,
+                          candidateTail.coda == targetTail.coda {
+                    slant = true
+                }
             }
         }
         if near { return .near }
@@ -494,13 +516,17 @@ nonisolated enum ProsodyAnalyzer {
     }
 
     static func metricFeet(_ stressPattern: [Int]) -> String {
-        stressPattern.map { stress in
-            switch stress {
-            case 1: return "ˈDA"
-            case 2: return "ˌDA"
-            default: return "da"
-            }
-        }.joined(separator: " ")
+        stride(from: 0, to: stressPattern.count, by: 2).map { start in
+            stressPattern[start..<min(start + 2, stressPattern.count)]
+                .map { stress in
+                    switch stress {
+                    case 1: return "ˈDA"
+                    case 2: return "ˌDA"
+                    default: return "da"
+                    }
+                }
+                .joined(separator: " ")
+        }.joined(separator: " | ")
     }
 
     static func normalizeWord(_ word: String) -> String {

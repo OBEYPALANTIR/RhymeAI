@@ -192,7 +192,7 @@ struct Writers_BlockTests {
 
         #expect(prosody.syllableCount == 4)
         #expect(prosody.stressPattern == [1, 0, 1, 0])
-        #expect(prosody.feet == "ˈDA da ˈDA da")
+        #expect(prosody.feet == "ˈDA da | ˈDA da")
     }
 
     @Test func prosodyAnalyzerRendersIpaPreview() {
@@ -207,7 +207,7 @@ struct Writers_BlockTests {
 
         #expect(prosody.ipa == "ˈreɪdiˌoʊ")
         #expect(prosody.stressPattern == [1, 0, 2])
-        #expect(ProsodyAnalyzer.metricFeet(prosody.stressPattern) == "ˈDA da ˌDA")
+        #expect(ProsodyAnalyzer.metricFeet(prosody.stressPattern) == "ˈDA da | ˌDA")
         #expect(prosody.isFallback == false)
     }
 

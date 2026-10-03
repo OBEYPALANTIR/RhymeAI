@@ -49,7 +49,7 @@ enum ExportFormat: String, CaseIterable, Identifiable {
     }
 }
 
-struct SongProjectExport: Codable {
+struct SongProjectExport: Codable, Sendable {
     var id: String
     var title: String
     var lyrics: String

@@ -5,7 +5,6 @@ struct EditorUndoRedoControls: View {
 
     let canUndo: Bool
     let canRedo: Bool
-    let floating: Bool
     let onUndo: () -> Void
     let onRedo: () -> Void
 
@@ -37,19 +36,9 @@ struct EditorUndoRedoControls: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.body.weight(.semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(appearance.palette.primaryInk.opacity(isEnabled ? 1 : 0.35))
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                .background(
-                    floating ? appearance.palette.surface : Color.clear,
-                    in: Circle()
-                )
-                .overlay(
-                    Circle().stroke(
-                        floating ? appearance.palette.outlineStrong : Color.clear,
-                        lineWidth: 1
-                    )
-                )
         }
         .buttonStyle(.rhymePress)
         .disabled(!isEnabled)

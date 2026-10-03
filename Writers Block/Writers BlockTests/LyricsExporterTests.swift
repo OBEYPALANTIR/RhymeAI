@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 import Testing
 @testable import Writers_Block
 
@@ -86,5 +87,34 @@ struct LyricsExporterTests {
 
         #expect(!pdf.isEmpty)
         #expect(header == "%PDF")
+    }
+
+    @Test func pdfExportPaginatesOneLongWrappedLineWithoutLosingText() throws {
+        let words = (0..<2400).map { "word\($0)" }
+        let lyrics = (["BeginningSentinel"] + Array(words.prefix(1200)) +
+            ["MiddleSentinel"] + Array(words.suffix(1200)) + ["EndingSentinel"])
+            .joined(separator: " ")
+        let project = SongProject(title: "Pagination", lyrics: lyrics)
+
+        let data = try LyricsExporter.data(for: project, format: .pdf)
+        let pdf = try #require(PDFDocument(data: data))
+        try data.write(to: FileManager.default.temporaryDirectory
+            .appendingPathComponent("rhyme-pdf-pagination-regression.pdf"))
+
+        #expect(pdf.pageCount >= 3)
+        let extracted = try #require(pdf.string)
+        let exportedWords = extracted.split(whereSeparator: \.isWhitespace)
+            .filter { $0.hasPrefix("word") }.map(String.init)
+        #expect(exportedWords == words)
+        for sentinel in ["BeginningSentinel", "MiddleSentinel", "EndingSentinel"] {
+            let selections = pdf.findString(sentinel, withOptions: [])
+            #expect(selections.count == 1)
+            let selection = try #require(selections.first)
+            let page = try #require(selection.pages.first)
+            let bounds = selection.bounds(for: page)
+            let printable = page.bounds(for: .mediaBox).insetBy(dx: 53, dy: 53)
+            #expect(!bounds.isEmpty)
+            #expect(printable.contains(bounds))
+        }
     }
 }

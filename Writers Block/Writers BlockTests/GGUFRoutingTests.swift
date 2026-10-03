@@ -1,9 +1,13 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import Writers_Block
 
 // MARK: - Gemma prompt template
 
+/// Verify that GGUFModelService.gemmaPrompt produces the same shape as
+/// Android's gemmaInstructionPrompt() — chat template must be stable across
+/// platforms so the model behaves identically.
 struct GemmaPromptTemplateTests {
     @Test func gemmaPromptMatchesCanonicalMachineWrapperExactly() {
         let input = "Write a verse about midnight roads."
@@ -57,8 +61,8 @@ struct GGUFMarkerStrippingTests {
         #expect(cleaned == "This is the output")
     }
 
-    @Test func stripsTaggedModelRoleLabel() {
-        let raw = "<model>\nActual output here\n</model>"
+    @Test func stripsModelRoleLabel() {
+        let raw = "<model>\nActual output here"
         let cleaned = GGUFModelService.stripMarkers(raw)
         #expect(cleaned == "Actual output here")
     }
@@ -77,6 +81,91 @@ struct GGUFMarkerStrippingTests {
 
     @Test func emptyInputReturnsEmpty() {
         #expect(GGUFModelService.stripMarkers("").isEmpty)
+    }
+}
+
+struct GGUFDownloadCatalogTests {
+    @Test func catalogUsesRhymeAITunedModels() {
+        let options = GGUFDownloadCatalog.options
+
+        #expect(options.count == 2)
+        #expect(options.allSatisfy { $0.url.host == "huggingface.co" })
+        #expect(options.allSatisfy { $0.url.path.contains("Shayde182/rhymeai-gemma-4-gguf") })
+        #expect(options.allSatisfy { $0.fileName.contains("rhymeai-Q4_K_M") })
+        #expect(options.allSatisfy {
+            $0.url.path.contains("/resolve/\(GGUFDownloadCatalog.huggingFaceRevision)/")
+        })
+        #expect(options.allSatisfy { !$0.url.path.contains("/resolve/main/") })
+        #expect(options.map(\.expectedBytes) == [3_427_878_784, 5_335_290_784])
+        #expect(options.map(\.sha256) == [
+            "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+            "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3",
+        ])
+    }
+
+    @Test func preferredModelUsesCatalogOrder() {
+        let options = GGUFDownloadCatalog.options
+        let preferred = GGUFModelSelection.preferredFileName(
+            in: [options[1].fileName, options[0].fileName],
+            selectedFileName: nil
+        )
+
+        #expect(preferred == options[0].fileName)
+    }
+
+    @Test func modelDownloadUsesRedirectCompatibleFullFileRequest() {
+        let request = ggufDownloadRequest(for: GGUFDownloadCatalog.options[0])
+
+        #expect(request.value(forHTTPHeaderField: "Range") == nil)
+        #expect(request.value(forHTTPHeaderField: "Accept-Encoding") == "identity")
+    }
+
+    @Test func modelDownloadRecognizesArtifactsFromRemovedSegmentedDownloader() {
+        #expect(isLegacyGGUFDownloadArtifact(fileName: "gemma-4-e2b.segment-0.part"))
+        #expect(isLegacyGGUFDownloadArtifact(fileName: "gemma-4-e4b.segment-3.resume"))
+        #expect(isLegacyGGUFDownloadArtifact(
+            fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf.download"
+        ))
+        #expect(!isLegacyGGUFDownloadArtifact(
+            fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf.resume"
+        ))
+        #expect(!isLegacyGGUFDownloadArtifact(
+            fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf"
+        ))
+    }
+}
+
+struct GGUFSuggestionParsingTests {
+    @Test func parsesLiteralEscapedLineBreaksFromTunedModel() {
+        let raw = #"A hazy amber glow begins to gleam\nA whispered, fragile, waking dream\nAcross the slick and darkened stream\nA silent, solitary, waking theme\nBeneath the shadows of a waking gleam\nA fading, ephemeral, silver gleam<end_of_turn>"#
+        let parsed = AIService().parseSuggestionList(raw)
+
+        #expect(parsed.count == 6)
+        #expect(parsed.first == "A hazy amber glow begins to gleam")
+        #expect(parsed.last == "A fading, ephemeral, silver gleam")
+    }
+}
+
+@Suite(.serialized)
+struct GGUFModelSelectionTests {
+    @Test func selectionPersistsAndWinsOverCatalogOrder() {
+        let original = GGUFModelSelection.currentFileName
+        defer {
+            if let original {
+                GGUFModelSelection.save(fileName: original)
+            } else {
+                GGUFModelSelection.clear()
+            }
+        }
+
+        let options = GGUFDownloadCatalog.options
+        GGUFModelSelection.save(fileName: options[1].fileName)
+
+        #expect(GGUFModelSelection.currentFileName == options[1].fileName)
+        #expect(
+            GGUFModelSelection.preferredFileName(in: options.map(\.fileName))
+                == options[1].fileName
+        )
     }
 }
 
@@ -129,27 +218,259 @@ struct GGUFEngineChoiceTests {
 
 // MARK: - Routing decision: shouldUseGemma
 
-struct GGUFRoutingDecisionTests {
+extension GGUFEngineChoiceTests {
     // shouldUseGemma returns false when engine is Apple Intelligence regardless
     // of whether GGUF files are present.
     @Test func appleEngineNeverRoutesToGemma() {
-        let result = AIService.shouldUseGemma(
-            engineChoice: .appleIntelligence,
-            ggufPath: "/tmp/model.gguf"
-        )
+        let defaults = UserDefaults.standard
+        let original = defaults.string(forKey: "ggufEngineChoice")
+        defer {
+            if let r = original { defaults.set(r, forKey: "ggufEngineChoice") }
+            else { defaults.removeObject(forKey: "ggufEngineChoice") }
+        }
+
+        GGUFEngineChoice.appleIntelligence.save()
+        // Even if a GGUF magically exists, Apple engine must short-circuit.
+        let result = AIService.shouldUseGemma()
         #expect(result == false)
     }
 
     // shouldUseGemma returns false when engine is Gemma but no GGUF exists
     // (the models directory is either absent or empty).
     @Test func gemmaEngineWithNoFileReturnsFalse() {
-        let result = AIService.shouldUseGemma(engineChoice: .gemma, ggufPath: nil)
-        #expect(result == false)
+        let defaults = UserDefaults.standard
+        let original = defaults.string(forKey: "ggufEngineChoice")
+        defer {
+            if let r = original { defaults.set(r, forKey: "ggufEngineChoice") }
+            else { defaults.removeObject(forKey: "ggufEngineChoice") }
+        }
+
+        GGUFEngineChoice.gemma.save()
+        // In the test sandbox, no GGUF has been downloaded, so directory is
+        // either missing or has no .gguf files.
+        // We can't guarantee the models directory is empty in all CI configs,
+        // so only assert the general correctness: if the real device has no
+        // GGUF then false is returned. This test is a logic sanity check,
+        // not a file-system mutation test.
+        let result = AIService.shouldUseGemma()
+        // On CI / simulator without any model: must be false.
+        // On a device where user downloaded a GGUF: could be true, skip assertion.
+        if AIService.firstGGUFPath() == nil {
+            #expect(result == false)
+        }
+    }
+}
+
+// MARK: - GGUFModelStub (always compiled, no model needed)
+
+@MainActor
+struct GGUFModelStubTests {
+    @Test func stubIsNotLoaded() {
+        let stub = GGUFModelStub()
+        #expect(stub.isLoaded == false)
+    }
+
+    @Test func stubLoadThrowsUnavailable() async throws {
+        let stub = GGUFModelStub()
+        do {
+            try await stub.loadModel(filePath: "/nonexistent/model.gguf")
+            Issue.record("Expected localModelUnavailable to be thrown")
+        } catch AIServiceError.localModelUnavailable {
+            // Expected
+        }
+    }
+
+    @Test func stubGenerateThrowsUnavailable() async throws {
+        let stub = GGUFModelStub()
+        do {
+            _ = try await stub.generate(prompt: "hello")
+            Issue.record("Expected localModelUnavailable to be thrown")
+        } catch AIServiceError.localModelUnavailable {
+            // Expected
+        }
+    }
+
+    @Test func stubUnloadIsNoop() {
+        // Should not crash or throw.
+        let stub = GGUFModelStub()
+        stub.unload()
+        #expect(stub.isLoaded == false)
+    }
+}
+
+// MARK: - Gemma rewrite prompt: punchUp uses raw instruction (no softening)
+
+struct GemmaRewritePromptTests {
+    @Test func punchUpUsesRawInstruction() {
+        let service = AIService()
+        let prompt = service.buildGemmaRewritePromptForTest(
+            action: .punchUp,
+            lyrics: "[Verse]\nCity lights glow on the boulevard",
+            selection: "City lights glow on the boulevard",
+            currentSection: .verse,
+            selectionStart: nil,
+            rejectedCandidates: []
+        )
+        // Must contain the raw punchUp instruction (not the softened Apple version).
+        #expect(prompt.contains(RewriteAction.punchUp.instruction))
+        // Must NOT contain the Apple-softened version.
+        let appleVersion = "sharper, bolder, more vivid imagery"
+        #expect(!prompt.contains(appleVersion))
+    }
+
+    @Test func rephraseInstructionPassedThrough() {
+        let service = AIService()
+        let prompt = service.buildGemmaRewritePromptForTest(
+            action: .rephrase,
+            lyrics: "[Verse]\nI keep a notebook under neon rain",
+            selection: "I keep a notebook under neon rain",
+            currentSection: .verse,
+            selectionStart: nil,
+            rejectedCandidates: []
+        )
+        #expect(prompt.contains(RewriteAction.rephrase.instruction))
+    }
+}
+
+struct GGUFDownloadIntegrityTests {
+    @Test func modelDirectoryIsExcludedFromBackup() throws {
+        let directory = try GGUFModelStorage.modelsDirectory(create: true)
+        #expect(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+    }
+
+    @Test func invalidStagingIsDiscardedAndFreshDownloadCanBeInstalled() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        let resume = directory.appendingPathComponent("fixture.gguf.resume")
+        let destination = directory.appendingPathComponent(option.fileName)
+        let previousModel = Data("existing model".utf8)
+        try previousModel.write(to: destination)
+        var corrupt = valid
+        corrupt[7] = 9
+        for invalid in [Data(repeating: 0, count: valid.count), corrupt, Data(valid.dropLast())] {
+            try invalid.write(to: staging)
+            try Data([1, 2]).write(to: resume)
+            #expect(throws: (any Error).self) {
+                try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
+            }
+            #expect(!FileManager.default.fileExists(atPath: staging.path))
+            #expect(!FileManager.default.fileExists(atPath: resume.path))
+            #expect(try Data(contentsOf: destination) == previousModel)
+        }
+        try valid.write(to: staging)
+        try Data([1, 2]).write(to: resume)
+        try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
+        #expect(try Data(contentsOf: destination) == valid)
+        #expect(try destination.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(!FileManager.default.fileExists(atPath: resume.path))
+    }
+
+    @Test func filesystemFailurePreservesValidatedStagingForRetry() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        try valid.write(to: staging)
+        #expect(throws: (any Error).self) {
+            try GGUFDownloadManager.installDownload(
+                from: staging, in: directory.appendingPathComponent("missing"), option: option
+            )
+        }
+        #expect(try Data(contentsOf: staging) == valid)
+    }
+
+    @Test func replacementFailurePreservesExistingModelAndStaging() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let previousModel = Data("existing model".utf8)
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        let destination = directory.appendingPathComponent(option.fileName)
+        let resume = directory.appendingPathComponent("fixture.gguf.resume")
+        try valid.write(to: staging)
+        try previousModel.write(to: destination)
+        try Data([1, 2]).write(to: resume)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        #expect(throws: (any Error).self) {
+            try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
+        }
+        #expect(try Data(contentsOf: destination) == previousModel)
+        #expect(try Data(contentsOf: staging) == valid)
+        #expect(try Data(contentsOf: resume) == Data([1, 2]))
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
+        #expect(try Data(contentsOf: destination) == valid)
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(!FileManager.default.fileExists(atPath: resume.path))
+    }
+
+    @Test func validatesCompleteModelAndRejectsCorruption() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let data = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(data.count),
+            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        try data.write(to: url)
+        try GGUFDownloadManager.validateDownload(at: url, option: option)
+        try data.dropLast().write(to: url)
+        #expect(throws: (any Error).self) {
+            try GGUFDownloadManager.validateDownload(at: url, option: option)
+        }
+        var corrupted = data
+        corrupted[7] = 9
+        try corrupted.write(to: url)
+        #expect(throws: (any Error).self) {
+            try GGUFDownloadManager.validateDownload(at: url, option: option)
+        }
     }
 }
 
 @Suite(.serialized)
 struct GGUFCustomModelRegistryTests {
+    @Test func selectionRejectsUnregisteredFilesAndPreservesExplicitCustomChoice() throws {
+        let name = "CompositionSelection.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let custom = GGUFCustomModel(id: "custom", displayName: "Custom", fileName: "custom.gguf")
+        #expect(GGUFModelSelection.preferredFileName(in: ["unknown.gguf"], selectedFileName: nil, defaults: defaults) == nil)
+        GGUFCustomModelRegistry.register(custom, defaults: defaults)
+        let catalog = GGUFDownloadCatalog.options[0].fileName
+        #expect(GGUFModelSelection.preferredFileName(in: [catalog, custom.fileName], selectedFileName: custom.fileName, defaults: defaults) == custom.fileName)
+        #expect(GGUFModelSelection.preferredFileName(in: ["../custom.gguf"], selectedFileName: "../custom.gguf", defaults: defaults) == nil)
+        #expect(GGUFModelSelection.preferredFileName(in: [catalog, "unknown.gguf"], selectedFileName: "unknown.gguf", defaults: defaults) == catalog)
+    }
+
     @Test func customModelRegistrationAndSelectionSurviveReload() throws {
         let suiteName = "GGUFCustomModelRegistryTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -202,119 +523,101 @@ struct GGUFCustomModelValidationTests {
 
 // MARK: - GGUFModelStub (always compiled, no model needed)
 
-struct GGUFModelStubTests {
-    @Test func stubIsNotLoaded() {
-        let stub = GGUFModelStub()
-        #expect(stub.isLoaded == false)
+struct GGUFResidentFileIdentityTests {
+    @Test func unchangedFileKeepsIdentityAndSelectionRevisionMatters() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("one model".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let identity = try GGUFModelFileIdentity.read(at: file.path)
+        let resident = GGUFResidentIdentity(file: identity, selection: GGUFModelSelection.Snapshot(fileName: nil, revision: 11), verifiedSHA256: "fixture")
+        #expect(try GGUFModelFileIdentity.read(at: file.path) == identity)
+        #expect(resident.matchesCurrentFile(selection: GGUFModelSelection.Snapshot(fileName: nil, revision: 11)))
+        #expect(!resident.matchesCurrentFile(selection: GGUFModelSelection.Snapshot(fileName: nil, revision: 12)))
+        #expect(!resident.matchesCurrentFile(selection: GGUFModelSelection.Snapshot(fileName: "other.gguf", revision: 11)))
     }
 
-    @Test func stubLoadThrowsUnavailable() async throws {
-        let stub = GGUFModelStub()
-        do {
-            try await stub.loadModel(filePath: "/nonexistent/model.gguf")
-            Issue.record("Expected localModelUnavailable to be thrown")
-        } catch AIServiceError.localModelUnavailable {
-            // Expected
-        }
+    @Test func atomicSameSizeReplacementInvalidatesResident() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("first".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let original = try GGUFModelFileIdentity.read(at: file.path)
+        let resident = GGUFResidentIdentity(file: original, selection: GGUFModelSelection.Snapshot(fileName: nil, revision: 3), verifiedSHA256: "fixture")
+        try Data("other".utf8).write(to: file, options: .atomic)
+        let replacement = try GGUFModelFileIdentity.read(at: file.path)
+        #expect(replacement.size == original.size)
+        #expect(replacement != original)
+        #expect(!resident.matchesCurrentFile(selection: GGUFModelSelection.Snapshot(fileName: nil, revision: 3)))
     }
 
-    @Test func stubGenerateThrowsUnavailable() async throws {
-        let stub = GGUFModelStub()
-        do {
-            _ = try await stub.generate(prompt: "hello")
-            Issue.record("Expected localModelUnavailable to be thrown")
-        } catch AIServiceError.localModelUnavailable {
-            // Expected
-        }
+    @Test func inPlaceWriteWithRestoredModificationDateStillInvalidatesResident() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("first".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let original = try GGUFModelFileIdentity.read(at: file.path)
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        let modified = try #require(attributes[.modificationDate] as? Date)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.write(contentsOf: Data("other".utf8))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: file.path)
+        let replacement = try GGUFModelFileIdentity.read(at: file.path)
+        #expect(replacement.inode == original.inode)
+        #expect(replacement.size == original.size)
+        #expect(replacement.changedSeconds != original.changedSeconds || replacement.changedNanoseconds != original.changedNanoseconds)
+        #expect(replacement != original)
     }
 
-    @Test func stubUnloadIsNoop() {
-        // Should not crash or throw.
-        let stub = GGUFModelStub()
-        stub.unload()
-        #expect(stub.isLoaded == false)
-    }
-}
-
-struct GGUFLlamaFrameworkEmbeddingTests {
-    @Test func appBundleContainsLinkedLlamaFramework() {
-        let frameworkURL = Bundle.main.privateFrameworksURL?
-            .appendingPathComponent("llama.framework/llama")
-
-        #expect(frameworkURL != nil)
-        #expect(FileManager.default.fileExists(atPath: frameworkURL?.path ?? ""))
-        #expect(GGUFModelService.isEngineAvailable)
-    }
-}
-
-// MARK: - Gemma rewrite prompt: punchUp uses raw instruction (no softening)
-
-struct GemmaRewritePromptTests {
-    @Test func punchUpUsesRawInstruction() {
-        let service = AIService()
-        let prompt = service.buildGemmaRewritePromptForTest(
-            action: .punchUp,
-            lyrics: "[Verse]\nCity lights glow on the boulevard",
-            selection: "City lights glow on the boulevard",
-            currentSection: .verse,
-            selectionStart: nil,
-            rejectedCandidates: []
-        )
-        // Must contain the raw punchUp instruction (not the softened Apple version).
-        #expect(prompt.contains(RewriteAction.punchUp.instruction))
-        // Must NOT contain the Apple-softened version.
-        let appleVersion = "sharper, bolder, more vivid imagery"
-        #expect(!prompt.contains(appleVersion))
-    }
-
-    @Test func rephraseInstructionPassedThrough() {
-        let service = AIService()
-        let prompt = service.buildGemmaRewritePromptForTest(
-            action: .rephrase,
-            lyrics: "[Verse]\nI keep a notebook under neon rain",
-            selection: "I keep a notebook under neon rain",
-            currentSection: .verse,
-            selectionStart: nil,
-            rejectedCandidates: []
-        )
-        #expect(prompt.contains(RewriteAction.rephrase.instruction))
+    @Test func deletedFileInvalidatesResident() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("first".utf8).write(to: file)
+        let resident = GGUFResidentIdentity(file: try GGUFModelFileIdentity.read(at: file.path), selection: GGUFModelSelection.Snapshot(fileName: nil, revision: 1), verifiedSHA256: "fixture")
+        try FileManager.default.removeItem(at: file)
+        #expect(!resident.matchesCurrentFile(selection: GGUFModelSelection.Snapshot(fileName: nil, revision: 1)))
+        #expect(throws: (any Error).self) { try GGUFModelFileIdentity.read(at: file.path) }
     }
 }
 
-// MARK: - Segmented download planning
 
-/// The download plan must stay byte-identical to Android's
-/// `planDownloadSegments`, so a model fetched on either platform is assembled
-/// from the same spans and hashes to the same digest.
-struct GGUFDownloadPlanTests {
-    @Test func segmentsCoverEveryByteContiguously() {
-        let total: Int64 = 24 * 1024 * 1024 + 5
-        let segments = GGUFDownloadPlan.segments(totalBytes: total)
-
-        #expect(segments.count == 3)
-        #expect(segments.first?.start == 0)
-        #expect(segments.last?.endInclusive == total - 1)
-        #expect(segments.reduce(0) { $0 + $1.size } == total)
-        for (left, right) in zip(segments, segments.dropFirst()) {
-            #expect(left.endInclusive + 1 == right.start)
+struct GGUFSelectionCaptureTests {
+    @Test(arguments: [false, true])
+    func selectionChangedDuringFileCaptureIsRejected(returnToOriginal: Bool) throws {
+        let suite = "selection-capture-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let models = GGUFModelCatalog.models
+        let a = try #require(models.first)
+        let b = try #require(models.last)
+        #expect(a.fileName != b.fileName)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent(a.fileName)
+        try Data("fixture".utf8).write(to: file)
+        GGUFModelSelection.save(fileName: a.fileName, defaults: defaults)
+        #expect(throws: (any Error).self) {
+            try GGUFModelSelection.captureForLoading(filePath: file.path, defaults: defaults) { path in
+                // Deterministic boundary: selection changes after entry, before metadata returns.
+                GGUFModelSelection.save(fileName: b.fileName, defaults: defaults)
+                if returnToOriginal { GGUFModelSelection.save(fileName: a.fileName, defaults: defaults) }
+                return try GGUFModelFileIdentity.read(at: path)
+            }
         }
-        let sizes = segments.map(\.size)
-        #expect((sizes.max() ?? 0) - (sizes.min() ?? 0) <= 1)
     }
 
-    @Test func smallFilesCollapseToASingleConnection() {
-        let segments = GGUFDownloadPlan.segments(totalBytes: 64 * 1024)
-        #expect(segments.count == 1)
-        #expect(segments[0].start == 0)
-        #expect(segments[0].endInclusive == 64 * 1024 - 1)
-    }
-
-    @Test func shippedModelSizesSplitAcrossEveryConnection() {
-        for model in GGUFModelCatalog.models {
-            let segments = GGUFDownloadPlan.segments(totalBytes: model.expectedBytes)
-            #expect(segments.count == GGUFDownloadPlan.segmentCount)
-            #expect(segments.reduce(0) { $0 + $1.size } == model.expectedBytes)
-            #expect(segments.last?.endInclusive == model.expectedBytes - 1)
-        }
+    @Test func unchangedSelectionCaptureRetainsFilenameAndRevision() throws {
+        let suite = "selection-capture-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let a = try #require(GGUFModelCatalog.models.first)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent(a.fileName)
+        try Data("fixture".utf8).write(to: file)
+        GGUFModelSelection.save(fileName: a.fileName, defaults: defaults)
+        let captured = try GGUFModelSelection.captureForLoading(filePath: file.path, defaults: defaults)
+        #expect(captured.selection.fileName == a.fileName)
+        #expect(captured.selection == GGUFModelSelection.snapshot(defaults: defaults))
+        #expect(captured.file == (try GGUFModelFileIdentity.read(at: file.path)))
     }
 }

@@ -41,6 +41,23 @@ struct AnalysisPresentationStyleTests {
         #expect(compactEditorStatsText(wordCount: 42, syllableCount: 108) == "42w · 108s")
     }
 
+    @Test func liveEditorSpansFollowTheSelectedAnalysisStyle() async {
+        let text = "light night"
+        let color = await LyricsHighlighting.spans(
+            text: text, rhymeEnabled: true, syllablesEnabled: false,
+            isDark: false, style: .color
+        )
+        let ink = await LyricsHighlighting.spans(
+            text: text, rhymeEnabled: true, syllablesEnabled: false,
+            isDark: false, style: .inkMarks
+        )
+        #expect(color.count == 2)
+        #expect(ink.count == 2)
+        #expect(color.allSatisfy { $0.foreground != nil && $0.underlineStyle == nil })
+        #expect(ink.allSatisfy { $0.foreground == nil && $0.underlineStyle != nil })
+        #expect(ink[0].underlineStyle == ink[1].underlineStyle)
+    }
+
     @Test func rhymeFamilyHelpMatchesTheSelectedAnalysisPresentation() {
         #expect(FeatureHelp.colorRhymes.title == "Rhyme Families")
         #expect(

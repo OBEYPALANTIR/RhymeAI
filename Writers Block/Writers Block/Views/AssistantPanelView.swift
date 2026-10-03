@@ -2,6 +2,10 @@ import SwiftUI
 
 struct AssistantPanelView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
+    @EnvironmentObject private var downloads: GGUFDownloadManager
+    @ObservedObject private var inferenceStatus = LocalInferenceStatus.shared
+    @State private var readiness = LocalReadiness.current()
+    @State private var showModelSetup = false
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -20,18 +24,42 @@ struct AssistantPanelView: View {
                 sheetContent(rhymeContext: rhymeContext)
             }
         }
+        .foregroundStyle(appearance.palette.primaryInk)
         .onAppear {
             viewModel.positionSeededProsodyCursorForUITests()
+        }
+        .task {
+            while !Task.isCancelled {
+                readiness = LocalReadiness.current()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+        .sheet(isPresented: $showModelSetup) {
+            SettingsView()
         }
         .sheet(item: $activeHelp) { help in
             FeatureHelpSheet(help: help)
         }
     }
 
+    private var suggestionDisabled: Bool {
+        !viewModel.isLoading && (viewModel.lyrics.isEmpty || (viewModel.selectedProvider == .local && !readiness.canGenerate))
+    }
+
+    private var localStatusTitle: String {
+        if inferenceStatus.loadingCount > 0 { return "Loading model" }
+        if viewModel.isLoading { return "Writing locally" }
+        if viewModel.errorMessage != nil { return "Try again" }
+        if downloads.activeDownloadID != nil && !readiness.canGenerate { return "Downloading model" }
+        return readiness.title
+    }
+
     private func sheetContent(rhymeContext: RhymeContext) -> some View {
         NavigationStack {
             panelScrollView(rhymeContext: rhymeContext)
-                .background(AppWritingBackground())
+                .background {
+                    AppWritingBackground()
+                }
                 .navigationTitle("Assistant")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -49,20 +77,34 @@ struct AssistantPanelView: View {
 
     private func inlineContent(rhymeContext: RhymeContext) -> some View {
         VStack(spacing: 0) {
-            // Simple header
             HStack {
                 Label("Assistant", systemImage: "pencil")
                     .font(.headline)
                 Spacer()
+
+                if let onDismiss {
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                    }
+                    .buttonStyle(.rhymePress)
+                    .accessibilityLabel("Hide Assistant")
+                    .accessibilityIdentifier("hideInlineAssistantButton")
+                }
             }
-            .padding(.horizontal, RhymeAITokens.Spacing.md)
-            .padding(.vertical, RhymeAITokens.Spacing.sm)
+            .padding(.leading, RhymeAITokens.Spacing.md)
+            .padding(.trailing, RhymeAITokens.Spacing.xs)
+            .frame(minHeight: RhymeAITokens.Touch.comfortable)
             .liquidGlassSurface(cornerRadius: 0, fallbackOpacity: 0.02)
             .overlay(Divider(), alignment: .bottom)
 
             panelScrollView(rhymeContext: rhymeContext)
         }
-        .background(AppWritingBackground())
+        .background {
+            AppWritingBackground()
+        }
     }
 
     private func panelScrollView(rhymeContext: RhymeContext) -> some View {
@@ -71,6 +113,7 @@ struct AssistantPanelView: View {
                 .padding(RhymeAITokens.Spacing.md)
                 .liquidGlassGroup(spacing: RhymeAITokens.Spacing.md)
         }
+        .accessibilityIdentifier("assistantScrollView")
     }
 
     private func panelControls(rhymeContext: RhymeContext) -> some View {
@@ -83,16 +126,9 @@ struct AssistantPanelView: View {
                     helpButton(.contextTheme)
                 }
 
-                TextField(
-                    "",
-                    text: $viewModel.theme,
-                    prompt: Text("What is this song about?")
-                        .foregroundStyle(appearance.palette.placeholder),
-                    axis: .vertical
-                )
+                TextField("What is this song about?", text: $viewModel.theme, axis: .vertical)
                     .lineLimit(3...6)
                     .textFieldStyle(.plain)
-                    .foregroundStyle(appearance.palette.primaryInk)
                     .padding(RhymeAITokens.Spacing.sm)
                     .liquidGlassSurface(
                         cornerRadius: RhymeAITokens.Radius.md,
@@ -110,7 +146,7 @@ struct AssistantPanelView: View {
                 HStack {
                     Label("Target Line", systemImage: "text.alignleft")
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .foregroundStyle(.secondary)
                     helpButton(.targetLine)
 
                     Spacer()
@@ -118,7 +154,7 @@ struct AssistantPanelView: View {
                     if let targetLine = rhymeContext.targetLine {
                         Text("\(SyllableCounter.countText(targetLine)) syl")
                             .font(.caption.monospaced())
-                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal, RhymeAITokens.Spacing.xs)
                             .padding(.vertical, RhymeAITokens.Spacing.xxs)
                             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, fallbackOpacity: 0.08)
@@ -140,7 +176,7 @@ struct AssistantPanelView: View {
                     } else {
                         Text("New rhyme sound (or place cursor on a line)")
                             .font(.caption)
-                            .foregroundStyle(appearance.palette.placeholder)
+                            .foregroundStyle(.secondary.opacity(0.5))
                             .italic()
                     }
                 }
@@ -155,21 +191,21 @@ struct AssistantPanelView: View {
             // current tuning visible while collapsed.
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
                 Button {
-                    withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
+                    withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                         rhymeOptionsExpanded.toggle()
                     }
                 } label: {
                     HStack(spacing: RhymeAITokens.Spacing.sm) {
                         Text("Rhyme Options")
                             .font(.subheadline.weight(.medium))
-                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .foregroundStyle(.secondary)
                         Spacer()
                         Text("\(viewModel.rhymeScheme.label) \u{00b7} \(viewModel.rhymeType.shortName) \u{00b7} \(viewModel.rhymeComplexity.label)")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(appearance.palette.action)
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(rhymeOptionsExpanded ? 180 : 0))
                     }
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
@@ -248,7 +284,7 @@ struct AssistantPanelView: View {
 
                     Text(viewModel.rhymeComplexity.description)
                         .font(.caption)
-                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .foregroundStyle(.secondary)
                 }
 
                 }
@@ -274,6 +310,17 @@ struct AssistantPanelView: View {
                 }
             }
 
+            if viewModel.selectedProvider == .local {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    Label(localStatusTitle, systemImage: "desktopcomputer")
+                        .font(.subheadline.weight(.semibold))
+                    Text(readiness.detail).font(.caption).foregroundStyle(.secondary)
+                    Button("Local model setup") { showModelSetup = true }
+                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                }
+                .accessibilityIdentifier("localAIReadiness")
+            }
+
             // MARK: - Suggest Button — turns into Stop while streaming
             Button {
                 if viewModel.isLoading {
@@ -282,7 +329,7 @@ struct AssistantPanelView: View {
                     viewModel.getSuggestions()
                 }
             } label: {
-                let isDisabled = viewModel.lyrics.isEmpty && !viewModel.isLoading
+                let isDisabled = suggestionDisabled
                 HStack {
                     if viewModel.isLoading {
                         ProgressView()
@@ -301,7 +348,7 @@ struct AssistantPanelView: View {
                 .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.md)
                 .opacity(isDisabled ? 0.45 : 1)
             }
-            .disabled(viewModel.lyrics.isEmpty && !viewModel.isLoading)
+            .disabled(suggestionDisabled)
             .buttonStyle(.rhymePress)
 
             // MARK: - Error
@@ -342,11 +389,11 @@ struct AssistantPanelView: View {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                     Text("Suggestions")
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .foregroundStyle(.secondary)
 
                     Text("AI-generated · review before use")
                         .font(.caption.italic())
-                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .foregroundStyle(.secondary.opacity(0.8))
 
                     ForEach(viewModel.suggestions) { suggestion in
                         SuggestionCardView(
@@ -354,13 +401,14 @@ struct AssistantPanelView: View {
                             rhymeTier: suggestion.tier,
                             isHookRepeat: suggestion.isHookRepeat,
                             highlightRhyme: viewModel.isHighlightEnabled,
-                            showProsody: viewModel.isStressPreviewEnabled
-                        ) {
-                            viewModel.insertSuggestion(suggestion.text)
-                            if !isInline {
-                                viewModel.showAssistantSheet = false
-                            }
-                        }
+                            showProsody: viewModel.isStressPreviewEnabled,
+                            onUse: {
+                                viewModel.insertSuggestion(suggestion.text)
+                                if !isInline { viewModel.showAssistantSheet = false }
+                            },
+                            onKeep: { viewModel.keepAlternate(suggestion.text) },
+                            isKept: viewModel.companion.alternates.contains(where: { $0.text == suggestion.text.trimmingCharacters(in: .whitespacesAndNewlines) })
+                        )
                     }
                 }
             }
@@ -370,12 +418,13 @@ struct AssistantPanelView: View {
     private func featureHelpLabel(
         _ text: String,
         help: FeatureHelp,
-        font: Font = .subheadline.weight(.medium)
+        font: Font = .subheadline.weight(.medium),
+        color: Color = .secondary
     ) -> some View {
         HStack(spacing: RhymeAITokens.Spacing.xs) {
             Text(text)
                 .font(font)
-                .foregroundStyle(appearance.palette.secondaryInk)
+                .foregroundStyle(color)
             helpButton(help)
         }
     }
@@ -402,13 +451,23 @@ struct AssistantPanelView: View {
             ZStack {
                 Image(systemName: "questionmark.circle")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .foregroundStyle(.secondary)
             }
             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum, alignment: .center)
         }
         .buttonStyle(.rhymePress)
         .contentShape(Rectangle())
         .accessibilityLabel("\(help.title) help")
+    }
+}
+
+private struct SuggestionSkeletonRow: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: RhymeAITokens.Radius.lg, style: .continuous)
+            .fill(Color.secondary.opacity(0.18))
+            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+            .opacity(0.6)
+            .accessibilityHidden(true)
     }
 }
 

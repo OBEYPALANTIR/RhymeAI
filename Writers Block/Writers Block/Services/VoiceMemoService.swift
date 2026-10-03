@@ -2,19 +2,65 @@ import AVFoundation
 import Foundation
 import Observation
 
-// A recording sitting in the Trash Bin. The trash filename encodes the deletion
-// timestamp as "<deletedAtMs>__<originalName>" so trash state survives restarts
-// without a separate metadata store — mirrors the Android TrashedVoiceMemo.
-struct TrashedVoiceMemo: Identifiable, Sendable {
-    let url: URL
-    let projectId: String
-    /// Original filename (with extension) the memo had before it was trashed.
-    let originalName: String
-    let deletedAt: Date
-    // nonisolated: the project builds with -default-isolation=MainActor, and these
-    // are read from nonisolated static purge/expiry helpers.
-    nonisolated var deleteAfter: Date { deletedAt.addingTimeInterval(trashRetentionInterval) }
-    nonisolated var id: String { url.absoluteString }
+// All memo audio-session mutations share one serial queue. A stop enqueues its
+// deactivation before the next activation, even when that stop does not wait.
+nonisolated final class VoiceMemoAudioSessionTransitions: @unchecked Sendable {
+    static let shared = VoiceMemoAudioSessionTransitions(
+        activateRecording: {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            try session.setActive(true)
+        },
+        activatePlayback: {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default)
+            try session.setActive(true)
+        },
+        deactivate: {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    )
+
+    private let queue = DispatchQueue(label: "com.rhymeai.audio-session", qos: .userInitiated)
+    private let recordingAction: @Sendable () throws -> Void
+    private let playbackAction: @Sendable () throws -> Void
+    private let deactivationAction: @Sendable () -> Void
+
+    init(
+        activateRecording: @escaping @Sendable () throws -> Void,
+        activatePlayback: @escaping @Sendable () throws -> Void,
+        deactivate: @escaping @Sendable () -> Void
+    ) {
+        recordingAction = activateRecording
+        playbackAction = activatePlayback
+        deactivationAction = deactivate
+    }
+
+    func activateRecording(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        perform(recordingAction, completion: completion)
+    }
+
+    func activatePlayback(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        perform(playbackAction, completion: completion)
+    }
+
+    func deactivate() {
+        queue.async(execute: deactivationAction)
+    }
+
+    private func perform(
+        _ action: @escaping @Sendable () throws -> Void,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        queue.async {
+            do {
+                try action()
+                completion(.success(()))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+    }
 }
 
 // VoiceMemoService owns the full record/play/delete lifecycle for per-song
@@ -53,108 +99,80 @@ final class VoiceMemoService {
     @ObservationIgnored private var recordingStartTime: Date?
     @ObservationIgnored private var activePlayURL: URL?
     @ObservationIgnored private var delegateForwarder: VoiceMemoDelegate?
+    @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
+    @ObservationIgnored private var audioIntentRevision: UInt64 = 0
+    @ObservationIgnored private var recordingActivationRevision: UInt64?
+    @ObservationIgnored private var pendingPlayURL: URL?
 
-    // MARK: - File System
-
-    // Root under Application Support so iOS backs it up and excludes it from
-    // iCloud Documents — memos are device-local scratch recordings, not synced content.
-    nonisolated static func memosRoot() -> URL {
-        let appSupport = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return appSupport.appendingPathComponent("voice-memos", isDirectory: true)
+    init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared) {
+        self.sessionTransitions = sessionTransitions
     }
 
-    nonisolated static func memoFolder(for projectId: String) -> URL {
-        memosRoot().appendingPathComponent(projectId, isDirectory: true)
+    nonisolated static let maximumImportBytes = 100 * 1024 * 1024
+
+    nonisolated enum ImportError: Error {
+        case unsupportedAudio, emptyAudio, tooLarge, cannotCreateFile
     }
 
-    nonisolated static func newMemoURL(for projectId: String) -> URL {
-        let folder = memoFolder(for: projectId)
-        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-        return folder.appendingPathComponent("\(timestamp).m4a")
-    }
-
-    /// Returns all memo URLs for a project, sorted oldest-first by filename
-    /// (filenames are millisecond timestamps, so lexicographic == chronological).
-    nonisolated static func memos(for projectId: String) -> [URL] {
-        let folder = memoFolder(for: projectId)
-        guard let items = try? FileManager.default.contentsOfDirectory(
-            at: folder,
-            includingPropertiesForKeys: [.creationDateKey],
-            options: .skipsHiddenFiles
-        ) else { return [] }
-        return items
-            .filter { $0.pathExtension == "m4a" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-    }
-
-    /// Remove a project's entire memo folder — live and trashed. Called on
-    /// permanent delete and on trash-purge expiry so orphaned audio doesn't
-    /// accumulate on disk.
-    @discardableResult
-    static func deleteMemosFolder(for projectId: String) -> Bool {
-        do {
-            let live = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: memosRoot())
-            let trash = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: memosTrashRoot())
-            try removeItemIfPresent(at: live, within: memosRoot())
-            try removeItemIfPresent(at: trash, within: memosTrashRoot())
-            return true
-        } catch {
-            return false
+    /// Copy provider-owned bytes into staging, decode them, then atomically publish.
+    /// No microphone or audio session is needed to import a recording.
+    nonisolated static func importMemo(from source: URL, projectId: String) async throws -> URL {
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let scoped = source.startAccessingSecurityScopedResource()
+            defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+            let ext = source.pathExtension.lowercased()
+            guard RecordingFiles.supportedAudioExtensions.contains(ext) else { throw ImportError.unsupportedAudio }
+            let folder = try RecordingFiles.projectURL(projectId: projectId, memosRoot: RecordingFiles.memosRoot())
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let staging = folder.appendingPathComponent(".import-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(at: staging) }
+            let copied = staging.appendingPathComponent("audio").appendingPathExtension(ext)
+            guard FileManager.default.createFile(atPath: copied.path, contents: nil) else {
+                throw ImportError.cannotCreateFile
+            }
+            let input = try FileHandle(forReadingFrom: source)
+            defer { try? input.close() }
+            let output = try FileHandle(forWritingTo: copied)
+            defer { try? output.close() }
+            var total = 0
+            while let bytes = try input.read(upToCount: 64 * 1024), !bytes.isEmpty {
+                try Task.checkCancellation()
+                total += bytes.count
+                guard total <= maximumImportBytes else { throw ImportError.tooLarge }
+                try output.write(contentsOf: bytes)
+            }
+            try output.close()
+            guard total > 0 else { throw ImportError.emptyAudio }
+            let audio = try AVAudioFile(forReading: copied)
+            guard audio.length > 0, audio.processingFormat.sampleRate > 0,
+                  let buffer = AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 4096) else {
+                throw ImportError.emptyAudio
+            }
+            // Decode the full stream so a renamed non-audio or corrupt file is not accepted.
+            var frames: AVAudioFramePosition = 0
+            while audio.framePosition < audio.length {
+                try Task.checkCancellation()
+                try audio.read(into: buffer)
+                guard buffer.frameLength > 0 else { throw ImportError.emptyAudio }
+                frames += AVAudioFramePosition(buffer.frameLength)
+            }
+            guard frames > 0 else { throw ImportError.emptyAudio }
+            try Task.checkCancellation()
+            let target = try RecordingFiles.importURL(basename: source.deletingPathExtension().lastPathComponent, extension: ext, projectId: projectId)
+            try FileManager.default.moveItem(at: copied, to: target)
+            return target
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 
-    // MARK: - Recordings Trash
-
-    /// Separates the deletion timestamp from the original name in trash filenames.
-    nonisolated static let trashNameSeparator = "__"
-
-    nonisolated static func memosTrashRoot() -> URL {
-        let appSupport = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return appSupport.appendingPathComponent("voice-memos-trash", isDirectory: true)
-    }
-
-    nonisolated static func trashFolder(for projectId: String) -> URL {
-        memosTrashRoot().appendingPathComponent(projectId, isDirectory: true)
-    }
-
-    /// All trashed recordings across every project, newest deletion first.
-    nonisolated static func trashedMemos() -> [TrashedVoiceMemo] {
-        guard let folders = try? FileManager.default.contentsOfDirectory(
-            at: memosTrashRoot(),
-            includingPropertiesForKeys: nil,
-            options: .skipsHiddenFiles
-        ) else { return [] }
-
-        return folders
-            .flatMap { folder -> [TrashedVoiceMemo] in
-                let projectId = folder.lastPathComponent
-                guard let files = try? FileManager.default.contentsOfDirectory(
-                    at: folder,
-                    includingPropertiesForKeys: nil,
-                    options: .skipsHiddenFiles
-                ) else { return [] }
-                return files
-                    .filter { $0.pathExtension == "m4a" }
-                    .compactMap { trashedMemo(at: $0, projectId: projectId) }
-            }
-            .sorted { $0.deletedAt > $1.deletedAt }
-    }
-
-    nonisolated private static func trashedMemo(at url: URL, projectId: String) -> TrashedVoiceMemo? {
-        let name = url.lastPathComponent
-        guard let separatorRange = name.range(of: trashNameSeparator),
-              separatorRange.lowerBound != name.startIndex,
-              let deletedAtMs = Double(name[..<separatorRange.lowerBound]) else { return nil }
-        let originalName = String(name[separatorRange.upperBound...])
-        guard !originalName.isEmpty else { return nil }
-        return TrashedVoiceMemo(
-            url: url,
-            projectId: projectId,
-            originalName: originalName,
-            deletedAt: Date(timeIntervalSince1970: deletedAtMs / 1000)
-        )
+    func isPlayingMemo(at url: URL) -> Bool {
+        isPlaying && activePlayURL == url
     }
 
     /// Move the memo at `url` to the Trash Bin instead of deleting it. The file
@@ -163,16 +181,16 @@ final class VoiceMemoService {
     @discardableResult
     func trashMemo(at url: URL, projectId: String) -> TrashedVoiceMemo? {
         if activePlayURL == url { stopPlayback() }
-        let folder = Self.trashFolder(for: projectId)
+        let folder = RecordingFiles.trashFolder(for: projectId)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             // Bump the timestamp on collision so a same-named file trashed twice
             // in one millisecond never overwrites an existing trashed recording.
             var deletedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-            var target = folder.appendingPathComponent("\(deletedAtMs)\(Self.trashNameSeparator)\(url.lastPathComponent)")
+            var target = folder.appendingPathComponent("\(deletedAtMs)\(RecordingFiles.trashNameSeparator)\(url.lastPathComponent)")
             while FileManager.default.fileExists(atPath: target.path) {
                 deletedAtMs += 1
-                target = folder.appendingPathComponent("\(deletedAtMs)\(Self.trashNameSeparator)\(url.lastPathComponent)")
+                target = folder.appendingPathComponent("\(deletedAtMs)\(RecordingFiles.trashNameSeparator)\(url.lastPathComponent)")
             }
             try FileManager.default.moveItem(at: url, to: target)
             return TrashedVoiceMemo(
@@ -190,20 +208,12 @@ final class VoiceMemoService {
     /// Move a trashed recording back into its project's live memo folder under
     /// its original name (suffixed if that name is now taken).
     func restoreTrashedMemo(_ trashed: TrashedVoiceMemo) {
-        let folder = Self.memoFolder(for: trashed.projectId)
+        let folder = RecordingFiles.memoFolder(for: trashed.projectId)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            var target = folder.appendingPathComponent(trashed.originalName)
-            if FileManager.default.fileExists(atPath: target.path) {
-                let stem = (trashed.originalName as NSString).deletingPathExtension
-                var suffix = 2
-                repeat {
-                    target = folder.appendingPathComponent("\(stem) \(suffix).m4a")
-                    suffix += 1
-                } while FileManager.default.fileExists(atPath: target.path) && suffix < 1000
-            }
+            let target = RecordingFiles.restoredURL(originalName: trashed.originalName, folder: folder)
             try FileManager.default.moveItem(at: trashed.url, to: target)
-            Self.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+            RecordingFiles.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
         } catch {
             lastError = "Couldn't restore recording: \(error.localizedDescription)"
         }
@@ -216,8 +226,8 @@ final class VoiceMemoService {
         do {
             try SyncIdentity.validateProjectId(trashed.projectId)
             try SyncIdentity.validateFileName(trashed.originalName)
-            try Self.removeItemIfPresent(at: trashed.url, within: Self.memosTrashRoot())
-            Self.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+            try RecordingFiles.removeItemIfPresent(at: trashed.url, within: RecordingFiles.memosTrashRoot())
+            RecordingFiles.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
             return true
         } catch {
             lastError = "Couldn't remove the local recording file. Writers Block will retry cleanup."
@@ -227,53 +237,15 @@ final class VoiceMemoService {
 
     func deletePermanentRecordingFiles(projectId: String, fileName: String) {
         do {
-            let live = try RecordingBackupManifest.localURL(projectId: projectId, fileName: fileName, memosRoot: Self.memosRoot())
-            _ = try RecordingBackupManifest.projectURL(projectId: projectId, memosRoot: Self.memosTrashRoot())
-            try Self.removeItemIfPresent(at: live, within: Self.memosRoot())
-            for trashed in Self.trashedMemos() where trashed.projectId == projectId && trashed.originalName == fileName {
+            let live = try RecordingFiles.localURL(projectId: projectId, fileName: fileName, memosRoot: RecordingFiles.memosRoot())
+            _ = try RecordingFiles.projectURL(projectId: projectId, memosRoot: RecordingFiles.memosTrashRoot())
+            try RecordingFiles.removeItemIfPresent(at: live, within: RecordingFiles.memosRoot())
+            for trashed in RecordingFiles.trashedMemos() where trashed.projectId == projectId && trashed.originalName == fileName {
                 _ = permanentlyDeleteTrashedMemo(trashed)
             }
         } catch {
             lastError = "Couldn't remove the local recording file. Writers Block will retry cleanup."
         }
-    }
-
-    /// Delete every trashed recording whose retention window has passed.
-    nonisolated static func purgeExpiredTrashedMemos(now: Date = Date()) {
-        for trashed in trashedMemos() where trashed.deleteAfter <= now {
-            try? removeItemIfPresent(at: trashed.url, within: memosTrashRoot())
-            cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
-        }
-    }
-
-    /// Earliest deleteAfter among trashed recordings, or nil when trash is empty.
-    nonisolated static func nextTrashedMemoExpiry() -> Date? {
-        trashedMemos().map(\.deleteAfter).min()
-    }
-
-    /// Remove a project's trash folder once its last recording leaves it.
-    nonisolated private static func cleanUpEmptyTrashFolder(_ folder: URL) {
-        if let contents = try? FileManager.default.contentsOfDirectory(
-            at: folder,
-            includingPropertiesForKeys: nil,
-            options: .skipsHiddenFiles
-        ), contents.isEmpty {
-            try? removeItemIfPresent(at: folder, within: memosTrashRoot())
-        }
-    }
-
-    nonisolated private static func removeItemIfPresent(at url: URL, within root: URL) throws {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-
-        let standardizedURL = url.standardizedFileURL
-        let canonicalURL = standardizedURL.resolvingSymlinksInPath()
-        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-        let rootPrefix = canonicalRoot.path.hasSuffix("/") ? canonicalRoot.path : canonicalRoot.path + "/"
-        guard canonicalURL.path != canonicalRoot.path, canonicalURL.path.hasPrefix(rootPrefix) else {
-            throw SyncValidationError.pathOutsideMemoRoot
-        }
-
-        try FileManager.default.removeItem(at: standardizedURL)
     }
 
     // MARK: - Permission
@@ -307,22 +279,43 @@ final class VoiceMemoService {
     // MARK: - Record
 
     func startRecording(projectId: String) async {
-        guard await requestPermissionIfNeeded() else { return }
-
-        stopPlayback()
-
-        let folder = Self.memoFolder(for: projectId)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let url = Self.newMemoURL(for: projectId)
-
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-            try session.setActive(true)
-        } catch {
-            failToStartRecording(session: session)
+        audioIntentRevision &+= 1
+        let permissionRevision = audioIntentRevision
+        #if DEBUG
+        if UITestFlags.isEnabled(UITestFlags.fakeVoiceRecording) {
+            stopPlayback()
+            recordingStartTime = Date()
+            recordingElapsed = 3
+            averagePowerNormalized = 0.55
+            isRecording = true
             return
         }
+        #endif
+
+        guard await requestPermissionIfNeeded() else { return }
+        guard audioIntentRevision == permissionRevision else { return }
+
+        stopPlayback()
+        let recordingRevision = audioIntentRevision
+
+        let folder = RecordingFiles.memoFolder(for: projectId)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = RecordingFiles.newMemoURL(for: projectId)
+
+        do {
+            recordingActivationRevision = recordingRevision
+            let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                sessionTransitions.activateRecording { continuation.resume(returning: $0) }
+            }
+            try result.get()
+        } catch {
+            if recordingActivationRevision == recordingRevision { recordingActivationRevision = nil }
+            guard audioIntentRevision == recordingRevision else { return }
+            failToStartRecording()
+            return
+        }
+        if recordingActivationRevision == recordingRevision { recordingActivationRevision = nil }
+        guard audioIntentRevision == recordingRevision else { return }
 
         // AAC in an MPEG-4 container matches the Android MediaRecorder output
         // format (.m4a / AAC_ADTS) for cross-platform parity.
@@ -337,7 +330,7 @@ final class VoiceMemoService {
         do {
             recorder = try AVAudioRecorder(url: url, settings: settings)
         } catch {
-            failToStartRecording(session: session)
+            failToStartRecording()
             return
         }
 
@@ -349,7 +342,7 @@ final class VoiceMemoService {
         recorder.isMeteringEnabled = true
         guard recorder.record() else {
             recorder.stop()
-            failToStartRecording(session: session)
+            failToStartRecording()
             return
         }
 
@@ -387,6 +380,8 @@ final class VoiceMemoService {
     }
 
     func stopRecording() {
+        audioIntentRevision &+= 1
+        let shouldDeactivateSession = audioRecorder != nil || recordingActivationRevision != nil
         audioRecorder?.stop()
         audioRecorder = nil
         elapsedTimer?.invalidate()
@@ -400,10 +395,12 @@ final class VoiceMemoService {
         averagePowerNormalized = 0
 
         // Deactivate so other apps (Music, Podcast) can resume their sessions.
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if shouldDeactivateSession {
+            sessionTransitions.deactivate()
+        }
     }
 
-    private func failToStartRecording(session: AVAudioSession) {
+    private func failToStartRecording() {
         audioRecorder?.stop()
         audioRecorder = nil
         elapsedTimer?.invalidate()
@@ -415,39 +412,52 @@ final class VoiceMemoService {
         isRecording = false
         recordingElapsed = 0
         averagePowerNormalized = 0
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        sessionTransitions.deactivate()
         lastError = "Couldn't start recording. Check the microphone and try again."
     }
 
     // MARK: - Playback
 
     func togglePlayback(url: URL) {
-        if isPlaying, activePlayURL == url {
+        if (isPlaying && activePlayURL == url) || pendingPlayURL == url {
             stopPlayback()
             return
         }
+        if isRecording || recordingActivationRevision != nil { stopRecording() }
         stopPlayback()
-        playMemo(url: url)
+        pendingPlayURL = url
+        let playbackRevision = audioIntentRevision
+        sessionTransitions.activatePlayback { [weak self] result in
+            Task { @MainActor [weak self] in
+                self?.finishPlaybackActivation(result, url: url, revision: playbackRevision)
+            }
+        }
     }
 
-    private func playMemo(url: URL) {
-        let session = AVAudioSession.sharedInstance()
+    private func finishPlaybackActivation(
+        _ result: Result<Void, Error>, url: URL, revision: UInt64
+    ) {
+        guard audioIntentRevision == revision else { return }
         do {
-            try session.setCategory(.playback, mode: .default)
-            try session.setActive(true)
+            try result.get()
         } catch {
+            pendingPlayURL = nil
             return
         }
+        pendingPlayURL = nil
 
         guard let player = try? AVAudioPlayer(contentsOf: url) else {
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            sessionTransitions.deactivate()
             return
         }
 
         let forwarder = VoiceMemoDelegate(service: self)
         delegateForwarder = forwarder
         player.delegate = forwarder
-        player.play()
+        guard player.play() else {
+            sessionTransitions.deactivate()
+            return
+        }
 
         audioPlayer = player
         activePlayURL = url
@@ -455,12 +465,15 @@ final class VoiceMemoService {
     }
 
     func stopPlayback() {
+        audioIntentRevision &+= 1
+        let hadPlayback = audioPlayer != nil || pendingPlayURL != nil
         audioPlayer?.stop()
         audioPlayer = nil
         activePlayURL = nil
+        pendingPlayURL = nil
         delegateForwarder = nil
         isPlaying = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if hadPlayback { sessionTransitions.deactivate() }
     }
 
     // MARK: - Delete
@@ -476,49 +489,16 @@ final class VoiceMemoService {
 
     // MARK: - Rename
 
-    /// Strip illegal filesystem characters from a candidate display name.
-    /// Rules: trim whitespace; remove `/`, `:`, `\0`; collapse runs of whitespace;
-    /// truncate to 255 UTF-8 code units (HFS+ limit minus .m4a overhead).
-    static func sanitizeName(_ raw: String) -> String {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Strip characters that are illegal in HFS+ / APFS filenames.
-        let illegal = CharacterSet(charactersIn: "/:\u{0000}")
-        s = s.unicodeScalars
-            .filter { !illegal.contains($0) }
-            .reduce(into: "") { $0.unicodeScalars.append($1) }
-        // Collapse interior whitespace runs to a single space.
-        s = s.components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        // Ensure the result, when encoded as UTF-8, fits within 255 bytes
-        // (leaving headroom for the ".m4a" extension — 4 bytes).
-        let limit = 251
-        if let data = s.data(using: .utf8), data.count > limit {
-            var truncated = s
-            while let d = truncated.data(using: .utf8), d.count > limit {
-                truncated.removeLast()
-            }
-            s = truncated
-        }
-        return s
-    }
-
     /// Rename the memo at `url` to `newBasename` (without extension).
     /// - The sanitized name is used; if empty after sanitization the rename is skipped.
     /// - If a file with the target name already exists, " 2" is appended (once).
     /// - Returns the new URL on success; throws on FileManager error.
     @discardableResult
     func renameMemo(at url: URL, to newBasename: String) throws -> URL {
-        let sanitized = Self.sanitizeName(newBasename)
+        let sanitized = RecordingFiles.sanitizeName(newBasename)
         guard !sanitized.isEmpty else { return url }
 
-        let folder = url.deletingLastPathComponent()
-        var targetURL = folder.appendingPathComponent(sanitized).appendingPathExtension("m4a")
-
-        // Collision avoidance: append " 2" if target already exists (and isn't the source itself).
-        if targetURL != url && FileManager.default.fileExists(atPath: targetURL.path) {
-            targetURL = folder.appendingPathComponent(sanitized + " 2").appendingPathExtension("m4a")
-        }
+        let targetURL = RecordingFiles.renamedURL(for: url, sanitizedName: sanitized)
 
         // No-op if names are identical.
         guard targetURL != url else { return url }
@@ -532,22 +512,14 @@ final class VoiceMemoService {
 
     // MARK: - Callbacks from delegate forwarder
 
-    fileprivate func recordingDidFinish() {
-        isRecording = false
-        recordingElapsed = 0
-        averagePowerNormalized = 0
-        elapsedTimer?.invalidate()
-        elapsedTimer = nil
-        meteringTimer?.invalidate()
-        meteringTimer = nil
-        delegateForwarder = nil
+    fileprivate func recordingDidFinish(_ recorder: AVAudioRecorder) {
+        guard audioRecorder === recorder else { return }
+        stopRecording()
     }
 
-    fileprivate func playbackDidFinish() {
-        isPlaying = false
-        activePlayURL = nil
-        delegateForwarder = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    fileprivate func playbackDidFinish(_ player: AVAudioPlayer) {
+        guard audioPlayer === player else { return }
+        stopPlayback()
     }
 
     // MARK: - Cleanup
@@ -572,13 +544,13 @@ private final class VoiceMemoDelegate: NSObject, AVAudioRecorderDelegate, AVAudi
 
     func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
         Task { @MainActor [weak self] in
-            self?.service?.recordingDidFinish()
+            self?.service?.recordingDidFinish(recorder)
         }
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
-            self?.service?.playbackDidFinish()
+            self?.service?.playbackDidFinish(player)
         }
     }
 }

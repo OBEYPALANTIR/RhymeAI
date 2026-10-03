@@ -815,6 +815,51 @@ struct SynonymTests {
     }
 
     @MainActor
+    @Test(arguments: ["context", "range", "unchanged"], [false, true])
+    func inspectorCompletionRequiresOriginalContextAndRange(change: String, fails: Bool) async throws {
+        let provider = ControlledSynonymProvider()
+        let viewModel = makeViewModel(synonymService: provider)
+        viewModel.lyrics = "shine beside me\nshine beside me"
+        viewModel.openInspector(word: "shine", range: NSRange(location: 0, length: 5))
+        try await provider.waitForRequestCount(1)
+        #expect(viewModel.inspectorSynonymsLoading)
+
+        if change == "context" {
+            viewModel.lyrics = "shine above me\nshine beside me"
+        } else if change == "range" {
+            // Same word and line text; only the inspected occurrence changes.
+            viewModel.inspectorRange = NSRange(location: 16, length: 5)
+        }
+        let finished = Task { @MainActor in
+            for await loading in viewModel.$inspectorSynonymsLoading.values where !loading { return }
+        }
+        if fails {
+            provider.fail(request: 0, with: AIServiceError.noApiKey(provider: "Gemini"))
+        } else {
+            provider.succeed(request: 0, with: ["Glow", "Gleam", "Spark"])
+        }
+        await finished.value
+
+        if change == "unchanged" {
+            if fails {
+                #expect(viewModel.inspectorSynonyms.isEmpty)
+                #expect(viewModel.inspectorSynonymsError != nil)
+                #expect(viewModel.inspectorSynonymsRecovery == .openSettings)
+            } else {
+                #expect(viewModel.inspectorSynonyms == ["Glow", "Gleam", "Spark"])
+                #expect(viewModel.inspectorSynonymsError == nil)
+                #expect(viewModel.inspectorSynonymsRecovery == nil)
+            }
+        } else {
+            #expect(viewModel.inspectorSynonyms.isEmpty)
+            #expect(viewModel.inspectorSynonymsError == nil)
+            #expect(viewModel.inspectorSynonymsRecovery == nil)
+        }
+        #expect(!viewModel.inspectorSynonymsLoading)
+        viewModel.dismissInspector()
+    }
+
+    @MainActor
     private func complete(
         provider: ControlledSynonymProvider,
         request: Int,
@@ -959,6 +1004,16 @@ private actor SwitchingGGUFRunner: LocalGGUFRunner {
         return generate(prompt: prompt)
     }
 
+    func generate(
+        prompt: String,
+        loading filePath: String,
+        onChunk: @escaping @Sendable (String) -> Void
+    ) -> String {
+        let response = generate(prompt: prompt, loading: filePath)
+        onChunk(response)
+        return response
+    }
+
     func unload() {}
 }
 
@@ -1006,6 +1061,16 @@ private actor InterleavingGGUFRunner: LocalGGUFRunner {
         return "\(prompt):\(filePath)"
     }
 
+    func generate(
+        prompt: String,
+        loading filePath: String,
+        onChunk: @escaping @Sendable (String) -> Void
+    ) async -> String {
+        let response = await generate(prompt: prompt, loading: filePath)
+        onChunk(response)
+        return response
+    }
+
     func waitUntilFirstLoadStarts() async {
         guard !firstLoadStarted else { return }
         await withCheckedContinuation { continuation in
@@ -1043,6 +1108,16 @@ private actor LifecycleGGUFRunner: LocalGGUFRunner {
             finishGenerationContinuation = continuation
         }
         return prompt
+    }
+
+    func generate(
+        prompt: String,
+        loading filePath: String,
+        onChunk: @escaping @Sendable (String) -> Void
+    ) async -> String {
+        let response = await generate(prompt: prompt, loading: filePath)
+        onChunk(response)
+        return response
     }
 
     func unload() async {

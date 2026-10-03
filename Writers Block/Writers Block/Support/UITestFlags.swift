@@ -3,13 +3,16 @@ import Foundation
 enum UITestFlags {
     static let inMemoryStore = "--ui-test-in-memory-store"
     static let seedProsodySong = "--ui-test-seed-prosody-song"
-    static let seedLongTitleSong = "--ui-test-seed-long-title-song"
     static let enableStressPreview = "--ui-test-enable-stress-preview"
     static let openAssistant = "--ui-test-open-assistant"
     static let seedRewriteSelection = "--ui-test-seed-rewrite-selection"
     static let seedRewriteLoading = "--ui-test-seed-rewrite-loading"
     static let seedTrashSong = "--ui-test-seed-trash-song"
     static let forceRewriteBar = "--ui-test-force-rewrite-bar"
+    static let fakeVoiceRecording = "--ui-test-fake-voice-recording"
+    static let seedSuggestions = "--ui-test-seed-suggestions"
+    static let forceSaveFailed = "--ui-test-force-save-failed"
+    static let seedLongTitleSong = "--ui-test-seed-long-title-song"
     static let accessibilityTextSize = "--ui-test-accessibility-text-size"
     static let seedCustomGGUFModel = "--ui-test-seed-custom-gguf-model"
 
@@ -20,7 +23,7 @@ enum UITestFlags {
 
     static func seedCustomGGUFModelIfRequested() {
         guard isEnabled(seedCustomGGUFModel),
-              let directory = try? GGUFModelCatalog.modelsDirectory(create: true) else { return }
+              let directory = try? GGUFModelStorage.modelsDirectory(create: true) else { return }
         let model = GGUFCustomModel(
             id: "ui-test-custom-model",
             displayName: "Night Drive QA",
