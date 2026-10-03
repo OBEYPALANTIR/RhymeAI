@@ -20,7 +20,7 @@ permissions:
 
 concurrency:
   group: ios-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ios-unit-tests:
@@ -28,15 +28,18 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Toolchain
         run: xcodebuild -version
       - name: Pick an iPhone simulator
         id: sim
         run: |
           udid=$(xcrun simctl list devices available --json | python3 -c '
-          import json, sys
+          import json, re, sys
           runtimes = json.load(sys.stdin)["devices"]
-          ios = sorted((k for k in runtimes if "SimRuntime.iOS" in k), reverse=True)
+          version = lambda key: tuple(int(n) for n in re.findall(r"\d+", key.rsplit("iOS", 1)[1]))
+          ios = sorted((k for k in runtimes if "SimRuntime.iOS" in k), key=version, reverse=True)
           for runtime in ios:
               for device in runtimes[runtime]:
                   if device["name"].startswith("iPhone"):
