@@ -1352,7 +1352,7 @@ struct BackupCoreTests {
     @MainActor
     private func makeHarness(oauthProvider: OAuthAccessTokenProvider) throws -> BackupHarness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let memosRoot = FileManager.default.temporaryDirectory.appendingPathComponent("BackupCoreTests-\(UUID().uuidString)", isDirectory: true)
         let drive = FakeDriveClient()

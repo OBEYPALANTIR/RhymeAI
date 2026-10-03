@@ -228,7 +228,7 @@ struct Writers_BlockApp: App {
 
         let isHostedUnitTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         if ProcessInfo.processInfo.arguments.contains("--ui-test-in-memory-store") || isHostedUnitTest {
-            let inMemory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            let inMemory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
             do {
                 return ModelContainerBootstrap(
                     container: try ModelContainer(for: schema, configurations: [inMemory]),
@@ -282,7 +282,7 @@ struct Writers_BlockApp: App {
             logger.error("Local ModelContainer failed, falling back to in-memory: \(error)")
         }
 
-        let inMemory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let inMemory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         do {
             return ModelContainerBootstrap(
                 container: try ModelContainer(for: schema, configurations: [inMemory]),
