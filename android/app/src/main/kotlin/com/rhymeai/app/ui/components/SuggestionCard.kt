@@ -4,19 +4,20 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,22 +34,24 @@ import com.rhymeai.app.ui.theme.DesignTokens
 
 private val lastWordPattern = Regex("(.*?)(\\b\\w+\\b)([^\\w]*)\$")
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SuggestionCard(
     suggestion: String,
     highlightRhyme: Boolean,
     showProsody: Boolean,
-    onClick: () -> Unit,
+    onUse: () -> Unit,
     modifier: Modifier = Modifier,
     /** 2 = perfect/multi, 1 = near, 0 = unverified. Drives the tier pill badge. */
     rhymeTier: Int = 0,
     /** True when this line repeats a first-chorus end-word; badge reads "hook". */
-    isHook: Boolean = false
+    isHook: Boolean = false,
+    onKeep: (() -> Unit)? = null,
+    isKept: Boolean = false
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
     OutlinedCard(
-        onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = DesignTokens.Touch.minTarget),
@@ -154,13 +157,20 @@ fun SuggestionCard(
                         .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
                 )
             }
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 4.dp)
-            )
         }
+        }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+        ) {
+            FilledTonalButton(onClick = onUse, modifier = Modifier.heightIn(min = DesignTokens.Touch.minTarget)) {
+                Text("Use line")
+            }
+            onKeep?.let { keep ->
+                TextButton(onClick = keep, enabled = !isKept, modifier = Modifier.heightIn(min = DesignTokens.Touch.minTarget)) {
+                    Text(if (isKept) "Kept" else "Keep for later")
+                }
+            }
         }
     }
 }

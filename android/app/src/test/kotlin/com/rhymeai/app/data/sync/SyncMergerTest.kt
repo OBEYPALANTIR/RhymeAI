@@ -129,12 +129,46 @@ class SyncMergerTest {
     }
 
     @Test
-    fun versionResultIsMaxOfBothBlobs() {
-        val local = SyncBlob(version = 1)
-        val remote = SyncBlob(version = 3)
+    fun permanentDeletionsConvergeAgainstNewerProjectTrashAndRecordingContent() {
+        val later = 2_000_000_000_000L
+        fun recording(id: String, file: String) = RecordingManifestEntry(
+            projectId = id, fileName = file, sizeBytes = 3, modifiedAt = later, sha256 = "synthetic"
+        )
+        val content = SyncBlob(
+            projects = listOf(project("gone", "stale", later), project("keep", "current", later)),
+            trashed = listOf(TrashedSongProject(project("gone", "stale", later), later)),
+            recordings = listOf(
+                recording("gone", "take.m4a"),
+                recording("keep", "removed.m4a"),
+                recording("keep", "new.m4a")
+            )
+        )
+        val tombstones = SyncBlob(deletions = listOf(
+            SyncDeletion("gone", deletedAt = 1L),
+            SyncDeletion("gone", deletedAt = 2L),
+            SyncDeletion("gone", fileName = "take.m4a", deletedAt = Long.MAX_VALUE),
+            SyncDeletion("keep", fileName = "removed.m4a", deletedAt = 3L)
+        ))
+        val merged = SyncMerger.merge(content, tombstones)
 
-        val merged = SyncMerger.merge(local, remote)
-
-        assertEquals(3, merged.version)
+        assertEquals(setOf("keep"), merged.projects.map { it.id }.toSet())
+        assertEquals(emptySet(), merged.trashed.map { it.project.id }.toSet())
+        assertEquals(setOf("keep/new.m4a"), merged.recordings.map { it.identityKey }.toSet())
+        assertEquals(
+            listOf(
+                SyncDeletion("gone", deletedAt = 2L),
+                SyncDeletion("keep", fileName = "removed.m4a", deletedAt = 3L)
+            ),
+            merged.deletions
+        )
+        for (next in listOf(
+            SyncMerger.merge(tombstones, content),
+            SyncMerger.merge(merged, content)
+        )) {
+            assertEquals(merged.projects.map { it.id }.toSet(), next.projects.map { it.id }.toSet())
+            assertEquals(merged.trashed.map { it.project.id }.toSet(), next.trashed.map { it.project.id }.toSet())
+            assertEquals(merged.recordings.map { it.identityKey }.toSet(), next.recordings.map { it.identityKey }.toSet())
+            assertEquals(merged.deletions, next.deletions)
+        }
     }
 }

@@ -1,5 +1,14 @@
 # Release Notes
 
+## Pending release-tooling safety
+
+Release scripts require explicit empty emulator targets, preserve existing app
+data and outputs, verify a trusted Android signer, and scan decompressed release
+content. Runtime-key checks avoid host argv and diagnostic disclosure. Sign-off
+reports remain incomplete diagnostics until candidate-bound external evidence is
+reviewed. Fixture tests verify orchestration only; they do not establish device,
+provider, signing, or store acceptance.
+
 ## Writers Block for iOS 1.0 (6) — TestFlight candidate
 
 This candidate combines the current iOS repairs for TestFlight acceptance.

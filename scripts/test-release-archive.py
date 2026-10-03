@@ -40,6 +40,18 @@ class ReleaseArchiveTests(unittest.TestCase):
             result = subprocess.run([sys.executable, str(SCANNER), "--binary", str(binary)], capture_output=True)
             self.assertEqual(result.returncode, 0)
 
+    def test_exact_stdin_secret_across_chunk_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "release.apk"
+            marker = b"synthetic-exact-secret-without-provider-prefix"
+            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as package:
+                package.writestr("payload", b"x" * (1024 * 1024 - 5) + marker)
+            result = subprocess.run([sys.executable, str(SCANNER), "--secret-stdin", str(archive)], input=marker, capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn(marker, result.stdout + result.stderr)
+            result = subprocess.run([sys.executable, str(SCANNER), "--secret-stdin", str(archive)], input=b"", capture_output=True)
+            self.assertEqual(result.returncode, 1)
+
     def test_missing_binary_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run([sys.executable, str(SCANNER), "--binary", str(Path(directory) / "missing")], capture_output=True)

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
+source "$ROOT_DIR/scripts/android-release-common.sh"
 PACKAGE="com.rhymeai.app"
-APK="$ANDROID_DIR/app/build/outputs/apk/release/app-release.apk"
 
 if [[ -z "${JAVA_HOME:-}" && -d "/Applications/Android Studio.app/Contents/jbr/Contents/Home" ]]; then
   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
@@ -25,22 +26,13 @@ if [[ ! -x "$ADB" ]]; then
   ADB="adb"
 fi
 
-serial="${ANDROID_SERIAL:-}"
-if [[ -z "$serial" ]]; then
-  serial="$("$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1; exit }')"
-fi
-
-if [[ -z "$serial" ]]; then
-  echo "No adb device is attached for the Android release walkthrough." >&2
-  echo "Boot an emulator or attach a device, then rerun this script." >&2
-  exit 1
-fi
+require_empty_android_target
+serial="$ANDROID_SERIAL"
 
 SKIP_INSTALL=1 "$ROOT_DIR/scripts/android-release-smoke.sh"
+APK="$(android_app_build_directory)/outputs/apk/release/app-release.apk"
 
-"$ADB" -s "$serial" uninstall "$PACKAGE" >/dev/null 2>&1 || true
-"$ADB" -s "$serial" install "$APK"
-"$ADB" -s "$serial" shell pm clear "$PACKAGE" >/dev/null
+install_release_apk "$APK"
 "$ADB" -s "$serial" logcat -c
 "$ADB" -s "$serial" shell am start -W -n "$PACKAGE/.MainActivity" >/dev/null
 

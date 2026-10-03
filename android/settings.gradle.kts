@@ -14,3 +14,6 @@ dependencyResolutionManagement {
 }
 rootProject.name = "RhymeAI"
 include(":app")
+include(":benchmark")
+include(":kotlinllamacpp")
+project(":kotlinllamacpp").projectDir = file("third_party/kotlinllamacpp")

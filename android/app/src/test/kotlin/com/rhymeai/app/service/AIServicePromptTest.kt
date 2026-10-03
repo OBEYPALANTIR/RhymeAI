@@ -6,6 +6,12 @@ import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
 import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.util.RhymeConstraint
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -15,6 +21,39 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AIServicePromptTest {
+    @Test
+    fun reducedPayloadsExcludePrivateLyricsForEveryCloudProvider() {
+        val service = AIService()
+        val privateText = "PRIVATE_VERSE_SENTINEL"
+        val chorusText = "PRIVATE_CHORUS_SENTINEL"
+        val song = "[Verse]\n$privateText\n\n[Chorus]\n$chorusText"
+        for (wholeSong in listOf(false, true)) {
+            val suggestions = service.buildPrompt(
+                "allowed theme", song, "ALLOWED_TARGET", RhymeType.PERFECT, "AABB", "A",
+                SongSection.CHORUS, RhymeComplexity.MODERATE, wholeSong,
+                sectionRef = com.rhymeai.app.util.SectionRef(SongSection.CHORUS, 2, "Chorus", 3 until 5)
+            )
+            val rewrite = service.buildRewritePrompt(
+                RewriteAction.entries.first(), song, "ALLOWED_SELECTION", SongSection.VERSE, wholeSong
+            )
+            for (prompt in listOf(suggestions, rewrite)) {
+                // Gemini SDK receives this exact prompt; the other providers serialize it here.
+                for (stream in listOf(false, true)) {
+                    val payloads = listOf(
+                        prompt,
+                        service.buildOpenAIChatRequestBody("fixture", prompt, 0.7, stream).toString(),
+                        service.buildClaudeMessagesRequestBody("fixture", prompt, stream).toString()
+                    )
+                    payloads.forEach { payload ->
+                        assertEquals(wholeSong, payload.contains(privateText))
+                        assertEquals(wholeSong, payload.contains(chorusText))
+                        assertContains(payload, "ALLOWED_")
+                    }
+                }
+            }
+        }
+    }
+
     private val rhymeDictionary = PronunciationDictionary.fromLines(
         sequenceOf(
             "road\tR OW1 D",
@@ -22,6 +61,64 @@ class AIServicePromptTest {
             "showed\tSH OW1 D"
         )
     )
+
+    @Test
+    fun serviceBatchAndStreamRetainPerfectRhymeBeyondCappedDisplayPool() = runBlocking {
+        val crowded = PronunciationDictionary.fromLines(
+            sequenceOf("rain\tR EY1 N", "pain\tP EY1 N") +
+                (0 until 65).asSequence().map { index ->
+                    "rhyme${'a' + index / 26}${'a' + index % 26}\tR EY1 N"
+                } + sequenceOf("wane\tW EY1 N", "night\tN AY1 T")
+        )
+        val service = AIService()
+        val constraint = assertNotNull(service.suggestionRhymeConstraint(
+            targetRhymeLine = "I wait beneath the rain",
+            rhymeType = RhymeType.PERFECT,
+            dictionary = crowded
+        ))
+        assertFalse("wane" in constraint.candidateWords)
+
+        val batch = service.parseSuggestionList(
+            "I wander through the night\nI watch the lanterns wane",
+            constraint
+        )
+        assertEquals("I watch the lanterns wane", batch.first().text)
+        assertEquals(2, batch.first().rhymeTier)
+        assertEquals(0, batch.last().rhymeTier)
+
+        val chunkProcessed = CompletableDeferred<Unit>()
+        val finishUpstream = CompletableDeferred<Unit>()
+        val streamed = mutableListOf<com.rhymeai.app.SuggestedLine>()
+        val collector = launch {
+            flow<com.rhymeai.app.SuggestedLine> {
+                with(service) {
+                    emitLinesFromTokens(flow {
+                        emit(
+                            "I wander through the night\n" +
+                                "I watch the lanterns wane\n" +
+                                "I wait along the shore\n" +
+                                "I watch the lanterns wane\n"
+                        )
+                        chunkProcessed.complete(Unit)
+                        finishUpstream.await()
+                    }, constraint)
+                }
+            }.collect { streamed += it }
+        }
+        try {
+            withTimeout(5_000) { chunkProcessed.await() }
+            assertEquals(listOf("I watch the lanterns wane"), streamed.map { it.text })
+            assertEquals(listOf(2), streamed.map { it.rhymeTier })
+        } finally {
+            finishUpstream.complete(Unit)
+        }
+        withTimeout(5_000) { collector.join() }
+        assertEquals(
+            listOf("I watch the lanterns wane", "I wander through the night", "I wait along the shore"),
+            streamed.map { it.text }
+        )
+        assertEquals(listOf(2, 0, 0), streamed.map { it.rhymeTier })
+    }
 
     @Test
     fun suggestionPromptShapesImmediateAndWholeSongContext() {
@@ -50,7 +147,7 @@ class AIServicePromptTest {
         )
 
         assertContains(immediatePrompt, "late-night resolve")
-        assertContains(immediatePrompt, "Prioritize the immediate writing context")
+        assertContains(immediatePrompt, "Prioritize the target line")
         assertContains(immediatePrompt, "MUST end with a **Perfect Rhyme**")
         assertContains(immediatePrompt, "Current song section: Verse.")
         assertContains(immediatePrompt, "Complexity level: Moderate")
@@ -169,7 +266,8 @@ class AIServicePromptTest {
             useWholeSongContext = false
         )
 
-        assertContains(prompt, "<start_of_turn>user")
+        assertFalse(prompt.contains("<start_of_turn>"))
+        assertFalse(prompt.contains("<|turn>"))
         assertContains(prompt, "Task: write exactly 6 next-line options for the song.")
         assertContains(prompt, "End every suggestion with a slant rhyme")
         assertContains(prompt, "Return only candidate lyric lines")
@@ -178,7 +276,7 @@ class AIServicePromptTest {
     }
 
     @Test
-    fun localRewriteCleanerAcceptsJsonAndDropsChatMarkers() {
+    fun localRewriteCleanerAcceptsJsonAndRejectsChatMarkers() {
         val service = AIService()
 
         assertEquals(
@@ -186,7 +284,7 @@ class AIServicePromptTest {
             service.cleanLocalRewrite("""{"rewrite":"I trade the dark for a borrowed glow"}""")
         )
         assertEquals(
-            "I trade the dark for a borrowed glow",
+            "",
             service.cleanLocalRewrite(
                 """
                 <start_of_turn>model
@@ -198,12 +296,13 @@ class AIServicePromptTest {
     }
 
     @Test
-    fun localRewriteCleanerExtractsSingleWordReplacement() {
+    fun localRewriteCleanerRequiresBareSingleWordReplacement() {
         val service = AIService()
 
-        assertEquals("gleam", service.cleanLocalRewrite("glow -> gleam", selection = "glow"))
-        assertEquals("shine", service.cleanLocalRewrite("shine, gleam, radiance", selection = "glow"))
-        assertEquals("gleam", service.cleanLocalRewrite("The replacement is \"gleam\".", selection = "glow"))
+        assertEquals("gleam", service.cleanLocalRewrite("gleam", selection = "glow"))
+        assertEquals("", service.cleanLocalRewrite("glow -> gleam", selection = "glow"))
+        assertEquals("", service.cleanLocalRewrite("shine, gleam, radiance", selection = "glow"))
+        assertEquals("", service.cleanLocalRewrite("The replacement is \"gleam\".", selection = "glow"))
     }
 
     @Test
@@ -219,6 +318,40 @@ class AIServicePromptTest {
         assertContains(prompt, "Return exactly one replacement word")
         assertContains(prompt, "Do not return \"glow\"")
         assertContains(prompt, "The replacement must be different from the selected word")
+    }
+
+    @Test
+    fun localPassageRewriteCleanerRequiresExactSelectedLineCount() {
+        val service = AIService()
+
+        assertEquals(
+            "I hum a tune to hold it near",
+            service.cleanLocalRewrite(
+                response = "I hum a tune to hold it near",
+                selection = "I hum the hook to keep it close"
+            )
+        )
+        assertEquals(
+            "I counted all the miles\nYou watched the county line",
+            service.cleanLocalRewrite(
+                response = "I counted all the miles\nYou watched the county line",
+                selection = "I counted every mile\nYou watched the county line"
+            )
+        )
+        assertEquals(
+            "",
+            service.cleanLocalRewrite(
+                response = "I hum a tune to hold it near\nA low and steady sound I hear",
+                selection = "I hum the hook to keep it close"
+            )
+        )
+        assertEquals(
+            "",
+            service.cleanLocalRewrite(
+                response = "I counted all the miles",
+                selection = "I counted every mile\nYou watched the county line"
+            )
+        )
     }
 
     @Test
@@ -255,7 +388,7 @@ class AIServicePromptTest {
             currentLetter = "A",
             currentSection = SongSection.VERSE,
             complexity = RhymeComplexity.MODERATE,
-            useWholeSongContext = false,
+            useWholeSongContext = true,
             constraint = constraint
         )
         assertContains(prompt, "This is Verse 2.")
@@ -287,7 +420,7 @@ class AIServicePromptTest {
             currentLetter = "A",
             currentSection = SongSection.BRIDGE,
             complexity = RhymeComplexity.MODERATE,
-            useWholeSongContext = false,
+            useWholeSongContext = true,
             constraint = constraint
         )
         assertContains(prompt, "This is the bridge — introduce a contrasting rhyme sound and cadence; avoid the chorus's ending words.")
@@ -319,7 +452,7 @@ class AIServicePromptTest {
             currentLetter = "A",
             currentSection = SongSection.CHORUS,
             complexity = RhymeComplexity.MODERATE,
-            useWholeSongContext = false,
+            useWholeSongContext = true,
             constraint = constraint
         )
         assertContains(prompt, "This is the chorus (instance 2). Keep hook language and ending words consistent with the established chorus:")

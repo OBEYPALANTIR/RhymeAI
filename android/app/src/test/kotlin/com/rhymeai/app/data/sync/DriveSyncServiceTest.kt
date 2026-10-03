@@ -5,8 +5,16 @@ import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.data.repository.SecureKeyStore
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.int
+import java.io.ByteArrayInputStream
+import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -29,6 +37,16 @@ class DriveSyncServiceTest {
     private val clientId = "device-001"
     private val json = Json { ignoreUnknownKeys = true }
 
+    @Test
+    fun boundedDriveReadAcceptsExactLimitAndRejectsUnknownLengthOverflow() {
+        val exact = ByteArray(8) { it.toByte() }
+
+        assertTrue(ByteArrayInputStream(exact).readBytesBounded(exact.size.toLong()).contentEquals(exact))
+        assertFailsWith<DriveNetworkException> {
+            ByteArrayInputStream(exact).readBytesBounded(exact.size - 1L)
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -43,16 +61,17 @@ class DriveSyncServiceTest {
 
     private fun sealBlob(blob: SyncBlob, pp: CharArray = passphrase): ByteArray {
         val bytes = json.encodeToString(blob).toByteArray(Charsets.UTF_8)
-        return SyncBlobCrypto.seal(bytes, pp)
+        return if (blob.version == 1) SyncBlobCrypto.seal(bytes, pp)
+        else SyncBlobCrypto.sealManifest(bytes, pp)
     }
 
     private fun openDecisionMergeBlob(decision: SyncDecision.MergeAndUpload): SyncBlob {
-        val plain = SyncBlobCrypto.open(decision.sealedBytes, passphrase)
+        val plain = SyncBlobCrypto.openManifest(decision.sealedBytes, passphrase).plaintext
         return json.decodeFromString(plain.toString(Charsets.UTF_8))
     }
 
     private fun openDecisionUploadBlob(decision: SyncDecision.UploadOnly): SyncBlob {
-        val plain = SyncBlobCrypto.open(decision.sealedBytes, passphrase)
+        val plain = SyncBlobCrypto.openManifest(decision.sealedBytes, passphrase).plaintext
         return json.decodeFromString(plain.toString(Charsets.UTF_8))
     }
 
@@ -68,6 +87,52 @@ class DriveSyncServiceTest {
         val decision = decideSyncAction(input)
 
         assertIs<SyncDecision.UploadOnly>(decision)
+    }
+
+    @Test
+    fun uploadOnlyRejectsLocalRecordingOutsideRestorePolicy() {
+        val oversized = RecordingManifestEntry(
+            projectId = "project",
+            fileName = "clip.m4a",
+            sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1L,
+            modifiedAt = 1L,
+            sha256 = "digest"
+        )
+
+        assertFailsWith<DriveNetworkException> {
+            decideSyncAction(
+                SyncDecisionInput(
+                    local = SyncBlob(recordings = listOf(oversized)),
+                    remoteBytes = null,
+                    passphrase = passphrase,
+                    clientId = clientId
+                )
+            )
+        }
+    }
+
+    @Test
+    fun uploadOnlyRejectsManifestWhoseAggregateRecordingsExceedRestorePolicy() {
+        val recordings = List(5) { index ->
+            RecordingManifestEntry(
+                projectId = "project-$index",
+                fileName = "clip.m4a",
+                sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES,
+                modifiedAt = index.toLong(),
+                sha256 = "digest-$index"
+            )
+        }
+
+        assertFailsWith<DriveNetworkException> {
+            decideSyncAction(
+                SyncDecisionInput(
+                    local = SyncBlob(recordings = recordings),
+                    remoteBytes = null,
+                    passphrase = passphrase,
+                    clientId = clientId
+                )
+            )
+        }
     }
 
     @Test
@@ -106,6 +171,23 @@ class DriveSyncServiceTest {
         val decision = decideSyncAction(input)
 
         assertIs<SyncDecision.MergeAndUpload>(decision)
+    }
+
+    @Test
+    fun mergeRejectsAggregateRecordingManifestThatCannotBeRestoredFresh() {
+        fun recording(index: Int) = RecordingManifestEntry(
+            projectId = "project-$index",
+            fileName = "clip.m4a",
+            sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES,
+            modifiedAt = index.toLong(),
+            sha256 = "digest-$index"
+        )
+        val local = SyncBlob(recordings = (0 until 4).map(::recording))
+        val remote = SyncBlob(recordings = listOf(recording(4)))
+
+        assertFailsWith<DriveNetworkException> {
+            decideSyncAction(SyncDecisionInput(local, sealBlob(remote), passphrase, clientId))
+        }
     }
 
     @Test
@@ -175,9 +257,8 @@ class DriveSyncServiceTest {
     @Test
     fun corruptRemoteWhenEnvelopeDecryptsButJsonDecodeFails() {
         val local = SyncBlob(projects = listOf(project("a", "A")))
-        val decryptableButInvalidJson = SyncBlobCrypto.seal(
-            "not a sync blob".toByteArray(Charsets.UTF_8),
-            passphrase
+        val decryptableButInvalidJson = SyncBlobCrypto.sealManifest(
+            "not a sync blob".toByteArray(Charsets.UTF_8), passphrase
         )
         val input = SyncDecisionInput(local, decryptableButInvalidJson, passphrase, clientId)
 
@@ -190,6 +271,77 @@ class DriveSyncServiceTest {
             is SyncDecision.UploadOnly -> error("unexpected")
             is SyncDecision.MergeAndUpload -> error("unexpected")
         }
+    }
+
+    @Test
+    fun corruptRemoteWhenAuthenticatedProjectIdEscapesRecordingRoot() {
+        val remoteJson = """{"version":2,"projects":[{"id":"../escape","title":"remote"}],"deletions":[]}"""
+        val sealed = SyncBlobCrypto.sealManifest(remoteJson.toByteArray(Charsets.UTF_8), passphrase)
+        val decision = decideSyncAction(
+            SyncDecisionInput(SyncBlob(), sealed, passphrase, clientId)
+        )
+
+        assertIs<SyncDecision.CorruptRemote>(decision)
+    }
+
+    @Test
+    fun corruptRemoteWhenAuthenticatedRecordingDriveNameIsForged() {
+        val remoteJson = """
+            {
+              "version": 2,
+              "recordings": [{
+                "projectId": "legacy opaque:é id",
+                "fileName": "take 1.m4a",
+                "driveName": "rec_other_take 1.m4a.enc",
+                "sizeBytes": 12,
+                "modifiedAt": 100,
+                "sha256": "digest"
+              }],
+              "deletions": []
+            }
+        """.trimIndent()
+        val sealed = SyncBlobCrypto.sealManifest(remoteJson.toByteArray(Charsets.UTF_8), passphrase)
+        val decision = decideSyncAction(
+            SyncDecisionInput(SyncBlob(), sealed, passphrase, clientId)
+        )
+
+        assertIs<SyncDecision.CorruptRemote>(decision)
+    }
+
+    @Test
+    fun syncMergerRejectsInvalidInMemoryRecordingIdentity() {
+        val invalid = RecordingManifestEntry(
+            projectId = "safe",
+            fileName = "../clip.m4a",
+            sizeBytes = 12L,
+            modifiedAt = 100L,
+            sha256 = "digest"
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            SyncMerger.merge(SyncBlob(), SyncBlob(recordings = listOf(invalid)))
+        }
+    }
+
+    @Test
+    fun authenticatedLegacyUnicodeIdentityStillMerges() {
+        val remote = SyncBlob(
+            recordings = listOf(
+                RecordingManifestEntry(
+                    projectId = "legacy opaque:é id",
+                    fileName = "take 1.m4a",
+                    sizeBytes = 12L,
+                    modifiedAt = 100L,
+                    sha256 = "digest"
+                )
+            )
+        )
+
+        val decision = decideSyncAction(
+            SyncDecisionInput(SyncBlob(), sealBlob(remote), passphrase, clientId)
+        )
+
+        assertIs<SyncDecision.MergeAndUpload>(decision)
     }
 
     @Test
@@ -223,7 +375,7 @@ class DriveSyncServiceTest {
         val decision = decideSyncAction(input) as SyncDecision.UploadOnly
 
         // Simulate what a second device would do: download the sealed bytes and open them.
-        val plain = SyncBlobCrypto.open(decision.sealedBytes, passphrase)
+        val plain = SyncBlobCrypto.openManifest(decision.sealedBytes, passphrase).plaintext
         val recovered = json.decodeFromString<SyncBlob>(plain.toString(Charsets.UTF_8))
 
         assertEquals("zzz", recovered.projects.first { it.id == "z" }.lyrics)
@@ -236,10 +388,146 @@ class DriveSyncServiceTest {
         val input = SyncDecisionInput(local, sealBlob(remote), passphrase, clientId)
         val decision = decideSyncAction(input) as SyncDecision.MergeAndUpload
 
-        val plain = SyncBlobCrypto.open(decision.sealedBytes, passphrase)
+        val plain = SyncBlobCrypto.openManifest(decision.sealedBytes, passphrase).plaintext
         val recovered = json.decodeFromString<SyncBlob>(plain.toString(Charsets.UTF_8))
 
         assertEquals(setOf("p", "q"), recovered.projects.map { it.id }.toSet())
+    }
+
+    @Test
+    fun supportedV1AndV2RemoteShapesMergeIntoV2WithoutRestoringDeletedSong() {
+        // Same v1 JSON used by the pinned iOS SyncRepairContractChecks fixture.
+        val v1 = """{"version":1,"projects":[],"trashed":[],"recordings":[],"savedAt":1700000000000,"savedByClientId":"android-fixture"}"""
+        val fromV1 = decideSyncAction(
+            SyncDecisionInput(SyncBlob(), SyncBlobCrypto.seal(v1.toByteArray(), passphrase), passphrase, clientId)
+        ) as SyncDecision.MergeAndUpload
+        assertEquals(1, fromV1.remote.version)
+        assertEquals(emptyList(), fromV1.remote.deletions)
+        assertEquals(2, fromV1.merged.version)
+
+        val v2 = """{"version":2,"deletions":[{"projectId":"gone","fileName":null,"deletedAt":1}]}"""
+        val local = SyncBlob(projects = listOf(project("gone", "later edit", updatedAt = 1000L)))
+        val fromV2 = decideSyncAction(
+            SyncDecisionInput(local, SyncBlobCrypto.sealManifest(v2.toByteArray(), passphrase), passphrase, clientId)
+        ) as SyncDecision.MergeAndUpload
+        assertEquals(emptyList(), fromV2.merged.projects)
+        assertEquals(listOf(SyncDeletion("gone", deletedAt = 1L)), fromV2.merged.deletions)
+        assertEquals(listOf(SyncDeletion("gone", deletedAt = 1L)), openDecisionMergeBlob(fromV2).deletions)
+    }
+
+    @Test
+    fun unsupportedVersionShapesNeverBecomeRemoteOrReplaceLocalData() {
+        for (raw in listOf(
+            """{"version":1,"deletions":[]}""",
+            """{"version":2}""",
+            """{"version":2,"deletions":null}""",
+            """{"version":3,"deletions":[]}""",
+            """{"version":0}""",
+            """{"deletions":[]}"""
+        )) {
+            assertFailsWith<Exception> { json.decodeFromString<SyncBlob>(raw) }
+            val decision = decideSyncAction(
+                SyncDecisionInput(SyncBlob(),
+                    if (raw.contains("\"version\":1") || raw.contains("\"version\":0"))
+                        SyncBlobCrypto.seal(raw.toByteArray(), passphrase)
+                    else SyncBlobCrypto.sealManifest(raw.toByteArray(), passphrase),
+                    passphrase, clientId)
+            )
+            assertIs<SyncDecision.CorruptRemote>(decision)
+        }
+        assertFailsWith<DriveNetworkException> {
+            decideSyncAction(SyncDecisionInput(
+                SyncBlob(version = 1, deletions = listOf(SyncDeletion("gone", deletedAt = 1L))),
+                null, passphrase, clientId
+            ))
+        }
+    }
+
+    @Test
+    fun uploadOnlyWritesV2AndExplicitEmptyDeletionArrayEvenFromLegacyLocalBlob() {
+        val upload = decideSyncAction(
+            SyncDecisionInput(SyncBlob(version = 1), null, passphrase, clientId)
+        ) as SyncDecision.UploadOnly
+        val outgoing = json.parseToJsonElement(
+            SyncBlobCrypto.openManifest(upload.sealedBytes, passphrase).plaintext.toString(Charsets.UTF_8)
+        ).jsonObject
+        assertEquals(2, outgoing.getValue("version").jsonPrimitive.int)
+        assertEquals(emptyList(), outgoing.getValue("deletions").jsonArray)
+        val deletionUpload = decideSyncAction(
+            SyncDecisionInput(SyncBlob(deletions = listOf(SyncDeletion("gone", deletedAt = 7L))),
+                null, passphrase, clientId)
+        ) as SyncDecision.UploadOnly
+        val encodedDeletion = json.parseToJsonElement(
+            SyncBlobCrypto.openManifest(deletionUpload.sealedBytes, passphrase).plaintext.toString(Charsets.UTF_8)
+        ).jsonObject.getValue("deletions").jsonArray.single().jsonObject
+        assertEquals(JsonNull, encodedDeletion.getValue("fileName"))
+        assertEquals(7L, encodedDeletion.getValue("deletedAt").jsonPrimitive.content.toLong())
+
+        val v1Passthrough = json.parseToJsonElement(json.encodeToString(SyncBlob(version = 1))).jsonObject
+        assertEquals(1, v1Passthrough.getValue("version").jsonPrimitive.int)
+        assertTrue("deletions" !in v1Passthrough)
+    }
+
+    @Test
+    fun envelopeVersionMismatchIsCorruptRemoteNotWrongPassphrase() {
+        val v1 = """{"version":1,"projects":[],"trashed":[],"recordings":[]}""".toByteArray()
+        val v2 = """{"version":2,"deletions":[]}""".toByteArray()
+        for (mismatch in listOf(
+            SyncBlobCrypto.seal(v2, passphrase),
+            SyncBlobCrypto.sealManifest(v1, passphrase)
+        )) {
+            assertIs<SyncDecision.CorruptRemote>(
+                decideSyncAction(SyncDecisionInput(SyncBlob(), mismatch, passphrase, clientId))
+            )
+        }
+        for (valid in listOf(
+            SyncBlobCrypto.seal(v1, passphrase),
+            SyncBlobCrypto.sealManifest(v2, passphrase)
+        )) {
+            assertIs<SyncDecision.BadPassphrase>(
+                decideSyncAction(SyncDecisionInput(SyncBlob(), valid, wrongPassphrase, clientId))
+            )
+            val unknown = valid.clone()
+            "RAI9".toByteArray().copyInto(unknown)
+            assertIs<SyncDecision.CorruptRemote>(
+                decideSyncAction(SyncDecisionInput(SyncBlob(), unknown, passphrase, clientId))
+            )
+        }
+    }
+
+    @Test
+    fun independentIosShapeVectorsUnderRai2AndLegacyRai1MergeCorrectly() {
+        val stream = requireNotNull(javaClass.classLoader!!.getResourceAsStream("sync-envelope-vectors.json"))
+        val fixture = json.parseToJsonElement(stream.bufferedReader().use { it.readText() }).jsonObject
+        val vectors = fixture.getValue("vectors").jsonArray.map { it.jsonObject }
+        val vectorPassphrase = fixture.getValue("passphrase").jsonPrimitive.content.toCharArray()
+        fun bytes(magic: String) = Base64.getDecoder().decode(
+            vectors.single { it.getValue("magic").jsonPrimitive.content == magic }
+                .getValue("envelope_base64").jsonPrimitive.content
+        )
+        val v1 = decideSyncAction(
+            SyncDecisionInput(SyncBlob(), bytes("RAI1"), vectorPassphrase, clientId)
+        ) as SyncDecision.MergeAndUpload
+        assertEquals(1, v1.remote.version)
+        val local = SyncBlob(
+            projects = listOf(project("gone", "late edit", updatedAt = Long.MAX_VALUE), project("keep", "live")),
+            recordings = listOf(
+                RecordingManifestEntry("gone", "take.m4a", sizeBytes = 3L, modifiedAt = 9L, sha256 = "one"),
+                RecordingManifestEntry("keep", "removed.m4a", sizeBytes = 3L, modifiedAt = 9L, sha256 = "two"),
+                RecordingManifestEntry("keep", "new.m4a", sizeBytes = 3L, modifiedAt = 9L, sha256 = "three")
+            )
+        )
+        val v2 = decideSyncAction(
+            SyncDecisionInput(local, bytes("RAI2"), vectorPassphrase, clientId)
+        ) as SyncDecision.MergeAndUpload
+        assertEquals(setOf("keep"), v2.merged.projects.map { it.id }.toSet())
+        assertEquals(listOf("new.m4a"), v2.merged.recordings.map { it.fileName })
+        assertEquals(
+            setOf(SyncDeletion("gone", deletedAt = 2L),
+                SyncDeletion("keep", fileName = "removed.m4a", deletedAt = 3L)),
+            v2.merged.deletions.toSet()
+        )
+        assertEquals(2, SyncBlobCrypto.openManifest(v2.sealedBytes, vectorPassphrase).version)
     }
 
     // -----------------------------------------------------------------------
