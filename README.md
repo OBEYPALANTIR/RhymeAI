@@ -88,6 +88,9 @@ The v2 deletion regressions run in `:app:testDebugUnitTest`. Their test source
 uses `SyncDeletion` and `SyncBlob.deletions`, so it does not compile unchanged
 against the pre-v2 base `3a0e8971`; the table identifies the behavioral
 assertion that base could not satisfy rather than claiming a base test run.
+The manifest format has since moved to v3 under RAI3: tests that pinned the
+written format were renamed and now assert RAI3, while the right-hand columns
+still describe the pre-v2 base they were written against.
 
 | Case | Regression test | Base behavior contradicted |
 | --- | --- | --- |
