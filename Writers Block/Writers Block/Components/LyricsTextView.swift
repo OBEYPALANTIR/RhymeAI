@@ -488,11 +488,14 @@ struct LyricsTextView: UIViewRepresentable {
                 // Automatic label scaling would use its current trait collection and
                 // can temporarily diverge from the notification's new category.
                 label.adjustsFontForContentSizeCategory = false
+                // Wrap rather than run off the trailing edge at larger text sizes.
+                label.numberOfLines = 0
                 label.translatesAutoresizingMaskIntoConstraints = false
                 textView.addSubview(label)
                 NSLayoutConstraint.activate([
                     label.topAnchor.constraint(equalTo: textView.topAnchor),
-                    label.leadingAnchor.constraint(equalTo: textView.leadingAnchor)
+                    label.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
+                    label.widthAnchor.constraint(lessThanOrEqualTo: textView.widthAnchor)
                 ])
                 placeholderLabel = label
             }
