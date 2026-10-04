@@ -180,6 +180,56 @@ final class Writers_BlockUITests: XCTestCase {
     }
 
     @MainActor
+    func testTapOnSongsDrawerTopPaddingKeepsDrawerOpen() throws {
+        let app = isolatedUITestApp()
+        app.launch()
+        createNewSong(in: app)
+        XCTAssertTrue(app.buttons["Open songs drawer"].waitForExistence(timeout: 5))
+        app.buttons["Open songs drawer"].tap()
+        let closeDrawer = app.buttons["Close drawer"]
+        let closeFrame = try XCTUnwrap(
+            waitForStableFrame(of: closeDrawer, matching: { _ in closeDrawer.isHittable }),
+            "The songs drawer did not settle open"
+        )
+        let window = app.windows.firstMatch.frame
+        // Empty panel padding just above the search row, inside the drawer.
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: window.midX, dy: closeFrame.minY - 12))
+            .tap()
+        // Outlast the dismissal animation so a closing drawer is caught.
+        Thread.sleep(forTimeInterval: 1)
+        attachScreenshot(app, name: "drawer-after-top-padding-tap")
+        XCTAssertTrue(
+            closeDrawer.exists && closeDrawer.isHittable,
+            "A tap on the drawer's own padding must not dismiss the drawer"
+        )
+    }
+
+    @MainActor
+    func testCreateNewSongTapRightAfterOpeningDrawerIsHonoured() throws {
+        let app = isolatedUITestApp()
+        app.launch()
+        createNewSong(in: app)
+        let lyrics = app.textViews["lyricsEditor"]
+        XCTAssertTrue(lyrics.waitForExistence(timeout: 5))
+        lyrics.tap()
+        lyrics.typeText("Draft that must be replaced")
+        // No settle wait on purpose: the tap follows the open as fast as
+        // XCUITest can deliver it and must still create the song.
+        app.buttons["Open songs drawer"].tap()
+        let createNewSong = app.buttons["Create New Song"]
+        createNewSong.tap()
+        let drawerGone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: createNewSong
+        )
+        let outcome = XCTWaiter().wait(for: [drawerGone], timeout: 5)
+        attachScreenshot(app, name: "drawer-after-immediate-create-tap")
+        XCTAssertEqual(outcome, .completed, "Create New Song tapped right after opening must close the drawer")
+        XCTAssertEqual(lyrics.value as? String, "", "Create New Song tapped right after opening must open an empty draft")
+    }
+
+    @MainActor
     func testSongNotebookKeepsAndInsertsAlternateWithoutReplacingDraft() throws {
         let app = isolatedUITestApp()
         app.launch()
