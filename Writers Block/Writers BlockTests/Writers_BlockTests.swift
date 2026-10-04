@@ -699,6 +699,28 @@ struct Writers_BlockTests {
         #expect(service.parseSuggestionList("```json\n[]\n```") == [])
     }
 
+    @Test func localFrameworkFailureBecomesActionableMessage() {
+        // The raw failure seen when the system model reports available but cannot run.
+        let raw = NSError(domain: "FoundationModels.LanguageModelError", code: -1)
+
+        let withGemma = AIService.mapLocalGenerationError(raw, gemmaDownloadAvailable: true)
+        let withoutGemma = AIService.mapLocalGenerationError(raw, gemmaDownloadAvailable: false)
+
+        #expect(withGemma.localizedDescription == "The on-device model couldn't respond on this device. Download Gemma or choose a cloud provider in Settings.")
+        #expect(withoutGemma.localizedDescription == "The on-device model couldn't respond on this device. Choose a cloud provider in Settings.")
+        #expect(!withGemma.localizedDescription.contains("FoundationModels"))
+    }
+
+    @Test func localErrorMappingKeepsRecognizedAndUnrelatedErrors() {
+        let recognized = AIService.mapLocalGenerationError(AIServiceError.decodingError)
+        let cancelled = AIService.mapLocalGenerationError(CancellationError())
+        let unrelated = AIService.mapLocalGenerationError(URLError(.timedOut))
+
+        #expect(recognized.localizedDescription == "Failed to parse AI response.")
+        #expect(cancelled is CancellationError)
+        #expect((unrelated as? URLError)?.code == .timedOut)
+    }
+
     @MainActor
     @Test func cloudSuggestionSurfacesNoKeyBeforeNetworkWork() async throws {
         do {
