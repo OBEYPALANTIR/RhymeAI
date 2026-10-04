@@ -325,6 +325,9 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var cloudBackupIsWorking: Bool = false
     private var activeCloudEditorOperation: CloudEditorOperation?
     private var pendingRecordingRecovery: OpenRecordingSnapshot?
+    /// Why the last `beginCloudEditorOperation` refused, when it has a reason
+    /// more specific than the caller's default message.
+    private var cloudOperationRefusalReason: String?
     private let draftRecoveryURL: URL?
     private let libraryIsCloudBacked: (ModelContainer) -> Bool
     private var didAttemptDraftRecovery = false
@@ -2077,7 +2080,8 @@ final class EditorViewModel: ObservableObject {
         }
         guard beginCloudEditorOperation(in: context) else {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Backup canceled. Save the open song before retrying; your edits remain open."
+            cloudBackupStatusText = "Backup canceled. "
+                + (cloudOperationRefusalReason ?? "Save the open song before retrying; your edits remain open.")
             return
         }
 
@@ -2148,6 +2152,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func beginCloudEditorOperation(in context: ModelContext) -> Bool {
+        cloudOperationRefusalReason = nil
         guard activeCloudEditorOperation == nil else { return false }
         let draft = openDraft
         let hadPendingEdit: Bool
@@ -2179,7 +2184,15 @@ final class EditorViewModel: ObservableObject {
             recordingProjectId: currentProjectId,
             recordingSnapshot: recordingSnapshot
         )
-        updateDraftRecoveryCopy()
+        // An edit that was pending when the operation begins needs its recovery
+        // copy from the start: the operation may replace the song, and nothing
+        // rewrites the copy unless the user types again. Without it, do not
+        // start. The edit is already saved in the library by the flush above.
+        guard updateDraftRecoveryCopy() else {
+            finishCloudEditorOperation()
+            cloudOperationRefusalReason = "A safety copy of the open song could not be written. Free up storage and try again; your edits are saved."
+            return false
+        }
         return true
     }
 
@@ -2244,7 +2257,8 @@ final class EditorViewModel: ObservableObject {
         }
         guard beginCloudEditorOperation(in: context) else {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Restore canceled. Save the open song before retrying; your edits remain open."
+            cloudBackupStatusText = "Restore canceled. "
+                + (cloudOperationRefusalReason ?? "Save the open song before retrying; your edits remain open.")
             return
         }
 
@@ -2648,7 +2662,8 @@ final class EditorViewModel: ObservableObject {
         }
         guard beginCloudEditorOperation(in: context) else {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Background backup canceled. Your open draft could not be saved."
+            cloudBackupStatusText = "Background backup canceled. "
+                + (cloudOperationRefusalReason ?? "Your open draft could not be saved.")
             return
         }
         cloudBackupIsWorking = true

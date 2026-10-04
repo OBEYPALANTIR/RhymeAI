@@ -488,16 +488,21 @@ struct DraftRecoveryTests {
     @Test func failedRecoveryWriteDoesNotLeaveFailedStatusAfterTheOperationSavesTheDraft() async throws {
         let harness = try RecoveryHarness()
         let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
-        try Data().write(to: harness.recoveryURL.deletingLastPathComponent())
         let service = GatedBackupService()
         let viewModel = harness.makeViewModel(service: service)
         viewModel.loadProject(project)
         // Pending when the backup starts: the operation saves it to the library
-        // first, and the recovery copy for it then fails to write.
+        // and writes its recovery copy before it begins.
         viewModel.lyrics = "pending before backup"
 
         let operation = Task { await viewModel.backUpNow() }
         try await service.waitUntilStarted()
+        #expect(harness.recoveryCopyExists)
+
+        // The recovery location stops being writable during the operation.
+        let folder = harness.recoveryURL.deletingLastPathComponent()
+        try FileManager.default.removeItem(at: folder)
+        try Data().write(to: folder)
         viewModel.triggerAutoSave()
         #expect(viewModel.saveStatus == .failed)
 
@@ -507,6 +512,41 @@ struct DraftRecoveryTests {
         #expect(viewModel.saveStatus == .saved)
         #expect(viewModel.errorMessage == nil)
         #expect(try harness.projects().first?.lyrics == "pending before backup")
+    }
+
+    @Test(arguments: ["backup", "restore", "background"])
+    func operationDoesNotStartWhenAPendingEditCannotGetItsRecoveryCopy(kind: String) async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try Data().write(to: harness.recoveryURL.deletingLastPathComponent())
+        let service = GatedBackupService()
+        service.release()
+        let viewModel = harness.makeViewModel(service: service)
+        viewModel.loadProject(project)
+        viewModel.lyrics = "pending before backup"
+
+        switch kind {
+        case "backup": await viewModel.backUpNow()
+        case "restore": await viewModel.restoreBackupNow()
+        default: await viewModel.runCloudBackupOnBackgroundIfPossible()
+        }
+
+        // Refused before the service was asked to do anything.
+        #expect(!service.started)
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText.contains("safety copy of the open song could not be written"))
+        #expect(!viewModel.cloudBackupIsWorking)
+        // The pending edit was saved to the library before the refusal, and no
+        // operation holds the library, so nothing is unsaved or unprotected.
+        #expect(viewModel.saveStatus == .saved)
+        #expect(viewModel.errorMessage == nil)
+        #expect(try harness.projects().first?.lyrics == "pending before backup")
+
+        // Editing and deleting work as usual afterwards.
+        viewModel.lyrics = "typed after the refusal"
+        #expect(viewModel.flushCurrentDraft())
+        #expect(try harness.projects().first?.lyrics == "typed after the refusal")
+        #expect(viewModel.projectDeletionNotice == nil)
     }
 
     @Test func deletingASongDuringBackupSaysWhenItCanBeDeleted() async throws {
