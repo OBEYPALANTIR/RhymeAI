@@ -315,7 +315,11 @@ struct AssistantPanelView: View {
                     Label(localStatusTitle, systemImage: "desktopcomputer")
                         .font(.subheadline.weight(.semibold))
                     Text(readiness.detail).font(.caption).foregroundStyle(.secondary)
+                    // Bordered like the panel's other secondary actions: as plain
+                    // text in the ink-coloured tint it read as a caption.
                     Button("Local model setup") { showModelSetup = true }
+                        .buttonStyle(.bordered)
+                        .tint(appearance.palette.action)
                         .frame(minHeight: RhymeAITokens.Touch.minimum)
                 }
                 .accessibilityIdentifier("localAIReadiness")
