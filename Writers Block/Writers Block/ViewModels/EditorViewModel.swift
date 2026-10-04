@@ -1755,7 +1755,7 @@ final class EditorViewModel: ObservableObject {
         guard activeCloudEditorOperation == nil else { return false }
         guard currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return true }
         guard let context = modelContext else {
-            saveStatus = .idle
+            saveStatus = .failed
             errorMessage = "Couldn't save this song. Your edits remain open."
             return false
         }
@@ -1792,7 +1792,8 @@ final class EditorViewModel: ObservableObject {
         } catch {
             context.rollback()
             if let createdProjectID { pendingRecordingRecovery?.removeCopy(for: createdProjectID) }
-            saveStatus = .idle
+            // .failed keeps the editor's retry control visible; the edits are still in memory.
+            saveStatus = .failed
             errorMessage = "Couldn't save this song. Your edits remain open."
             return false
         }
