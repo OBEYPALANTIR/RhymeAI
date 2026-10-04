@@ -612,7 +612,10 @@ final class Writers_BlockUITests: XCTestCase {
         let sectionMenu = app.buttons["sectionMenuButton"]
         XCTAssertTrue(sectionMenu.waitForExistence(timeout: 3))
         sectionMenu.tap()
-        let bridgeSection = app.buttons["sectionMenuBridge"]
+        // iOS 27 menus expose SwiftUI menu items by label only, so accept either.
+        let bridgeSection = app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "sectionMenuBridge", "Bridge")
+        ).firstMatch
         XCTAssertTrue(bridgeSection.waitForExistence(timeout: 3))
         bridgeSection.tap()
 
@@ -664,7 +667,7 @@ final class Writers_BlockUITests: XCTestCase {
             let option = app.buttons[name]
             XCTAssertTrue(option.waitForExistence(timeout: 5))
             option.tap()
-            XCTAssertEqual(option.value as? String, "Selected")
+            XCTAssertTrue(option.isSelected, "\(name) did not apply immediately")
             XCTAssertTrue(app.buttons["saveSettingsButton"].isHittable)
         }
     }
@@ -1004,7 +1007,7 @@ final class Writers_BlockUITests: XCTestCase {
         let openDrawerButton = app.buttons["Open songs drawer"]
         XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
         openDrawerButton.tap()
-        let deleteButton = app.buttons["Delete UI Trash Song"]
+        let deleteButton = app.buttons["Move UI Trash Song to Trash"]
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         deleteButton.tap()
 
@@ -1012,7 +1015,7 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(undoButton.waitForExistence(timeout: 3))
         undoButton.tap()
 
-        XCTAssertTrue(app.buttons["Delete UI Trash Song"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Move UI Trash Song to Trash"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -1023,7 +1026,7 @@ final class Writers_BlockUITests: XCTestCase {
         let openDrawerButton = app.buttons["Open songs drawer"]
         XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
         openDrawerButton.tap()
-        let deleteButton = app.buttons["Delete UI Trash Song"]
+        let deleteButton = app.buttons["Move UI Trash Song to Trash"]
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         deleteButton.tap()
 
@@ -1117,6 +1120,8 @@ final class Writers_BlockUITests: XCTestCase {
     @MainActor
     func testAssistantOfflineFailureShowsConnectionMessage() throws {
         let app = isolatedUITestApp(arguments: [
+            "-selectedProvider",
+            "GEMINI",
             "--ui-test-seed-prosody-song",
             "--ui-test-open-assistant"
         ])
@@ -1126,6 +1131,7 @@ final class Writers_BlockUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
         app.buttons["Suggest Next Line"].tap()
+        approveCloudAISharing(in: app)
 
         XCTAssertTrue(
             app.staticTexts["Provider request failed — check your connection and try again."]
@@ -1179,8 +1185,8 @@ final class Writers_BlockUITests: XCTestCase {
             XCTAssertTrue(app.buttons["Open songs drawer"].waitForExistence(timeout: 5))
             app.buttons["Open songs drawer"].tap()
 
-            XCTAssertTrue(app.buttons["Delete UI Trash Song"].waitForExistence(timeout: 5))
-            app.buttons["Delete UI Trash Song"].tap()
+            XCTAssertTrue(app.buttons["Move UI Trash Song to Trash"].waitForExistence(timeout: 5))
+            app.buttons["Move UI Trash Song to Trash"].tap()
 
             // Delete is immediate (no confirmation); the undo toast confirms the move.
             XCTAssertTrue(app.buttons["Undo"].waitForExistence(timeout: 3))
@@ -1328,6 +1334,8 @@ final class Writers_BlockUITests: XCTestCase {
     @MainActor
     func testReleaseSuggestionNoKeyFailsGracefully() throws {
         let app = isolatedUITestApp(arguments: [
+            "-selectedProvider",
+            "GEMINI",
             "--ui-test-seed-prosody-song",
             "--ui-test-open-assistant"
         ])
@@ -1335,6 +1343,7 @@ final class Writers_BlockUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
         app.buttons["Suggest Next Line"].tap()
+        approveCloudAISharing(in: app)
         XCTAssertTrue(
             app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
                 .firstMatch
@@ -1345,6 +1354,8 @@ final class Writers_BlockUITests: XCTestCase {
     @MainActor
     func testReleaseRewriteNoKeyFailsGracefully() throws {
         let app = isolatedUITestApp(arguments: [
+            "-selectedProvider",
+            "GEMINI",
             "--ui-test-seed-rewrite-selection",
             "--ui-test-force-rewrite-bar"
         ])
@@ -1352,6 +1363,7 @@ final class Writers_BlockUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Rephrase"].waitForExistence(timeout: 5))
         app.buttons["Rephrase"].tap()
+        approveCloudAISharing(in: app)
 
         XCTAssertTrue(app.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5))
         XCTAssertTrue(
@@ -1383,7 +1395,10 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(app.images["Saved"].waitForExistence(timeout: 5))
         attachScreenshot(app, name: "release-populated-editor")
 
-        app.buttons["Share"].tap()
+        app.buttons["songActionsButton"].tap()
+        let exportButton = app.buttons["Export"]
+        XCTAssertTrue(exportButton.waitForExistence(timeout: 3))
+        exportButton.tap()
         XCTAssertTrue(app.staticTexts["Export Song"].waitForExistence(timeout: 5))
         XCTAssertTrue(
             app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Plain Text"))
@@ -1395,10 +1410,17 @@ final class Writers_BlockUITests: XCTestCase {
 
         let unblockButton = app.buttons["unblockButton"]
         XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
-        unblockButton.tap()
+        // Regular-width layouts keep the assistant open as an inline panel,
+        // where this button would hide it instead.
+        if !app.staticTexts["Assistant"].exists {
+            unblockButton.tap()
+        }
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
         attachScreenshot(app, name: "release-assistant-panel")
-        app.buttons["Close Assistant"].tap()
+        // Sheet close on compact width, inline panel hide on regular width.
+        app.buttons.matching(
+            NSPredicate(format: "label IN %@", ["Close Assistant", "Hide Assistant"])
+        ).firstMatch.tap()
 
         app.terminate()
 
@@ -1413,6 +1435,7 @@ final class Writers_BlockUITests: XCTestCase {
         suggestionApp.launch()
         XCTAssertTrue(suggestionApp.staticTexts["Assistant"].waitForExistence(timeout: 5))
         suggestionApp.buttons["Suggest Next Line"].tap()
+        approveCloudAISharing(in: suggestionApp)
         XCTAssertTrue(
             suggestionApp.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
                 .firstMatch
@@ -1433,6 +1456,7 @@ final class Writers_BlockUITests: XCTestCase {
         rewriteApp.launch()
         XCTAssertTrue(rewriteApp.buttons["Rephrase"].waitForExistence(timeout: 5))
         rewriteApp.buttons["Rephrase"].tap()
+        approveCloudAISharing(in: rewriteApp)
         XCTAssertTrue(rewriteApp.descendants(matching: .any)["inlineRewriteReviewBar"].waitForExistence(timeout: 5))
         XCTAssertTrue(
             rewriteApp.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No API key set"))
@@ -1517,7 +1541,7 @@ final class Writers_BlockUITests: XCTestCase {
                 let appearance = app.buttons[name]
                 XCTAssertTrue(appearance.isHittable)
                 appearance.tap()
-                XCTAssertEqual(appearance.value as? String, "Selected")
+                XCTAssertTrue(appearance.isSelected)
             }
         }
     }
@@ -1659,6 +1683,14 @@ final class Writers_BlockUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-in-memory-store"] + arguments
         return app
+    }
+
+    /// Cloud providers ask for sharing consent before the first request of a
+    /// fresh install; the request only proceeds after the writer allows it.
+    private func approveCloudAISharing(in app: XCUIApplication) {
+        let allow = app.alerts.buttons["Allow and Continue"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 5), "Cloud AI sharing consent prompt did not appear")
+        allow.tap()
     }
 
     private func createNewSong(in app: XCUIApplication) {
