@@ -183,10 +183,13 @@ struct SettingsLocalModelSection: View {
                 }
                 .accessibilityIdentifier("customGGUF.\(model.id)")
             }
-            Button("Import GGUF Model", systemImage: "square.and.arrow.down") {
+            Button {
                 customModelImporterPresented = true
+            } label: {
+                Label("Import GGUF Model", systemImage: "square.and.arrow.down")
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .contentShape(Rectangle())
             }
-            .frame(minHeight: RhymeAITokens.Touch.minimum)
             .accessibilityIdentifier("importCustomGGUFModel")
             if let customImportError { Text(customImportError).foregroundStyle(appearance.palette.error) }
         }
