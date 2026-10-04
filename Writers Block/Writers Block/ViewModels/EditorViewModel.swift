@@ -1151,7 +1151,7 @@ final class EditorViewModel: ObservableObject {
                       self.inspectorRange == range,
                       self.currentLine(for: range) == lineContext,
                       self.currentInspectorSynonymIdentity == identity else { return }
-                self.inspectorSynonymsError = error.localizedDescription
+                self.inspectorSynonymsError = SynonymResultPresentation.message(for: error)
                 self.inspectorSynonymsRecovery = SynonymResultPresentation.recoveryAction(
                     resultCount: self.inspectorSynonyms.count,
                     error: error
