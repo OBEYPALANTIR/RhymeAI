@@ -171,7 +171,7 @@ struct SettingsView: View {
                     set: { viewModel.setCloudAISharingConsent($0, scope: .selectedContext) }
                 )
             )
-            .tint(.indigo)
+            .tint(appearance.palette.action)
             .accessibilityIdentifier("cloudAISelectedContextConsent")
 
             Toggle(
@@ -181,7 +181,7 @@ struct SettingsView: View {
                     set: { viewModel.setCloudAISharingConsent($0, scope: .wholeSong) }
                 )
             )
-            .tint(.indigo)
+            .tint(appearance.palette.action)
             .accessibilityIdentifier("cloudAIWholeSongConsent")
         }
         .padding(RhymeAITokens.Spacing.lg)
