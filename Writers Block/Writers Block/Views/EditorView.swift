@@ -952,7 +952,7 @@ struct EditorView: View {
             HStack(spacing: RhymeAITokens.Spacing.xxs) {
                 if !isFocusMode {
                     Menu {
-                        Menu("Insert section", systemImage: "plus") {
+                        Menu("Insert Section", systemImage: "plus") {
                             ForEach(SectionMap.standardLabels, id: \.self) { label in
                                 Button(label) { viewModel.insertSection(label) }
                                     .accessibilityIdentifier("sectionMenu\(label.filter(\.isLetter))")
@@ -960,7 +960,7 @@ struct EditorView: View {
                         }
                         .disabled(viewModel.hasActiveRewrite)
                         .accessibilityIdentifier("sectionMenuButton")
-                        Button("Song recordings", systemImage: "waveform") {
+                        Button("Song Recordings", systemImage: "waveform") {
                             dismissKeyboard()
                             guard let id = viewModel.ensureProjectForRecording() else { return }
                             recordingSong = RecordingSong(id: id, title: viewModel.title.isEmpty ? "Untitled Song" : viewModel.title)
@@ -971,7 +971,7 @@ struct EditorView: View {
                             viewModel.showNotebook = true
                         }
                         if !viewModel.selectedLyrics.isEmpty {
-                            Button("Keep selection", systemImage: "bookmark") {
+                            Button("Keep Selection", systemImage: "bookmark") {
                                 viewModel.keepAlternate(viewModel.selectedLyrics)
                             }
                         }
