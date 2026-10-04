@@ -887,9 +887,18 @@ struct EditorView: View {
                     Button {
                         viewModel.triggerAutoSave()
                     } label: {
-                        Label("Save failed", systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .fixedSize(horizontal: false, vertical: true)
+                        // The words only fit beside the other toolbar controls
+                        // on wide layouts; elsewhere the icon stands alone
+                        // rather than wrapping letter by letter.
+                        ViewThatFits(in: .horizontal) {
+                            Label("Save failed", systemImage: "exclamationmark.triangle.fill")
+                                .lineLimit(1)
+                            Image(systemName: "exclamationmark.triangle.fill")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(appearance.palette.error)
+                        .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                        .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Save failed. Retry saving")
                 } else if viewModel.saveStatus == .saved {
