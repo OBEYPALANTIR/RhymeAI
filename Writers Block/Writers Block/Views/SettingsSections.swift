@@ -112,6 +112,7 @@ struct SettingsLocalModelSection: View {
 
     @EnvironmentObject private var ggufDownloadManager: GGUFDownloadManager
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
@@ -269,7 +270,13 @@ struct SettingsLocalModelSection: View {
             }
         } label: {
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
-                HStack(alignment: .center, spacing: RhymeAITokens.Spacing.md) {
+                // Beside each other at standard sizes; stacked at accessibility
+                // sizes, where a row left the title one or two letters wide.
+                let stacked = dynamicTypeSize.isAccessibilitySize
+                let rowLayout = stacked
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: RhymeAITokens.Spacing.sm))
+                    : AnyLayout(HStackLayout(alignment: .center, spacing: RhymeAITokens.Spacing.md))
+                rowLayout {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "arrow.down.circle.fill")
                         .font(.title3)
                         .foregroundStyle(isSelected ? appearance.palette.success : appearance.palette.action)
@@ -277,29 +284,31 @@ struct SettingsLocalModelSection: View {
                         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: RhymeAITokens.Spacing.xs) {
-                            Text(option.title)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
+                        Text(option.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
 
-                            if option.isRecommended {
-                                Text("Recommended")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(appearance.palette.action)
-                            }
+                        if option.isRecommended {
+                            Text("Recommended")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(appearance.palette.action)
                         }
 
                         Text("\(option.subtitle) · \(option.size)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
                     }
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                    Spacer(minLength: RhymeAITokens.Spacing.sm)
+                    if !stacked {
+                        Spacer(minLength: RhymeAITokens.Spacing.sm)
+                    }
 
                     Text(downloadActionTitle(isDownloaded: isDownloaded, isSelected: isSelected, isDownloading: isDownloading))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(isSelected ? appearance.palette.success : appearance.palette.primaryInk)
+                        .fixedSize()
                         .padding(.horizontal, RhymeAITokens.Spacing.sm)
                         .padding(.vertical, 7)
                         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.05), fallbackOpacity: 0.07)
@@ -311,6 +320,7 @@ struct SettingsLocalModelSection: View {
                         .accessibilityValue("\(Int(ggufDownloadManager.progress * 100)) percent")
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(RhymeAITokens.Spacing.md)
             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
         }
