@@ -47,7 +47,7 @@ final class AppAppearanceUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
         attachScreenshot(app, name: "appearance-graphite-keyboard-caret")
 
-        let assistantButton = app.buttons["Open Assistant"]
+        let assistantButton = app.buttons["unblockButton"]
         XCTAssertTrue(assistantButton.waitForExistence(timeout: 3))
         assistantButton.tap()
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
