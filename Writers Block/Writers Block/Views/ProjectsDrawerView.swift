@@ -199,8 +199,13 @@ struct ProjectsDrawerView: View {
                         // shape of its own the panel's padding and gaps let taps
                         // fall through to the scrim and dismiss the drawer.
                         .contentShape(Rectangle())
-                        .background(AppWritingBackground())
-                        .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
+                        // The shadow belongs to the panel surface. Applied to
+                        // the content it also rendered under every control,
+                        // which read as grey smudges on the light appearances.
+                        .background {
+                            AppWritingBackground()
+                                .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
+                        }
                         // Push-style reveal: while the trash screen slides in from
                         // the right, the drawer slides toward the left like a
                         // navigation push instead of sitting still under an overlay.
