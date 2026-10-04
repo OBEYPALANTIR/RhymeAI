@@ -306,6 +306,100 @@ struct DraftRecoveryTests {
         #expect(projects.count == 2)
     }
 
+    @Test func cloudBackedLibraryRecoversAsSeparateSongInsteadOfUpdatingInPlace() async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try await harness.leaveRecoveryCopy(for: project, typing: "typed during backup")
+
+        // The stored song still matches what the editor started from, but another
+        // device's newer version may not have been downloaded yet.
+        let relaunched = harness.makeViewModel(cloudBacked: true)
+
+        let projects = try harness.projects()
+        #expect(projects.count == 2)
+        #expect(projects.first(where: { $0.id == "song-a" })?.lyrics == "saved A")
+        let recovered = try #require(projects.first(where: { $0.id != "song-a" }))
+        #expect(recovered.lyrics == "typed during backup")
+        #expect(relaunched.currentProjectId == recovered.id)
+        #expect(!harness.recoveryCopyExists)
+    }
+
+    @Test func recordingsFollowDraftRecoveredAfterRestoreDeletedTheSong() async throws {
+        let harness = try RecoveryHarness()
+        let audio = Data("take one".utf8)
+        try await harness.leaveRecoveryCopyAfterRestoreDeletesSong(recording: audio, typing: "typed during restore")
+        #expect(try harness.recordings(for: "song-a").isEmpty)
+        #expect(try harness.stagedSnapshots().count == 1)
+
+        let relaunched = harness.makeViewModel()
+
+        let projects = try harness.projects()
+        #expect(projects.count == 1)
+        let recovered = try #require(projects.first)
+        #expect(recovered.id != "song-a")
+        #expect(recovered.lyrics == "typed during restore")
+        #expect(relaunched.currentProjectId == recovered.id)
+        #expect(try harness.recordings(for: recovered.id) == ["100.m4a": audio])
+        #expect(try harness.stagedSnapshots().isEmpty)
+        #expect(!harness.recoveryCopyExists)
+    }
+
+    @Test func recordingSnapshotIsKeptUntilTheRecoveredSongIsSaved() async throws {
+        let harness = try RecoveryHarness()
+        let audio = Data("take one".utf8)
+        try await harness.leaveRecoveryCopyAfterRestoreDeletesSong(recording: audio, typing: "typed during restore")
+
+        let failedLaunch = harness.makeViewModel { _ in throw CocoaError(.fileWriteUnknown) }
+
+        #expect(failedLaunch.errorMessage != nil)
+        #expect(try harness.projects().isEmpty)
+        #expect(harness.recoveryCopyExists)
+        let staged = try harness.stagedSnapshots()
+        #expect(staged.count == 1)
+        #expect(try staged.first.map { try Data(contentsOf: $0.appendingPathComponent("100.m4a")) } == audio)
+        // The failed attempt leaves no recordings under a song that was not saved.
+        #expect(try harness.recordingFolders().isEmpty)
+
+        _ = harness.makeViewModel()
+
+        let recovered = try #require(try harness.projects().first)
+        #expect(recovered.lyrics == "typed during restore")
+        #expect(try harness.recordings(for: recovered.id) == ["100.m4a": audio])
+        #expect(try harness.stagedSnapshots().isEmpty)
+    }
+
+    @Test func unreferencedRecordingSnapshotIsRemovedOnlyWhenLiveCopiesExist() async throws {
+        // Killed during a backup with nothing typed: the snapshot duplicates
+        // recordings the song still has.
+        let redundant = try RecoveryHarness()
+        let kept = try redundant.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try redundant.writeRecording(Data("take one".utf8), named: "100.m4a", projectId: "song-a")
+        let service = GatedBackupService()
+        let viewModel = redundant.makeViewModel(service: service)
+        viewModel.loadProject(kept)
+        Task { await viewModel.backUpNow() }
+        try await service.waitUntilStarted()
+        #expect(try redundant.stagedSnapshots().count == 1)
+        #expect(!redundant.recoveryCopyExists)
+
+        _ = redundant.makeViewModel()
+
+        #expect(try redundant.stagedSnapshots().isEmpty)
+        #expect(try redundant.recordings(for: "song-a").count == 1)
+
+        // Killed during a restore that deleted the song, with nothing typed: the
+        // snapshot is the only copy of the audio left on the device.
+        let onlyCopy = try RecoveryHarness()
+        try await onlyCopy.leaveRecoveryCopyAfterRestoreDeletesSong(recording: Data("take one".utf8), typing: nil)
+        #expect(!onlyCopy.recoveryCopyExists)
+
+        _ = onlyCopy.makeViewModel()
+
+        let staged = try onlyCopy.stagedSnapshots()
+        #expect(staged.count == 1)
+        #expect(try staged.first.map { try Data(contentsOf: $0.appendingPathComponent("100.m4a")) } == Data("take one".utf8))
+    }
+
     @Test func deletingASongDuringBackupSaysWhenItCanBeDeleted() async throws {
         let harness = try RecoveryHarness()
         let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
@@ -334,6 +428,7 @@ struct DraftRecoveryTests {
 private struct RecoveryHarness {
     let container: ModelContainer
     let recoveryURL: URL
+    let memosRoot: URL
 
     var context: ModelContext { container.mainContext }
 
@@ -373,6 +468,7 @@ private struct RecoveryHarness {
             schema: schema, url: root.appendingPathComponent("library.store"), cloudKitDatabase: .none
         )
         container = try ModelContainer(for: schema, configurations: [configuration])
+        memosRoot = root.appendingPathComponent("voice-memos", isDirectory: true)
         recoveryURL = root
             .appendingPathComponent("DraftRecovery", isDirectory: true)
             .appendingPathComponent("open-draft.json")
@@ -389,15 +485,71 @@ private struct RecoveryHarness {
         try context.fetch(FetchDescriptor<SongProject>())
     }
 
+    func writeRecording(_ data: Data, named name: String, projectId: String) throws {
+        let folder = memosRoot.appendingPathComponent(projectId, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try data.write(to: folder.appendingPathComponent(name))
+    }
+
+    func recordingFolders() throws -> [URL] {
+        guard FileManager.default.fileExists(atPath: memosRoot.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: memosRoot, includingPropertiesForKeys: nil)
+    }
+
+    func recordings(for projectId: String) throws -> [String: Data] {
+        let folder = memosRoot.appendingPathComponent(projectId, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: folder.path) else { return [:] }
+        var result: [String: Data] = [:]
+        for url in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) {
+            result[url.lastPathComponent] = try Data(contentsOf: url)
+        }
+        return result
+    }
+
+    /// Recording snapshots a session took for an operation and has not discarded.
+    func stagedSnapshots() throws -> [URL] {
+        let staging = memosRoot.deletingLastPathComponent()
+            .appendingPathComponent("recording-recovery", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: staging.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil)
+    }
+
+    /// Opens "song-a" with one recording, starts a restore that deletes the song
+    /// and its recordings and then never finishes, and optionally types into it.
+    func leaveRecoveryCopyAfterRestoreDeletesSong(recording: Data, typing lyrics: String?) async throws {
+        let project = try seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try writeRecording(recording, named: "100.m4a", projectId: "song-a")
+        let songFolder = memosRoot.appendingPathComponent("song-a", isDirectory: true)
+        let service = GatedBackupService()
+        service.onStart = { context in
+            context.delete(project)
+            try context.save()
+            try FileManager.default.removeItem(at: songFolder)
+        }
+        let viewModel = makeViewModel(service: service)
+        viewModel.loadProject(project)
+        Task { await viewModel.restoreBackupNow() }
+        try await service.waitUntilStarted()
+        if let lyrics {
+            viewModel.lyrics = lyrics
+            viewModel.triggerAutoSave()
+            try #require(FileManager.default.fileExists(atPath: recoveryURL.path))
+        }
+    }
+
     /// A new view model on the same store and recovery file, as after a launch.
     func makeViewModel(
         service: GatedBackupService? = nil,
+        cloudBacked: Bool? = nil,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) -> EditorViewModel {
+        let service = service ?? GatedBackupService()
+        service.recordingRecoveryRoot = memosRoot
         let viewModel = EditorViewModel(
             keychainStore: InMemoryKeychainStore(),
-            backupService: service ?? GatedBackupService(),
+            backupService: service,
             draftRecoveryURL: recoveryURL,
+            libraryIsCloudBacked: cloudBacked.map { value in { _ in value } },
             saveModelContext: save
         )
         viewModel.modelContext = context
@@ -411,6 +563,7 @@ private struct RecoveryHarness {
 private final class GatedBackupService: CloudBackupServicing {
     var isConfigured = true
     var hasStoredPassphrase = true
+    var recordingRecoveryRoot: URL?
     var onStart: ((ModelContext) throws -> Void)?
     private(set) var started = false
     private let gate: AsyncStream<Void>
