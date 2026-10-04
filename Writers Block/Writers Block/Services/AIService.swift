@@ -4,6 +4,8 @@ import FoundationModels
 enum AIServiceError: LocalizedError {
     case noApiKey(provider: String)
     case localModelUnavailable(reason: String)
+    case localGenerationFailed(gemmaDownloadAvailable: Bool)
+    case localModelBusy
     case invalidResponse
     case apiError(statusCode: Int, message: String)
     case networkUnavailable
@@ -20,6 +22,12 @@ enum AIServiceError: LocalizedError {
             return "No API key set. Go to Settings to add your \(provider) API key."
         case .localModelUnavailable(let reason):
             return "On-device model unavailable: \(reason)"
+        case .localGenerationFailed(let gemmaDownloadAvailable):
+            return gemmaDownloadAvailable
+                ? "The on-device model couldn't respond on this device. Download Gemma or choose a cloud provider in Settings."
+                : "The on-device model couldn't respond on this device. Choose a cloud provider in Settings."
+        case .localModelBusy:
+            return "The on-device model is busy. Try again in a moment."
         case .invalidResponse:
             return "Invalid response from server."
         case .apiError(let code, let msg):
@@ -1137,9 +1145,14 @@ struct AIService {
         )
         // Explicit token caps silently truncate Foundation Models responses.
         // Require natural completion so a cut-off tail cannot become a lyric.
-        let response = try await session.respond(to: prompt)
+        let content: String
+        do {
+            content = try await session.respond(to: prompt).content
+        } catch {
+            throw Self.mapLocalGenerationError(error)
+        }
         try Task.checkCancellation()
-        return try validatedLocalSuggestions(response.content, lyrics: lyrics, limit: limit)
+        return try validatedLocalSuggestions(content, lyrics: lyrics, limit: limit)
     }
 
     static func localSnapshotDelta(previous: String, current: String) throws -> String {
@@ -1169,7 +1182,7 @@ struct AIService {
                     try Task.checkCancellation()
                     continuation.finish()
                 } catch {
-                    continuation.finish(throwing: error)
+                    continuation.finish(throwing: Self.mapLocalGenerationError(error))
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
@@ -1899,15 +1912,51 @@ struct AIService {
         throw AIServiceError.decodingError
     }
 
-    /// Surfaces on-device guardrail refusals as the recognized safety error
-    /// instead of a raw FoundationModels failure.
-    @available(iOS 26.0, *)
-    private static func mapLocalGenerationError(_ error: Error) -> Error {
-        if let generationError = error as? LanguageModelSession.GenerationError,
+    /// Surfaces on-device generation failures as recognized errors instead of
+    /// raw FoundationModels failures: guardrail refusals become the safety
+    /// error, and any other framework failure (for example a simulator or
+    /// device that reports the model available but cannot run it) becomes an
+    /// actionable message.
+    static func mapLocalGenerationError(
+        _ error: Error,
+        gemmaDownloadAvailable: Bool = GGUFModelService.isEngineAvailable
+    ) -> Error {
+        if error is CancellationError || error is AIServiceError { return error }
+        if #available(iOS 26.0, *),
+           let generationError = error as? LanguageModelSession.GenerationError,
            case .guardrailViolation = generationError {
             return AIServiceError.blockedResponse
         }
+        // Every FoundationModels error type bridges to an NSError domain
+        // prefixed with the module name, across OS releases.
+        if (error as NSError).domain.hasPrefix("FoundationModels.") {
+            return localError(
+                forFoundationModelsCase: foundationModelsCaseName(error),
+                gemmaDownloadAvailable: gemmaDownloadAvailable
+            )
+        }
         return error
+    }
+
+    /// Newer OS releases add FoundationModels error types that older SDKs do
+    /// not declare, so cases are identified by name instead of by type.
+    static func foundationModelsCaseName(_ error: Error) -> String {
+        Mirror(reflecting: error).children.first?.label ?? String(describing: error)
+    }
+
+    static func localError(
+        forFoundationModelsCase caseName: String,
+        gemmaDownloadAvailable: Bool
+    ) -> AIServiceError {
+        switch caseName {
+        case "guardrailViolation":
+            return .blockedResponse
+        case "rateLimited", "concurrentRequests":
+            // Transient: retrying is the right recovery, not changing providers.
+            return .localModelBusy
+        default:
+            return .localGenerationFailed(gemmaDownloadAvailable: gemmaDownloadAvailable)
+        }
     }
 
     func acceptLocalSingleWordRewrite(candidate: String, selection: String, action: RewriteAction) -> String {

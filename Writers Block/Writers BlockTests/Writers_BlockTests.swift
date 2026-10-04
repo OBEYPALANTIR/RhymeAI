@@ -699,6 +699,49 @@ struct Writers_BlockTests {
         #expect(service.parseSuggestionList("```json\n[]\n```") == [])
     }
 
+    @Test func localFrameworkFailureBecomesActionableMessage() {
+        // The raw failure seen when the system model reports available but cannot run.
+        let raw = NSError(domain: "FoundationModels.LanguageModelError", code: -1)
+
+        let withGemma = AIService.mapLocalGenerationError(raw, gemmaDownloadAvailable: true)
+        let withoutGemma = AIService.mapLocalGenerationError(raw, gemmaDownloadAvailable: false)
+
+        #expect(withGemma.localizedDescription == "The on-device model couldn't respond on this device. Download Gemma or choose a cloud provider in Settings.")
+        #expect(withoutGemma.localizedDescription == "The on-device model couldn't respond on this device. Choose a cloud provider in Settings.")
+        #expect(!withGemma.localizedDescription.contains("FoundationModels"))
+    }
+
+    @Test func localFrameworkCasesMapByNameSoRetryableFailuresStayRetryable() throws {
+        let busy = AIService.localError(forFoundationModelsCase: "rateLimited", gemmaDownloadAvailable: true)
+        let concurrent = AIService.localError(forFoundationModelsCase: "concurrentRequests", gemmaDownloadAvailable: true)
+        let blocked = AIService.localError(forFoundationModelsCase: "guardrailViolation", gemmaDownloadAvailable: true)
+        let unknown = AIService.localError(forFoundationModelsCase: "assetsUnavailable", gemmaDownloadAvailable: false)
+
+        let busyMessage = try #require(busy.errorDescription)
+        #expect(busyMessage == "The on-device model is busy. Try again in a moment.")
+        #expect(concurrent.errorDescription == busyMessage)
+        #expect(AIErrorRecoveryAction(errorMessage: busyMessage) == .retry)
+        #expect(blocked.errorDescription == AIServiceError.blockedResponse.errorDescription)
+        #expect(unknown.errorDescription == "The on-device model couldn't respond on this device. Choose a cloud provider in Settings.")
+    }
+
+    @Test func foundationModelsCaseNameReadsEnumCasesWithAndWithoutPayloads() {
+        enum Sample: Error { case rateLimited(detail: String), assetsUnavailable }
+
+        #expect(AIService.foundationModelsCaseName(Sample.rateLimited(detail: "x")) == "rateLimited")
+        #expect(AIService.foundationModelsCaseName(Sample.assetsUnavailable) == "assetsUnavailable")
+    }
+
+    @Test func localErrorMappingKeepsRecognizedAndUnrelatedErrors() {
+        let recognized = AIService.mapLocalGenerationError(AIServiceError.decodingError)
+        let cancelled = AIService.mapLocalGenerationError(CancellationError())
+        let unrelated = AIService.mapLocalGenerationError(URLError(.timedOut))
+
+        #expect(recognized.localizedDescription == "Failed to parse AI response.")
+        #expect(cancelled is CancellationError)
+        #expect((unrelated as? URLError)?.code == .timedOut)
+    }
+
     @MainActor
     @Test func cloudSuggestionSurfacesNoKeyBeforeNetworkWork() async throws {
         do {

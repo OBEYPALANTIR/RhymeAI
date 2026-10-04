@@ -505,6 +505,9 @@ final class EditorViewModel: ObservableObject {
             isSyllableColoringEnabled = true
             showWelcome = false
         }
+        if UITestFlags.isEnabled(UITestFlags.forceSaveFailed) {
+            saveStatus = .failed
+        }
         refreshCloudBackupState()
     }
 

@@ -984,6 +984,7 @@ struct EditorView: View {
                             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                     }
                     .accessibilityLabel("Settings")
+                    .accessibilityIdentifier("settingsButton")
                 }
             }
             .frame(width: RhymeAITokens.Touch.minimum * 2 + RhymeAITokens.Spacing.xxs, height: RhymeAITokens.Touch.minimum)

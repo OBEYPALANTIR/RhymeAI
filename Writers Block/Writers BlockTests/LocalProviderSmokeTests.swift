@@ -42,8 +42,9 @@ final class LocalProviderSmokeTests: XCTestCase {
                 if attempt == maxAttempts {
                     #if targetEnvironment(simulator)
                     // See verifyLocalRewrite: simulator generation failures from
-                    // FoundationModels are environmental, not app defects.
-                    if (error as NSError).domain.hasPrefix("FoundationModels.") {
+                    // FoundationModels (surfaced as localGenerationFailed) are
+                    // environmental, not app defects.
+                    if case AIServiceError.localGenerationFailed = error {
                         throw XCTSkip("Simulator Apple Intelligence generation failed: \(error)")
                     }
                     #endif
@@ -170,9 +171,10 @@ final class LocalProviderSmokeTests: XCTestCase {
                     #if targetEnvironment(simulator)
                     // The simulator reports the on-device model as available but
                     // generation can still fail with an opaque FoundationModels
-                    // error; that's a simulator limitation, not an app defect.
+                    // error, which the service surfaces as localGenerationFailed;
+                    // that's a simulator limitation, not an app defect.
                     // Real-device runs stay strict.
-                    if (error as NSError).domain.hasPrefix("FoundationModels.") {
+                    if case AIServiceError.localGenerationFailed = error {
                         throw XCTSkip("Simulator Apple Intelligence generation failed: \(error)")
                     }
                     #endif
