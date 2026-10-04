@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import time
+import traceback
 
 BASE = "google/gemma-4-12B-it"
 REVISION = "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7"
@@ -324,6 +325,7 @@ def main():
         status.update(status="failed", error=type(error).__name__ + ": " + str(error),
                       elapsed_s=time.time() - started)
         write_json(out / "status.json", status)
+        (out / "error-traceback.txt").write_text(traceback.format_exc())
         raise
 
 
