@@ -27,7 +27,7 @@ struct ProjectsDrawerView: View {
     @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
     @State private var searchText = ""
     @State private var fileImporterPresented = false
-    @State private var importError: String?
+    @State private var drawerError: String?
     @State private var drawerVisible = false
     @State private var isClosing = false
     @State private var undoToast: UndoToast?
@@ -349,7 +349,7 @@ struct ProjectsDrawerView: View {
 
             HStack(spacing: RhymeAITokens.Spacing.sm) {
                 Button {
-                    importError = nil
+                    drawerError = nil
                     fileImporterPresented = true
                 } label: {
                     HStack(spacing: RhymeAITokens.Spacing.xs) {
@@ -382,8 +382,8 @@ struct ProjectsDrawerView: View {
                 .accessibilityValue(trashedProjects.isEmpty ? "Empty" : "Deleted songs available")
             }
 
-            if let importError {
-                Text(importError)
+            if let drawerError = drawerError ?? viewModel.projectDeletionNotice {
+                Text(drawerError)
                     .font(.caption)
                     .foregroundStyle(appearance.palette.error)
                     .padding(.top, RhymeAITokens.Spacing.xs)
@@ -766,7 +766,13 @@ struct ProjectsDrawerView: View {
             Button(role: .destructive) {
                 let title = project.title.isEmpty ? "Untitled Song" : project.title
                 let projectId = project.id
-                guard viewModel.moveProjectToTrash(project) else { return }
+                guard viewModel.moveProjectToTrash(project) else {
+                    // A refusal during a backup or restore is shown from the view
+                    // model's notice, which clears itself when the operation ends.
+                    drawerError = viewModel.projectDeletionNotice == nil ? viewModel.errorMessage : nil
+                    return
+                }
+                drawerError = nil
                 showUndoToast("\u{201c}\(title)\u{201d} moved to Trash") {
                     if let trashed = trashedProjects.first(where: { $0.id == projectId }) {
                         viewModel.restoreTrashedProject(trashed)
@@ -836,10 +842,10 @@ struct ProjectsDrawerView: View {
                     dismissAfterNavigation()
                 }
             } catch {
-                importError = "Could not import this file. Pick a RhymeAI project JSON."
+                drawerError = "Could not import this file. Pick a RhymeAI project JSON."
             }
         case .failure:
-            importError = "Could not open the selected file."
+            drawerError = "Could not open the selected file."
         }
     }
 }

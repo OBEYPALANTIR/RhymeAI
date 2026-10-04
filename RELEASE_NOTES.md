@@ -1,5 +1,36 @@
 # Release Notes
 
+## Pending iOS draft safety during backup and restore
+
+Text typed while a Google Drive backup or restore is running is now also
+written to a small recovery file as each edit is made. If that file cannot be
+written, the editor shows "Save failed" with Retry instead of the saving
+indicator, because that edit would not survive a kill. A backup or restore
+does not start when the open song has an unsaved edit whose recovery file
+cannot be written; the edit is saved to the library and the backup status says
+why. If the app is closed or
+killed before the operation finishes, the next launch puts that text back. With
+iCloud sync on, it always comes back as a separate song, because another
+device's newer version of the original may not have arrived yet. With a
+local-only library it goes into the same song when that song is unchanged, and
+otherwise into a separate song, so neither version is lost. A separate song
+gets the recordings the original had when the operation began. Another song
+that happens to have the same text does not count as the text having been
+saved. If the recovery cannot be saved, the copy and its recordings are kept
+and tried again on later launches; it is not recovered into the temporary
+library used when the real one cannot be opened, and a copy that cannot be read
+is set aside rather than deleted.
+
+The backup that starts when the app goes to the background now asks iOS for
+extra run time. Trying to delete a song during a backup or restore now says, in
+the song list, that it can be deleted once the operation finishes.
+
+Recording copies left behind by a killed operation are removed at the next
+launch only when identical recordings (same name and content) still exist in
+the library; otherwise they
+stay on the device and are not shown in the app. Covered by unit tests that
+drop the editor mid-operation; a real kill on a device has not been tried.
+
 ## Pending Android backup format
 
 Android writes Google Drive backups in the same v3/RAI3 format as iOS and still
