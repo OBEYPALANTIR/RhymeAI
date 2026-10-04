@@ -49,8 +49,8 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun recordingBatchLimitAppliesBeforeUploadOrRestore() {
-        val atLimit = List(4) { index ->
+    fun recordingTransferGuardRejectsOversizeEntriesButNotLargeTotals() {
+        val atBatchLimit = List(4) { index ->
             recording(
                 "p$index",
                 "clip.m4a",
@@ -59,15 +59,17 @@ class RecordingSyncTest {
                 sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES
             )
         }
-        assertEquals(DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES, requireRecordingBatchWithinLimit(atLimit))
+        assertEquals(DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES, requireTransferableRecordings(atBatchLimit))
 
-        assertFailsWith<DriveNetworkException> {
-            requireRecordingBatchWithinLimit(
-                atLimit + recording("overflow", "clip.m4a", 5L, "digest", 1L)
+        // The total is reported, not capped: restores are chunked and uploads are sequential.
+        assertEquals(
+            DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES + 1L,
+            requireTransferableRecordings(
+                atBatchLimit + recording("overflow", "clip.m4a", 5L, "digest", 1L)
             )
-        }
+        )
         assertFailsWith<DriveNetworkException> {
-            requireRecordingBatchWithinLimit(
+            requireTransferableRecordings(
                 listOf(
                     recording(
                         "large", "clip.m4a", 6L, "digest",
