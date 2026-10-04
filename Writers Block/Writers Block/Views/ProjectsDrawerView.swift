@@ -122,6 +122,8 @@ struct ProjectsDrawerView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.lg)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .frame(minHeight: RhymeAITokens.Touch.minimum)
+        // A toast, not a banner: on iPad it otherwise spans the whole screen.
+        .frame(maxWidth: RhymeAITokens.Layout.assistantReadableWidth)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.06), fallbackOpacity: 0.14)
         .shadow(color: .black.opacity(0.3), radius: 14, y: 4)
         // Auto-dismiss after 4s; a new toast restarts the clock via its id.
