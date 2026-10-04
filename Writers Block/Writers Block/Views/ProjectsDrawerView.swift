@@ -43,6 +43,7 @@ struct ProjectsDrawerView: View {
     @State private var renamingItem: RecordingItem?
     @State private var renameText: String = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.appAppearanceStyle) private var appearance
 
     init(
@@ -103,17 +104,20 @@ struct ProjectsDrawerView: View {
             Text(toast.message)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
-                .lineLimit(2)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
             Spacer(minLength: RhymeAITokens.Spacing.sm)
-            Button("Undo") {
+            Button {
                 toast.undo()
                 withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
                     undoToast = nil
                 }
+            } label: {
+                Text("Undo")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(appearance.palette.action)
+                    .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
             }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(appearance.palette.action)
-            .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+            .buttonStyle(.rhymePress)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.lg)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
@@ -327,8 +331,11 @@ struct ProjectsDrawerView: View {
                         .font(.body.weight(.semibold))
                 }
                 .foregroundStyle(appearance.palette.onAction)
+                .multilineTextAlignment(.center)
+                .padding(.vertical, RhymeAITokens.Spacing.xs)
+                .padding(.horizontal, RhymeAITokens.Spacing.sm)
                 .frame(maxWidth: .infinity)
-                .frame(height: RhymeAITokens.Spacing.xxl)
+                .frame(minHeight: RhymeAITokens.Spacing.xxl)
                 .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
             }
             .buttonStyle(.rhymePress)
@@ -366,8 +373,10 @@ struct ProjectsDrawerView: View {
                     }
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RhymeAITokens.Spacing.xs)
                     .frame(maxWidth: .infinity)
-                    .frame(height: RhymeAITokens.Touch.minimum)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
                     .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
                 }
                 .buttonStyle(.rhymePress)
@@ -732,7 +741,7 @@ struct ProjectsDrawerView: View {
             }
         }
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
-        .frame(height: RhymeAITokens.Touch.minimum)
+        .frame(minHeight: RhymeAITokens.Touch.minimum)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
     }
 
@@ -749,16 +758,27 @@ struct ProjectsDrawerView: View {
                         Text(project.title.isEmpty ? "Untitled Song" : project.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
 
-                        HStack(spacing: RhymeAITokens.Spacing.xs) {
-                            Text(project.updatedAt, style: .date)
-                            Text("·")
-                            Text("\(SyllableCounter.wordCount(project.lyrics)) words")
+                        // Side by side while both facts fit on one line;
+                        // stacked once larger text would squeeze the date
+                        // into a hyphenated column.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: RhymeAITokens.Spacing.xs) {
+                                Text(project.updatedAt, style: .date)
+                                Text("·")
+                                Text("\(SyllableCounter.wordCount(project.lyrics)) words")
+                            }
+                            .lineLimit(1)
+                            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                                Text(project.updatedAt, style: .date)
+                                Text("\(SyllableCounter.wordCount(project.lyrics)) words")
+                            }
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
+                    .multilineTextAlignment(.leading)
 
                     Spacer(minLength: 8)
 
