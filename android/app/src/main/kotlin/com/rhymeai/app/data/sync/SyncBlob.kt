@@ -160,14 +160,23 @@ data class RecordingManifestEntry(
     val identityKey: String
         get() = "$projectId/$fileName"
 
+    /**
+     * Whether this device can move the recording. Recordings are encrypted
+     * whole in memory, so a larger entry stays valid in the manifest (another
+     * device may hold it) but is never uploaded or downloaded here.
+     */
+    val isTransferable: Boolean
+        get() = sizeBytes <= MAX_SYNC_RECORDING_BYTES
+
     fun validate() {
         SyncIdentity.validateProjectId(projectId)
         SyncIdentity.validateFileName(fileName)
         require(driveName == driveNameFor(projectId, fileName)) { "Invalid recording Drive name" }
-        require(sizeBytes in 0..MAX_SYNC_RECORDING_BYTES) { "Invalid recording size" }
+        require(sizeBytes >= 0L) { "Invalid recording size" }
     }
 
     companion object {
+        /** Per-recording transfer limit for this device; not a manifest validity rule. */
         const val MAX_SYNC_RECORDING_BYTES = 16L * 1024L * 1024L
         const val DRIVE_PREFIX = "rec_"
         const val MIME_TYPE = "application/octet-stream"

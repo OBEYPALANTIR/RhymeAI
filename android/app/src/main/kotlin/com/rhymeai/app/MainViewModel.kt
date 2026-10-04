@@ -104,13 +104,19 @@ internal fun formatDriveSyncSuccessStatus(
     action: DriveSyncAction,
     projectCount: Int,
     trashedCount: Int,
-    recordingCount: Int
+    recordingCount: Int,
+    skippedLargeRecordings: Int = 0
 ): String {
     val verb = when (action) {
         DriveSyncAction.Sync -> "Sync complete"
         DriveSyncAction.Restore -> "Restore complete"
     }
-    return "$verb — ${plural(projectCount, "project")}, $trashedCount trashed, ${plural(recordingCount, "recording")}. API keys stay on this device."
+    val skipped = when {
+        skippedLargeRecordings <= 0 -> ""
+        skippedLargeRecordings == 1 -> " 1 recording was skipped because it is too large to sync on this device."
+        else -> " $skippedLargeRecordings recordings were skipped because they are too large to sync on this device."
+    }
+    return "$verb — ${plural(projectCount, "project")}, $trashedCount trashed, ${plural(recordingCount, "recording")}.$skipped API keys stay on this device."
 }
 
 internal fun driveSyncProgressLabel(action: DriveSyncAction?): String =
@@ -718,7 +724,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     action = action,
                     projectCount = result.merged.projects.size,
                     trashedCount = result.merged.trashed.size,
-                    recordingCount = result.merged.recordings.size
+                    recordingCount = result.merged.recordings.size,
+                    skippedLargeRecordings = result.skippedLargeRecordings
                 )
             }
             is SyncResult.AuthorizationRequired -> {

@@ -45,8 +45,12 @@ import kotlin.coroutines.resumeWithException
  * a red "failed" state.
  */
 sealed class SyncResult {
-    /** Both push and pull completed; `merged` is the snapshot now in the repository. */
-    data class Success(val merged: SyncBlob) : SyncResult()
+    /**
+     * Both push and pull completed; `merged` is the snapshot now in the repository.
+     * `skippedLargeRecordings` counts recordings left out of this device's
+     * transfers because they exceed [RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES].
+     */
+    data class Success(val merged: SyncBlob, val skippedLargeRecordings: Int = 0) : SyncResult()
 
     /**
      * Authorization is required before we can talk to Drive. The [pendingIntent]
@@ -348,6 +352,9 @@ internal fun requireRecordingBatchWithinLimit(entries: List<RecordingManifestEnt
     for (entry in entries) {
         try {
             entry.validate()
+            if (!entry.isTransferable) {
+                throw DriveNetworkException("Recording transfer exceeds the allowed size")
+            }
             totalBytes = Math.addExact(totalBytes, entry.sizeBytes)
         } catch (e: ArithmeticException) {
             throw DriveNetworkException("Recording transfer exceeds the allowed size", e)
@@ -380,6 +387,7 @@ internal fun recordingsAllowedForUpload(
 }
 
 object RecordingSyncPlanner {
+    /** Recordings over the transfer limit are never planned; see [countSkippedAsTooLarge]. */
     fun planUploads(
         local: List<RecordingManifestEntry>,
         remoteManifest: List<RecordingManifestEntry>,
@@ -387,6 +395,7 @@ object RecordingSyncPlanner {
     ): List<RecordingManifestEntry> {
         val remoteByIdentity = remoteManifest.associateBy { it.identityKey }
         return local.filter { localEntry ->
+            if (!localEntry.isTransferable) return@filter false
             val remoteEntry = remoteByIdentity[localEntry.identityKey]
             remoteEntry == null ||
                 localEntry.modifiedAt > remoteEntry.modifiedAt ||
@@ -397,6 +406,25 @@ object RecordingSyncPlanner {
         }
     }
 
+    /**
+     * Identities this device left out of sync because of the transfer limit:
+     * a local file too large to upload, or a manifest entry too large to
+     * download, whose content is not already the same on both sides.
+     */
+    fun countSkippedAsTooLarge(
+        local: List<RecordingManifestEntry>,
+        manifest: List<RecordingManifestEntry>
+    ): Int {
+        val localByIdentity = local.associateBy { it.identityKey }
+        val manifestByIdentity = manifest.associateBy { it.identityKey }
+        return (localByIdentity.keys + manifestByIdentity.keys).count { identity ->
+            val localEntry = localByIdentity[identity]
+            val manifestEntry = manifestByIdentity[identity]
+            val tooLarge = localEntry?.isTransferable == false || manifestEntry?.isTransferable == false
+            tooLarge && localEntry?.sha256 != manifestEntry?.sha256
+        }
+    }
+
     fun planRestores(
         local: List<RecordingManifestEntry>,
         remoteManifest: List<RecordingManifestEntry>,
@@ -404,8 +432,12 @@ object RecordingSyncPlanner {
     ): List<RecordingRestorePlan> {
         val localByIdentity = local.associateBy { it.identityKey }
         return remoteManifest.mapNotNull { remoteEntry ->
+            if (!remoteEntry.isTransferable) return@mapNotNull null
             val remoteFileId = remoteFilesByName[remoteEntry.driveName] ?: return@mapNotNull null
             val localEntry = localByIdentity[remoteEntry.identityKey]
+            // A local file over the transfer limit was never uploaded, so it may exist
+            // nowhere else; a remote recording with the same name must not replace it.
+            if (localEntry != null && !localEntry.isTransferable) return@mapNotNull null
             val shouldRestore = localEntry == null ||
                 remoteEntry.modifiedAt > localEntry.modifiedAt ||
                 (remoteEntry.modifiedAt == localEntry.modifiedAt && remoteEntry.sha256 != localEntry.sha256)
@@ -751,9 +783,12 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
         input.local.validate()
         input.local.copy(
             version = SyncBlob.CURRENT_VERSION,
+            // A manifest must not list a recording whose bytes this device cannot
+            // put on Drive. If another device already uploaded the same identity,
+            // the merge keeps that remote entry exactly as received.
             recordings = recordingsAllowedForUpload(
                 input.local.recordings, input.local.deletions, emptyList()
-            ),
+            ).filter { it.isTransferable },
             savedByClientId = input.local.savedByClientId.ifBlank { input.clientId }
         )
     } catch (e: IllegalArgumentException) {
@@ -761,7 +796,9 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     }
 
     val sealLocal = { blob: SyncBlob ->
-        requireRecordingBatchWithinLimit(blob.recordings)
+        // Entries over the transfer limit are retained for other devices and never
+        // restored here, so they do not count toward this device's restore budget.
+        requireRecordingBatchWithinLimit(blob.recordings.filter { it.isTransferable })
         val plaintext = json.encodeToString(blob).toByteArray(Charsets.UTF_8)
         if (SyncBlobCrypto.envelopeSizeForPlaintext(plaintext.size.toLong()) > DriveSyncService.MAX_SYNC_BLOB_BYTES) {
             throw DriveNetworkException("Drive backup exceeds the allowed size")
@@ -792,6 +829,15 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     val merged = SyncMerger.merge(localWithId, remoteBlob)
     return SyncDecision.MergeAndUpload(merged, sealLocal(merged), remoteBlob)
 }
+
+/** Tombstoned recordings are deletions, not size skips. */
+internal fun skippedLargeRecordingCount(
+    localRecordings: List<RecordingManifestEntry>,
+    merged: SyncBlob
+): Int = RecordingSyncPlanner.countSkippedAsTooLarge(
+    local = recordingsAllowedForUpload(localRecordings, emptyList(), merged.deletions),
+    manifest = merged.recordings
+)
 
 internal data class LocalRecordingFile(val entry: RecordingManifestEntry, val file: File)
 
@@ -1065,7 +1111,7 @@ class DriveSyncService(
                             } catch (e: DriveNetworkException) {
                                 return@withContext SyncResult.NetworkError("Upload failed: ${driveNetworkMessage(e)}")
                             }
-                            return@withContext SyncResult.Success(finalDecision.local)
+                            return@withContext syncSuccess(finalDecision.local, localBlob)
                         }
                         is SyncDecision.MergeAndUpload -> {
                             val finalRemoteFilesByName = try {
@@ -1113,7 +1159,7 @@ class DriveSyncService(
                                 return@withContext SyncResult.NetworkError("Sync failed after remote changed: ${driveNetworkMessage(e)}")
                             }
                             val committed = repository.applySyncResult(finalDecision.merged, base)
-                            return@withContext SyncResult.Success(committed)
+                            return@withContext syncSuccess(committed, localBlob)
                         }
                     }
                 }
@@ -1171,7 +1217,7 @@ class DriveSyncService(
                                 return@withContext SyncResult.NetworkError("Sync failed after merge: ${driveNetworkMessage(e)}")
                             }
                             val committed = repository.applySyncResult(refreshed.local, base)
-                            return@withContext SyncResult.Success(committed)
+                            return@withContext syncSuccess(committed, localBlob)
                         }
                         is SyncDecision.MergeAndUpload -> refreshed
                     }
@@ -1226,7 +1272,7 @@ class DriveSyncService(
                     }
 
                     val committed = repository.applySyncResult(finalDecision.merged, base)
-                    return@withContext SyncResult.Success(committed)
+                    return@withContext syncSuccess(committed, localBlob)
                 }
             }
         } catch (e: DriveAuthException) {
@@ -1378,7 +1424,7 @@ class DriveSyncService(
                             ?: return@withContext SyncResult.NetworkError("No Drive backup found")
                         driveClient.updateFile(accessToken, manifestFileId, finalDecision.sealedBytes)
                         val committed = repository.applySyncResult(finalDecision.merged, base)
-                        SyncResult.Success(committed)
+                        syncSuccess(committed, localBlob)
                     } catch (e: DriveNetworkException) {
                         return@withContext SyncResult.NetworkError("Restore push-back failed: ${driveNetworkMessage(e)}")
                     }
@@ -1397,6 +1443,9 @@ class DriveSyncService(
             SyncResult.UnknownError(e)
         }
     }
+
+    private fun syncSuccess(merged: SyncBlob, localBlob: SyncBlob): SyncResult.Success =
+        SyncResult.Success(merged, skippedLargeRecordingCount(localBlob.recordings, merged))
 
     private data class GuardedDecision(
         val metadata: DriveFileMetadata?,

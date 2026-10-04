@@ -214,6 +214,73 @@ class ReceivingDeviceUploadTest {
         assertEquals(emptyList(), missing, "Missing iOS-required JSON keys from sealed production decisions")
     }
 
+    @Test
+    fun oversizeLocalRecordingIsNeitherUploadedNorAdvertisedAndSyncStillSucceeds() = runBlocking {
+        val fixture = Fixture()
+        try {
+            val song = SongProject(id = "song", title = "Long session")
+            fixture.repository.saveProjects(listOf(song))
+            fixture.memo(song.id, "take.m4a", "small take")
+            val large = fixture.largeMemo(song.id, "session.wav")
+            val before = RecordingFileStore.sha256Hex(large)
+
+            val first = fixture.sync(remote = null)
+            assertEquals(listOf("take.m4a"), first.recordings.map { it.fileName })
+            assertEquals(setOf("rec_song_take.m4a.enc"), fixture.drive.recordingUploads.toSet())
+            assertEquals(listOf("take.m4a"), fixture.uploadedManifest().recordings.map { it.fileName })
+            assertEquals(1, fixture.skippedLargeRecordings(first))
+            val uploadsAfterFirst = fixture.drive.recordingUploads.size
+
+            val repeated = fixture.sync(fixture.drive.manifestBytes())
+            assertEquals(listOf(song.id), repeated.projects.map { it.id })
+            assertEquals(listOf("take.m4a"), repeated.recordings.map { it.fileName })
+            assertEquals(listOf("take.m4a"), fixture.uploadedManifest().recordings.map { it.fileName })
+            assertEquals(emptyList(), repeated.deletions)
+            assertEquals(uploadsAfterFirst, fixture.drive.recordingUploads.size)
+            assertEquals(setOf("rec_song_take.m4a.enc"), fixture.drive.recordingNames())
+            assertEquals(1, fixture.skippedLargeRecordings(repeated))
+            assertEquals(before, RecordingFileStore.sha256Hex(large))
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun oversizeRecordingListedRemotelyStaysInManifestWhenAlsoPresentLocally() = runBlocking {
+        val fixture = Fixture()
+        try {
+            val song = SongProject(id = "song", title = "Shared session")
+            fixture.repository.saveProjects(listOf(song))
+            val large = fixture.largeMemo(song.id, "session.wav")
+            val sameAsLocal = RecordingManifestEntry(
+                projectId = song.id,
+                fileName = large.name,
+                sizeBytes = large.length(),
+                modifiedAt = large.lastModified(),
+                sha256 = RecordingFileStore.sha256Hex(large)
+            )
+
+            val inSync = fixture.sync(fixture.seal(SyncBlob(projects = listOf(song), recordings = listOf(sameAsLocal))))
+            assertEquals(listOf(sameAsLocal), inSync.recordings)
+            assertEquals(listOf(sameAsLocal), fixture.uploadedManifest().recordings)
+            assertEquals(emptyList(), fixture.drive.recordingUploads)
+            assertEquals(0, fixture.skippedLargeRecordings(inSync))
+
+            // The other device's copy differs and is older: its entry still wins,
+            // because this device cannot put its own bytes on Drive.
+            val otherDevice = sameAsLocal.copy(modifiedAt = sameAsLocal.modifiedAt - 1_000L, sha256 = "other-device")
+            val diverged = fixture.sync(fixture.seal(SyncBlob(projects = listOf(song), recordings = listOf(otherDevice))))
+            assertEquals(listOf(otherDevice), diverged.recordings)
+            assertEquals(listOf(otherDevice), fixture.uploadedManifest().recordings)
+            assertEquals(emptyList(), fixture.drive.recordingUploads)
+            assertEquals(emptyList(), diverged.deletions)
+            assertEquals(1, fixture.skippedLargeRecordings(diverged))
+            assertEquals(sameAsLocal.sha256, RecordingFileStore.sha256Hex(large))
+        } finally {
+            fixture.close()
+        }
+    }
+
     private inner class Fixture {
         private val root = kotlin.io.path.createTempDirectory("rhymeai-receiving-upload").toFile()
         private val preferencesFile = File(root, "prefs.preferences_pb")
@@ -238,6 +305,19 @@ class ReceivingDeviceUploadTest {
                 parentFile!!.mkdirs()
                 writeText(content)
             }
+
+        /** Sparse file one byte over the per-recording transfer limit. */
+        fun largeMemo(projectId: String, fileName: String): File =
+            RecordingFiles.memoFile(filesDir, projectId, fileName).apply {
+                parentFile!!.mkdirs()
+                java.io.RandomAccessFile(this, "rw").use {
+                    it.setLength(RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1L)
+                }
+            }
+
+        fun skippedLargeRecordings(merged: SyncBlob): Int = skippedLargeRecordingCount(
+            snapshotLocalRecordingFiles(filesDir, emptySet()).map { it.entry }, merged
+        )
 
         fun seal(blob: SyncBlob): ByteArray = SyncBlobCrypto.sealManifest(
             json.encodeToString(blob).toByteArray(Charsets.UTF_8), passphrase
