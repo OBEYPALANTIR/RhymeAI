@@ -49,10 +49,17 @@ final class AppAppearanceUITests: XCTestCase {
 
         let assistantButton = app.buttons["unblockButton"]
         XCTAssertTrue(assistantButton.waitForExistence(timeout: 3))
-        assistantButton.tap()
+        // Regular-width layouts keep the assistant open as an inline panel,
+        // where this button would hide it instead.
+        if !app.staticTexts["Assistant"].exists {
+            assistantButton.tap()
+        }
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
         attachScreenshot(app, name: "appearance-graphite-assistant")
-        app.buttons["Close Assistant"].tap()
+        // Sheet close on compact width, inline panel hide on regular width.
+        app.buttons.matching(
+            NSPredicate(format: "label IN %@", ["Close Assistant", "Hide Assistant"])
+        ).firstMatch.tap()
 
         let projectsButton = app.buttons["Open songs drawer"]
         XCTAssertTrue(projectsButton.waitForExistence(timeout: 5))

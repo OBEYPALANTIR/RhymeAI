@@ -1410,10 +1410,17 @@ final class Writers_BlockUITests: XCTestCase {
 
         let unblockButton = app.buttons["unblockButton"]
         XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
-        unblockButton.tap()
+        // Regular-width layouts keep the assistant open as an inline panel,
+        // where this button would hide it instead.
+        if !app.staticTexts["Assistant"].exists {
+            unblockButton.tap()
+        }
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
         attachScreenshot(app, name: "release-assistant-panel")
-        app.buttons["Close Assistant"].tap()
+        // Sheet close on compact width, inline panel hide on regular width.
+        app.buttons.matching(
+            NSPredicate(format: "label IN %@", ["Close Assistant", "Hide Assistant"])
+        ).firstMatch.tap()
 
         app.terminate()
 
