@@ -59,9 +59,12 @@ struct WelcomeView: View {
                         // Action Cards — horizontal on iPad, vertical at accessibility sizes.
                         Group {
                             if usesHorizontalCards {
+                                // Cards stretch to the tallest one so a wrapped
+                                // subtitle cannot leave them at unequal heights.
                                 HStack(spacing: RhymeAITokens.Spacing.lg) {
                                     cardContent
                                 }
+                                .fixedSize(horizontal: false, vertical: true)
                             } else {
                                 VStack(spacing: RhymeAITokens.Spacing.lg) {
                                     cardContent
@@ -77,6 +80,7 @@ struct WelcomeView: View {
                     .frame(maxWidth: .infinity, minHeight: proxy.size.height)
                 }
                 .scrollIndicators(.hidden)
+                .accessibilityIdentifier("welcomeScroll")
             }
         }
     }
@@ -145,7 +149,7 @@ private struct WelcomeCard: View {
                         }
                         .multilineTextAlignment(.center)
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(RhymeAITokens.Spacing.md)
                 } else {
                     // Horizontal card layout for iPhone

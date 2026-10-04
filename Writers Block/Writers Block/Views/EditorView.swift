@@ -983,6 +983,7 @@ struct EditorView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                     }
+                    .accessibilityLabel("Settings")
                 }
             }
             .frame(width: RhymeAITokens.Touch.minimum * 2 + RhymeAITokens.Spacing.xxs, height: RhymeAITokens.Touch.minimum)
