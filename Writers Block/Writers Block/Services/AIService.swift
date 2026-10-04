@@ -5,6 +5,7 @@ enum AIServiceError: LocalizedError {
     case noApiKey(provider: String)
     case localModelUnavailable(reason: String)
     case localGenerationFailed(gemmaDownloadAvailable: Bool)
+    case localModelBusy
     case invalidResponse
     case apiError(statusCode: Int, message: String)
     case networkUnavailable
@@ -25,6 +26,8 @@ enum AIServiceError: LocalizedError {
             return gemmaDownloadAvailable
                 ? "The on-device model couldn't respond on this device. Download Gemma or choose a cloud provider in Settings."
                 : "The on-device model couldn't respond on this device. Choose a cloud provider in Settings."
+        case .localModelBusy:
+            return "The on-device model is busy. Try again in a moment."
         case .invalidResponse:
             return "Invalid response from server."
         case .apiError(let code, let msg):
@@ -1924,17 +1927,36 @@ struct AIService {
            case .guardrailViolation = generationError {
             return AIServiceError.blockedResponse
         }
-        if #available(iOS 27.0, *),
-           let modelError = error as? LanguageModelError,
-           case .guardrailViolation = modelError {
-            return AIServiceError.blockedResponse
-        }
         // Every FoundationModels error type bridges to an NSError domain
         // prefixed with the module name, across OS releases.
         if (error as NSError).domain.hasPrefix("FoundationModels.") {
-            return AIServiceError.localGenerationFailed(gemmaDownloadAvailable: gemmaDownloadAvailable)
+            return localError(
+                forFoundationModelsCase: foundationModelsCaseName(error),
+                gemmaDownloadAvailable: gemmaDownloadAvailable
+            )
         }
         return error
+    }
+
+    /// Newer OS releases add FoundationModels error types that older SDKs do
+    /// not declare, so cases are identified by name instead of by type.
+    static func foundationModelsCaseName(_ error: Error) -> String {
+        Mirror(reflecting: error).children.first?.label ?? String(describing: error)
+    }
+
+    static func localError(
+        forFoundationModelsCase caseName: String,
+        gemmaDownloadAvailable: Bool
+    ) -> AIServiceError {
+        switch caseName {
+        case "guardrailViolation":
+            return .blockedResponse
+        case "rateLimited", "concurrentRequests":
+            // Transient: retrying is the right recovery, not changing providers.
+            return .localModelBusy
+        default:
+            return .localGenerationFailed(gemmaDownloadAvailable: gemmaDownloadAvailable)
+        }
     }
 
     func acceptLocalSingleWordRewrite(candidate: String, selection: String, action: RewriteAction) -> String {
