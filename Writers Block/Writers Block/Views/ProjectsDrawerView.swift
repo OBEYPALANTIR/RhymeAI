@@ -382,7 +382,7 @@ struct ProjectsDrawerView: View {
                 .accessibilityValue(trashedProjects.isEmpty ? "Empty" : "Deleted songs available")
             }
 
-            if let drawerError {
+            if let drawerError = drawerError ?? viewModel.projectDeletionNotice {
                 Text(drawerError)
                     .font(.caption)
                     .foregroundStyle(appearance.palette.error)
@@ -468,11 +468,6 @@ struct ProjectsDrawerView: View {
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
                 }
-            }
-        }
-        .onChange(of: viewModel.cloudBackupIsWorking) { _, isWorking in
-            if !isWorking, drawerError == EditorViewModel.projectDeletionBlockedText {
-                drawerError = nil
             }
         }
         .alert("Recording Error", isPresented: Binding(
@@ -771,9 +766,10 @@ struct ProjectsDrawerView: View {
             Button(role: .destructive) {
                 let title = project.title.isEmpty ? "Untitled Song" : project.title
                 let projectId = project.id
-                let blocked = viewModel.projectDeletionBlockedMessage
                 guard viewModel.moveProjectToTrash(project) else {
-                    drawerError = blocked ?? viewModel.errorMessage
+                    // A refusal during a backup or restore is shown from the view
+                    // model's notice, which clears itself when the operation ends.
+                    drawerError = viewModel.projectDeletionNotice == nil ? viewModel.errorMessage : nil
                     return
                 }
                 drawerError = nil

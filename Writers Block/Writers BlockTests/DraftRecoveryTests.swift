@@ -400,6 +400,30 @@ struct DraftRecoveryTests {
         #expect(try staged.first.map { try Data(contentsOf: $0.appendingPathComponent("100.m4a")) } == Data("take one".utf8))
     }
 
+    @Test func unreferencedRecordingSnapshotIsComparedByContentNotNameAndSize() async throws {
+        let original = Data("take one".utf8)
+        let sameSizeOtherAudio = Data("take two".utf8)
+        #expect(original.count == sameSizeOtherAudio.count)
+
+        // Another song has a recording with the snapshot's name and size but
+        // different audio: the snapshot is still the only copy of its audio.
+        let different = try RecoveryHarness()
+        try await different.leaveRecoveryCopyAfterRestoreDeletesSong(recording: original, typing: nil)
+        try different.writeRecording(sameSizeOtherAudio, named: "100.m4a", projectId: "song-b")
+        _ = different.makeViewModel()
+        let staged = try different.stagedSnapshots()
+        #expect(staged.count == 1)
+        #expect(try staged.first.map { try Data(contentsOf: $0.appendingPathComponent("100.m4a")) } == original)
+
+        // Another song has the identical recording: the snapshot is redundant.
+        let identical = try RecoveryHarness()
+        try await identical.leaveRecoveryCopyAfterRestoreDeletesSong(recording: original, typing: nil)
+        try identical.writeRecording(original, named: "100.m4a", projectId: "song-b")
+        _ = identical.makeViewModel()
+        #expect(try identical.stagedSnapshots().isEmpty)
+        #expect(try identical.recordings(for: "song-b") == ["100.m4a": original])
+    }
+
     @Test func deletingASongDuringBackupSaysWhenItCanBeDeleted() async throws {
         let harness = try RecoveryHarness()
         let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
@@ -409,15 +433,17 @@ struct DraftRecoveryTests {
         let operation = Task { await viewModel.backUpNow() }
         try await service.waitUntilStarted()
 
-        #expect(viewModel.projectDeletionBlockedMessage == "This song can be moved to Trash once the backup or restore finishes.")
+        #expect(viewModel.projectDeletionNotice == nil)
         #expect(!viewModel.moveProjectToTrash(project))
+        #expect(viewModel.projectDeletionNotice == "This song can be moved to Trash once the backup or restore finishes.")
         // The assistant panel reads `errorMessage` as an AI failure with Retry.
         #expect(viewModel.errorMessage == nil)
         #expect(try harness.projects().count == 1)
 
         service.release()
         await operation.value
-        #expect(viewModel.projectDeletionBlockedMessage == nil)
+        // The song lists show this notice; it goes away when the operation ends.
+        #expect(viewModel.projectDeletionNotice == nil)
         #expect(viewModel.errorMessage == nil)
         #expect(viewModel.moveProjectToTrash(project))
         #expect(try harness.projects().isEmpty)

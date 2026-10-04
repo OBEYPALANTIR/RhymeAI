@@ -1405,17 +1405,18 @@ final class EditorViewModel: ObservableObject {
         trackSelectedDraftDuringCloudOperation(recordingSnapshot: nextRecordingSnapshot)
     }
 
-    static let projectDeletionBlockedText = "This song can be moved to Trash once the backup or restore finishes."
-
-    /// Why `moveProjectToTrash` refuses right now, for the list that asked. Kept
-    /// out of `errorMessage`, which the assistant panel treats as an AI failure.
-    var projectDeletionBlockedMessage: String? {
-        activeCloudEditorOperation != nil ? Self.projectDeletionBlockedText : nil
-    }
+    /// Why the last `moveProjectToTrash` was refused, for the song lists. Kept
+    /// out of `errorMessage`, which the assistant panel treats as an AI failure,
+    /// and cleared when the backup or restore that caused it ends.
+    @Published private(set) var projectDeletionNotice: String?
 
     @discardableResult
     func moveProjectToTrash(_ project: SongProject) -> Bool {
-        if activeCloudEditorOperation != nil { return false }
+        if activeCloudEditorOperation != nil {
+            projectDeletionNotice = "This song can be moved to Trash once the backup or restore finishes."
+            return false
+        }
+        if projectDeletionNotice != nil { projectDeletionNotice = nil }
         if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
         guard let context = modelContext else { return false }
         autoSaveTask?.cancel()
@@ -2231,6 +2232,7 @@ final class EditorViewModel: ObservableObject {
             snapshot.discard()
         }
         activeCloudEditorOperation = nil
+        if projectDeletionNotice != nil { projectDeletionNotice = nil }
     }
 
     func restoreBackupNow() async {
@@ -2364,9 +2366,11 @@ final class EditorViewModel: ObservableObject {
 
     /// A session killed mid-operation leaves its recording snapshot behind. One
     /// that a recovery file still names is kept for that recovery. Any other is
-    /// removed only when every file in it is still present among the live
-    /// recordings (same name and size), so the only copy of audio is never
-    /// deleted; snapshots that fail that check are left in place.
+    /// removed only when every file in it has a live recording with the same
+    /// name and the same SHA-256, so the only copy of audio is never deleted;
+    /// snapshots that fail that check, or cannot be hashed, are left in place.
+    /// Such a snapshot does not say which song it came from, so a match in any
+    /// song's recordings counts.
     private func removeRedundantRecordingSnapshots(recoveryFolder: URL) {
         guard let recordingsRoot = backupService?.recordingRecoveryRoot else { return }
         let fileManager = FileManager.default
@@ -2389,19 +2393,21 @@ final class EditorViewModel: ObservableObject {
         func size(_ url: URL) -> Int? {
             (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
         }
-        var liveSizesByName: [String: Set<Int>] = [:]
+        var liveByName: [String: [URL]] = [:]
         for projectFolder in (try? fileManager.contentsOfDirectory(at: recordingsRoot, includingPropertiesForKeys: nil)) ?? [] {
             for recording in (try? fileManager.contentsOfDirectory(at: projectFolder, includingPropertiesForKeys: [.fileSizeKey])) ?? [] {
-                if let bytes = size(recording) {
-                    liveSizesByName[recording.lastPathComponent, default: []].insert(bytes)
-                }
+                liveByName[recording.lastPathComponent, default: []].append(recording)
             }
         }
         for snapshot in snapshots where !referenced.contains(snapshot.lastPathComponent) {
             guard let files = try? fileManager.contentsOfDirectory(at: snapshot, includingPropertiesForKeys: [.fileSizeKey]) else { continue }
             let redundant = files.allSatisfy { file in
-                guard let bytes = size(file) else { return false }
-                return liveSizesByName[file.lastPathComponent]?.contains(bytes) ?? false
+                // Size only narrows the candidates; the hash decides.
+                guard let bytes = size(file),
+                      let digest = try? GGUFModelCatalog.fileSHA256(at: file) else { return false }
+                return (liveByName[file.lastPathComponent] ?? []).contains { live in
+                    size(live) == bytes && (try? GGUFModelCatalog.fileSHA256(at: live)) == digest
+                }
             }
             if redundant { try? fileManager.removeItem(at: snapshot) }
         }

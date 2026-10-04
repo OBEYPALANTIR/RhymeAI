@@ -21,7 +21,8 @@ extra run time. Trying to delete a song during a backup or restore now says, in
 the song list, that it can be deleted once the operation finishes.
 
 Recording copies left behind by a killed operation are removed at the next
-launch only when the same recordings still exist in the library; otherwise they
+launch only when identical recordings (same name and content) still exist in
+the library; otherwise they
 stay on the device and are not shown in the app. Covered by unit tests that
 drop the editor mid-operation; a real kill on a device has not been tried.
 

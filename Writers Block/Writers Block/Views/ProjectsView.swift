@@ -92,7 +92,7 @@ struct ProjectsView: View {
                 }
                 .listRowBackground(Color.clear)
 
-                if let listError {
+                if let listError = listError ?? viewModel.projectDeletionNotice {
                     Text(listError)
                         .font(.caption)
                         .foregroundStyle(appearance.palette.error)
@@ -188,11 +188,6 @@ struct ProjectsView: View {
                 handleImport(result)
             }
         }
-        .onChange(of: viewModel.cloudBackupIsWorking) { _, isWorking in
-            if !isWorking, listError == EditorViewModel.projectDeletionBlockedText {
-                listError = nil
-            }
-        }
         .alert(
             "Delete this song?",
             isPresented: Binding(
@@ -205,8 +200,11 @@ struct ProjectsView: View {
                 pendingDeleteProject = nil
             }
             Button("Move to Trash", role: .destructive) {
-                let blocked = viewModel.projectDeletionBlockedMessage
-                listError = viewModel.moveProjectToTrash(project) ? nil : blocked ?? viewModel.errorMessage
+                if viewModel.moveProjectToTrash(project) || viewModel.projectDeletionNotice != nil {
+                    listError = nil
+                } else {
+                    listError = viewModel.errorMessage
+                }
                 pendingDeleteProject = nil
             }
         } message: { project in
