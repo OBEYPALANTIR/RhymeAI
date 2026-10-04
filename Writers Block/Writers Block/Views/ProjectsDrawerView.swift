@@ -187,7 +187,10 @@ struct ProjectsDrawerView: View {
                 ZStack(alignment: .leading) {
                     Color.black.opacity(drawerVisible ? 0.42 : 0)
                         .ignoresSafeArea()
-                        .onTapGesture { closeDrawer() }
+                        // The panel is still off-screen until the open
+                        // animation starts on the next run-loop tick; a tap
+                        // in that gap must not dismiss a drawer nobody saw.
+                        .onTapGesture { if drawerVisible { closeDrawer() } }
 
                     drawerContent(topInset: proxy.safeAreaInsets.top, bottomInset: proxy.safeAreaInsets.bottom)
                         .frame(width: drawerWidth)
