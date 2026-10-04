@@ -192,6 +192,10 @@ struct ProjectsDrawerView: View {
                     drawerContent(topInset: proxy.safeAreaInsets.top, bottomInset: proxy.safeAreaInsets.bottom)
                         .frame(width: drawerWidth)
                         .frame(maxHeight: .infinity)
+                        // The background opts out of hit testing, so without a
+                        // shape of its own the panel's padding and gaps let taps
+                        // fall through to the scrim and dismiss the drawer.
+                        .contentShape(Rectangle())
                         .background(AppWritingBackground())
                         .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
                         // Push-style reveal: while the trash screen slides in from
