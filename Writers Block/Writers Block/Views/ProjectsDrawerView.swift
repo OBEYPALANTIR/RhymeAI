@@ -448,6 +448,7 @@ struct ProjectsDrawerView: View {
                         }
                     }
                     .padding(.horizontal, RhymeAITokens.Spacing.xs)
+                    .padding(.top, RhymeAITokens.Spacing.xs)
 
                     List {
                         ForEach(filteredRecordingFolders) { folder in
