@@ -14,9 +14,19 @@ One recording over 16 MiB no longer stops Google Drive sync on Android. Such a
 recording stays on the device that holds it and is skipped by Android: it is
 not uploaded, not downloaded, and not listed in the backup unless another
 device already uploaded it, in which case its entry is kept unchanged. The sync
-status says how many recordings were skipped as too large. Android still
-refuses to sync when the recordings it can transfer total more than 64 MiB.
+status says how many recordings were skipped as too large.
 Covered by JVM tests only; not verified on a device or against an iOS backup.
+
+## Pending Android large-library recording sync
+
+Google Drive sync on Android no longer fails with "Recording transfer exceeds
+the allowed size" once a library's recordings total more than 64 MiB. The
+backup may list any total; recordings upload one at a time, and a device
+restores them in groups of at most 64 MiB, each saved before the next starts.
+Free space for the whole restore is checked first. If a restore is interrupted,
+the groups already saved are kept and the next sync fetches only what is still
+missing. The 16 MiB per-recording limit is unchanged. Covered by JVM tests
+only; a restore of a library over 64 MiB has not been run on a device.
 
 ## Pending release-tooling safety
 

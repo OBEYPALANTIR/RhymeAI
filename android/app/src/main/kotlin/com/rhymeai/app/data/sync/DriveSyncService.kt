@@ -347,7 +347,13 @@ data class RecordingRestorePlan(
     val remoteFileId: String
 )
 
-internal fun requireRecordingBatchWithinLimit(entries: List<RecordingManifestEntry>): Long {
+/**
+ * Per-entry guard for anything this device is about to hold in memory: every
+ * entry must be valid and within the per-file transfer limit. Returns the total
+ * size. There is deliberately no aggregate cap: uploads hold one file at a time
+ * and restores are bounded per transaction by [RecordingSyncPlanner.chunkRestores].
+ */
+internal fun requireTransferableRecordings(entries: List<RecordingManifestEntry>): Long {
     var totalBytes = 0L
     for (entry in entries) {
         try {
@@ -360,9 +366,6 @@ internal fun requireRecordingBatchWithinLimit(entries: List<RecordingManifestEnt
             throw DriveNetworkException("Recording transfer exceeds the allowed size", e)
         } catch (e: IllegalArgumentException) {
             throw DriveNetworkException("Recording transfer contains unsupported data", e)
-        }
-        if (totalBytes > DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES) {
-            throw DriveNetworkException("Recording transfer exceeds the allowed size")
         }
     }
     return totalBytes
@@ -443,6 +446,35 @@ object RecordingSyncPlanner {
                 (remoteEntry.modifiedAt == localEntry.modifiedAt && remoteEntry.sha256 != localEntry.sha256)
             if (shouldRestore) RecordingRestorePlan(remoteEntry, remoteFileId) else null
         }
+    }
+
+    /**
+     * Splits a restore plan into consecutive chunks of at most [maxChunkBytes],
+     * preserving order. Each chunk is staged and committed as its own restore
+     * transaction, which bounds temporary disk use however large the library is.
+     */
+    internal fun chunkRestores(
+        plan: List<RecordingRestorePlan>,
+        maxChunkBytes: Long = DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES
+    ): List<List<RecordingRestorePlan>> {
+        val chunks = mutableListOf<List<RecordingRestorePlan>>()
+        var current = mutableListOf<RecordingRestorePlan>()
+        var currentBytes = 0L
+        for (restore in plan) {
+            val size = restore.entry.sizeBytes
+            if (size < 0L || size > maxChunkBytes) {
+                throw DriveNetworkException("Recording transfer exceeds the allowed size")
+            }
+            if (current.isNotEmpty() && size > maxChunkBytes - currentBytes) {
+                chunks.add(current)
+                current = mutableListOf()
+                currentBytes = 0L
+            }
+            current.add(restore)
+            currentBytes += size
+        }
+        if (current.isNotEmpty()) chunks.add(current)
+        return chunks
     }
 }
 
@@ -796,9 +828,10 @@ fun decideSyncAction(input: SyncDecisionInput): SyncDecision {
     }
 
     val sealLocal = { blob: SyncBlob ->
-        // Entries over the transfer limit are retained for other devices and never
-        // restored here, so they do not count toward this device's restore budget.
-        requireRecordingBatchWithinLimit(blob.recordings.filter { it.isTransferable })
+        // The manifest is only a listing, so its total recording size is unbounded;
+        // a device restoring it works through bounded chunks. Entries over the
+        // transfer limit are retained for other devices and never restored here.
+        requireTransferableRecordings(blob.recordings.filter { it.isTransferable })
         val plaintext = json.encodeToString(blob).toByteArray(Charsets.UTF_8)
         if (SyncBlobCrypto.envelopeSizeForPlaintext(plaintext.size.toLong()) > DriveSyncService.MAX_SYNC_BLOB_BYTES) {
             throw DriveNetworkException("Drive backup exceeds the allowed size")
@@ -883,7 +916,8 @@ internal suspend fun uploadRecordingFilesToDrive(
     localFiles: List<LocalRecordingFile>,
     remoteFilesByName: Map<String, String>
 ): Map<String, String> {
-    requireRecordingBatchWithinLimit(uploads)
+    // One file is in memory at a time, so only the per-file limit applies.
+    requireTransferableRecordings(uploads)
     val localByIdentity = localFiles.associateBy { it.entry.identityKey }
     val uploaded = mutableMapOf<String, String>()
     for (entry in uploads) {
@@ -1505,21 +1539,34 @@ class DriveSyncService(
             remoteFilesByName = remoteFilesByName
         )
         if (plan.isEmpty()) return
-        val restoreBytes = requireRecordingBatchWithinLimit(plan.map { it.entry })
-        val requiredFreeBytes = Math.addExact(
-            restoreBytes,
-            MIN_FREE_AFTER_RECORDING_RESTORE_BYTES
-        )
+        val restoreBytes = requireTransferableRecordings(plan.map { it.entry })
+        val requiredFreeBytes = try {
+            Math.addExact(restoreBytes, MIN_FREE_AFTER_RECORDING_RESTORE_BYTES)
+        } catch (e: ArithmeticException) {
+            throw DriveNetworkException("Recording transfer exceeds the allowed size", e)
+        }
         if (context.filesDir.usableSpace < requiredFreeBytes) {
             throw DriveNetworkException("Not enough storage to restore recordings safely")
         }
 
+        // Each chunk is its own transaction. A failure leaves earlier chunks
+        // committed; the next sync plans only what is still missing.
+        for (chunk in RecordingSyncPlanner.chunkRestores(plan)) {
+            restoreRecordingChunk(accessToken, passphrase, chunk)
+        }
+    }
+
+    private suspend fun restoreRecordingChunk(
+        accessToken: String,
+        passphrase: CharArray,
+        chunk: List<RecordingRestorePlan>
+    ) {
         val stageDirectory = Files.createTempDirectory(
             context.filesDir.toPath(),
             RecordingFileStore.RESTORE_STAGE_PREFIX
         ).toFile()
         try {
-            val staged = plan.mapIndexed { index, restore ->
+            val staged = chunk.mapIndexed { index, restore ->
                 val encrypted = driveClient.downloadFile(
                     accessToken,
                     restore.remoteFileId,

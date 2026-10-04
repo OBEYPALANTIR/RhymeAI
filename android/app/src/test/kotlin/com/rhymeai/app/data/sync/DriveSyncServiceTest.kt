@@ -115,8 +115,8 @@ class DriveSyncServiceTest {
     }
 
     @Test
-    fun uploadOnlyRejectsManifestWhoseAggregateRecordingsExceedRestorePolicy() {
-        val recordings = List(5) { index ->
+    fun uploadOnlySealsManifestWhoseRecordingsExceedOneRestoreChunk() {
+        val recordings = List(12) { index ->
             RecordingManifestEntry(
                 projectId = "project-$index",
                 fileName = "clip.m4a",
@@ -125,17 +125,33 @@ class DriveSyncServiceTest {
                 sha256 = "digest-$index"
             )
         }
+        assertTrue(recordings.sumOf { it.sizeBytes } > 2 * DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES)
 
-        assertFailsWith<DriveNetworkException> {
-            decideSyncAction(
-                SyncDecisionInput(
-                    local = SyncBlob(recordings = recordings),
-                    remoteBytes = null,
-                    passphrase = passphrase,
-                    clientId = clientId
-                )
+        val decision = decideSyncAction(
+            SyncDecisionInput(
+                local = SyncBlob(recordings = recordings),
+                remoteBytes = null,
+                passphrase = passphrase,
+                clientId = clientId
             )
-        }
+        )
+
+        assertIs<SyncDecision.UploadOnly>(decision)
+        assertEquals(recordings, openDecisionUploadBlob(decision).recordings)
+        // A fresh device restores this manifest as bounded transactions, not one batch.
+        val freshRestore = RecordingSyncPlanner.chunkRestores(
+            RecordingSyncPlanner.planRestores(
+                local = emptyList(),
+                remoteManifest = decision.local.recordings,
+                remoteFilesByName = recordings.associate { it.driveName to it.driveName }
+            )
+        )
+        assertEquals(recordings, freshRestore.flatten().map { it.entry })
+        assertTrue(
+            freshRestore.all { chunk ->
+                chunk.sumOf { it.entry.sizeBytes } <= DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES
+            }
+        )
     }
 
     @Test
@@ -177,7 +193,7 @@ class DriveSyncServiceTest {
     }
 
     @Test
-    fun mergeRejectsAggregateRecordingManifestThatCannotBeRestoredFresh() {
+    fun mergeSealsAggregateRecordingManifestThatAFreshDeviceRestoresInChunks() {
         fun recording(index: Int) = RecordingManifestEntry(
             projectId = "project-$index",
             fileName = "clip.m4a",
@@ -186,11 +202,27 @@ class DriveSyncServiceTest {
             sha256 = "digest-$index"
         )
         val local = SyncBlob(recordings = (0 until 4).map(::recording))
-        val remote = SyncBlob(recordings = listOf(recording(4)))
+        val remote = SyncBlob(recordings = (4 until 10).map(::recording))
 
-        assertFailsWith<DriveNetworkException> {
-            decideSyncAction(SyncDecisionInput(local, sealBlob(remote), passphrase, clientId))
-        }
+        val decision = decideSyncAction(SyncDecisionInput(local, sealBlob(remote), passphrase, clientId))
+
+        assertIs<SyncDecision.MergeAndUpload>(decision)
+        val expected = (0 until 10).map(::recording).toSet()
+        assertEquals(expected, decision.merged.recordings.toSet())
+        assertEquals(expected, openDecisionMergeBlob(decision).recordings.toSet())
+        assertTrue(
+            decision.merged.recordings.sumOf { it.sizeBytes } > 2 * DriveSyncService.MAX_SYNC_RECORDING_BATCH_BYTES
+        )
+        // This device restores the six remote recordings as two bounded transactions.
+        val restoreChunks = RecordingSyncPlanner.chunkRestores(
+            RecordingSyncPlanner.planRestores(
+                local = local.recordings,
+                remoteManifest = decision.merged.recordings,
+                remoteFilesByName = expected.associate { it.driveName to it.driveName }
+            )
+        )
+        assertEquals((4 until 10).map(::recording).toSet(), restoreChunks.flatten().map { it.entry }.toSet())
+        assertEquals(listOf(4, 2), restoreChunks.map { it.size })
     }
 
     @Test
