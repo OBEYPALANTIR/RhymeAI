@@ -1783,11 +1783,12 @@ final class EditorViewModel: ObservableObject {
     func triggerAutoSave() {
         autoSaveTask?.cancel()
         if activeCloudEditorOperation != nil {
-            saveStatus = .saving
             // The library is held by the backup or restore, so this edit cannot be
             // saved yet. Write it to the recovery file now: a kill before the
-            // operation reconciles must not lose it.
-            updateDraftRecoveryCopy()
+            // operation reconciles must not lose it. If that write fails the edit
+            // has no protection, so show the retry control instead of the spinner;
+            // retrying comes back here.
+            saveStatus = updateDraftRecoveryCopy() ? .saving : .failed
             return
         }
         let projectIdAtTrigger = currentProjectId
@@ -2288,14 +2289,16 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: Draft recovery file
 
-    private func updateDraftRecoveryCopy() {
+    /// False only when the copy was needed and could not be written.
+    @discardableResult
+    private func updateDraftRecoveryCopy() -> Bool {
         guard draftRecoveryUsable, let url = draftRecoveryURL,
-              let operation = activeCloudEditorOperation else { return }
+              let operation = activeCloudEditorOperation else { return true }
         let draft = openDraft
         let baseline = operation.currentBaseline
         guard operation.currentHadPendingEdit || draft != baseline else {
             removeDraftRecoveryCopy()
-            return
+            return true
         }
         let record = DraftRecoveryRecord(
             projectId: currentProjectId,
@@ -2313,9 +2316,13 @@ final class EditorViewModel: ObservableObject {
             try JSONEncoder().encode(record).write(
                 to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
             )
+            return true
         } catch {
             // The edit is still in the open editor and is reconciled when the
-            // operation ends; only the kill protection is missing for it.
+            // operation ends; only the kill protection is missing for it. An
+            // earlier copy may remain on disk: it holds older text of the same
+            // draft, which launch recovery applies by the same rules.
+            return false
         }
     }
 
@@ -2565,7 +2572,7 @@ final class EditorViewModel: ObservableObject {
             let stored = try currentProjectId.flatMap { try storedDraft(id: $0, in: context) }
             if edited {
                 if stored?.1 == draft {
-                    if saveStatus == .saving { saveStatus = .saved }
+                    if saveStatus == .saving || saveStatus == .failed { saveStatus = .saved }
                     return operation.savedSeparateOutgoingDraft
                 }
                 if let stored, stored.1 == operation.currentBaseline {
@@ -2612,7 +2619,9 @@ final class EditorViewModel: ObservableObject {
                 selectedRange = NSRange(location: 0, length: 0)
                 showWelcome = true
             }
-            if saveStatus == .saving { saveStatus = currentProjectId == nil ? .idle : .saved }
+            if saveStatus == .saving || saveStatus == .failed {
+                saveStatus = currentProjectId == nil ? .idle : .saved
+            }
             return operation.savedSeparateOutgoingDraft
         } catch {
             context.rollback()

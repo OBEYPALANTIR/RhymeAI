@@ -3,7 +3,9 @@
 ## Pending iOS draft safety during backup and restore
 
 Text typed while a Google Drive backup or restore is running is now also
-written to a small recovery file as each edit is made. If the app is closed or
+written to a small recovery file as each edit is made. If that file cannot be
+written, the editor shows "Save failed" with Retry instead of the saving
+indicator, because that edit would not survive a kill. If the app is closed or
 killed before the operation finishes, the next launch puts that text back. With
 iCloud sync on, it always comes back as a separate song, because another
 device's newer version of the original may not have arrived yet. With a

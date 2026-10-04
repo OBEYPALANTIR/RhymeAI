@@ -450,6 +450,65 @@ struct DraftRecoveryTests {
         #expect(try harness.stagedSnapshots().isEmpty)
     }
 
+    @Test func failedRecoveryWriteShowsRetryUntilTheCopyIsWritten() async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        // A file where the recovery folder should be makes every write fail.
+        let folder = harness.recoveryURL.deletingLastPathComponent()
+        try Data().write(to: folder)
+        let service = GatedBackupService()
+        let viewModel = harness.makeViewModel(service: service)
+        viewModel.loadProject(project)
+
+        let operation = Task { await viewModel.backUpNow() }
+        try await service.waitUntilStarted()
+        viewModel.lyrics = "typed during backup"
+        viewModel.triggerAutoSave()
+
+        #expect(viewModel.saveStatus == .failed)
+        #expect(viewModel.errorMessage == nil)
+        #expect(!FileManager.default.fileExists(atPath: harness.recoveryURL.path))
+
+        // The location becomes writable; the retry control calls triggerAutoSave.
+        try FileManager.default.removeItem(at: folder)
+        viewModel.lyrics = "typed during backup, again"
+        viewModel.triggerAutoSave()
+
+        #expect(viewModel.saveStatus == .saving)
+        let copy = try JSONSerialization.jsonObject(with: Data(contentsOf: harness.recoveryURL)) as? [String: Any]
+        #expect(copy?["lyrics"] as? String == "typed during backup, again")
+
+        service.release()
+        await operation.value
+        #expect(viewModel.saveStatus == .saved)
+        #expect(try harness.projects().first?.lyrics == "typed during backup, again")
+        #expect(!harness.recoveryCopyExists)
+    }
+
+    @Test func failedRecoveryWriteDoesNotLeaveFailedStatusAfterTheOperationSavesTheDraft() async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try Data().write(to: harness.recoveryURL.deletingLastPathComponent())
+        let service = GatedBackupService()
+        let viewModel = harness.makeViewModel(service: service)
+        viewModel.loadProject(project)
+        // Pending when the backup starts: the operation saves it to the library
+        // first, and the recovery copy for it then fails to write.
+        viewModel.lyrics = "pending before backup"
+
+        let operation = Task { await viewModel.backUpNow() }
+        try await service.waitUntilStarted()
+        viewModel.triggerAutoSave()
+        #expect(viewModel.saveStatus == .failed)
+
+        service.release()
+        await operation.value
+
+        #expect(viewModel.saveStatus == .saved)
+        #expect(viewModel.errorMessage == nil)
+        #expect(try harness.projects().first?.lyrics == "pending before backup")
+    }
+
     @Test func deletingASongDuringBackupSaysWhenItCanBeDeleted() async throws {
         let harness = try RecoveryHarness()
         let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
