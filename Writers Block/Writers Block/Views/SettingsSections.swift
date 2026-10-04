@@ -463,6 +463,7 @@ struct SettingsCloudBackupSection: View {
                 backupButton("Restore", systemImage: "arrow.down.doc.fill", action: restoreNow)
             }
             .disabled(!controlsEnabled)
+            .opacity(controlsEnabled ? 1 : 0.45)
 
             Label(viewModel.cloudBackupStatusText, systemImage: backupStatusIcon)
                 .font(.caption)
