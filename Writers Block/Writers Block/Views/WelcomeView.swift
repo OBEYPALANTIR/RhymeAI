@@ -149,7 +149,7 @@ private struct WelcomeCard: View {
                         }
                         .multilineTextAlignment(.center)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .padding(RhymeAITokens.Spacing.md)
                 } else {
                     // Horizontal card layout for iPhone
