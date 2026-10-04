@@ -331,7 +331,7 @@ struct TrashLifecycleTests {
     @MainActor
     private static func makeHarness() throws -> Harness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let viewModel = EditorViewModel()
         viewModel.modelContext = container.mainContext

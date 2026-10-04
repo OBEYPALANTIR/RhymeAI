@@ -292,8 +292,14 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Internal
 
+    // ModelContext does not keep its ModelContainer alive, and SwiftData traps when a
+    // context is used after its container is gone. A pending autosave can outlive the
+    // caller that owned the container, so hold it for as long as the context is set.
+    private var modelContainer: ModelContainer?
+
     var modelContext: ModelContext? {
         didSet {
+            modelContainer = modelContext?.container
             applyPersistedDeletions()
             purgeExpiredTrashedProjects()
             seedTrashProjectForUITestsIfNeeded()

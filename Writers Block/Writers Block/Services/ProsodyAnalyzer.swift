@@ -67,13 +67,7 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
             return .empty
         }
 
-        ensureBuilt(dictionary: dictionary)
-        lock.lock()
-        let perfectMap = perfectByKey
-        let multiMap = multiByKey
-        let nearMap = nearByVowel
-        let slantMap = slantByCoda
-        lock.unlock()
+        let (perfectMap, multiMap, nearMap, slantMap) = builtMaps(dictionary: dictionary)
 
         let perfectAll = (perfectMap[k0] ?? []).filter { $0 != normalized }
         let multiAll: [String]
@@ -119,14 +113,22 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         )
     }
 
-    nonisolated private func ensureBuilt(dictionary: PronunciationDictionary) {
+    nonisolated private func builtMaps(dictionary: PronunciationDictionary) -> (
+        perfect: [String: [String]],
+        multi: [String: [String]],
+        near: [String: [RhymeTailEntry]],
+        slant: [String: [RhymeTailEntry]]
+    ) {
         // Hold the lock for the whole build: releasing it here let two concurrent
         // first-callers each scan the full dictionary. Callers are off-main and a
         // second caller would have to wait for the index anyway.
+        // The maps are returned under the same lock acquisition: a caller using a
+        // different dictionary can rebuild the index as soon as the lock is free,
+        // so reading them afterwards could return another dictionary's index.
         lock.lock()
         defer { lock.unlock() }
         if builtForWordCount == dictionary.wordCount {
-            return
+            return (perfectByKey, multiByKey, nearByVowel, slantByCoda)
         }
 
         var perfectBuild: [String: [String]] = [:]
@@ -169,6 +171,7 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         nearByVowel = nearBuild
         slantByCoda = slantBuild
         builtForWordCount = dictionary.wordCount
+        return (perfectBuild, multiBuild, nearBuild, slantBuild)
     }
 
     private static func codaKey(_ coda: [String]) -> String {

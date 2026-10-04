@@ -49,7 +49,7 @@ struct PersistenceTests {
         viewModel.theme = "late-night resolve"
         viewModel.triggerAutoSave()
 
-        try await Task.sleep(for: .milliseconds(1_300))
+        await viewModel.waitForPendingAutoSaveForTesting()
 
         let projects = try Self.fetchProjects(context)
         let saved = try #require(projects.first)
@@ -70,13 +70,33 @@ struct PersistenceTests {
         try harness.context.save()
         harness.viewModel.loadProject(project)
 
+        let clock = ContinuousClock()
+        let changedAt = clock.now
         harness.viewModel.theme = "after"
-        try await Task.sleep(for: .milliseconds(400))
         #expect(project.theme == "before")
 
-        try await Task.sleep(for: .milliseconds(900))
+        await harness.viewModel.waitForPendingAutoSaveForTesting()
+        #expect(clock.now - changedAt >= .seconds(1))
         #expect(project.theme == "after")
         #expect(harness.viewModel.saveStatus == .saved)
+    }
+
+    @MainActor
+    @Test func pendingAutoSaveCompletesAfterItsContainerOwnerIsReleased() async throws {
+        let viewModel = EditorViewModel()
+        do {
+            let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+            let container = try ModelContainer(for: schema, configurations: [configuration])
+            viewModel.modelContext = container.mainContext
+        }
+        viewModel.lyrics = "a line that outlives its container's owner"
+        viewModel.triggerAutoSave()
+
+        await viewModel.waitForPendingAutoSaveForTesting()
+
+        #expect(viewModel.saveStatus == .saved)
+        #expect(viewModel.currentProjectId != nil)
     }
 
     @MainActor
@@ -105,7 +125,7 @@ struct PersistenceTests {
         )
         #expect(viewModel.importProject(importedExport))
 
-        try await Task.sleep(for: .milliseconds(1_300))
+        await viewModel.waitForPendingAutoSaveForTesting()
 
         let projects = try Self.fetchProjects(harness.context)
         let persistedOriginal = try #require(projects.first { $0.id == "song-a" })
@@ -230,7 +250,7 @@ struct PersistenceTests {
         saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) throws -> Harness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let viewModel = EditorViewModel(backupService: backupService, saveModelContext: saveModelContext)
         viewModel.modelContext = container.mainContext
