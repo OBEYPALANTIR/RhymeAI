@@ -985,6 +985,9 @@ struct EditorView: View {
                             .font(.system(size: EditorViewConstants.ControlChrome.iconSize))
                             .foregroundStyle(.secondary)
                             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                            // The menu's own button takes its name from this
+                            // label; without one it is announced as "button".
+                            .accessibilityLabel("Song actions")
                     }
                     .accessibilityLabel("Song actions")
                     .accessibilityIdentifier("songActionsButton")
