@@ -382,7 +382,7 @@ struct DraftRecoveryTests {
         #expect(try redundant.stagedSnapshots().count == 1)
         #expect(!redundant.recoveryCopyExists)
 
-        _ = redundant.makeViewModel()
+        await redundant.makeViewModel().waitForRecordingSnapshotSweepForTesting()
 
         #expect(try redundant.stagedSnapshots().isEmpty)
         #expect(try redundant.recordings(for: "song-a").count == 1)
@@ -393,7 +393,7 @@ struct DraftRecoveryTests {
         try await onlyCopy.leaveRecoveryCopyAfterRestoreDeletesSong(recording: Data("take one".utf8), typing: nil)
         #expect(!onlyCopy.recoveryCopyExists)
 
-        _ = onlyCopy.makeViewModel()
+        await onlyCopy.makeViewModel().waitForRecordingSnapshotSweepForTesting()
 
         let staged = try onlyCopy.stagedSnapshots()
         #expect(staged.count == 1)
@@ -410,7 +410,7 @@ struct DraftRecoveryTests {
         let different = try RecoveryHarness()
         try await different.leaveRecoveryCopyAfterRestoreDeletesSong(recording: original, typing: nil)
         try different.writeRecording(sameSizeOtherAudio, named: "100.m4a", projectId: "song-b")
-        _ = different.makeViewModel()
+        await different.makeViewModel().waitForRecordingSnapshotSweepForTesting()
         let staged = try different.stagedSnapshots()
         #expect(staged.count == 1)
         #expect(try staged.first.map { try Data(contentsOf: $0.appendingPathComponent("100.m4a")) } == original)
@@ -419,9 +419,35 @@ struct DraftRecoveryTests {
         let identical = try RecoveryHarness()
         try await identical.leaveRecoveryCopyAfterRestoreDeletesSong(recording: original, typing: nil)
         try identical.writeRecording(original, named: "100.m4a", projectId: "song-b")
-        _ = identical.makeViewModel()
+        await identical.makeViewModel().waitForRecordingSnapshotSweepForTesting()
         #expect(try identical.stagedSnapshots().isEmpty)
         #expect(try identical.recordings(for: "song-b") == ["100.m4a": original])
+    }
+
+    @Test func snapshotFoundToBeTheOnlyCopyIsNotHashedAgainOnLaterLaunches() async throws {
+        let audio = Data("take one".utf8)
+        let harness = try RecoveryHarness()
+        try await harness.leaveRecoveryCopyAfterRestoreDeletesSong(recording: audio, typing: nil)
+
+        await harness.makeViewModel().waitForRecordingSnapshotSweepForTesting()
+
+        let snapshot = try #require(try harness.stagedSnapshots().first)
+        let marker = snapshot.appendingPathComponent(EditorViewModel.recordingSnapshotCheckedMarkerName)
+        let checked = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: marker))
+        #expect(checked == ["100.m4a": audio.count])
+
+        // An identical live recording appears afterwards. A launch that hashed
+        // the snapshot again would now remove it; the marker says it was already
+        // checked, so it is left alone.
+        try harness.writeRecording(audio, named: "100.m4a", projectId: "song-b")
+        await harness.makeViewModel().waitForRecordingSnapshotSweepForTesting()
+        #expect(try harness.stagedSnapshots().count == 1)
+
+        // A snapshot whose files changed since the check is checked again.
+        try FileManager.default.removeItem(at: marker)
+        try JSONEncoder().encode(["100.m4a": audio.count + 1]).write(to: marker)
+        await harness.makeViewModel().waitForRecordingSnapshotSweepForTesting()
+        #expect(try harness.stagedSnapshots().isEmpty)
     }
 
     @Test func deletingASongDuringBackupSaysWhenItCanBeDeleted() async throws {

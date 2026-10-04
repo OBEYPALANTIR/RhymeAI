@@ -75,7 +75,7 @@ private final class OpenRecordingSnapshot {
         snapshotFolder = folder
     }
 
-    static func stagingRoot(for recordingsRoot: URL) -> URL {
+    nonisolated static func stagingRoot(for recordingsRoot: URL) -> URL {
         recordingsRoot.deletingLastPathComponent()
             .appendingPathComponent("recording-recovery", isDirectory: true)
     }
@@ -111,7 +111,7 @@ private final class OpenRecordingSnapshot {
 /// The open draft as last typed while a backup or restore held the library.
 /// Kept in a file outside the SwiftData store so the text survives the app
 /// being killed before the operation reconciles it.
-private struct DraftRecoveryRecord: Codable {
+nonisolated private struct DraftRecoveryRecord: Codable, Sendable {
     var projectId: String?
     var title: String
     var lyrics: String
@@ -328,6 +328,7 @@ final class EditorViewModel: ObservableObject {
     private let draftRecoveryURL: URL?
     private let libraryIsCloudBacked: (ModelContainer) -> Bool
     private var didAttemptDraftRecovery = false
+    private var recordingSnapshotSweepTask: Task<Void, Never>?
     /// True once this session may write and remove its own recovery file: the
     /// library is on disk and any file left by an earlier session was set aside.
     private var draftRecoveryUsable = false
@@ -2361,7 +2362,7 @@ final class EditorViewModel: ObservableObject {
         for file in unrecovered {
             recoverDraft(from: file, in: context)
         }
-        removeRedundantRecordingSnapshots(recoveryFolder: folder)
+        startRecordingSnapshotSweep(recoveryFolder: folder)
     }
 
     /// A session killed mid-operation leaves its recording snapshot behind. One
@@ -2371,24 +2372,47 @@ final class EditorViewModel: ObservableObject {
     /// snapshots that fail that check, or cannot be hashed, are left in place.
     /// Such a snapshot does not say which song it came from, so a match in any
     /// song's recordings counts.
-    private func removeRedundantRecordingSnapshots(recoveryFolder: URL) {
+    ///
+    /// Hashing audio can take long, so it runs off the main actor on file URLs
+    /// only. It starts after launch recovery has used the snapshots it needs,
+    /// and looks only at the folders present now: snapshots this session takes
+    /// later belong to its own operations.
+    private func startRecordingSnapshotSweep(recoveryFolder: URL) {
         guard let recordingsRoot = backupService?.recordingRecoveryRoot else { return }
-        let fileManager = FileManager.default
         let stagingRoot = OpenRecordingSnapshot.stagingRoot(for: recordingsRoot)
-        guard let snapshots = try? fileManager.contentsOfDirectory(
-            at: stagingRoot, includingPropertiesForKeys: [.isDirectoryKey]
+        guard let snapshots = try? FileManager.default.contentsOfDirectory(
+            at: stagingRoot, includingPropertiesForKeys: nil
         ), !snapshots.isEmpty else { return }
-
-        var referenced = Set<String>()
-        for file in (try? fileManager.contentsOfDirectory(at: recoveryFolder, includingPropertiesForKeys: nil)) ?? []
-        where file.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: file),
-                  let record = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: data) else {
-                // A record that cannot be read may name any snapshot: keep them all.
-                return
-            }
-            if let name = record.recordingSnapshotFolder { referenced.insert(name) }
+        recordingSnapshotSweepTask = Task.detached(priority: .utility) {
+            EditorViewModel.removeRedundantRecordingSnapshots(
+                snapshots, recordingsRoot: recordingsRoot, recoveryFolder: recoveryFolder
+            )
         }
+    }
+
+    /// Written inside a snapshot that was hashed and found to hold audio with no
+    /// live duplicate. It lists the snapshot's files and sizes; while they are
+    /// unchanged the snapshot is kept without hashing it again on every launch.
+    nonisolated static let recordingSnapshotCheckedMarkerName = ".checked-only-copy.json"
+
+    /// Snapshot folder names that recovery files still need, or nil when a
+    /// recovery file cannot be read and so may name any of them.
+    nonisolated private static func snapshotNamesNeededByRecovery(in recoveryFolder: URL) -> Set<String>? {
+        var names = Set<String>()
+        let files = (try? FileManager.default.contentsOfDirectory(at: recoveryFolder, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: file),
+                  let record = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: data) else { return nil }
+            if let name = record.recordingSnapshotFolder { names.insert(name) }
+        }
+        return names
+    }
+
+    nonisolated private static func removeRedundantRecordingSnapshots(
+        _ snapshots: [URL], recordingsRoot: URL, recoveryFolder: URL
+    ) {
+        let fileManager = FileManager.default
+        guard let needed = snapshotNamesNeededByRecovery(in: recoveryFolder) else { return }
 
         func size(_ url: URL) -> Int? {
             (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
@@ -2399,17 +2423,45 @@ final class EditorViewModel: ObservableObject {
                 liveByName[recording.lastPathComponent, default: []].append(recording)
             }
         }
-        for snapshot in snapshots where !referenced.contains(snapshot.lastPathComponent) {
-            guard let files = try? fileManager.contentsOfDirectory(at: snapshot, includingPropertiesForKeys: [.fileSizeKey]) else { continue }
+
+        for snapshot in snapshots where !needed.contains(snapshot.lastPathComponent) {
+            guard let files = try? fileManager.contentsOfDirectory(
+                at: snapshot, includingPropertiesForKeys: [.fileSizeKey], options: .skipsHiddenFiles
+            ) else { continue }
+            var sizes: [String: Int] = [:]
+            for file in files {
+                guard let bytes = size(file) else { break }
+                sizes[file.lastPathComponent] = bytes
+            }
+            guard sizes.count == files.count else { continue }
+
+            let marker = snapshot.appendingPathComponent(recordingSnapshotCheckedMarkerName)
+            if let data = try? Data(contentsOf: marker),
+               let checked = try? JSONDecoder().decode([String: Int].self, from: data),
+               checked == sizes {
+                continue
+            }
+
+            var hashingFailed = false
             let redundant = files.allSatisfy { file in
                 // Size only narrows the candidates; the hash decides.
-                guard let bytes = size(file),
-                      let digest = try? GGUFModelCatalog.fileSHA256(at: file) else { return false }
+                guard let digest = try? GGUFModelCatalog.fileSHA256(at: file) else {
+                    hashingFailed = true
+                    return false
+                }
                 return (liveByName[file.lastPathComponent] ?? []).contains { live in
-                    size(live) == bytes && (try? GGUFModelCatalog.fileSHA256(at: live)) == digest
+                    size(live) == sizes[file.lastPathComponent]
+                        && (try? GGUFModelCatalog.fileSHA256(at: live)) == digest
                 }
             }
-            if redundant { try? fileManager.removeItem(at: snapshot) }
+            if redundant {
+                // A recovery file may have been written while this was hashing.
+                guard let stillNeeded = snapshotNamesNeededByRecovery(in: recoveryFolder),
+                      !stillNeeded.contains(snapshot.lastPathComponent) else { continue }
+                try? fileManager.removeItem(at: snapshot)
+            } else if !hashingFailed, let data = try? JSONEncoder().encode(sizes) {
+                try? data.write(to: marker, options: .atomic)
+            }
         }
     }
 
@@ -2607,6 +2659,10 @@ final class EditorViewModel: ObservableObject {
     #if DEBUG
     func waitForPendingAutoSaveForTesting() async {
         await autoSaveTask?.value
+    }
+
+    func waitForRecordingSnapshotSweepForTesting() async {
+        await recordingSnapshotSweepTask?.value
     }
     #endif
 
