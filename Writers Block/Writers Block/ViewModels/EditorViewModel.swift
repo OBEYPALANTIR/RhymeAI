@@ -102,6 +102,9 @@ private struct DraftRecoveryRecord: Codable {
     var baselineLyrics: String
     var baselineTheme: String
     var savedAt: Date
+    /// The id the interrupted operation would give this draft if it had to be
+    /// saved as a separate song. A song with this id means it already was.
+    var separateCopyId: String?
 }
 
 private struct InspectorSynonymRequestIdentity: Equatable {
@@ -1377,12 +1380,17 @@ final class EditorViewModel: ObservableObject {
         trackSelectedDraftDuringCloudOperation(recordingSnapshot: nextRecordingSnapshot)
     }
 
+    static let projectDeletionBlockedText = "This song can be moved to Trash once the backup or restore finishes."
+
+    /// Why `moveProjectToTrash` refuses right now, for the list that asked. Kept
+    /// out of `errorMessage`, which the assistant panel treats as an AI failure.
+    var projectDeletionBlockedMessage: String? {
+        activeCloudEditorOperation != nil ? Self.projectDeletionBlockedText : nil
+    }
+
     @discardableResult
     func moveProjectToTrash(_ project: SongProject) -> Bool {
-        if activeCloudEditorOperation != nil {
-            errorMessage = "This song can be moved to Trash once the backup or restore finishes."
-            return false
-        }
+        if activeCloudEditorOperation != nil { return false }
         if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
         guard let context = modelContext else { return false }
         autoSaveTask?.cancel()
@@ -2087,6 +2095,9 @@ final class EditorViewModel: ObservableObject {
         var currentHadPendingEdit: Bool
         var recordingProjectId: String?
         var savedSeparateOutgoingDraft = false
+        /// The id for the next draft this operation saves as a separate song.
+        /// The recovery file records it so a relaunch can tell that happened.
+        var separateDraftID = UUID().uuidString
         var recordingSnapshot: OpenRecordingSnapshot?
 
         init(currentBaseline: OpenDraft, currentHadPendingEdit: Bool,
@@ -2150,13 +2161,14 @@ final class EditorViewModel: ObservableObject {
         let draft = openDraft
         guard operation.currentHadPendingEdit || draft != operation.currentBaseline else { return true }
         guard let context = modelContext else { return false }
-        let recoveredID = UUID().uuidString
+        let recoveredID = operation.separateDraftID
         do {
             try operation.recordingSnapshot?.copy(to: recoveredID)
             let recovered = SongProject(id: recoveredID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
             context.insert(recovered)
             try saveModelContext(context)
             operation.savedSeparateOutgoingDraft = true
+            operation.separateDraftID = UUID().uuidString
             if pendingRecordingRecovery === operation.recordingSnapshot {
                 pendingRecordingRecovery = nil
             }
@@ -2261,7 +2273,8 @@ final class EditorViewModel: ObservableObject {
             projectId: currentProjectId,
             title: draft.title, lyrics: draft.lyrics, theme: draft.theme,
             baselineTitle: baseline.title, baselineLyrics: baseline.lyrics, baselineTheme: baseline.theme,
-            savedAt: Date()
+            savedAt: Date(),
+            separateCopyId: operation.separateDraftID
         )
         do {
             try FileManager.default.createDirectory(
@@ -2342,13 +2355,20 @@ final class EditorViewModel: ObservableObject {
             func content(_ project: SongProject) -> OpenDraft {
                 OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
             }
+            let stored = record.projectId.flatMap { id in projects.first { $0.id == id } }
+            let separateID = record.separateCopyId ?? UUID().uuidString
             // The text already reached the library (the kill came after the save
-            // but before the file was removed): nothing to recover.
-            if projects.contains(where: { content($0) == draft }) {
+            // but before the file was removed): nothing to recover. Only the
+            // interrupted song itself, or the separate song saved under the id
+            // recorded for this draft, counts. An unrelated song with the same
+            // text does not: identical songs are legitimate.
+            let trashedIDs = try context.fetch(FetchDescriptor<TrashedSongProject>()).map(\.id)
+            let savedInPlace = stored.map { content($0) == draft } ?? false
+            let savedSeparately = projects.contains { $0.id == separateID } || trashedIDs.contains(separateID)
+            if savedInPlace || savedSeparately {
                 try? fileManager.removeItem(at: file)
                 return
             }
-            let stored = record.projectId.flatMap { id in projects.first { $0.id == id } }
             let recovered: SongProject
             if let stored, content(stored) == baseline, stored.updatedAt <= record.savedAt {
                 stored.title = draft.title
@@ -2359,7 +2379,7 @@ final class EditorViewModel: ObservableObject {
             } else {
                 // The song was replaced, deleted, or changed after this copy was
                 // written. Keep both: never write old text over a newer row.
-                recovered = SongProject(title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
+                recovered = SongProject(id: separateID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
                 context.insert(recovered)
             }
             try saveModelContext(context)
@@ -2397,7 +2417,7 @@ final class EditorViewModel: ObservableObject {
                     saveStatus = .saved
                     return operation.savedSeparateOutgoingDraft
                 }
-                let recoveredID = UUID().uuidString
+                let recoveredID = operation.separateDraftID
                 try operation.recordingSnapshot?.copy(to: recoveredID)
                 let recovered = SongProject(id: recoveredID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
                 context.insert(recovered)

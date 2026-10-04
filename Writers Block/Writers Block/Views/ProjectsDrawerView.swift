@@ -470,6 +470,11 @@ struct ProjectsDrawerView: View {
                 }
             }
         }
+        .onChange(of: viewModel.cloudBackupIsWorking) { _, isWorking in
+            if !isWorking, drawerError == EditorViewModel.projectDeletionBlockedText {
+                drawerError = nil
+            }
+        }
         .alert("Recording Error", isPresented: Binding(
             get: { viewModel.voiceMemoService.lastError != nil },
             set: { if !$0 { viewModel.voiceMemoService.lastError = nil } }
@@ -766,8 +771,9 @@ struct ProjectsDrawerView: View {
             Button(role: .destructive) {
                 let title = project.title.isEmpty ? "Untitled Song" : project.title
                 let projectId = project.id
+                let blocked = viewModel.projectDeletionBlockedMessage
                 guard viewModel.moveProjectToTrash(project) else {
-                    drawerError = viewModel.errorMessage
+                    drawerError = blocked ?? viewModel.errorMessage
                     return
                 }
                 drawerError = nil

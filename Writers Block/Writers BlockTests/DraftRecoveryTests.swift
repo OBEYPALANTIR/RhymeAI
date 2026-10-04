@@ -263,6 +263,49 @@ struct DraftRecoveryTests {
         #expect(try harness.recoveryFolderFiles().count == 1)
     }
 
+    @Test func identicalTwinSongDoesNotCauseRecoveryToBeDropped() async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "Same", lyrics: "saved A")
+        // An unrelated song that already has exactly the text about to be typed.
+        _ = try harness.seedProject(id: "song-twin", title: "Same", lyrics: "typed during backup")
+        try await harness.leaveRecoveryCopy(for: project, typing: "typed during backup")
+
+        let relaunched = harness.makeViewModel()
+
+        let projects = try harness.projects()
+        #expect(projects.count == 2)
+        #expect(projects.first(where: { $0.id == "song-a" })?.lyrics == "typed during backup")
+        #expect(relaunched.currentProjectId == "song-a")
+        #expect(!harness.recoveryCopyExists)
+    }
+
+    @Test func neverSavedDraftIsRecoveredAsItsOwnSongDespiteIdenticalTwin() async throws {
+        let harness = try RecoveryHarness()
+        _ = try harness.seedProject(id: "song-twin", title: "Untitled Song", lyrics: "new hook")
+        let service = GatedBackupService()
+        let viewModel = harness.makeViewModel(service: service)
+
+        Task { await viewModel.backUpNow() }
+        try await service.waitUntilStarted()
+        viewModel.newProject()
+        viewModel.lyrics = "new hook"
+        viewModel.triggerAutoSave()
+        #expect(harness.recoveryCopyExists)
+
+        let relaunched = harness.makeViewModel()
+
+        var projects = try harness.projects()
+        #expect(projects.count == 2)
+        let recovered = try #require(projects.first(where: { $0.id != "song-twin" }))
+        #expect(recovered.lyrics == "new hook")
+        #expect(relaunched.currentProjectId == recovered.id)
+        #expect(!harness.recoveryCopyExists)
+
+        _ = harness.makeViewModel()
+        projects = try harness.projects()
+        #expect(projects.count == 2)
+    }
+
     @Test func deletingASongDuringBackupSaysWhenItCanBeDeleted() async throws {
         let harness = try RecoveryHarness()
         let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
@@ -272,12 +315,16 @@ struct DraftRecoveryTests {
         let operation = Task { await viewModel.backUpNow() }
         try await service.waitUntilStarted()
 
+        #expect(viewModel.projectDeletionBlockedMessage == "This song can be moved to Trash once the backup or restore finishes.")
         #expect(!viewModel.moveProjectToTrash(project))
-        #expect(viewModel.errorMessage == "This song can be moved to Trash once the backup or restore finishes.")
+        // The assistant panel reads `errorMessage` as an AI failure with Retry.
+        #expect(viewModel.errorMessage == nil)
         #expect(try harness.projects().count == 1)
 
         service.release()
         await operation.value
+        #expect(viewModel.projectDeletionBlockedMessage == nil)
+        #expect(viewModel.errorMessage == nil)
         #expect(viewModel.moveProjectToTrash(project))
         #expect(try harness.projects().isEmpty)
     }

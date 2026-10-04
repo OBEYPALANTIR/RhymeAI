@@ -6,9 +6,14 @@ Text typed while a Google Drive backup or restore is running is now also
 written to a small recovery file as each edit is made. If the app is closed or
 killed before the operation finishes, the next launch puts that text back: into
 the same song when the song is unchanged, otherwise as a separate song so
-neither version is lost. The backup that starts when the app goes to the
+neither version is lost. Another song that happens to have the same text does
+not count as the text having been saved. If that recovery cannot be saved, the
+copy is kept and tried again on later launches; it is not recovered into the
+temporary library used when the real one cannot be opened, and a copy that
+cannot be read is set aside rather than deleted. The backup that starts when the app goes to the
 background now asks iOS for extra run time. Trying to delete a song during a
-backup or restore now says it can be deleted once the operation finishes.
+backup or restore now says, in the song list, that it can be deleted once the
+operation finishes.
 Recordings of a song that the interrupted operation replaced or deleted are not
 re-attached to the recovered copy. Covered by unit tests that drop the editor
 mid-operation; a real kill on a device has not been tried.
