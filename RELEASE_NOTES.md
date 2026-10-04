@@ -1,5 +1,18 @@
 # Release Notes
 
+## Pending iOS draft safety during backup and restore
+
+Text typed while a Google Drive backup or restore is running is now also
+written to a small recovery file as each edit is made. If the app is closed or
+killed before the operation finishes, the next launch puts that text back: into
+the same song when the song is unchanged, otherwise as a separate song so
+neither version is lost. The backup that starts when the app goes to the
+background now asks iOS for extra run time. Trying to delete a song during a
+backup or restore now says it can be deleted once the operation finishes.
+Recordings of a song that the interrupted operation replaced or deleted are not
+re-attached to the recovered copy. Covered by unit tests that drop the editor
+mid-operation; a real kill on a device has not been tried.
+
 ## Pending Android backup format
 
 Android writes Google Drive backups in the same v3/RAI3 format as iOS and still

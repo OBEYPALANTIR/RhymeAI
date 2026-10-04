@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import SwiftData
 import CloudKit
 import Combine
@@ -191,8 +192,13 @@ struct Writers_BlockApp: App {
                     viewModel.refreshCloudBackupState()
                     persistenceState.refreshCloudSyncStatus()
                 case .background:
+                    // Ask for run time past the move to the background so the backup
+                    // can finish and reconcile the open draft instead of being
+                    // suspended part-way. The system may still end it early.
+                    let assertion = BackgroundTaskAssertion(name: "Cloud backup")
                     Task {
                         await viewModel.runCloudBackupOnBackgroundIfPossible()
+                        assertion.end()
                     }
                 default:
                     break
@@ -310,5 +316,22 @@ private struct UITestDynamicTypeSizeModifier: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+@MainActor
+private final class BackgroundTaskAssertion {
+    private var identifier = UIBackgroundTaskIdentifier.invalid
+
+    init(name: String) {
+        identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            MainActor.assumeIsolated { self?.end() }
+        }
+    }
+
+    func end() {
+        guard identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
+        identifier = .invalid
     }
 }

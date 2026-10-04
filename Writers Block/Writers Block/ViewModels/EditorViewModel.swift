@@ -90,6 +90,20 @@ private final class OpenRecordingSnapshot {
     }
 }
 
+/// The open draft as last typed while a backup or restore held the library.
+/// Kept in a file outside the SwiftData store so the text survives the app
+/// being killed before the operation reconciles it.
+private struct DraftRecoveryRecord: Codable {
+    var projectId: String?
+    var title: String
+    var lyrics: String
+    var theme: String
+    var baselineTitle: String
+    var baselineLyrics: String
+    var baselineTheme: String
+    var savedAt: Date
+}
+
 private struct InspectorSynonymRequestIdentity: Equatable {
     let provider: AIProvider
     let modelID: String
@@ -287,6 +301,8 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var cloudBackupIsWorking: Bool = false
     private var activeCloudEditorOperation: CloudEditorOperation?
     private var pendingRecordingRecovery: OpenRecordingSnapshot?
+    private let draftRecoveryURL: URL?
+    private var didAttemptDraftRecovery = false
     @Published private(set) var cloudBackupStatusText: String = "Google Drive backup is unavailable in this build."
     @Published private(set) var cloudBackupLastResultIsError: Bool = false
 
@@ -302,6 +318,7 @@ final class EditorViewModel: ObservableObject {
             modelContainer = modelContext?.container
             applyPersistedDeletions()
             purgeExpiredTrashedProjects()
+            recoverInterruptedDraftIfNeeded()
             seedTrashProjectForUITestsIfNeeded()
             refreshCloudBackupState()
         }
@@ -402,7 +419,7 @@ final class EditorViewModel: ObservableObject {
 
     private let saveModelContext: (ModelContext) throws -> Void
 
-    init(aiService: AIService = AIService(), keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, companionStore: WritingCompanionStore? = nil, synonymService: (any SynonymProviding)? = nil, defaults: UserDefaults = .standard, saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
+    init(aiService: AIService = AIService(), keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, companionStore: WritingCompanionStore? = nil, synonymService: (any SynonymProviding)? = nil, defaults: UserDefaults = .standard, draftRecoveryURL: URL? = nil, saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.aiService = aiService
         self.synonymService = synonymService ?? aiService
         self.defaults = defaults
@@ -413,6 +430,16 @@ final class EditorViewModel: ObservableObject {
         self.companionStore = companionStore ?? WritingCompanionStore(inMemory: runningUITestInMemory || keychainStore != nil)
         self.keychainStore = resolvedStore
         self.backupService = backupService
+        if let draftRecoveryURL {
+            self.draftRecoveryURL = draftRecoveryURL
+        } else if runningUITestInMemory || keychainStore != nil {
+            self.draftRecoveryURL = nil
+        } else {
+            self.draftRecoveryURL = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("DraftRecovery", isDirectory: true)
+                .appendingPathComponent("open-draft.json")
+        }
 
         #if DEBUG
         if runningUITestInMemory,
@@ -1349,7 +1376,10 @@ final class EditorViewModel: ObservableObject {
 
     @discardableResult
     func moveProjectToTrash(_ project: SongProject) -> Bool {
-        if activeCloudEditorOperation != nil { return false }
+        if activeCloudEditorOperation != nil {
+            errorMessage = "This song can be moved to Trash once the backup or restore finishes."
+            return false
+        }
         if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
         guard let context = modelContext else { return false }
         autoSaveTask?.cancel()
@@ -1716,6 +1746,10 @@ final class EditorViewModel: ObservableObject {
         autoSaveTask?.cancel()
         if activeCloudEditorOperation != nil {
             saveStatus = .saving
+            // The library is held by the backup or restore, so this edit cannot be
+            // saved yet. Write it to the recovery file now: a kill before the
+            // operation reconciles must not lose it.
+            updateDraftRecoveryCopy()
             return
         }
         let projectIdAtTrigger = currentProjectId
@@ -1787,6 +1821,7 @@ final class EditorViewModel: ObservableObject {
                 pendingRecordingRecovery = nil
             }
             saveStatus = .saved
+            removeDraftRecoveryCopy()
             saveCompanion(checkpoint: checkpoint)
             return true
         } catch {
@@ -2102,6 +2137,7 @@ final class EditorViewModel: ObservableObject {
             recordingProjectId: currentProjectId,
             recordingSnapshot: recordingSnapshot
         )
+        updateDraftRecoveryCopy()
         return true
     }
 
@@ -2146,6 +2182,7 @@ final class EditorViewModel: ObservableObject {
         operation.currentHadPendingEdit = isUnsaved
         operation.recordingProjectId = currentProjectId
         operation.recordingSnapshot = recordingSnapshot
+        updateDraftRecoveryCopy()
     }
 
     private func finishCloudEditorOperation() {
@@ -2199,6 +2236,100 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func reconcileOpenDraftAfterCloudOperation(in context: ModelContext) -> Bool? {
+        let recovered = reconcileOpenDraft(in: context)
+        // On failure the edits exist only in the open editor, so the recovery
+        // file stays until a later save succeeds.
+        if recovered != nil { removeDraftRecoveryCopy() }
+        return recovered
+    }
+
+    // MARK: Draft recovery file
+
+    private func updateDraftRecoveryCopy() {
+        guard let url = draftRecoveryURL, let operation = activeCloudEditorOperation else { return }
+        let draft = openDraft
+        let baseline = operation.currentBaseline
+        guard operation.currentHadPendingEdit || draft != baseline else {
+            removeDraftRecoveryCopy()
+            return
+        }
+        let record = DraftRecoveryRecord(
+            projectId: currentProjectId,
+            title: draft.title, lyrics: draft.lyrics, theme: draft.theme,
+            baselineTitle: baseline.title, baselineLyrics: baseline.lyrics, baselineTheme: baseline.theme,
+            savedAt: Date()
+        )
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            // Readable while the device is locked: the background backup writes here.
+            try JSONEncoder().encode(record).write(
+                to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+            )
+        } catch {
+            // The edit is still in the open editor and is reconciled when the
+            // operation ends; only the kill protection is missing for it.
+        }
+    }
+
+    private func removeDraftRecoveryCopy() {
+        guard let url = draftRecoveryURL else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Runs once, when the library first becomes available after launch. A
+    /// recovery file found then was left by a backup or restore that never
+    /// reconciled the open draft, so apply the same rules reconciliation uses.
+    private func recoverInterruptedDraftIfNeeded() {
+        guard !didAttemptDraftRecovery, activeCloudEditorOperation == nil,
+              let url = draftRecoveryURL, let context = modelContext else { return }
+        didAttemptDraftRecovery = true
+        guard let data = try? Data(contentsOf: url) else { return }
+        guard let record = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: data) else {
+            removeDraftRecoveryCopy()
+            return
+        }
+        let draft = OpenDraft(title: record.title, lyrics: record.lyrics, theme: record.theme)
+        let baseline = OpenDraft(
+            title: record.baselineTitle, lyrics: record.baselineLyrics, theme: record.baselineTheme
+        )
+        do {
+            let projects = try context.fetch(FetchDescriptor<SongProject>())
+            func content(_ project: SongProject) -> OpenDraft {
+                OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
+            }
+            // The text already reached the library (the kill came after the save
+            // but before the file was removed): nothing to recover.
+            if projects.contains(where: { content($0) == draft }) {
+                removeDraftRecoveryCopy()
+                return
+            }
+            let stored = record.projectId.flatMap { id in projects.first { $0.id == id } }
+            let recovered: SongProject
+            if let stored, content(stored) == baseline, stored.updatedAt <= record.savedAt {
+                stored.title = draft.title
+                stored.lyrics = draft.lyrics
+                stored.theme = draft.theme
+                stored.updatedAt = record.savedAt
+                recovered = stored
+            } else {
+                // The song was replaced, deleted, or changed after this copy was
+                // written. Keep both: never write old text over a newer row.
+                recovered = SongProject(title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
+                context.insert(recovered)
+            }
+            try saveModelContext(context)
+            removeDraftRecoveryCopy()
+            loadProject(recovered)
+            saveStatus = .saved
+        } catch {
+            context.rollback()
+            errorMessage = "Could not recover the song you were editing during the last backup. It will be retried the next time the app opens."
+        }
+    }
+
+    private func reconcileOpenDraft(in context: ModelContext) -> Bool? {
         guard let operation = activeCloudEditorOperation else { return nil }
         autoSaveTask?.cancel()
         let draft = openDraft
