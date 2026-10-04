@@ -8,6 +8,16 @@ as unreadable on Android. Older Android builds cannot read a backup once a newer
 build has written it. A shared test vector is checked on both platforms; a live
 exchange between an Android and an iOS device has not been verified.
 
+## Pending Android large-recording sync
+
+One recording over 16 MiB no longer stops Google Drive sync on Android. Such a
+recording stays on the device that holds it and is skipped by Android: it is
+not uploaded, not downloaded, and not listed in the backup unless another
+device already uploaded it, in which case its entry is kept unchanged. The sync
+status says how many recordings were skipped as too large. Android still
+refuses to sync when the recordings it can transfer total more than 64 MiB.
+Covered by JVM tests only; not verified on a device or against an iOS backup.
+
 ## Pending release-tooling safety
 
 Release scripts require explicit empty emulator targets, preserve existing app
