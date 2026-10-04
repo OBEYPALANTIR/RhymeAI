@@ -136,6 +136,7 @@ struct DraftRecoveryTests {
         try await service.waitUntilStarted()
         viewModel.lyrics = "typed during backup"
         viewModel.triggerAutoSave()
+        #expect(harness.recoveryCopyExists)
 
         // The kill came after the edit reached the library but before the
         // recovery copy was removed.
@@ -148,6 +149,118 @@ struct DraftRecoveryTests {
         #expect(try harness.projects().count == 1)
         #expect(relaunched.currentProjectId == nil)
         #expect(!harness.recoveryCopyExists)
+    }
+
+    @Test func recoveryCopyDoesNotOverwriteSongSavedLaterWithUnchangedText() async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try await harness.leaveRecoveryCopy(for: project, typing: "typed during backup")
+
+        // Same text as when the copy was written, but saved after it.
+        project.updatedAt = Date().addingTimeInterval(60)
+        try harness.context.save()
+
+        _ = harness.makeViewModel()
+
+        let projects = try harness.projects()
+        #expect(projects.count == 2)
+        #expect(projects.first(where: { $0.id == "song-a" })?.lyrics == "saved A")
+        #expect(projects.first(where: { $0.id != "song-a" })?.lyrics == "typed during backup")
+        #expect(!harness.recoveryCopyExists)
+    }
+
+    @Test func failedRecoveryIsNotDeletedByLaterSavesOrBackups() async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try await harness.leaveRecoveryCopy(for: project, typing: "typed during backup")
+
+        // The launch that should recover the text cannot save.
+        var savesFail = true
+        let service = GatedBackupService()
+        service.release()
+        let failedLaunch = harness.makeViewModel(service: service) { context in
+            if savesFail { throw CocoaError(.fileWriteUnknown) }
+            try context.save()
+        }
+        #expect(failedLaunch.errorMessage != nil)
+        #expect(try harness.projects().first?.lyrics == "saved A")
+        #expect(harness.recoveryCopyExists)
+
+        // The automatic backup runs with nothing pending in the editor, another
+        // song is saved normally, and a manual backup completes. None of them
+        // may remove the unrecovered copy.
+        savesFail = false
+        await failedLaunch.runCloudBackupOnBackgroundIfPossible()
+        #expect(harness.recoveryCopyExists)
+        failedLaunch.newProject()
+        failedLaunch.lyrics = "another song"
+        #expect(failedLaunch.flushCurrentDraft())
+        await failedLaunch.backUpNow()
+        failedLaunch.lyrics = "another song, edited"
+        failedLaunch.triggerAutoSave()
+        #expect(failedLaunch.flushCurrentDraft())
+        #expect(harness.recoveryCopyExists)
+
+        _ = harness.makeViewModel()
+
+        #expect(try harness.projects().first(where: { $0.id == "song-a" })?.lyrics == "typed during backup")
+        #expect(!harness.recoveryCopyExists)
+    }
+
+    @Test func recoveryIsSkippedForAnInMemoryLibrary() async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try await harness.leaveRecoveryCopy(for: project, typing: "typed during backup")
+        let copy = try Data(contentsOf: harness.recoveryURL)
+
+        // The fallback library used when the real one cannot be opened.
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let fallback = try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ])
+        let service = GatedBackupService()
+        let degraded = EditorViewModel(
+            keychainStore: InMemoryKeychainStore(), backupService: service,
+            draftRecoveryURL: harness.recoveryURL
+        )
+        degraded.modelContext = fallback.mainContext
+        #expect(try fallback.mainContext.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        #expect(degraded.currentProjectId == nil)
+
+        // Typing during a backup in that session must not replace the copy either.
+        Task { await degraded.backUpNow() }
+        try await service.waitUntilStarted()
+        degraded.lyrics = "typed in the fallback session"
+        degraded.triggerAutoSave()
+        #expect(try Data(contentsOf: harness.recoveryURL) == copy)
+
+        _ = harness.makeViewModel()
+        #expect(try harness.projects().first?.lyrics == "typed during backup")
+        #expect(!harness.recoveryCopyExists)
+    }
+
+    @Test func unreadableRecoveryFileIsSetAsideWithoutBlockingLaunch() async throws {
+        let harness = try RecoveryHarness()
+        _ = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try FileManager.default.createDirectory(
+            at: harness.recoveryURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let garbage = Data("not a recovery record".utf8)
+        try garbage.write(to: harness.recoveryURL)
+
+        let viewModel = harness.makeViewModel()
+
+        #expect(viewModel.errorMessage == nil)
+        #expect(viewModel.currentProjectId == nil)
+        #expect(try harness.projects().map(\.lyrics) == ["saved A"])
+        #expect(!harness.recoveryCopyExists)
+        let kept = try harness.recoveryFolderFiles().filter { $0.lastPathComponent.hasPrefix("unreadable-") }
+        #expect(kept.count == 1)
+        #expect(try kept.first.map { try Data(contentsOf: $0) } == garbage)
+
+        // It is not retried or duplicated on the next launch.
+        _ = harness.makeViewModel()
+        #expect(try harness.recoveryFolderFiles().count == 1)
     }
 
     @Test func deletingASongDuringBackupSaysWhenItCanBeDeleted() async throws {
@@ -177,16 +290,44 @@ private struct RecoveryHarness {
 
     var context: ModelContext { container.mainContext }
 
+    /// True while any copy is waiting: this session's file or one an earlier
+    /// session left behind. Files set aside as unreadable do not count.
     var recoveryCopyExists: Bool {
-        FileManager.default.fileExists(atPath: recoveryURL.path)
+        let files = (try? recoveryFolderFiles()) ?? []
+        return files.contains { !$0.lastPathComponent.hasPrefix("unreadable-") }
+    }
+
+    func recoveryFolderFiles() throws -> [URL] {
+        let folder = recoveryURL.deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+    }
+
+    /// Types into `project` during a backup that never finishes, leaving the
+    /// recovery copy a killed app would leave.
+    func leaveRecoveryCopy(for project: SongProject, typing lyrics: String) async throws {
+        let service = GatedBackupService()
+        let viewModel = makeViewModel(service: service)
+        viewModel.loadProject(project)
+        Task { await viewModel.backUpNow() }
+        try await service.waitUntilStarted()
+        viewModel.lyrics = lyrics
+        viewModel.triggerAutoSave()
+        try #require(FileManager.default.fileExists(atPath: recoveryURL.path))
     }
 
     init() throws {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
-        container = try ModelContainer(for: schema, configurations: [configuration])
-        recoveryURL = FileManager.default.temporaryDirectory
+        let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("DraftRecoveryTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // On disk: recovery is skipped for in-memory libraries.
+        let configuration = ModelConfiguration(
+            schema: schema, url: root.appendingPathComponent("library.store"), cloudKitDatabase: .none
+        )
+        container = try ModelContainer(for: schema, configurations: [configuration])
+        recoveryURL = root
+            .appendingPathComponent("DraftRecovery", isDirectory: true)
             .appendingPathComponent("open-draft.json")
     }
 
@@ -202,11 +343,15 @@ private struct RecoveryHarness {
     }
 
     /// A new view model on the same store and recovery file, as after a launch.
-    func makeViewModel(service: GatedBackupService? = nil) -> EditorViewModel {
+    func makeViewModel(
+        service: GatedBackupService? = nil,
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) -> EditorViewModel {
         let viewModel = EditorViewModel(
             keychainStore: InMemoryKeychainStore(),
             backupService: service ?? GatedBackupService(),
-            draftRecoveryURL: recoveryURL
+            draftRecoveryURL: recoveryURL,
+            saveModelContext: save
         )
         viewModel.modelContext = context
         return viewModel

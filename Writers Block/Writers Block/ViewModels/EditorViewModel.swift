@@ -303,6 +303,9 @@ final class EditorViewModel: ObservableObject {
     private var pendingRecordingRecovery: OpenRecordingSnapshot?
     private let draftRecoveryURL: URL?
     private var didAttemptDraftRecovery = false
+    /// True once this session may write and remove its own recovery file: the
+    /// library is on disk and any file left by an earlier session was set aside.
+    private var draftRecoveryUsable = false
     @Published private(set) var cloudBackupStatusText: String = "Google Drive backup is unavailable in this build."
     @Published private(set) var cloudBackupLastResultIsError: Bool = false
 
@@ -2246,7 +2249,8 @@ final class EditorViewModel: ObservableObject {
     // MARK: Draft recovery file
 
     private func updateDraftRecoveryCopy() {
-        guard let url = draftRecoveryURL, let operation = activeCloudEditorOperation else { return }
+        guard draftRecoveryUsable, let url = draftRecoveryURL,
+              let operation = activeCloudEditorOperation else { return }
         let draft = openDraft
         let baseline = operation.currentBaseline
         guard operation.currentHadPendingEdit || draft != baseline else {
@@ -2273,9 +2277,16 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    /// Removes only the file this session writes; copies left by earlier
+    /// sessions have other names and are removed by their own recovery.
     private func removeDraftRecoveryCopy() {
-        guard let url = draftRecoveryURL else { return }
+        guard draftRecoveryUsable, let url = draftRecoveryURL else { return }
         try? FileManager.default.removeItem(at: url)
+    }
+
+    private var isLibraryStoredOnDisk: Bool {
+        guard let container = modelContext?.container else { return false }
+        return !container.configurations.contains { $0.isStoredInMemoryOnly }
     }
 
     /// Runs once, when the library first becomes available after launch. A
@@ -2285,9 +2296,41 @@ final class EditorViewModel: ObservableObject {
         guard !didAttemptDraftRecovery, activeCloudEditorOperation == nil,
               let url = draftRecoveryURL, let context = modelContext else { return }
         didAttemptDraftRecovery = true
-        guard let data = try? Data(contentsOf: url) else { return }
+        // An in-memory library (the fallback when the real one cannot be opened,
+        // and test launches) is discarded at exit. Recovering into it would lose
+        // the text, so leave the files alone for a launch with the real library.
+        guard isLibraryStoredOnDisk else { return }
+        let fileManager = FileManager.default
+        let folder = url.deletingLastPathComponent()
+        // Set the earlier session's file aside under its own name before this
+        // session can write or remove `url`, so a failed recovery is never
+        // overwritten or deleted by this session's saves and operations.
+        if fileManager.fileExists(atPath: url.path) {
+            let aside = folder.appendingPathComponent("unrecovered-\(UUID().uuidString).json")
+            do {
+                try fileManager.moveItem(at: url, to: aside)
+            } catch {
+                return
+            }
+        }
+        draftRecoveryUsable = true
+        let unrecovered = ((try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix("unrecovered-") && $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        for file in unrecovered {
+            recoverDraft(from: file, in: context)
+        }
+    }
+
+    private func recoverDraft(from file: URL, in context: ModelContext) {
+        let fileManager = FileManager.default
+        guard let data = try? Data(contentsOf: file) else { return }
         guard let record = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: data) else {
-            removeDraftRecoveryCopy()
+            // Not readable by this build, but it may still hold text. Keep it under
+            // a name that is not retried rather than deleting it.
+            let unreadable = file.deletingLastPathComponent()
+                .appendingPathComponent("unreadable-\(file.lastPathComponent)")
+            try? fileManager.moveItem(at: file, to: unreadable)
             return
         }
         let draft = OpenDraft(title: record.title, lyrics: record.lyrics, theme: record.theme)
@@ -2302,7 +2345,7 @@ final class EditorViewModel: ObservableObject {
             // The text already reached the library (the kill came after the save
             // but before the file was removed): nothing to recover.
             if projects.contains(where: { content($0) == draft }) {
-                removeDraftRecoveryCopy()
+                try? fileManager.removeItem(at: file)
                 return
             }
             let stored = record.projectId.flatMap { id in projects.first { $0.id == id } }
@@ -2320,7 +2363,7 @@ final class EditorViewModel: ObservableObject {
                 context.insert(recovered)
             }
             try saveModelContext(context)
-            removeDraftRecoveryCopy()
+            try? fileManager.removeItem(at: file)
             loadProject(recovered)
             saveStatus = .saved
         } catch {
