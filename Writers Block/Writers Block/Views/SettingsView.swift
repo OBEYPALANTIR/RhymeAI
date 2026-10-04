@@ -205,11 +205,15 @@ struct SettingsView: View {
             .padding(RhymeAITokens.Spacing.md)
             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
-            Text(viewModel.selectedModel.id)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
+            // Cloud model ids are what the provider's docs call the model; the
+            // on-device placeholder id ("local-model") means nothing to a writer.
+            if viewModel.selectedProvider != .local {
+                Text(viewModel.selectedModel.id)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+            }
         }
         .padding(RhymeAITokens.Spacing.lg)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
