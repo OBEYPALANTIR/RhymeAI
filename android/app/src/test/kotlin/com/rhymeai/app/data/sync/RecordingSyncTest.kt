@@ -33,28 +33,19 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun recordingManifestRejectsSizesThatCannotBeSafelyRestored() {
-        recording("p1", "clip.m4a", modifiedAt = 1L, sha256 = "digest", sizeBytes = 0L).validate()
-        recording(
-            "p1",
-            "clip.m4a",
-            modifiedAt = 1L,
-            sha256 = "digest",
-            sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES
-        ).validate()
+    fun recordingManifestAcceptsAnyNonNegativeSizeAndFlagsWhatThisDeviceCanTransfer() {
+        fun sized(sizeBytes: Long) =
+            recording("p1", "clip.m4a", modifiedAt = 1L, sha256 = "digest", sizeBytes = sizeBytes)
+        val limit = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES
 
-        assertFailsWith<IllegalArgumentException> {
-            recording("p1", "clip.m4a", modifiedAt = 1L, sha256 = "digest", sizeBytes = -1L).validate()
-        }
-        assertFailsWith<IllegalArgumentException> {
-            recording(
-                "p1",
-                "clip.m4a",
-                modifiedAt = 1L,
-                sha256 = "digest",
-                sizeBytes = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1L
-            ).validate()
-        }
+        sized(0L).validate()
+        sized(limit).validate()
+        sized(limit + 1L).validate()
+        sized(100L * 1024L * 1024L).validate()
+        assertFailsWith<IllegalArgumentException> { sized(-1L).validate() }
+
+        assertTrue(sized(limit).isTransferable)
+        assertFalse(sized(limit + 1L).isTransferable)
     }
 
     @Test
@@ -73,6 +64,16 @@ class RecordingSyncTest {
         assertFailsWith<DriveNetworkException> {
             requireRecordingBatchWithinLimit(
                 atLimit + recording("overflow", "clip.m4a", 5L, "digest", 1L)
+            )
+        }
+        assertFailsWith<DriveNetworkException> {
+            requireRecordingBatchWithinLimit(
+                listOf(
+                    recording(
+                        "large", "clip.m4a", 6L, "digest",
+                        RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1L
+                    )
+                )
             )
         }
     }

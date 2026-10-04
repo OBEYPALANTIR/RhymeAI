@@ -90,7 +90,7 @@ class DriveSyncServiceTest {
     }
 
     @Test
-    fun uploadOnlyRejectsLocalRecordingOutsideRestorePolicy() {
+    fun uploadOnlyDoesNotAdvertiseLocalRecordingOverTransferLimit() {
         val oversized = RecordingManifestEntry(
             projectId = "project",
             fileName = "clip.m4a",
@@ -98,17 +98,20 @@ class DriveSyncServiceTest {
             modifiedAt = 1L,
             sha256 = "digest"
         )
+        val normal = oversized.copy(fileName = "small.m4a", driveName = RecordingManifestEntry.driveNameFor("project", "small.m4a"), sizeBytes = 12L)
 
-        assertFailsWith<DriveNetworkException> {
-            decideSyncAction(
-                SyncDecisionInput(
-                    local = SyncBlob(recordings = listOf(oversized)),
-                    remoteBytes = null,
-                    passphrase = passphrase,
-                    clientId = clientId
-                )
+        val decision = decideSyncAction(
+            SyncDecisionInput(
+                local = SyncBlob(recordings = listOf(oversized, normal)),
+                remoteBytes = null,
+                passphrase = passphrase,
+                clientId = clientId
             )
-        }
+        )
+
+        assertIs<SyncDecision.UploadOnly>(decision)
+        assertEquals(listOf(normal), decision.local.recordings)
+        assertEquals(listOf(normal), openDecisionUploadBlob(decision).recordings)
     }
 
     @Test

@@ -21,6 +21,28 @@ class DriveSyncUiStateTest {
     }
 
     @Test
+    fun successStatusSaysWhenRecordingsWereTooLargeForThisDevice() {
+        fun status(skipped: Int) = formatDriveSyncSuccessStatus(
+            action = DriveSyncAction.Sync,
+            projectCount = 2,
+            trashedCount = 1,
+            recordingCount = 3,
+            skippedLargeRecordings = skipped
+        )
+
+        assertFalse(status(0).contains("skipped"), status(0))
+        assertTrue(
+            status(1).contains("1 recording was skipped because it is too large to sync on this device."),
+            status(1)
+        )
+        assertTrue(
+            status(2).contains("2 recordings were skipped because they are too large to sync on this device."),
+            status(2)
+        )
+        assertTrue(status(2).contains("API keys stay on this device"), status(2))
+    }
+
+    @Test
     fun restoreStatusUsesRestoreCopyAndPreservesApiKeyWarning() {
         val status = formatDriveSyncSuccessStatus(
             action = DriveSyncAction.Restore,
