@@ -14,6 +14,13 @@ final class Writers_BlockUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// A test that fails after rotating leaves the simulator in landscape;
+    /// start every test from portrait so that cannot cascade.
+    @MainActor
+    override func setUp() async throws {
+        XCUIDevice.shared.orientation = .portrait
+    }
+
     @MainActor
     func testColoredLyricsTypingAtLineEnd() throws {
         XCUIDevice.shared.orientation = .portrait
@@ -46,7 +53,8 @@ final class Writers_BlockUITests: XCTestCase {
         editor.typeText("s\nA new line")
         XCTAssertEqual(editor.value as? String, text + "s\nA new line")
         XCUIDevice.shared.orientation = .landscapeLeft
-        let expectsLandscape = UIDevice.current.userInterfaceIdiom == .pad
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let expectsLandscape = isRunningOnIPad
         let rotatedWindowFrame = try XCTUnwrap(
             waitForStableFrame(of: window, matching: {
                 expectsLandscape ? $0.width > $0.height : $0.height > $0.width
@@ -83,7 +91,7 @@ final class Writers_BlockUITests: XCTestCase {
         app.launch()
         let model = app.buttons["gemmaDownload.gemma-4-e2b"]
         func openDownloads() {
-            app.buttons["gearshape"].tap()
+            app.buttons["settingsButton"].tap()
             app.buttons["Local"].tap()
             for _ in 0..<8 {
                 if model.isHittable { break }
@@ -150,12 +158,18 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(before.contains("CURSORPROOF"))
         attachScreenshot(app, name: "long-draft-position-before-switch")
         XCTAssertFalse(title.isHittable, "The title must be above the scrolled viewport.")
+        // The drawer slides in and out; a tap that lands mid-transition is
+        // dropped, so wait for each surface to settle before using it.
         app.buttons["Open songs drawer"].tap()
-        app.buttons["Create New Song"].tap()
+        let createNewSong = app.buttons["Create New Song"]
+        XCTAssertNotNil(waitForStableFrame(of: createNewSong, matching: { _ in createNewSong.isHittable }))
+        createNewSong.tap()
         XCTAssertTrue(lyrics.waitForExistence(timeout: 5))
+        XCTAssertNotNil(waitForStableFrame(of: lyrics, matching: { _ in !createNewSong.exists }))
+        XCTAssertEqual(lyrics.value as? String, "", "Create New Song must open an empty draft")
         app.buttons["Open songs drawer"].tap()
         let savedSong = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Position proof")).firstMatch
-        XCTAssertTrue(savedSong.waitForExistence(timeout: 5))
+        XCTAssertNotNil(waitForStableFrame(of: savedSong, matching: { _ in savedSong.isHittable }))
         savedSong.tap()
         XCTAssertEqual(lyrics.value as? String, before)
         XCTAssertFalse(title.isHittable, "Restoring must not return the document to the top.")
@@ -205,9 +219,7 @@ final class Writers_BlockUITests: XCTestCase {
     @MainActor
     func testWelcomeActionsRemainReachableAtAccessibilityTextSize() throws {
         defer { XCUIDevice.shared.orientation = .portrait }
-        let simulatorName = ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? ""
-        let isIPad = UIDevice.current.userInterfaceIdiom == .pad || simulatorName.localizedCaseInsensitiveContains("iPad")
-        let orientations: [UIDeviceOrientation] = isIPad ? [.portrait, .landscapeLeft] : [.portrait]
+        let orientations: [UIDeviceOrientation] = isRunningOnIPad ? [.portrait, .landscapeLeft] : [.portrait]
         for orientation in orientations {
             XCUIDevice.shared.orientation = orientation
             let app = isolatedUITestApp(arguments: [
@@ -302,14 +314,21 @@ final class Writers_BlockUITests: XCTestCase {
                 app.buttons["redoLyricsButton"],
                 app.buttons["focusModeButton"],
                 app.buttons["songActionsButton"],
-                app.buttons["gearshape"],
+                app.buttons["settingsButton"],
             ]
             for control in topControls {
                 XCTAssertTrue(control.waitForExistence(timeout: 3))
                 XCTAssertTrue(windowFrame.contains(control.frame))
             }
+            // Regular width at accessibility sizes stacks the leading and
+            // trailing controls on two rows; order applies within a row.
             for (leading, trailing) in zip(topControls, topControls.dropFirst()) {
-                XCTAssertLessThanOrEqual(leading.frame.maxX, trailing.frame.minX)
+                let sharesRow = leading.frame.minY < trailing.frame.maxY && trailing.frame.minY < leading.frame.maxY
+                if sharesRow {
+                    XCTAssertLessThanOrEqual(leading.frame.maxX, trailing.frame.minX)
+                } else {
+                    XCTAssertLessThanOrEqual(leading.frame.maxY, trailing.frame.minY)
+                }
             }
 
             let unblockButton = app.buttons["unblockButton"]
@@ -633,7 +652,7 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(newSongButton.waitForExistence(timeout: 5))
         newSongButton.tap()
 
-        let settingsButton = app.buttons["gearshape"]
+        let settingsButton = app.buttons["settingsButton"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
         settingsButton.tap()
 
@@ -658,7 +677,7 @@ final class Writers_BlockUITests: XCTestCase {
         app.launch()
         createNewSong(in: app)
 
-        let settingsButton = app.buttons["gearshape"]
+        let settingsButton = app.buttons["settingsButton"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
         settingsButton.tap()
 
@@ -1272,8 +1291,8 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(app.textFields["Search songs"].waitForExistence(timeout: 5))
         app.buttons["Close drawer"].tap()
 
-        XCTAssertTrue(app.buttons["gearshape"].waitForExistence(timeout: 5))
-        app.buttons["gearshape"].tap()
+        XCTAssertTrue(app.buttons["settingsButton"].waitForExistence(timeout: 5))
+        app.buttons["settingsButton"].tap()
         XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()
 
@@ -1526,7 +1545,7 @@ final class Writers_BlockUITests: XCTestCase {
         let app = isolatedUITestApp(arguments: ["--ui-test-seed-prosody-song"])
         app.launch()
 
-        let settingsButton = app.buttons["gearshape"]
+        let settingsButton = app.buttons["settingsButton"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
         settingsButton.tap()
         XCTAssertTrue(app.staticTexts["APPEARANCE"].waitForExistence(timeout: 5))
@@ -1661,6 +1680,11 @@ final class Writers_BlockUITests: XCTestCase {
             "-selectedProvider", "local"
         ])
         app.launch()
+        // Compact width presents the assistant as a sheet ("Close Assistant");
+        // regular width shows it inline ("Hide Assistant").
+        let closeAssistant = app.buttons.matching(
+            NSPredicate(format: "label IN %@", ["Close Assistant", "Hide Assistant"])
+        ).firstMatch
         for appearance in ["Graphite", "Paper", "Ink"] {
             let setup = app.buttons["Local model setup"]
             XCTAssertTrue(setup.waitForExistence(timeout: 5))
@@ -1671,10 +1695,10 @@ final class Writers_BlockUITests: XCTestCase {
             attachScreenshot(app, name: "model-settings-\(appearance)")
             app.buttons["Done"].tap()
             XCTAssertTrue(setup.waitForExistence(timeout: 5))
-            XCTAssertTrue(app.buttons["Close Assistant"].exists)
+            XCTAssertTrue(closeAssistant.exists)
             attachScreenshot(app, name: "model-return-\(appearance)")
         }
-        app.buttons["Close Assistant"].tap()
+        closeAssistant.tap()
         XCTAssertTrue(app.buttons["unblockButton"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.textViews["lyricsEditor"].exists)
     }
@@ -1781,16 +1805,22 @@ final class Writers_BlockUITests: XCTestCase {
         [.portrait, .landscapeLeft]
     }
 
-    private func requireIPad() throws {
+    /// The UI test runner is an iPhone-family bundle, so on an iPad simulator
+    /// its own `UIDevice` idiom reports `.phone`; the simulator name is the
+    /// reliable signal for the device the app under test runs on.
+    private var isRunningOnIPad: Bool {
         let simulatorName = ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? ""
-        guard UIDevice.current.userInterfaceIdiom == .pad || simulatorName.localizedCaseInsensitiveContains("iPad") else {
+        return UIDevice.current.userInterfaceIdiom == .pad || simulatorName.localizedCaseInsensitiveContains("iPad")
+    }
+
+    private func requireIPad() throws {
+        guard isRunningOnIPad else {
             throw XCTSkip("iPad-only audit test")
         }
     }
 
     private func requirePhone() throws {
-        let simulatorName = ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? ""
-        guard UIDevice.current.userInterfaceIdiom == .phone && !simulatorName.localizedCaseInsensitiveContains("iPad") else {
+        guard !isRunningOnIPad else {
             throw XCTSkip("Phone-only assistant sheet test")
         }
     }
