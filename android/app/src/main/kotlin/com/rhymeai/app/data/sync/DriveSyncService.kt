@@ -435,6 +435,9 @@ object RecordingSyncPlanner {
             if (!remoteEntry.isTransferable) return@mapNotNull null
             val remoteFileId = remoteFilesByName[remoteEntry.driveName] ?: return@mapNotNull null
             val localEntry = localByIdentity[remoteEntry.identityKey]
+            // A local file over the transfer limit was never uploaded, so it may exist
+            // nowhere else; a remote recording with the same name must not replace it.
+            if (localEntry != null && !localEntry.isTransferable) return@mapNotNull null
             val shouldRestore = localEntry == null ||
                 remoteEntry.modifiedAt > localEntry.modifiedAt ||
                 (remoteEntry.modifiedAt == localEntry.modifiedAt && remoteEntry.sha256 != localEntry.sha256)

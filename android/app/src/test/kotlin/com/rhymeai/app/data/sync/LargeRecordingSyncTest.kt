@@ -92,6 +92,21 @@ class LargeRecordingSyncTest {
     }
 
     @Test
+    fun newerRemoteRecordingDoesNotReplaceLocalFileThatWasTooLargeToUpload() {
+        val localLarge = recording("p1", "session.wav", sizeBytes = limit + 1L, modifiedAt = 1L, sha256 = "local")
+        val remoteNewer = recording("p1", "session.wav", modifiedAt = 2L, sha256 = "remote")
+
+        assertEquals(
+            emptyList<RecordingRestorePlan>(),
+            RecordingSyncPlanner.planRestores(
+                local = listOf(localLarge),
+                remoteManifest = listOf(remoteNewer),
+                remoteFilesByName = mapOf(remoteNewer.driveName to "remote-file")
+            )
+        )
+    }
+
+    @Test
     fun plannerNeverTransfersOversizeRecordingsAndLeavesNormalOnesUnchanged() {
         val localLarge = recording("p1", "session.wav", sizeBytes = limit + 1L)
         val localAtLimit = recording("p1", "limit.m4a", sizeBytes = limit)
