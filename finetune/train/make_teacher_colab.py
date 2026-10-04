@@ -80,9 +80,14 @@ def checked(command):
     remaining = DEADLINE - time.time() - 300
     if remaining <= 0:
         raise TimeoutError('Controller deadline reached')
-    with log_path.open('a') as log:
-        subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
-                       check=True, timeout=remaining)
+    try:
+        with log_path.open('a') as log:
+            subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
+                           check=True, timeout=remaining)
+    finally:
+        # Give subprocesses a local file descriptor; DriveFS can invalidate
+        # inherited descriptors even while new path-based writes still work.
+        shutil.copy2(log_path, PERSIST / 'controller.log')
 
 try:
     drive.mount('/content/drive', timeout_ms=240000)
@@ -99,7 +104,7 @@ try:
               'note': 'Time bound from observed rate; not a provider-side spending limit.'}
     (PERSIST / 'budget.json').write_text(json.dumps(budget, indent=2))
     shutil.copytree(ROOT, PERSIST / 'source')
-    log_path = PERSIST / 'controller.log'
+    log_path = ROOT / 'controller.log'
     print('PERSISTENT_OUTPUT', str(PERSIST), flush=True)
     print('BUDGET', json.dumps(budget), flush=True)
     environment = ROOT / 'venv'
@@ -109,8 +114,9 @@ try:
     checked([python, '-m', 'pip', 'install', '--disable-pip-version-check',
              'transformers==5.18.0', 'peft==0.21.2', 'accelerate==1.15.0',
              'bitsandbytes==0.50.2'])
-    with (PERSIST / 'pip-freeze.txt').open('w') as freeze:
+    with (ROOT / 'pip-freeze.txt').open('w') as freeze:
         subprocess.run([python, '-m', 'pip', 'freeze'], stdout=freeze, check=True)
+    shutil.copy2(ROOT / 'pip-freeze.txt', PERSIST / 'pip-freeze.txt')
     checked([python, str(ROOT / 'train_teacher.py'), '--data', str(ROOT / 'data'),
              '--out', str(PERSIST / 'run'), '--deadline', str(DEADLINE - 180)])
     print('RUN_STATUS', (PERSIST / 'run/status.json').read_text(), flush=True)
