@@ -63,6 +63,7 @@ private enum EditorViewConstants {
         static let surfaceTintOpacity: Double = 0.08
         static let surfaceFallbackOpacity: Double = 0.85
         static let statusLineLimit = 1
+        static let errorLineLimit = 4
     }
 
     enum Wordmark {
@@ -1017,6 +1018,7 @@ private struct RewriteAccessoryHeightPreferenceKey: PreferenceKey {
 
 private struct InlineRewriteReviewBar: View {
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let action: RewriteAction
     let loading: Bool
@@ -1027,7 +1029,14 @@ private struct InlineRewriteReviewBar: View {
     var onRetry: () -> Void
 
     var body: some View {
-        HStack(spacing: RhymeAITokens.Spacing.xs) {
+        // An error has to stay readable, so it wraps; at accessibility sizes
+        // the actions drop below the status instead of squeezing it out.
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs))
+            : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.xs))
+
+        layout {
             HStack(spacing: RhymeAITokens.Spacing.xs) {
                 if loading {
                     ProgressView()
@@ -1039,50 +1048,65 @@ private struct InlineRewriteReviewBar: View {
 
                 Text(statusText)
                     .font(.caption.weight(.semibold))
-                    .lineLimit(EditorViewConstants.RewriteReview.statusLineLimit)
+                    .lineLimit(error == nil ? EditorViewConstants.RewriteReview.statusLineLimit : EditorViewConstants.RewriteReview.errorLineLimit)
                     .minimumScaleFactor(EditorViewConstants.RewriteReview.statusMinimumScale)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .foregroundStyle(error == nil ? appearance.palette.action : appearance.palette.error)
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if error != nil {
-                Button("Retry", action: onRetry)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(appearance.palette.action)
-                    .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
+            HStack(spacing: RhymeAITokens.Spacing.xs) {
+                if error != nil {
+                    Button(action: onRetry) {
+                        Text("Retry")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(appearance.palette.action)
+                            .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
+                    }
                     .buttonStyle(.rhymePress)
-            } else if preview != nil {
-                Button("Apply", action: onApply)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(appearance.palette.onAction)
-                    .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
-                    .background(appearance.palette.action, in: Capsule())
+                } else if preview != nil {
+                    Button(action: onApply) {
+                        Text("Apply")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(appearance.palette.onAction)
+                            .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
+                            .background(appearance.palette.action, in: Capsule())
+                    }
                     .buttonStyle(.rhymePress)
-                Button {
-                    onRetry()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.caption.weight(.semibold))
-                        .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
-                        .contentShape(Rectangle())
+                    Button {
+                        onRetry()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(appearance.palette.action)
+                            .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                    }
+                    .buttonStyle(.rhymePress)
+                    .accessibilityLabel("Regenerate rewrite")
                 }
-                .foregroundStyle(appearance.palette.action)
-                .buttonStyle(.rhymePress)
-                .accessibilityLabel("Regenerate rewrite")
-            }
 
-            Button("Cancel", action: onCancel)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(minWidth: RhymeAITokens.Spacing.xxl, minHeight: RhymeAITokens.Touch.minimum)
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: RhymeAITokens.Spacing.xxl, minHeight: RhymeAITokens.Touch.minimum)
+                }
                 .buttonStyle(.rhymePress)
+            }
+            .frame(maxWidth: stacked ? .infinity : nil, alignment: .trailing)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
         .padding(.vertical, RhymeAITokens.Spacing.xs)
         .frame(maxWidth: RhymeAITokens.Layout.drawerMaxWidth)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .indigo.opacity(EditorViewConstants.RewriteReview.surfaceTintOpacity), fallbackOpacity: EditorViewConstants.RewriteReview.surfaceFallbackOpacity)
+        .liquidGlassSurface(cornerRadius: surfaceRadius, tint: .indigo.opacity(EditorViewConstants.RewriteReview.surfaceTintOpacity), fallbackOpacity: EditorViewConstants.RewriteReview.surfaceFallbackOpacity)
         .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
         .accessibilityIdentifier("inlineRewriteReviewBar")
+    }
+
+    /// A pill only suits a single line; taller content gets the card radius
+    /// so wrapped text is not crowded by the rounded ends.
+    private var surfaceRadius: CGFloat {
+        error == nil && !dynamicTypeSize.isAccessibilitySize ? RhymeAITokens.Radius.pill : RhymeAITokens.Radius.xl
     }
 
     private var statusText: String {
