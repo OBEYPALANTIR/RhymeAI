@@ -521,6 +521,9 @@ final class Writers_BlockUITests: XCTestCase {
         let editor = app.textViews["lyricsEditor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.tap()
+        // A tap alone leaves the simulator's software keyboard collapsed when
+        // it assumes a hardware keyboard; typing summons it.
+        editor.typeText(" keyboard visible")
         let keyboard = try XCTUnwrap(
             waitForVisibleKeyboardFrame(in: app, windowFrame: window),
             "iPad software keyboard did not appear; shown-state clearance is unverified"
@@ -616,7 +619,8 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertLessThan(editorStats.frame.maxY, lyricsEditor.frame.minY)
 
         lyricsEditor.tap()
-        let longLyrics = (1...36)
+        // Enough lines to overflow the tallest editor viewport (iPad portrait).
+        let longLyrics = (1...80)
             .map { "Lyric line \($0)" }
             .joined(separator: "\n")
         lyricsEditor.typeText(longLyrics)
