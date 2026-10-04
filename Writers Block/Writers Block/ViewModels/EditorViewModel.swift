@@ -2024,7 +2024,7 @@ final class EditorViewModel: ObservableObject {
         cloudBackupHasStoredPassphrase = backupService?.hasStoredPassphrase ?? false
 
         if !cloudBackupConfigured {
-            cloudBackupStatusText = "Google Drive backup is not configured yet. Add the iOS OAuth client ID before backing up."
+            cloudBackupStatusText = "Google Drive backup is not configured in this build, so Back Up Now and Restore are unavailable."
             cloudBackupLastResultIsError = true
         } else if !cloudBackupHasStoredPassphrase {
             cloudBackupStatusText = "Enter a backup passphrase to enable Google Drive backup."
