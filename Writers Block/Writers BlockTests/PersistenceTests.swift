@@ -144,6 +144,8 @@ struct PersistenceTests {
             try context.save()
         })
         let viewModel = harness.viewModel
+        // On the welcome screen there is no open draft, so a flush is a no-op.
+        viewModel.showWelcome = false
         viewModel.title = "Retry"
         viewModel.lyrics = "line kept in the editor"
 
