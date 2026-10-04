@@ -95,7 +95,7 @@ struct SettingsSaveBar: View {
                 systemImage: saved ? "checkmark.circle.fill" : "checkmark"
             )
             .font(.headline)
-            .foregroundStyle(saved ? appearance.palette.success : appearance.palette.onAction)
+            .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
             .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
         }
