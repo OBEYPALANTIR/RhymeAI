@@ -136,6 +136,32 @@ struct PersistenceTests {
     }
 
     @MainActor
+    @Test func failedSaveShowsRetryStateAndRetrySavesTheSameEdits() throws {
+        final class SaveGate { var shouldFail = true }
+        let gate = SaveGate()
+        let harness = try Self.makeHarness(saveModelContext: { context in
+            if gate.shouldFail { throw CocoaError(.fileWriteUnknown) }
+            try context.save()
+        })
+        let viewModel = harness.viewModel
+        // On the welcome screen there is no open draft, so a flush is a no-op.
+        viewModel.showWelcome = false
+        viewModel.title = "Retry"
+        viewModel.lyrics = "line kept in the editor"
+
+        #expect(!viewModel.flushCurrentDraft())
+        #expect(viewModel.saveStatus == .failed)
+        #expect(viewModel.errorMessage == "Couldn't save this song. Your edits remain open.")
+        #expect(viewModel.lyrics == "line kept in the editor")
+        #expect(try Self.fetchProjects(harness.context).isEmpty)
+
+        gate.shouldFail = false
+        #expect(viewModel.flushCurrentDraft())
+        #expect(viewModel.saveStatus == .saved)
+        #expect(try Self.fetchProjects(harness.context).map(\.lyrics) == ["line kept in the editor"])
+    }
+
+    @MainActor
     @Test func importFailureKeepsEditorAndStoreUnchanged() throws {
         let harness = try Self.makeHarness(saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) })
         let viewModel = harness.viewModel
