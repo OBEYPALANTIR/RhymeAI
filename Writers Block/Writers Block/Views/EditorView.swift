@@ -643,16 +643,22 @@ struct EditorView: View {
                             .font(.subheadline)
                             .accessibilityIdentifier("lineAddedFeedback")
                         Spacer(minLength: RhymeAITokens.Spacing.xs)
-                        Button("Undo", action: viewModel.undoInsertedLine)
-                            .font(.subheadline.weight(.semibold))
-                            .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
-                            .accessibilityIdentifier("undoInsertedLineButton")
+                        Button(action: viewModel.undoInsertedLine) {
+                            Text("Undo")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                        }
+                        .buttonStyle(.rhymePress)
+                        .accessibilityIdentifier("undoInsertedLineButton")
                         if viewModel.voiceMemoService.isRecording {
-                            Button("Stop", systemImage: "stop.fill") {
+                            Button {
                                 viewModel.voiceMemoService.stopRecording()
+                            } label: {
+                                Label("Stop", systemImage: "stop.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
                             }
-                            .font(.subheadline.weight(.semibold))
-                            .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                            .buttonStyle(.rhymePress)
                             .accessibilityLabel("Stop recording")
                         }
                     }
