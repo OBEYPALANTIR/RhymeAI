@@ -25,6 +25,7 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var selectionAnimation
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let options: [Option]
     @Binding var selection: Option
@@ -32,34 +33,12 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
     let title: (Option) -> String
 
     var body: some View {
-        HStack(spacing: RhymeAITokens.Spacing.xxs) {
-            ForEach(options, id: \.self) { option in
-                let isSelected = selection == option
-                Button {
-                    withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
-                        selection = option
-                    }
-                } label: {
-                    Text(title(option))
-                        .font(.caption.weight(isSelected ? .semibold : .medium))
-                        .foregroundStyle(isSelected ? appearance.palette.onAction : appearance.palette.primaryInk)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                        .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
-                        .background {
-                            if isSelected {
-                                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
-                                    .fill(appearance.palette.action)
-                                    .matchedGeometryEffect(id: "selection", in: selectionAnimation)
-                            }
-                        }
-                }
-                .buttonStyle(.rhymePress)
-                .accessibilityLabel(title(option))
-                .accessibilityValue(isSelected ? "Selected" : "Not selected")
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-            }
-        }
+        // More than two options cannot share a row at accessibility sizes
+        // without truncating ("Gemi…", "Ope…", "Clau…"), so they stack.
+        let layout = dynamicTypeSize.isAccessibilitySize && options.count > 2
+            ? AnyLayout(VStackLayout(spacing: RhymeAITokens.Spacing.xxs))
+            : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.xxs))
+        layout { segments }
         .padding(RhymeAITokens.Spacing.xxs)
         .background(
             appearance.palette.raisedSurface,
@@ -70,6 +49,36 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
                 .strokeBorder(appearance.palette.outline, lineWidth: 1)
         }
         .accessibilityIdentifier(accessibilityIdentifier)
+    }
+
+    @ViewBuilder
+    private var segments: some View {
+        ForEach(options, id: \.self) { option in
+            let isSelected = selection == option
+            Button {
+                withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
+                    selection = option
+                }
+            } label: {
+                Text(title(option))
+                    .font(.caption.weight(isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? appearance.palette.onAction : appearance.palette.primaryInk)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
+                    .background {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
+                                .fill(appearance.palette.action)
+                                .matchedGeometryEffect(id: "selection", in: selectionAnimation)
+                        }
+                    }
+            }
+            .buttonStyle(.rhymePress)
+            .accessibilityLabel(title(option))
+            .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+        }
     }
 }
 
