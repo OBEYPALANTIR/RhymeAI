@@ -633,7 +633,7 @@ Two floating actions sit at the bottom trailing edge: UnBlock and the mic. On iO
 
 Assistant placement differs by width on iOS. On a compact width it is a full-screen panel that rises from the bottom over the editor and is dragged down to dismiss. On a regular width it is a persistent 380pt column on the trailing side of the editor, separated by a divider, which the user can hide; Focus mode also hides it. On Android the assistant is always a full-screen panel that rises from the bottom; there is no side-panel layout in the Android code.
 
-The songs drawer enters from the leading edge and covers the full height and the full width of the window on both platforms, at every size including iPad. Its order is: search with a close button, a Songs/Recordings switch, Create New Song, the Recent Songs list, then Import From File and Trash at the bottom.
+The songs drawer enters from the leading edge and covers the full height and the full width of the window on both platforms, at every size including iPad. On iOS its order is: search with a close button, a Songs/Recordings switch, Create New Song, the Recent Songs list, then Import From File and Trash at the bottom. On Android the drawer goes from search straight to Create New Song and the song list; it has no Songs/Recordings switch, and the only Projects/Recordings segmented control is inside the Trash screen.
 
 Settings is a native sheet on iOS (on a regular width it requests at least 420pt wide, ideally 520pt, and at least 560pt tall) and a full-screen page on Android.
 
@@ -703,7 +703,7 @@ Drawers and the assistant panel are squared to the screen edge. Template, notebo
 
 Values below are the shipped ones. iOS values are in points, Android values in dp.
 
-**Editor top bar.** iOS: 8pt padding, bottom divider, and from the leading edge: songs drawer button, undo, redo, save status; then Focus, song actions menu, Settings. Icon buttons are 17pt symbols in a 44×44pt frame with an accessibility label ("Open songs drawer", "Undo last edit", "Redo last edit", "Song actions", "Settings"); Focus reports its value as On or Off. The top bar does not show the song name on either platform; the in-scroll title field is the song title. Android uses a Material `TopAppBar` on the surface colour with the same controls.
+**Editor top bar.** iOS: 8pt padding, bottom divider, and from the leading edge: songs drawer button, undo, redo, save status; then Focus, song actions menu, Settings. Icon buttons are 17pt symbols in a 44×44pt frame with an accessibility label ("Open songs drawer", "Undo last edit", "Redo last edit", "Song actions", "Settings"); Focus reports its value as On or Off. The top bar does not show the song name on either platform; the in-scroll title field is the song title. Android uses a Material `TopAppBar` on the surface colour with the save status, undo, redo, the song-actions menu and Focus; Settings is an item inside the song-actions menu, not a top-bar button.
 
 **Save-status indicator.** A compact indicator beside undo/redo, animated with the 160ms feedback tier. iOS has three states: saving shows a small spinner labelled "Saving..."; saved shows a caption-size checkmark in the success colour at 80% opacity labelled "Saved"; failed shows a warning triangle in the error colour (with the words "Save failed" when they fit) as a 44pt button labelled "Save failed. Retry saving" that retries the save. Android has saving (14dp spinner, 2dp stroke) and saved (14dp check) only.
 
@@ -729,12 +729,13 @@ Values below are the shipped ones. iOS values are in points, Android values in d
 
 **Song Notebook.** iOS: a native sheet with a system segmented switch between Alternates and Draft History, plain rows at least 44pt tall, and secondary-ink empty states. Android: `SongNotebookSheet`.
 
-**Accessibility requirements the code enforces.** Every interactive control has a hit area of at least 44×44pt on iOS and 48×48dp on Android, even when its glyph is smaller. iOS custom buttons use the `rhymePress` style, which makes the whole frame tappable rather than just the drawn glyph. Every icon-only button carries an accessibility label. Switches are labelled with their row text. Decorative layers (background texture, tier badges) are hidden from assistive technology.
+**Accessibility requirements.** Every interactive control must have a hit area of at least 44×44pt on iOS and 48×48dp on Android, even when its glyph is smaller. The code meets this for icon buttons and the main controls; a known gap is listed below. iOS custom buttons use the `rhymePress` style, which makes the whole frame tappable rather than just the drawn glyph. Every icon-only button carries an accessibility label. Switches are labelled with their row text. Decorative layers (background texture, tier badges) are hidden from assistive technology.
 
 ### Known inconsistencies
 
 These describe the current code. They are not rules to copy.
 
+- iOS recordings selection toolbar: the text-only Cancel, Delete and Select buttons in the songs drawer have no 44pt minimum frame, so their hit areas are the size of their text.
 - iOS Settings mixes two segmented styles: the General/Editor tabs and AI Provider use the custom action-fill control, while Appearance and Analysis Style use the system segmented picker. The drawer, notebook, trash, and rhyme-density controls also use the system picker.
 - iOS Settings input fields and provider cards use the 32pt radius inside 22pt-radius groups, while comparable fields elsewhere (drawer search) use 16pt.
 - Graphite switches have weak contrast on iOS: the on-state track is the warm white action colour (`#F6F2E8`) behind a white thumb.
