@@ -1,70 +1,106 @@
 ---
 version: "alpha"
 name: "Writers Block"
-description: "A dark, lyric-first mobile design system for a songwriting assistant with Material You adaptation on Android and Liquid Glass depth on iOS."
+description: "A monochrome, lyric-first mobile design system for a songwriting assistant. Android and iOS both ship three user-selectable appearances: Ink (default), Paper, and Graphite. Unprefixed color tokens are the Ink appearance."
 colors:
-  primary: "#4F46E5"
-  on-primary: "#FFFFFF"
-  primary-container: "#6366F1"
-  on-primary-container: "#FFFFFF"
-  primary-soft: "#818CF8"
-  secondary: "#C084FC"
-  on-secondary: "#FFFFFF"
-  tertiary: "#6EE7B7"
-  on-tertiary: "#003824"
-  tertiary-container: "#005235"
-  on-tertiary-container: "#90F7C4"
-  background: "#0A0A0A"
-  on-background: "#FFFFFF"
-  surface: "#0A0A0A"
-  surface-container-low: "#111111"
-  surface-container: "#1A1A1A"
-  surface-container-high: "#222222"
-  surface-container-highest: "#333333"
-  on-surface: "#FFFFFF"
-  on-surface-muted: "#B3B3B3"
-  on-surface-subtle: "#666666"
-  outline: "#333333"
-  outline-bright: "#FFFFFF"
-  inverse-surface: "#FFFFFF"
-  inverse-on-surface: "#0A0A0A"
-  error: "#FFB4AB"
-  on-error: "#690005"
-  success: "#6EE7B7"
-  warning: "#FFA000"
-  app-icon-coral: "#FF7A73"
-  app-icon-burgundy: "#4A000B"
-  app-icon-light: "#FFFFFF"
-  app-icon-ink: "#050505"
-  android-dynamic-background: "#2B0008"
-  android-dynamic-primary: "#FF8982"
-  android-dynamic-on-primary: "#4B000B"
-  ios-glass-surface: "#252837"
-  ios-glass-border: "#50577A"
-  ios-glass-icon-fill: "#303556"
-  syllable-1: "#6EE7B7"
-  syllable-2: "#93C5FD"
-  syllable-3: "#D8B4FE"
-  syllable-4-plus: "#FDA4AF"
-  rhyme-01: "#FCA5A5"
-  rhyme-02: "#FCD34D"
-  rhyme-03: "#86EFAC"
-  rhyme-04: "#7DD3FC"
-  rhyme-05: "#C4B5FD"
-  rhyme-06: "#F9A8D4"
-  rhyme-07: "#FDBA74"
-  rhyme-08: "#67E8F9"
-  rhyme-09: "#A7F3D0"
-  rhyme-10: "#E9D5FF"
-  rhyme-11: "#FEF08A"
-  rhyme-12: "#BEF264"
-  light-background: "#FBFBFE"
-  light-surface: "#FBFBFE"
-  light-surface-container: "#F0F0F5"
-  light-on-surface: "#1B1B1F"
-  light-on-surface-muted: "#46464F"
-  light-outline: "#767680"
-  light-outline-variant: "#C6C5D0"
+  primary: "#050505"
+  on-primary: "#FCFCF8"
+  background: "#FCFCF8"
+  on-background: "#050505"
+  surface: "#FCFCF8"
+  surface-container-low: "#F7F7F2"
+  surface-container: "#EFEFE9"
+  surface-container-high: "#E5E5DE"
+  surface-container-highest: "#DADAD2"
+  on-surface: "#050505"
+  on-surface-muted: "#4D4D48"
+  on-surface-subtle: "#666660"
+  outline: "#B5B5AD"
+  outline-strong: "#5E5E58"
+  placeholder: "#5E5E58"
+  selection: "#DADAD2"
+  scrim-base: "#050505"
+  error: "#B3261E"
+  on-error: "#FFFFFF"
+  success: "#047857"
+  on-success: "#FFFFFF"
+  success-container: "#D1FAE5"
+  on-success-container: "#064E3B"
+  warning: "#92400E"
+  recording: "#B3261E"
+  paper-primary: "#302E2A"
+  paper-on-primary: "#FFF9EB"
+  paper-background: "#F3EEDF"
+  paper-surface: "#F8F3E6"
+  paper-surface-container-low: "#EFE8D7"
+  paper-surface-container: "#E8E0CE"
+  paper-surface-container-high: "#DDD4BF"
+  paper-surface-container-highest: "#D2C8B0"
+  paper-on-surface: "#302E2A"
+  paper-on-surface-muted: "#5D574E"
+  paper-on-surface-subtle: "#6E675C"
+  paper-outline: "#B7AC94"
+  paper-outline-strong: "#696257"
+  paper-placeholder: "#5D574E"
+  paper-selection-ios: "#D8CDB4"
+  paper-scrim-base: "#302E2A"
+  graphite-primary: "#F6F2E8"
+  graphite-on-primary: "#171716"
+  graphite-background: "#171716"
+  graphite-surface: "#1C1C1B"
+  graphite-surface-container-low: "#20201E"
+  graphite-surface-container: "#232321"
+  graphite-surface-container-high: "#2B2B28"
+  graphite-surface-container-highest: "#343430"
+  graphite-on-surface: "#F6F2E8"
+  graphite-on-surface-muted: "#C4BEB3"
+  graphite-on-surface-subtle: "#9B968C"
+  graphite-outline: "#484843"
+  graphite-outline-strong: "#7B766D"
+  graphite-placeholder: "#AAA49A"
+  graphite-selection: "#41413D"
+  graphite-scrim-base: "#000000"
+  graphite-error: "#FFB4AB"
+  graphite-on-error: "#690005"
+  graphite-success: "#6EE7B7"
+  graphite-on-success: "#003824"
+  graphite-success-container: "#005235"
+  graphite-on-success-container: "#90F7C4"
+  graphite-warning: "#FFB95B"
+  graphite-on-warning: "#4A2800"
+  graphite-recording-ios: "#FF8A80"
+  syllable-1: "#047857"
+  syllable-2: "#0369A1"
+  syllable-3: "#7E22CE"
+  syllable-4-plus: "#B91C1C"
+  graphite-syllable-1: "#6EE7B7"
+  graphite-syllable-2: "#93C5FD"
+  graphite-syllable-3: "#D8B4FE"
+  graphite-syllable-4-plus: "#FDA4AF"
+  rhyme-01: "#B91C1C"
+  rhyme-02: "#92400E"
+  rhyme-03: "#166534"
+  rhyme-04: "#0369A1"
+  rhyme-05: "#6D28D9"
+  rhyme-06: "#BE185D"
+  rhyme-07: "#9A3412"
+  rhyme-08: "#155E75"
+  rhyme-09: "#047857"
+  rhyme-10: "#7E22CE"
+  rhyme-11: "#854D0E"
+  rhyme-12: "#3F6212"
+  graphite-rhyme-01: "#FCA5A5"
+  graphite-rhyme-02: "#FCD34D"
+  graphite-rhyme-03: "#86EFAC"
+  graphite-rhyme-04: "#7DD3FC"
+  graphite-rhyme-05: "#C4B5FD"
+  graphite-rhyme-06: "#F9A8D4"
+  graphite-rhyme-07: "#FDBA74"
+  graphite-rhyme-08: "#67E8F9"
+  graphite-rhyme-09: "#A7F3D0"
+  graphite-rhyme-10: "#E9D5FF"
+  graphite-rhyme-11: "#FEF08A"
+  graphite-rhyme-12: "#BEF264"
 typography:
   display-lg:
     fontFamily: "System Serif"
@@ -90,6 +126,12 @@ typography:
     fontWeight: "700"
     lineHeight: 36px
     letterSpacing: 0em
+  editor-title-android:
+    fontFamily: "System Serif"
+    fontSize: 34px
+    fontWeight: "700"
+    lineHeight: 42px
+    letterSpacing: 0em
   title-lg:
     fontFamily: "System Sans"
     fontSize: 20px
@@ -99,7 +141,7 @@ typography:
   title-md:
     fontFamily: "System Sans"
     fontSize: 16px
-    fontWeight: "600"
+    fontWeight: "500"
     lineHeight: 24px
     letterSpacing: 0em
   body-lg:
@@ -108,17 +150,28 @@ typography:
     fontWeight: "400"
     lineHeight: 24px
     letterSpacing: 0em
-  lyric-body:
+  lyric-body-android:
+    fontFamily: "System Sans"
+    fontSize: 17px
+    fontWeight: "400"
+    lineHeight: 27px
+    letterSpacing: 0em
+  lyric-body-ios:
     fontFamily: "System Sans"
     fontSize: 16px
     fontWeight: "400"
-    lineHeight: 28px
     letterSpacing: 0em
   body-md:
     fontFamily: "System Sans"
     fontSize: 14px
     fontWeight: "400"
     lineHeight: 20px
+    letterSpacing: 0em
+  caption-android:
+    fontFamily: "System Sans"
+    fontSize: 13px
+    fontWeight: "400"
+    lineHeight: 16px
     letterSpacing: 0em
   body-sm:
     fontFamily: "System Sans"
@@ -130,12 +183,6 @@ typography:
     fontFamily: "System Sans"
     fontSize: 12px
     fontWeight: "500"
-    lineHeight: 16px
-    letterSpacing: 0em
-  caption-mono:
-    fontFamily: "System Monospace"
-    fontSize: 12px
-    fontWeight: "400"
     lineHeight: 16px
     letterSpacing: 0em
 rounded:
@@ -151,490 +198,584 @@ rounded:
   pill: 28px
   app-icon: 22px
   app-icon-shell: 30px
-  full: 9999px
+  ios-xs: 6px
+  ios-sm: 8px
+  ios-md: 12px
+  ios-lg: 16px
+  ios-xl: 22px
+  ios-xxl: 32px
+  ios-pill: 52px
 spacing:
   unit: 4px
-  xs: 4px
-  sm: 8px
-  md: 12px
-  lg: 16px
-  xl: 20px
-  xxl: 24px
-  xxxl: 32px
-  jumbo: 48px
-  screen-horizontal: 24px
-  editor-horizontal: 20px
-  drawer-horizontal: 16px
-  assistant-panel: 20px
-  card-gap: 12px
-  section-gap: 16px
-  sheet-handle-area: 64px
-  editor-bottom-rest: 300px
+  android-xs: 4px
+  android-sm: 8px
+  android-md: 12px
+  android-lg: 20px
+  android-xl: 24px
+  android-xxl: 32px
+  android-golden: 52px
+  android-rhythm-tight: 8px
+  android-rhythm-related: 13px
+  android-rhythm-standard: 21px
+  android-rhythm-section: 34px
+  android-rhythm-primary: 55px
+  ios-hairline: 1px
+  ios-xxs: 4px
+  ios-xs: 8px
+  ios-sm: 12px
+  ios-md: 20px
+  ios-lg: 24px
+  ios-xl: 32px
+  ios-xxl: 52px
+  ios-touch-minimum: 44px
+  ios-touch-comfortable: 56px
+  ios-touch-prominent: 82px
+  android-touch-minimum: 48px
+  android-fab: 55px
+  ios-editor-horizontal: 20px
+  android-editor-horizontal: 21px
+  ios-editor-max-width: 740px
+  ios-editor-bottom-rest: 200px
+  android-editor-bottom-rest: 300px
+  ios-assistant-column: 380px
+  ios-readable-width: 420px
+  ios-sheet-handle-area: 72px
+  android-sheet-handle-area: 64px
+  sheet-handle-width: 52px
+  sheet-handle-height: 4px
+  android-expanded-content-width: 584px
 proportion:
   phi: 1.618
   inverse-phi: 0.618
-  rhythm: "8px, 12/13px, 20/21px, 32/34px, 52/55px"
-  editor-assistant-drawer: "Size major editor, assistant, and drawer relationships with inverse-phi proportions before rounding to platform-friendly pixels."
-  exceptions: "Minimum touch targets and keyboard/safe-area offsets override phi: 48px web, 48dp Android, 44pt iOS."
+  rhythm: "Android Rhythm tokens: 8, 13, 21, 34, 55dp. iOS Spacing tokens: 1, 4, 8, 12, 20, 24, 32, 52pt."
+  exceptions: "Minimum touch targets and keyboard/safe-area offsets override the rhythm: 48dp Android, 44pt iOS."
 opacity:
-  disabled: 0.40
-  placeholder: 0.20
-  subtle-text: 0.50
-  muted-text: 0.60
-  outline-variant: 0.10
-  glass-border: 0.12
-  glass-tint-low: 0.05
-  glass-tint-medium: 0.08
-  glass-tint-strong: 0.35
   scrim: 0.42
-  rhyme-text: 0.90
+  graphite-scrim: 0.55
+  pressed: 0.86
+  sheet-grabber: 0.45
+  saved-status: 0.80
+  disabled-export: 0.40
+  paper-rule-texture: 0.055
+  paper-fiber-texture: 0.024
+  graphite-grain-texture: 0.018
 elevation:
   flat: 0px
   android-icon-tonal: 4px
   android-icon-shadow: 6px
-  drawer-tonal: 8px
-  ios-brand-glow-radius: 22px
-  ios-brand-glow-y: 10px
+  android-selection-bar-tonal: 3px
+  ios-brand-icon-shadow-radius: 18px
+  ios-brand-icon-shadow-y: 8px
+  ios-action-shadow-radius: 12px
+  ios-action-shadow-y: 4px
   ios-drawer-shadow-radius: 26px
   ios-drawer-shadow-x: 10px
-  fab-shadow-radius: 12px
-  fab-shadow-y: 4px
+  ios-toast-shadow-radius: 14px
+  ios-toast-shadow-y: 4px
 shadows:
-  ios-brand-glow: "0px 10px 22px rgba(79, 70, 229, 0.32)"
+  ios-brand-icon: "0px 8px 18px primary ink at 0.14"
+  ios-unblock-action: "0px 4px 12px primary ink at 0.26"
+  ios-mic-action: "0px 4px 12px primary ink at 0.18"
   ios-drawer: "10px 0px 26px rgba(0, 0, 0, 0.35)"
-  ios-primary-action: "0px 4px 12px rgba(79, 70, 229, 0.26)"
-  android-surface-resting: "0px 6px 12px rgba(0, 0, 0, 0.24)"
+  ios-toast: "0px 4px 14px rgba(0, 0, 0, 0.3)"
 motion:
   fast: "160ms"
   standard: "260ms"
-  provider-expand: "260ms"
-  assistant-present: "260ms"
-  assistant-settle: "420ms"
-  rewrite-chip: "260ms"
-  easing-standard: "ease-in-out"
-  spring-standard: "response 260ms, damping 0.88"
-  spring-settle: "response 420ms, damping 0.80"
-  spring-expressive: "response 400ms, damping 0.76"
+  settle: "420ms"
+  android-page-fade: "140ms"
+  android-disclosure: "200ms"
+  ios-easing: "ease-in-out"
+  android-easing-standard: "cubic-bezier(0.2, 0, 0, 1)"
+  android-easing-exit: "cubic-bezier(0.4, 0, 1, 1)"
+  spring-standard: "iOS response 260ms, damping 0.88; Android damping 0.88, medium-low stiffness"
+  spring-settle: "iOS response 420ms, damping 0.80; Android damping 0.80, low stiffness"
+  spring-expressive: "iOS response 400ms, damping 0.76; Android damping 0.76, stiffness 247"
+  press-scale: 0.98
   purpose:
-    phi-ladder: "Fast, standard/present, and settle tiers use a golden-ratio ladder: 160ms ×φ ≈260ms ×φ ≈420ms."
-    feedback-dismiss: "160ms for immediate feedback, press states, and dismissals."
-    state-dialog: "260ms for ordinary state changes, settings growth, dialogs, assistant panels, sheets, drawers, and rewrite chips."
-    drag-settle: "420ms for drag release and spring settle with damping 0.80; expressive mic choreography preserves damping 0.76."
+    phi-ladder: "Fast, standard, and settle tiers use a golden-ratio ladder: 160ms, 260ms, 420ms."
+    feedback-dismiss: "160ms for press feedback, save-status changes, and dismissals."
+    state-dialog: "260ms for ordinary state changes, segmented selection, assistant panels, sheets, drawers, and rewrite chips."
+    drag-settle: "420ms spring for drag release and disclosure settle; the expressive spring drives the mic and UnBlock choreography."
+    reduced-motion: "iOS disables token animations and swaps move/scale transitions for opacity under Reduce Motion; Android snaps when the system animator duration scale is 0."
     avoid: "Avoid decorative hover motion and staggered choreography that does not clarify state or origin."
 effects:
-  ios-glass-material: "ultra-thin translucent material"
-  ios-glass-border-width: 1px
-  android-outline-width: 1px
-  underline-stroke: 3px
+  surface-border-width: 1px
   unblock-scribble-stroke: 1.6px
+  android-syllable-underline-width: 3px
+  android-syllable-underline-gap: 2px
+  texture: "iOS draws Paper rules and fibers and Graphite grain; Android draws Graphite grain only. Ink is untextured."
 components:
   app-screen:
     backgroundColor: "{colors.background}"
     textColor: "{colors.on-background}"
     typography: "{typography.body-lg}"
-  welcome-title:
-    backgroundColor: "transparent"
-    textColor: "{colors.primary}"
-    typography: "{typography.display-lg}"
-  welcome-subtitle:
-    backgroundColor: "transparent"
-    textColor: "{colors.on-surface-muted}"
+  paper-screen:
+    backgroundColor: "{colors.paper-background}"
+    textColor: "{colors.paper-on-surface}"
     typography: "{typography.body-lg}"
-  android-welcome-card:
-    backgroundColor: "{colors.surface-container-low}"
+  graphite-screen:
+    backgroundColor: "{colors.graphite-background}"
+    textColor: "{colors.graphite-on-surface}"
+    typography: "{typography.body-lg}"
+  welcome-title-android:
+    backgroundColor: "transparent"
+    textColor: "{colors.on-background}"
+    typography: "{typography.headline-md}"
+  welcome-card-ios:
+    backgroundColor: "{colors.surface-container-high}"
     textColor: "{colors.on-surface}"
+    borderColor: "{colors.outline-strong}"
+    rounded: "{rounded.ios-lg}"
+    padding: 24px
+  welcome-card-android:
+    textColor: "{colors.on-surface}"
+    borderColor: "{colors.outline-strong}"
     typography: "{typography.title-md}"
     rounded: "{rounded.xxl}"
-    padding: 20px 16px
-  ios-glass-card:
-    backgroundColor: "rgba(255, 255, 255, 0.06)"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  icon-tile:
-    backgroundColor: "rgba(79, 70, 229, 0.15)"
-    textColor: "{colors.primary-soft}"
-    rounded: "{rounded.md}"
+  icon-tile-ios:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.primary}"
+    borderColor: "{colors.outline}"
+    rounded: "{rounded.ios-md}"
     size: 44px
   top-bar:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.on-surface-muted}"
-    typography: "{typography.label-md}"
-    height: 64px
-    titleRule: "Editor top bar persistently shows the current song name, or \"Untitled Song\" when empty, with save status as a compact adjacent indicator; the large in-scroll title field remains the editor."
-  editor-title-field:
+    titleRule: "Neither platform shows the song name in the top bar. The bar holds the songs-drawer button, undo/redo, a compact save-status indicator, Focus, song actions, and Settings; the large in-scroll title field is the only song title."
+  editor-title-field-android:
     backgroundColor: "transparent"
     textColor: "{colors.on-background}"
-    typography: "{typography.headline-lg}"
-  lyric-editor:
+    typography: "{typography.editor-title-android}"
+  lyric-editor-android:
     backgroundColor: "transparent"
     textColor: "{colors.on-background}"
-    typography: "{typography.lyric-body}"
-  primary-action-fab:
+    typography: "{typography.lyric-body-android}"
+  lyric-editor-ios:
+    backgroundColor: "transparent"
+    textColor: "{colors.on-background}"
+    typography: "{typography.lyric-body-ios}"
+  unblock-action-ios:
     backgroundColor: "{colors.primary}"
     textColor: "{colors.on-primary}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.pill}"
+    rounded: "{rounded.ios-pill}"
     height: 56px
-    padding: 14px 20px
-  assistant-sheet:
-    backgroundColor: "{colors.surface-container-low}"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.none}"
-  assistant-primary-button:
+    minWidth: 136px
+  unblock-action-android:
     backgroundColor: "{colors.primary}"
     textColor: "{colors.on-primary}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.lg}"
-    height: 48px
-    padding: 14px
-  drawer-panel:
-    backgroundColor: "{colors.surface-container-low}"
+    rounded: "{rounded.pill}"
+    height: 55px
+    width: 144px
+  mic-button-ios:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.on-primary}"
+    rounded: "{rounded.ios-pill}"
+    size: 56px
+    recordingWidth: 220px
+  mic-button-android:
+    rounded: "{rounded.pill}"
+    size: 55px
+    recordingWidth: 216px
+  assistant-panel-ios:
+    backgroundColor: "{colors.background}"
     textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
     rounded: "{rounded.none}"
-    width: 360px
-  drawer-row:
-    backgroundColor: "{colors.surface-container}"
+    inlineWidth: 380px
+  assistant-primary-button-ios:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.on-primary}"
+    rounded: "{rounded.ios-md}"
+    minHeight: 44px
+    padding: 12px 0px
+  suggestion-card-ios:
+    backgroundColor: "{colors.surface}"
     textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 12px 14px
-  drawer-row-active:
-    backgroundColor: "rgba(79, 70, 229, 0.18)"
+    borderColor: "{colors.outline}"
+    rounded: "{rounded.ios-md}"
+    padding: 24px
+  suggestion-card-android:
     textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 12px 14px
-  search-field:
-    backgroundColor: "{colors.surface-container-low}"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    height: 46px
-    padding: 0px 12px
-  settings-card:
-    backgroundColor: "rgba(255, 255, 255, 0.06)"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.sheet}"
-    padding: 16px
-  compact-info-pill:
+    borderColor: "{colors.outline-strong}"
+    rounded: "{rounded.lg}"
+  rewrite-chip-bar-ios:
+    backgroundColor: "{colors.surface}"
+    borderColor: "{colors.outline}"
+    rounded: "{rounded.ios-pill}"
+    padding: 8px
+    maxWidth: 360px
+  rewrite-chip-bar-android:
     backgroundColor: "{colors.surface-container-high}"
-    textColor: "{colors.on-surface-muted}"
-    typography: "{typography.caption-mono}"
-    rounded: "{rounded.xs}"
-    padding: 4px 8px
-  primary-container-surface:
-    backgroundColor: "{colors.primary-container}"
-    textColor: "{colors.app-icon-ink}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  primary-container-label-on-dark:
-    backgroundColor: "{colors.background}"
-    textColor: "{colors.on-primary-container}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  secondary-action:
-    backgroundColor: "{colors.secondary}"
-    textColor: "{colors.inverse-on-surface}"
-    typography: "{typography.title-md}"
-    rounded: "{rounded.lg}"
-    height: 48px
-    padding: 14px
-  secondary-label-on-dark:
-    backgroundColor: "{colors.background}"
-    textColor: "{colors.on-secondary}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  tertiary-status:
-    backgroundColor: "{colors.tertiary}"
-    textColor: "{colors.on-tertiary}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  tertiary-container-status:
-    backgroundColor: "{colors.tertiary-container}"
-    textColor: "{colors.on-tertiary-container}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.lg}"
-    padding: 12px
-  high-surface-panel:
-    backgroundColor: "{colors.surface-container-highest}"
-    textColor: "{colors.on-surface-muted}"
-    typography: "{typography.body-sm}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  subtle-text-on-light:
-    backgroundColor: "{colors.inverse-surface}"
-    textColor: "{colors.on-surface-subtle}"
-    typography: "{typography.body-sm}"
-  divider:
-    backgroundColor: "{colors.outline}"
-    textColor: "{colors.on-surface-muted}"
-    height: 1px
-  glass-edge:
-    backgroundColor: "{colors.outline-bright}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 1px
-  inverse-toast:
-    backgroundColor: "{colors.inverse-surface}"
-    textColor: "{colors.inverse-on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 12px 16px
-  error-banner:
-    backgroundColor: "{colors.error}"
-    textColor: "{colors.on-error}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.lg}"
-    padding: 12px
-  success-pill:
-    backgroundColor: "{colors.success}"
-    textColor: "{colors.on-tertiary}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  warning-pill:
-    backgroundColor: "{colors.warning}"
-    textColor: "{colors.inverse-on-surface}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
-  app-icon-android:
-    backgroundColor: "{colors.app-icon-coral}"
-    textColor: "{colors.app-icon-burgundy}"
-    rounded: "{rounded.app-icon}"
-    size: 80px
-  app-icon-ios:
-    backgroundColor: "{colors.app-icon-light}"
-    textColor: "{colors.app-icon-ink}"
-    rounded: "{rounded.app-icon}"
-    size: 82px
-  android-dynamic-screen:
-    backgroundColor: "{colors.android-dynamic-background}"
-    textColor: "{colors.android-dynamic-primary}"
-    typography: "{typography.body-lg}"
-  android-dynamic-fab:
-    backgroundColor: "{colors.android-dynamic-primary}"
-    textColor: "{colors.android-dynamic-on-primary}"
-    typography: "{typography.title-md}"
+    borderColor: "{colors.outline-strong}"
+    rounded: "{rounded.sheet}"
+  rewrite-chip-android:
     rounded: "{rounded.pill}"
-    height: 56px
-    padding: 14px 20px
-  ios-glass-panel:
-    backgroundColor: "{colors.ios-glass-surface}"
+    height: 48px
+  word-inspector-chip-ios:
     textColor: "{colors.on-surface}"
-    typography: "{typography.body-md}"
+    borderColor: "{colors.outline}"
+    rounded: "{rounded.ios-pill}"
+    padding: 6px 12px
+  word-inspector-android:
+    borderColor: "{colors.outline-strong}"
     rounded: "{rounded.xxl}"
-    padding: 16px
-  ios-glass-panel-edge:
-    backgroundColor: "{colors.ios-glass-border}"
+    maxHeight: 560px
+  drawer-panel:
+    backgroundColor: "{colors.background}"
     textColor: "{colors.on-surface}"
-    height: 1px
-  ios-glass-icon-tile:
-    backgroundColor: "{colors.ios-glass-icon-fill}"
+    rounded: "{rounded.none}"
+    width: "100%"
+  drawer-create-button-ios:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.on-primary}"
+    rounded: "{rounded.ios-lg}"
+    minHeight: 52px
+  drawer-row-ios:
     textColor: "{colors.on-surface}"
-    rounded: "{rounded.xxl}"
-    size: 44px
-  syllable-one-underline:
-    backgroundColor: "{colors.syllable-1}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 3px
-  syllable-two-underline:
-    backgroundColor: "{colors.syllable-2}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 3px
-  syllable-three-underline:
-    backgroundColor: "{colors.syllable-3}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 3px
-  syllable-four-plus-underline:
-    backgroundColor: "{colors.syllable-4-plus}"
-    textColor: "{colors.inverse-on-surface}"
-    height: 3px
-  rhyme-swatch-01:
-    backgroundColor: "{colors.rhyme-01}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-02:
-    backgroundColor: "{colors.rhyme-02}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-03:
-    backgroundColor: "{colors.rhyme-03}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-04:
-    backgroundColor: "{colors.rhyme-04}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-05:
-    backgroundColor: "{colors.rhyme-05}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-06:
-    backgroundColor: "{colors.rhyme-06}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-07:
-    backgroundColor: "{colors.rhyme-07}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-08:
-    backgroundColor: "{colors.rhyme-08}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-09:
-    backgroundColor: "{colors.rhyme-09}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-10:
-    backgroundColor: "{colors.rhyme-10}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-11:
-    backgroundColor: "{colors.rhyme-11}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  rhyme-swatch-12:
-    backgroundColor: "{colors.rhyme-12}"
-    textColor: "{colors.inverse-on-surface}"
-    size: 18px
-    rounded: "{rounded.full}"
-  light-screen:
-    backgroundColor: "{colors.light-background}"
-    textColor: "{colors.light-on-surface}"
-    typography: "{typography.body-lg}"
-  light-card:
-    backgroundColor: "{colors.light-surface}"
-    textColor: "{colors.light-on-surface-muted}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  light-container:
-    backgroundColor: "{colors.light-surface-container}"
-    textColor: "{colors.light-on-surface}"
-    typography: "{typography.body-md}"
-    rounded: "{rounded.xxl}"
-    padding: 16px
-  light-divider:
-    backgroundColor: "{colors.light-outline}"
-    textColor: "{colors.app-icon-ink}"
-    height: 1px
-  light-subtle-divider:
-    backgroundColor: "{colors.light-outline-variant}"
-    textColor: "{colors.light-on-surface}"
-    height: 1px
+    minHeight: 76px
+  search-field-ios:
+    backgroundColor: "{colors.surface-container-high}"
+    textColor: "{colors.on-surface}"
+    borderColor: "{colors.outline-strong}"
+    rounded: "{rounded.ios-lg}"
+    minHeight: 44px
+  settings-card-ios:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.on-surface}"
+    borderColor: "{colors.outline}"
+    rounded: "{rounded.ios-xl}"
+    padding: 20px
+  settings-field-ios:
+    backgroundColor: "{colors.surface-container-high}"
+    textColor: "{colors.on-surface}"
+    borderColor: "{colors.outline-strong}"
+    rounded: "{rounded.ios-xxl}"
+  settings-save-button-ios:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.on-primary}"
+    rounded: "{rounded.ios-lg}"
+    minHeight: 44px
+  segmented-control-ios:
+    backgroundColor: "{colors.surface-container-high}"
+    textColor: "{colors.on-surface}"
+    borderColor: "{colors.outline}"
+    rounded: "{rounded.ios-md}"
+    padding: 4px
+    selectedBackgroundColor: "{colors.primary}"
+    selectedTextColor: "{colors.on-primary}"
+    selectedRounded: "{rounded.ios-sm}"
+    segmentMinHeight: 44px
+  segmented-control-android:
+    borderColor: "{colors.outline-strong}"
+    rounded: "{rounded.pill}"
+    height: 48px
+  toast-ios:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.on-surface}"
+    borderColor: "{colors.outline}"
+    rounded: "{rounded.ios-lg}"
+    maxWidth: 420px
+  error-text:
+    textColor: "{colors.error}"
+  success-indicator:
+    textColor: "{colors.success}"
+  syllable-one:
+    textColor: "{colors.syllable-1}"
+  syllable-two:
+    textColor: "{colors.syllable-2}"
+  syllable-three:
+    textColor: "{colors.syllable-3}"
+  syllable-four-plus:
+    textColor: "{colors.syllable-4-plus}"
 ---
 
 ## Overview
 
-Writers Block is a dark, focused songwriting workspace. The interface should feel like a quiet writing room with a powerful assistant close at hand: black canvas, soft luminous accents, large serif song titles, restrained controls, and color only where it helps the writer understand rhythm, rhyme, or action.
+Writers Block is a monochrome, focused songwriting workspace. The interface should feel like a sheet of paper with a capable assistant close at hand: one flat writing surface, ink-coloured text and actions, large serif song titles, restrained controls, and hue only where it helps the writer read rhythm, rhyme, or status.
 
-The product is shared across Android and iOS, but each platform speaks its native language. Android uses Material 3 structure and can harmonize with Material You dynamic colors. iOS uses a glass-forward visual model with translucent panels, soft borders, and native-feeling depth. The shared identity is not a rigid color match; it is a shared hierarchy, rhythm, and lyric-first mood.
+Naming: the product's user-facing name is "Writers Block" on both platforms (iOS `CFBundleDisplayName`, Android `app_name`, the welcome wordmark, and the README). "RhymeAI" is the repository and code namespace only (`RhymeAITokens`, `RhymeAITheme`, package `com.rhymeai.app`); it never appears in UI copy.
+
+Both platforms ship the same three appearances, chosen by the user in Settings under Appearance with a three-segment control:
+
+- **Ink** (default, and the fallback for an unknown stored value): near-white canvas with near-black ink. Light colour scheme.
+- **Paper**: warm ivory canvas with soft pencil-grey ink. Light colour scheme.
+- **Graphite**: near-black canvas with warm white ink. Dark colour scheme, and the only appearance that uses the pastel analysis palette.
+
+The appearance is an explicit user choice. It does not follow the system light/dark setting, and Android does not use Material You dynamic colour. Each appearance forces its own colour scheme (iOS `preferredColorScheme`; Android `lightColorScheme`/`darkColorScheme`).
+
+Each platform keeps its native structure. Android is built from Material 3 components themed by `RhymeAITheme`. iOS is SwiftUI with opaque, bordered surfaces; despite the `liquidGlassSurface` name, iOS surfaces use no blur, material, or `glassEffect`. The shared identity is the monochrome palettes, the serif/sans pairing, and the lyric-first hierarchy.
+
+Evidence: iOS statements were checked against the code and against current simulator screenshots (iPhone and iPad, all three appearances, default and accessibility text sizes). There are no current Android screenshots; Android statements come from code only.
 
 ## Colors
 
-The canonical palette is near-black with indigo, purple, and emerald accents. Black is the dominant working surface. Indigo is the main action color, purple supports brand expression, emerald marks successful or local states, and a coral app-icon family provides warmth when dynamic color or brand imagery is present.
+Sources: iOS `Writers Block/Writers Block/Support/AppAppearance.swift`; Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/Color.kt` and `Theme.kt`. In the front matter, unprefixed colour tokens are Ink, and `paper-*` / `graphite-*` are the other two appearances.
 
-Android enables Material You dynamic color by default in `Theme.kt`, so the authored indigo, purple, and emerald palette is the non-dynamic baseline; on Android 12+ it can be replaced by the user's wallpaper palette. When that happens, keep the same tonal relationships: a very dark canvas, a high-contrast primary action, subdued card outlines, and muted secondary text.
+Core palette (iOS role name, then the Android Material role that carries the same value):
 
-iOS should bias toward black, indigo, purple, and translucent blue-gray glass. Glass surfaces should be visible through border, tint, blur, and shadow rather than through solid fill. Avoid opaque cards on iOS unless the content is modal and needs firm legibility.
+| Role | Ink | Paper | Graphite |
+| --- | --- | --- | --- |
+| Canvas (`background`) | `#FCFCF8` | `#F3EEDF` | `#171716` |
+| Surface (`surface`) | `#FCFCF8` | `#F8F3E6` | `#1C1C1B` |
+| Raised surface (`surfaceContainerHigh`) | `#E5E5DE` | `#DDD4BF` | `#2B2B28` |
+| Primary ink / text (`onSurface`) | `#050505` | `#302E2A` | `#F6F2E8` |
+| Secondary ink / text (`onSurfaceVariant`) | `#4D4D48` | `#5D574E` | `#C4BEB3` |
+| Outline (resting border, iOS) | `#B5B5AD` | `#B7AC94` | `#484843` |
+| Strong outline (interactive or increased contrast; Android `outline` and `outlineVariant`) | `#5E5E58` | `#696257` | `#7B766D` |
+| Action fill (`primary`) | `#050505` | `#302E2A` | `#F6F2E8` |
+| On action (`onPrimary`) | `#FCFCF8` | `#FFF9EB` | `#171716` |
+| Caret (iOS) | `#050505` | `#302E2A` | `#F6F2E8` |
+| Placeholder | `#5E5E58` | `#5D574E` | `#AAA49A` |
+| Selection | `#DADAD2` | iOS `#D8CDB4`, Android `#D2C8B0` | `#41413D` |
+| Scrim | `#050505` at 42% | `#302E2A` at 42% | black at 55% |
 
-Rhyme and syllable colors are functional tokens, not decoration. Syllable underlines use four stable colors by syllable count. Rhyme colors cycle through a broader palette so matching colors imply matching rhyme families. When Rhyme Highlight is on, syllable cues render as underlines beneath each word; when Rhyme Highlight is off, Syllable Coloring instead tints each whole word (semibold) by its syllable count, mirroring rhyme highlight's word coloring so the foreground color is never double-claimed.
+Android also defines the remaining Material container steps and a subtle text tone:
+
+| Android role | Ink | Paper | Graphite |
+| --- | --- | --- | --- |
+| `surfaceContainerLow` | `#F7F7F2` | `#EFE8D7` | `#20201E` |
+| `surfaceContainer` / `surfaceVariant` | `#EFEFE9` | `#E8E0CE` | `#232321` |
+| `surfaceContainerHighest` / `primaryContainer` | `#DADAD2` | `#D2C8B0` | `#343430` (`primaryContainer` is `#41413D`) |
+| Subtle text | `#666660` | `#6E675C` | `#9B968C` |
+
+Status colours are the only non-analysis hues. Ink and Paper share the light set; Graphite uses the dark set.
+
+| Status | Ink and Paper | Graphite |
+| --- | --- | --- |
+| Success | `#047857` | `#6EE7B7` |
+| Warning | `#92400E` | `#FFB95B` |
+| Error | `#B3261E` | `#FFB4AB` |
+| Recording (iOS palette role) | `#B3261E` | `#FF8A80` |
+
+Android additionally themes `tertiary` as success, with success containers `#D1FAE5` / `#064E3B` (light) and `#005235` / `#90F7C4` (dark), on-error `#FFFFFF` (light) and `#690005` (dark), and on-warning `#4A2800` (dark).
+
+The action colour is the ink itself. Primary buttons, the UnBlock pill, the mic button, the selected segment, slider and switch tints, and the app tint all use the action fill with the on-action colour for content. There is no brand accent hue.
+
+Rhyme and syllable colours are functional tokens, not decoration, and are identical on both platforms. Ink and Paper use the dark-on-light set; Graphite uses the pastel set.
+
+| Syllables | Ink and Paper | Graphite |
+| --- | --- | --- |
+| 1 | `#047857` | `#6EE7B7` |
+| 2 | `#0369A1` | `#93C5FD` |
+| 3 | `#7E22CE` | `#D8B4FE` |
+| 4+ | `#B91C1C` | `#FDA4AF` |
+
+Rhyme families cycle through twelve colours so matching colour implies a matching family:
+
+- Ink and Paper: `#B91C1C`, `#92400E`, `#166534`, `#0369A1`, `#6D28D9`, `#BE185D`, `#9A3412`, `#155E75`, `#047857`, `#7E22CE`, `#854D0E`, `#3F6212`.
+- Graphite: `#FCA5A5`, `#FCD34D`, `#86EFAC`, `#7DD3FC`, `#C4B5FD`, `#F9A8D4`, `#FDBA74`, `#67E8F9`, `#A7F3D0`, `#E9D5FF`, `#FEF08A`, `#BEF264`.
+
+The editor's word count uses the 1-syllable colour and its syllable count uses the 4+ colour.
+
+Settings offers two Analysis Style presentations on both platforms. **Color** (default): rhyme families tint the word in its family colour at semibold weight; when rhyme colouring and syllable cues are both on, syllable count appears as an underline in the syllable colour, and when rhyme colouring is off the syllable cue instead tints the whole word (semibold) so the foreground colour is never double-claimed. **Ink Marks**: no hue at all; rhyme families are identified by underline pattern (solid, dashed, dotted, dash-dot) in primary ink, and syllable count is shown by font weight (regular for 1, medium for 2, semibold for 3, bold for 4+).
+
+Texture is part of the appearance. On iOS, Paper draws faint ruled lines every 28pt (primary ink at 5.5%) plus sparse fibre marks (2.4%), Graphite draws a fine grain (1.8%), and Ink is plain; the texture is removed when Reduce Transparency or Increase Contrast is on. Android draws only the Graphite grain (1.8%), removed when the system high-contrast-text setting is on; Android Paper is untextured.
 
 ## Typography
 
-The typographic voice pairs expressive serif display text with plain system sans text. Song titles, welcome headlines, and large editor placeholders use bold serif type to make writing feel personal and editorial. Controls, labels, settings, metadata, and assistant content use system sans for scan speed and platform familiarity.
+The typographic voice pairs a bold system serif for song identity with the plain system sans for everything else. No custom font files ship on either platform.
 
-Lyric text needs more breathing room than standard body copy. Use a 16px size with a 28px line height for writing and highlighted lyric overlays. This keeps colored rhyme and syllable cues readable without making the editor feel crowded.
+Serif (iOS `design: .serif`, Android `FontFamily.Serif`) is used for the welcome wordmark, the editor's song title field, the Word Inspector headword, and — at regular weight — suggested lyric lines and the quoted target line in the assistant. Monospace is used for IPA, syllable-count badges, the recording timer, and API-key entry. iOS uses the rounded design only for the suggestion tier badge and one settings field.
 
-Secondary and support text — dialog captions, sheet metadata, and inline labels — sits at a 13px caption size. This is the upper half of the 12/13px caption tier in the φ-rounded rhythm above, kept one step below the 14px control text so supporting copy reads as quieter without dropping to the 12px fine-print rung.
+iOS uses Dynamic Type text styles rather than fixed sizes:
+
+| Role | iOS style |
+| --- | --- |
+| Welcome wordmark, song title field, inspector headword | `largeTitle`, serif, bold |
+| Lyrics | 16pt regular system font scaled with the `body` text style |
+| Suggested line, quoted target line | `body`, serif |
+| Primary button label, UnBlock wordmark | `body` semibold |
+| Card and section titles, Save Settings | `headline` |
+| Row titles, secondary buttons, toasts | `subheadline` (semibold or medium for emphasis) |
+| Supporting text, word/syllable counts, chips, segmented labels | `caption` (semibold for emphasis) |
+| Toolbar glyphs | 17pt system symbol; welcome and mic glyphs 20pt semibold |
+
+Android uses the Material type scale in `Type.kt`: serif bold for `displayLarge` 44/52sp, `displayMedium` 40/48sp, `headlineLarge` 32/40sp, and `headlineMedium` 28/36sp (the welcome wordmark); sans for `titleLarge` 20/28sp medium, `titleMedium` 16/24sp medium, `bodyLarge` 16/24sp, `bodyMedium` 14/20sp, `bodySmall` 12/16sp, and `labelMedium` 12/16sp medium. The editor overrides two roles: the song title is serif bold 34/42sp, and lyrics are sans 17sp on a 27sp line. Secondary and support text uses the 13sp caption token (`DesignTokens.Typography.caption`); editor metadata is 13/16sp.
+
+Dynamic Type behaviour on iOS is enforced in code, not left to chance:
+
+- Lyrics, titles, and all labels scale with the user's text size.
+- At accessibility sizes on a compact width, the editor top bar and the floating action row are clamped to the `large` size so the toolbar stays on one row; on a regular width the top bar instead splits into two rows.
+- Multi-option rows restack vertically at accessibility sizes: welcome cards, custom segmented controls with more than two options, suggestion actions, and notebook actions. Rewrite chips instead switch to a horizontally scrolling row at natural width so the bar stays one line tall.
+- The welcome screen drops the app icon and the subtitle at accessibility sizes so the three actions stay reachable.
 
 Letter spacing stays neutral. Do not tighten display text; the heavy serif forms already carry enough character.
 
 ## Layout
 
-The welcome screen is centered and calm. It should lead with the app icon, then the Writers Block wordmark, then a short explanation, then three large actions. On compact screens, vertical spacing can compress, but the page should still feel centered rather than packed.
+Shipped values live in iOS `RhymeAITokens` (`Writers Block/Writers Block/Views/LiquidGlassSupport.swift`) and Android `DesignTokens` (`android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt`). The two scales are tuned independently, and the same token name does not mean the same value on both platforms.
 
-The editor is the primary workspace. It uses a fixed top toolbar, a full-screen dark writing area, 20px to 24px side padding, a large title field, and a long bottom rest area so the last lyric line can settle comfortably above controls and keyboards.
+| Step | iOS `Spacing` | Android `Spacing` |
+| --- | --- | --- |
+| 1 | `hairline` | — |
+| 4 | `xxs` | `xs` |
+| 8 | `xs` | `sm` |
+| 12 | `sm` | `md` |
+| 20 | `md` | `lg` |
+| 24 | `lg` | `xl` |
+| 32 | `xl` | `xxl` |
+| 52 | `xxl` | `golden` |
 
-Assistant controls live in a bottom sheet on phones and a persistent side panel on large screens. The sheet should feel like it rises from the working surface, not like a separate page. The drawer for projects enters from the left, covers the full height, and contains search first, new song second, then recent songs.
+Android also has a φ-rounded `Rhythm` scale of 8, 13, 21, 34, and 55dp, used for editor padding (21dp) and the floating action size (55dp).
 
-Spacing should follow a 4px base with 8px, 12px, 16px, 20px, 24px, 32px, and 48px as the normal visible rhythm. Avoid odd one-off gaps unless they solve a specific safe-area or keyboard problem.
+Touch targets: iOS minimum 44pt, comfortable 56pt (floating actions), prominent 82pt (welcome app icon). Android minimum 48dp.
 
-The spacing table describes relative rhythm, not exact per-platform pixels; shipped values live in Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt` and iOS `RhymeAITokens` in `Writers Block/Writers Block/Views/LiquidGlassSupport.swift`, with dp/pt scales tuned independently.
+The welcome screen is centred and calm: app icon, the Writers Block wordmark, a two-sentence explanation, then three actions (New Song, Load Song, Song Templates). On iOS:
 
-Major structure should use φ=1.618 as a practical proportion rule, especially the relationship between the lyric editor and assistant or drawer surfaces. Size supporting panels with inverse-φ relationships to the editor, then round to the shared visible rhythm: 8px, 12/13px, 20/21px, 32/34px, and 52/55px. This ratio is a hierarchy tool, not a rigid grid; minimum touch targets and system geometry override it: 48px on web, 48dp on Android, 44pt on iOS, plus any keyboard or safe-area offsets needed to keep writing usable.
+- Compact width: the three cards stack vertically with 24pt gaps and 32pt side padding; each card is a row of icon tile, title and caption, and a trailing chevron.
+- Regular width (iPad): the cards sit in one horizontal row, capped at 660pt wide, each with its icon above centred text and no chevron.
+- Accessibility text sizes (any width): the icon and subtitle are removed, the top spacer shrinks from 8% of the height to 20pt, and the cards stack vertically in the row layout.
+
+On Android the welcome content is capped at 584dp wide, and screens shorter than 600dp use a 56dp icon instead of 80dp.
+
+The editor is the primary workspace: a top toolbar with a bottom divider, the flat appearance canvas, a large title field, a word/syllable count line, and the lyric text. On iOS the writing column has 20pt side padding, is capped at 740pt wide and centred, has a 400pt minimum lyric height, and ends with a 200pt bottom rest. On Android the side padding is 21dp and the bottom rest is 300dp.
+
+Two floating actions sit at the bottom trailing edge: UnBlock and the mic. They hide while the assistant sheet, a rewrite, the rewrite chip bar, an insertion toast, or Focus mode is active.
+
+Assistant placement differs by width on iOS. On a compact width it is a full-screen panel that rises from the bottom over the editor and is dragged down to dismiss. On a regular width it is a persistent 380pt column on the trailing side of the editor, separated by a divider, which the user can hide; Focus mode also hides it. On Android the assistant is always a full-screen panel that rises from the bottom; there is no side-panel layout in the Android code.
+
+The songs drawer enters from the leading edge and covers the full height and the full width of the window on both platforms, at every size including iPad. Its order is: search with a close button, a Songs/Recordings switch, Create New Song, the Recent Songs list, then Import From File and Trash at the bottom.
+
+Settings is a native sheet on iOS (on a regular width it requests at least 420pt wide, ideally 520pt, and at least 560pt tall) and a full-screen page on Android.
 
 ## Elevation & Depth
 
-Depth is subtle. Android surfaces mostly use Material tonal elevation, 1px outlines, and dark containers. iOS surfaces use material blur, translucent tint, a 1px light border, and soft shadows.
+The interface is flat. Surfaces are separated by a 1px border and a small tonal step, not by blur or shadow.
 
-On iOS 26+, native `.glassEffect` renders Liquid Glass with its own edge; the explicit 1px light border applies to the pre-iOS-26 `.ultraThinMaterial` fallback in `LiquidGlassSurfaceModifier`, while soft shadows remain part of the broader iOS surface treatment where callers apply them.
+On iOS every bordered surface goes through `liquidGlassSurface`, which draws an opaque palette fill with a 1px border: resting surfaces use the surface colour and the outline colour; interactive surfaces use the raised surface colour and the strong outline. With Increase Contrast on, every border uses the strong outline. There is no `.ultraThinMaterial`, `.glassEffect`, or blur in the app, and `liquidGlassGroup` is a no-op.
 
-The app icon can glow. Primary action buttons can cast a small accent shadow. Drawers can cast a directional shadow to reinforce lateral motion. Standard editor content should remain flat so the lyric text stays dominant.
+Shadows on iOS are limited to five places:
 
-Scrims should be dark and functional. Use them to explain modality, not to create a separate dramatic layer.
+- The welcome app icon: primary ink at 14%, radius 18, y 8.
+- The UnBlock pill: primary ink at 26%, radius 12, y 4.
+- The mic button and recording pill: primary ink at 18%, radius 12, y 4.
+- The songs drawer panel: black at 35%, radius 26, x 10. The shadow is attached to the panel background only; it was deliberately removed from the drawer's content because it rendered as grey smudges under every control on the light appearances.
+- Floating toasts in the drawer and recordings screen: black at 30%, radius 14, y 4.
+
+Cards, rows, suggestion cards, chips, settings groups, the assistant panel, and the editor have no shadow.
+
+On Android, depth is Material tonal colour plus 1dp borders. The drawer and settings page set tonal elevation to 0. The only elevated elements are the welcome app icon (4dp tonal, 6dp shadow) and the recordings selection bar (3dp tonal). The floating actions are flat fills.
+
+Scrims are functional. The palette scrim is the ink colour at 42% on Ink and Paper and black at 55% on Graphite. The iOS songs drawer uses black at 42% in every appearance.
 
 ## Motion
 
-Motion must explain cause, state, or spatial origin. Use 160ms for immediate feedback and dismissals, 260ms for ordinary state changes and panels, sheets, or drawers presenting from their physical origin, and 420ms for drag release settle. A stationary full-page fade may use the platform's 140ms token. Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
+Motion must explain cause, state, or spatial origin. Both platforms share a golden-ratio duration ladder:
+
+| Tier | Duration | Used for |
+| --- | --- | --- |
+| Feedback / dismiss | 160ms | Press states, save-status changes, drawer and sheet dismissal |
+| State / presentation | 260ms | Segmented selection, welcome-to-editor fade, chips and toasts appearing, panels, sheets, and drawers presenting |
+| Settle | 420ms | Drag release and disclosure settle |
+
+iOS curves: feedback, dismiss, and state use ease-in-out; presentation is a spring (response 0.26, damping 0.88); settle is a spring (response 0.42, damping 0.80); the mic and UnBlock choreography uses the expressive spring (response 0.40, damping 0.76). Pressed controls scale to 0.98 and fade to 86% opacity.
+
+Android curves: standard and emphasized easing are both cubic-bezier(0.2, 0, 0, 1); exit easing is cubic-bezier(0.4, 0, 1, 1). Springs mirror iOS: standard damping 0.88 (medium-low stiffness), settle damping 0.80 (low stiffness), expressive damping 0.76 with stiffness 247. Android also defines a 140ms page fade and a 200ms disclosure duration.
+
+Reduced motion is enforced in code. On iOS, token animations go through `rhymeAnimation` / `withRhymeAnimation`, which disable the animation when Reduce Motion is on; move and scale transitions fall back to opacity, and the press style keeps its opacity change but drops the scale. On Android, Compose honours the system animator duration scale, and custom drag and slide transitions snap when animations are disabled.
+
+Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
 
 ## Shapes
 
-The shape language is soft but not bubbly. Cards and rows use 16px corners. Settings and glass grouped surfaces can use 18px to 22px. Floating actions use a 28px pill. App icon artwork keeps a 22px inner corner with a 30px glass shell on iOS.
+The shape language is soft but not bubbly. All iOS rounded rectangles use the continuous corner style. Radii differ by platform, and the same token name does not mean the same value:
 
-The rounded table describes shape intent, not exact per-platform pixels; shipped radii live in Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt` and iOS `RhymeAITokens` in `Writers Block/Writers Block/Views/LiquidGlassSupport.swift`, with platform-specific dp/pt tuning.
+| Token | iOS `Radius` | Android `Radius` |
+| --- | --- | --- |
+| `xs` | 6 | 6 |
+| `sm` | 8 | 8 |
+| `md` | 12 | 10 |
+| `lg` | 16 | 12 |
+| `xl` | 22 | 14 |
+| `xxl` | 32 | 16 |
+| `xxxl` | — | 18 |
+| `sheet` | — | 22 |
+| `pill` | 52 | 28 |
 
-Drawers are squared to the screen edge. Template sheets follow each platform's native modal-sheet behavior rather than one shared geometry: Android uses a capped-width, content-sized Material sheet with rounded top corners, and iOS uses the native system sheet presentation, including its native tablet adaptation; drawers and explicit edge-attached assistant panels keep their own edge-attached treatment and tokens.
+How iOS uses them: 6 for small badges; 8 for the selected segment and inline assistant fields; 12 for icon tiles, suggestion cards, the custom segmented track, and the assistant's primary button; 16 for welcome cards, drawer buttons and search, toasts, and Save Settings; 22 for settings groups; 32 for settings input fields and provider cards; 52 for the UnBlock pill, mic, rewrite chips, and inspector chips.
+
+How Android uses them: 12 for suggestion cards, drawer rows and fields, and most settings surfaces; 16 for welcome cards and the Word Inspector; 22 for the rewrite chip bar; 28 for floating actions, chips, and the segmented control. Material `small`, `medium`, and `large` shapes map to 8, 10, and 12.
+
+The app icon keeps a 22pt inner corner inside a 30pt bordered shell on iOS; Android rounds its icon at 22% of its size.
+
+Drawers and the assistant panel are squared to the screen edge. Template, notebook, settings, and Word Inspector sheets on iOS use the native system sheet (the inspector with medium and large detents and a visible drag indicator); the Android Word Inspector is a bordered 16dp card capped at 560dp tall.
 
 ## Components
 
-Component dimensions and radii below express relative rhythm and intent, not exact per-platform pixels. Shipped per-platform values are authoritative in Android `android/app/src/main/kotlin/com/rhymeai/app/ui/theme/DesignTokens.kt` and iOS `RhymeAITokens` in `Writers Block/Writers Block/Views/LiquidGlassSupport.swift`, and their dp/pt scales intentionally differ where native feel requires it.
+Values below are the shipped ones. iOS values are in points, Android values in dp.
 
-Welcome cards are large repeated actions. Android cards are outlined Material surfaces. iOS cards are translucent glass surfaces with tinted icon tiles. Both should share the same information order: icon, title, supporting text, and an optional trailing affordance.
+**Editor top bar.** iOS: 8pt padding, bottom divider, and from the leading edge: songs drawer button, undo, redo, save status; then Focus, song actions menu, Settings. Icon buttons are 17pt symbols in a 44×44pt frame with an accessibility label ("Open songs drawer", "Undo last edit", "Redo last edit", "Song actions", "Settings"); Focus reports its value as On or Off. The top bar does not show the song name on either platform; the in-scroll title field is the song title. Android uses a Material `TopAppBar` on the surface colour with the same controls.
 
-The UnBlock action uses a pencil icon and a scribble underline under the word "UnBlock." It should read as a creative writing action, not as a magic or automation action. The scribble is part of the brand vocabulary and should stay low, thin, and hand-marked.
+**Save-status indicator.** A compact indicator beside undo/redo, animated with the 160ms feedback tier. iOS has three states: saving shows a small spinner labelled "Saving..."; saved shows a caption-size checkmark in the success colour at 80% opacity labelled "Saved"; failed shows a warning triangle in the error colour (with the words "Save failed" when they fit) as a 44pt button labelled "Save failed. Retry saving" that retries the save. Android has saving (14dp spinner, 2dp stroke) and saved (14dp check) only.
 
-Assistant panels are dense operational surfaces. Use segmented controls for density, sliders for complexity, switches for feature toggles, help buttons for explanations, and a single strong primary action for suggestions. Keep each control aligned with its label so the panel feels practical rather than decorative.
+**UnBlock action.** A pill in the action fill with a pencil icon and the word "UnBlock" over a hand-drawn scribble underline (iOS: 58×5pt, 1.6pt round stroke at 90% opacity). It should read as a creative writing action, not as magic or automation. iOS: 56pt tall, 136pt wide expanded, 52pt radius, collapsing to a 56pt circle (icon only) while recording or at accessibility sizes on compact width; on iPad with the inline assistant open it reads "Hide AI". Android: 55dp tall, 144dp wide, 28dp radius, 68dp scribble.
 
-Project drawers should be utilitarian and stable. Search is the first control. Create New Song is the second control. Recent Songs is the main content area. Import belongs at the bottom. The drawer slides in from the left and dismisses back to the left.
+**Mic and recording pill.** A circle in the action fill (iOS 56pt, Android 55dp) that stretches leftward into a pill while recording (iOS 220pt, Android 216dp) on the expressive spring, showing a 22-bar level meter 24 high and a monospaced elapsed time, with the stop control staying where the mic was. Labels: "Record voice memo" and "Stop recording". Under Reduce Motion on iOS the change is instant.
 
-Settings use grouped glass or outlined containers with smooth content growth when provider-specific sections change. Provider switching should feel like a panel expanding in place, not like the whole dialog snaps to a new size after content appears.
+**Assistant panel.** A dense operational surface on the canvas colour. iOS compact: a 72pt drag area with a 52×4pt grabber at 45% opacity, labelled "Dismiss Assistant", then an "Assistant" header with a 44pt close button. iOS regular: a 56pt header row with "Assistant" and a 44pt hide button. Contents in order: Context & Theme, Target Line with a monospaced syllable badge, a collapsible Rhyme Options row (scheme menu, rhyme-density segmented control, complexity slider), model readiness, one full-width primary button ("Suggest Next Line", 44pt minimum, 12pt radius, action fill), then Suggestions with an "AI-generated · review before use" note. Every feature label has a 44pt help button labelled "<feature> help". Android follows the same order with a 64dp handle area, Material sliders, and the sliding segmented control.
+
+**Suggestion card.** iOS: surface fill, 1px outline, 12pt radius, 24pt padding; the line in serif body text, a monospaced syllable count badge, an optional tier badge, then "Use line" (semibold) and "Keep for later" / "Kept", each at least 44pt tall; actions stack at accessibility sizes. Android: outlined card, 12dp radius, 48dp minimum height, serif line, tonal "Use" button.
+
+**Rewrite chip bar.** Appears at the bottom of the editor while lyric text is selected. iOS: a 52pt-radius bordered capsule, 8pt padding, at most 360pt wide, holding a "Look up word" magnifier (44×44pt) and caption-weight chips at least 44pt tall. Android: a 22dp-radius bar on the high container colour with 28dp-radius, 48dp-tall chips. The rewrite review bar that follows uses the same capsule on iOS (22pt radius when showing an error or at accessibility sizes) with Retry/Apply at least 72×44pt and a "Regenerate rewrite" icon button.
+
+**Word Inspector.** iOS: a native sheet with 20pt padding: a "Word inspector" header with a 44pt Close button, the headword in bold serif large title, IPA in monospaced footnote, syllable count, then rhyme and synonym groups as wrapping chips (callout text, 12×6pt padding, 52pt radius, 1px outline that flashes the success colour on use; hint "Replaces the selected word"). Empty and error states are caption text, with errors in the error colour. Android: bordered card with a serif headword and monospace IPA.
+
+**Songs drawer.** Utilitarian and stable. iOS: search field (16pt radius, raised fill, strong outline, 44pt minimum, "Clear search" button) with a "Close drawer" button; a system segmented Songs/Recordings switch; Create New Song (action fill, 52pt minimum height, 16pt radius); a "Recent Songs" caption header; rows at least 76pt tall with a semibold title, caption metadata, a selected checkmark, and a 44pt trash button labelled "Move <title> to Trash"; Import From File and an "Open Trash Bin" button at the bottom. Opening Trash pushes the drawer 30% to the left. Android mirrors the order with 12dp-radius fields and rows.
+
+**Welcome cards.** Large repeated actions on the raised surface with the strong outline and a 16pt radius on iOS (16dp outlined cards on Android). Each has a 44pt icon tile (12pt radius, 20pt semibold symbol in the action colour), a headline title, and a caption subtitle in secondary ink.
+
+**Settings.** iOS: a sheet with Done, a General/Editor tab switch, grouped cards (surface fill, 1px outline, 22pt radius, 20pt padding) with small uppercase caption headers, and a pinned full-width Save Settings button (action fill, 44pt minimum, 16pt radius). The General tab holds Appearance, Analysis Style (with a live preview), AI Provider, and provider-specific sections that expand in place; the Editor tab holds labelled switches, each with a 44pt help button. Switches and sliders are tinted with the action colour. Android: a full-screen page using the sliding segmented control, Material switches, and 12dp-radius surfaces.
+
+**Segmented controls.** iOS custom control (`RhymeSegmentedControl`): raised-surface track, 1px outline, 12pt radius, 4pt padding; the selected segment is an 8pt-radius action fill that slides between options; segments are at least 44pt tall, caption text, and expose Selected / Not selected. Android (`SlidingSegmentedControl`): a 48dp-tall, 28dp-radius outlined track with a sliding selection driven by the standard spring.
+
+**Song Notebook.** iOS: a native sheet with a system segmented switch between Alternates and Draft History, plain rows at least 44pt tall, and secondary-ink empty states. Android: `SongNotebookSheet`.
+
+**Accessibility requirements the code enforces.** Every interactive control has a hit area of at least 44×44pt on iOS and 48×48dp on Android, even when its glyph is smaller. iOS custom buttons use the `rhymePress` style, which makes the whole frame tappable rather than just the drawn glyph. Every icon-only button carries an accessibility label. Switches are labelled with their row text. Decorative layers (background texture, tier badges) are hidden from assistive technology.
+
+### Known inconsistencies
+
+These describe the current code. They are not rules to copy.
+
+- iOS Settings mixes two segmented styles: the General/Editor tabs and AI Provider use the custom action-fill control, while Appearance and Analysis Style use the system segmented picker. The drawer, notebook, trash, and rhyme-density controls also use the system picker.
+- iOS Settings input fields and provider cards use the 32pt radius inside 22pt-radius groups, while comparable fields elsewhere (drawer search) use 16pt.
+- Graphite switches have weak contrast on iOS: the on-state track is the warm white action colour (`#F6F2E8`) behind a white thumb.
+- The songs drawer is full-width on iPad. The iOS layout tokens `drawerMinWidth`, `drawerMaxWidth`, `drawerHorizontalMargin`, `projectSidebarWidth`, and `threeColumnWorkspaceMinWidth` do not size the drawer (the first two only cap the welcome cards and chip bar; the last three are unused), and Android's `Drawer.compactWidth` and `Drawer.width` are unused.
+- iOS still passes legacy hue tints (indigo, teal, cyan, purple, blue, white) into `liquidGlassSurface` for some settings groups and the rewrite review bar. They are applied at very low opacity and are not part of the palette. The `liquidGlass*` names are legacy too.
+- iOS hardcodes black for the drawer scrim and for drawer and toast shadows instead of using the palette scrim.
+- Token names disagree across platforms (for example `Spacing.lg` is 24pt on iOS and 20dp on Android; `Radius.pill` is 52pt and 28dp).
+- Paper's ruled texture exists only on iOS, and Paper's selection colour differs (`#D8CDB4` iOS, `#D2C8B0` Android).
+- Android maps both `outline` and `outlineVariant` to the strong outline, so resting borders are darker than on iOS, which uses the lighter outline at rest.
+- Android has no save-failed state in the top bar and no persistent assistant side panel on large screens.
+- Lyric size and bottom rest differ: 16pt and 200pt on iOS, 17sp and 300dp on Android.
 
 ## Do's and Don'ts
 
-Do keep the lyric editor visually quiet.
+Do keep the lyric editor visually quiet: one flat canvas, ink text, no cards behind the lyrics.
 
-Do preserve platform-native behavior: Material 3 and dynamic color on Android, Liquid Glass and native sheets on iOS.
+Do take every colour from the active appearance's palette so a screen works in Ink, Paper, and Graphite without special cases.
+
+Do use the action fill with its on-action colour for the one primary action on a surface.
 
 Do use serif type for song identity and sans type for controls.
 
-Do keep rhyme and syllable colors semantically stable.
+Do keep rhyme and syllable colours semantically stable, and make every analysis cue work in Ink Marks without colour.
 
-Do let actions and panels animate from their physical origin: bottom sheets rise, drawers slide from the left, selected chips emerge from the bottom.
+Do separate surfaces with a 1px palette outline and a tonal step.
 
-Don't turn the app into a bright productivity dashboard.
+Do preserve platform-native behaviour: Material 3 components on Android, native sheets and Dynamic Type on iOS.
 
-Don't use decorative gradients or extra glow in the editor.
+Do give every control a 44pt (iOS) or 48dp (Android) hit area and every icon button a label.
+
+Do let actions and panels animate from their physical origin, and route animations through the reduced-motion helpers.
+
+Don't add an accent hue, gradient, or tint to chrome. Hue is reserved for rhyme, syllable, and status meaning.
+
+Don't reintroduce blur, translucent "glass" materials, or glow.
+
+Don't add shadows to cards, rows, or panels; shadows are limited to the floating actions, the app icon, the drawer edge, and toasts.
+
+Don't follow the system light/dark setting or Android dynamic colour; appearance is the user's choice in Settings.
+
+Don't hardcode black, white, or system greys where a palette role exists.
 
 Don't make Android and iOS visually identical at the expense of platform conventions.
 
