@@ -26,7 +26,7 @@ struct RhymeSchemeDisplayView: View {
                                 .frame(width: RhymeAITokens.Spacing.md, alignment: .leading)
 
                             if row.line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isCurrent {
-                                Text("Typing here...")
+                                Text("Next line goes here")
                                     .font(.system(.caption, design: .monospaced))
                                     .italic()
                                     .foregroundColor(.secondary.opacity(0.5))

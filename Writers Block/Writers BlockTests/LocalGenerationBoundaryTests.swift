@@ -15,8 +15,9 @@ struct LocalGenerationBoundaryTests {
         let prompt = AIService().buildLocalSuggestionPromptForTest(input: input)
 
         #expect(input.stanzaLines == ["[Verse 1]", "first glow", "second sky", "third show"])
-        #expect(input.targetRhymeLine == "first glow")
-        #expect(input.currentLetter == "A")
+        // The suggestion becomes line 4 of the verse: "B", rhyming with line 2.
+        #expect(input.targetRhymeLine == "second sky")
+        #expect(input.currentLetter == "B")
         #expect(input.rhymeScheme == "ABAB")
         #expect(input.complexity == .complex)
         #expect(prompt.contains("first glow\nsecond sky\nthird show"))
@@ -39,7 +40,8 @@ struct LocalGenerationBoundaryTests {
         let viewModel = EditorViewModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         viewModel.rhymeScheme = .abab
         viewModel.rhymeComplexity = .simple
-        viewModel.lyrics = "[Verse 1]\nfirst glow\nsecond sky"
+        // The suggestion becomes line 2 of the verse, which opens the "B" sound.
+        viewModel.lyrics = "[Verse 1]\nfirst glow"
         viewModel.cursorPosition = (viewModel.lyrics as NSString).length
 
         let input = viewModel.suggestionInputForTest()

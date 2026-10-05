@@ -131,9 +131,15 @@ struct SuggestedLine: Identifiable {
     }
 }
 
+/// Rhyme context of the line a next-line suggestion will be inserted as
+/// (see `NextLinePlacement`), not of the line the cursor is on.
 nonisolated struct RhymeContext: Sendable {
+    /// Rhyme anchor: the latest earlier line in the stanza with `currentLetter`.
     let targetLine: String?
+    /// Scheme letter of the line to be inserted.
     let currentLetter: String
+    /// The cursor's blank-line-delimited block, with an empty row at
+    /// `currentLineIndex` standing for the line to be inserted.
     let stanzaLines: [String]
     let currentLineIndex: Int
     let currentSection: SongSection
@@ -152,6 +158,17 @@ nonisolated struct RhymeContext: Sendable {
         sectionOrdinal: 1,
         firstChorusLines: nil
     )
+
+    /// The block's existing lines, without the row reserved for the new line.
+    var existingStanzaLines: [String] {
+        guard stanzaLines.indices.contains(currentLineIndex),
+              stanzaLines[currentLineIndex].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return stanzaLines
+        }
+        var lines = stanzaLines
+        lines.remove(at: currentLineIndex)
+        return lines
+    }
 
     static func emptyContext(currentLetter: String = "A", currentSection: SongSection = .unknown) -> RhymeContext {
         RhymeContext(

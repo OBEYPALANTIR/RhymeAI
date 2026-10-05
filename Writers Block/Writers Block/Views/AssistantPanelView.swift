@@ -252,7 +252,7 @@ struct AssistantPanelView: View {
                             }
                         }
                     } else {
-                        Text("New rhyme sound (or place cursor on a line)")
+                        Text("New rhyme sound: no earlier line to match")
                             .font(.caption)
                             .foregroundStyle(.secondary.opacity(0.5))
                             .italic()
