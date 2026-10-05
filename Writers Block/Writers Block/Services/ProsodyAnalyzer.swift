@@ -113,7 +113,30 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         )
     }
 
-    nonisolated private func builtMaps(dictionary: PronunciationDictionary) -> (
+    /// Builds the index ahead of the first lookup, which otherwise pays for
+    /// the dictionary load and the index build (seconds on a cold start).
+    /// Stops early, leaving the index unbuilt, when the calling task is
+    /// cancelled; the next lookup then builds it as before.
+    nonisolated func warmUp(dictionary: PronunciationDictionary = .shared) {
+        guard !Task.isCancelled, dictionary.wordCount > 0 else { return }
+        _ = builtMaps(dictionary: dictionary, stopsWhenCancelled: true)
+    }
+
+    /// Runs `warmUp` off the main thread at low priority and forwards
+    /// cancellation to it.
+    nonisolated static func warmUpInBackground() async {
+        let task = Task.detached(priority: .utility) { RhymeIndex.shared.warmUp() }
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    nonisolated private func builtMaps(
+        dictionary: PronunciationDictionary,
+        stopsWhenCancelled: Bool = false
+    ) -> (
         perfect: [String: [String]],
         multi: [String: [String]],
         near: [String: [RhymeTailEntry]],
@@ -139,7 +162,12 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         multiBuild.reserveCapacity(32_768)
         nearBuild.reserveCapacity(64)
 
+        var stopped = false
         dictionary.forEachEntry { word, variants in
+            if stopsWhenCancelled, stopped || Task.isCancelled {
+                stopped = true
+                return
+            }
             guard word.count >= 2 else { return }
             var seenK0 = Set<String>()
             var seenK1 = Set<String>()
@@ -165,6 +193,8 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
                 }
             }
         }
+        // A cancelled warm-up must not publish a partial index.
+        if stopped { return ([:], [:], [:], [:]) }
 
         perfectByKey = perfectBuild
         multiByKey = multiBuild

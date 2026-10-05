@@ -186,6 +186,12 @@ struct Writers_BlockApp: App {
                 UITestFlags.seedCustomGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
             }
+            .task {
+                // After the first frames, so launch is not competing with it.
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                await RhymeIndex.warmUpInBackground()
+            }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .active:
