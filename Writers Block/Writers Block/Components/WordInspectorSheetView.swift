@@ -123,15 +123,23 @@ struct WordInspectorSheetView: View {
                         Button(action: onRetrySynonyms) {
                             Label("Retry", systemImage: "arrow.clockwise")
                                 .font(.caption.weight(.semibold))
-                                .frame(minHeight: RhymeAITokens.Touch.minimum)
+                                // Taller hit area without growing the row: on
+                                // iPad's short sheet a 44pt row pushed the
+                                // error text below the fold.
+                                .padding(.vertical, RhymeAITokens.Spacing.sm)
                                 .contentShape(Rectangle())
+                                .padding(.vertical, -RhymeAITokens.Spacing.sm)
                         }
                     case .openSettings:
                         Button(action: onOpenSettings) {
                             Label("Settings", systemImage: "gearshape")
                                 .font(.caption.weight(.semibold))
-                                .frame(minHeight: RhymeAITokens.Touch.minimum)
+                                // Taller hit area without growing the row: on
+                                // iPad's short sheet a 44pt row pushed the
+                                // error text below the fold.
+                                .padding(.vertical, RhymeAITokens.Spacing.sm)
                                 .contentShape(Rectangle())
+                                .padding(.vertical, -RhymeAITokens.Spacing.sm)
                         }
                     }
                 }
