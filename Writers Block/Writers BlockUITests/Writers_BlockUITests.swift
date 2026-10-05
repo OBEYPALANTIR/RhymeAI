@@ -1164,6 +1164,7 @@ final class Writers_BlockUITests: XCTestCase {
         app.buttons["Stop"].tap()
         XCTAssertTrue(suggest.waitForExistence(timeout: 1))
     }
+        expandTargetLineStressDetail(in: app)
 
     @MainActor
     func testAssistantStopCancelsSuggestionRequest() throws {
@@ -1262,6 +1263,7 @@ final class Writers_BlockUITests: XCTestCase {
             app.buttons["Move UI Trash Song to Trash"].tap()
 
             // Delete is immediate (no confirmation); the undo toast confirms the move.
+            expandTargetLineStressDetail(in: app)
             XCTAssertTrue(app.buttons["Undo"].waitForExistence(timeout: 3))
 
             XCTAssertTrue(app.buttons["Open Trash Bin"].waitForExistence(timeout: 5))
@@ -1792,6 +1794,19 @@ final class Writers_BlockUITests: XCTestCase {
         if loadSongButton.waitForExistence(timeout: 2) {
             loadSongButton.tap()
         } else {
+    /// The target line keeps its stress pattern and IPA behind a disclosure
+    /// whose state is remembered between launches, so only expand it when it
+    /// is collapsed.
+    private func expandTargetLineStressDetail(in app: XCUIApplication) {
+        let disclosure = app.buttons["targetLineStressDisclosure"]
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5), "Target line stress disclosure is missing")
+        if disclosure.label == "Show stress pattern" {
+            XCTAssertFalse(app.staticTexts["ˈDA da | ˈDA da"].exists, "Stress detail should stay hidden until asked for")
+            disclosure.tap()
+        }
+        XCTAssertEqual(disclosure.label, "Hide stress pattern")
+    }
+
             let openDrawerButton = app.buttons["Open songs drawer"]
             XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
             openDrawerButton.tap()

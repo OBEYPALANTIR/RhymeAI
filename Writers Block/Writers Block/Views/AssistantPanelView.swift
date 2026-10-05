@@ -8,9 +8,14 @@ struct AssistantPanelView: View {
     @State private var showModelSetup = false
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
+    @AppStorage("assistant.targetLineStressExpanded") private var stressDetailExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
     var isInline: Bool = false
+    /// Height the host keeps clear below the panel: the home-indicator inset,
+    /// or the keyboard while it is up. The compact sheet ignores the safe
+    /// area, so its host has to pass this in; the inline column leaves it 0.
+    var bottomInset: CGFloat = 0
     var onDismiss: (() -> Void)?
     var onOpenSettings: (() -> Void)?
 
@@ -55,23 +60,28 @@ struct AssistantPanelView: View {
     }
 
     private func sheetContent(rhymeContext: RhymeContext) -> some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            // A plain title row rather than a navigation bar: the bar added a
+            // second band of top chrome under the drag handle.
+            HStack {
+                Text("Assistant")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+
+                if let onDismiss {
+                    closeButton(label: "Close Assistant", identifier: "closeAssistantButton", action: onDismiss)
+                }
+            }
+            .padding(.leading, RhymeAITokens.Spacing.md)
+            .padding(.trailing, RhymeAITokens.Spacing.xs)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .overlay(Divider(), alignment: .bottom)
+
             panelScrollView(rhymeContext: rhymeContext)
-                .background {
-                    AppWritingBackground()
-                }
-                .navigationTitle("Assistant")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    if let onDismiss {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button(action: onDismiss) {
-                                Image(systemName: "xmark")
-                            }
-                            .accessibilityLabel("Close Assistant")
-                        }
-                    }
-                }
+        }
+        .background {
+            AppWritingBackground()
         }
     }
 
@@ -83,15 +93,7 @@ struct AssistantPanelView: View {
                 Spacer()
 
                 if let onDismiss {
-                    Button(action: onDismiss) {
-                        Image(systemName: "xmark")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                    }
-                    .buttonStyle(.rhymePress)
-                    .accessibilityLabel("Hide Assistant")
-                    .accessibilityIdentifier("hideInlineAssistantButton")
+                    closeButton(label: "Hide Assistant", identifier: "hideInlineAssistantButton", action: onDismiss)
                 }
             }
             .padding(.leading, RhymeAITokens.Spacing.md)
@@ -107,13 +109,89 @@ struct AssistantPanelView: View {
         }
     }
 
-    private func panelScrollView(rhymeContext: RhymeContext) -> some View {
-        ScrollView {
-            panelControls(rhymeContext: rhymeContext)
-                .padding(RhymeAITokens.Spacing.md)
-                .liquidGlassGroup(spacing: RhymeAITokens.Spacing.md)
+    private func closeButton(label: String, identifier: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(appearance.palette.secondaryInk)
+                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
         }
-        .accessibilityIdentifier("assistantScrollView")
+        .buttonStyle(.rhymePress)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private func panelScrollView(rhymeContext: RhymeContext) -> some View {
+        ScrollViewReader { scroll in
+            // The primary action stays reachable below the scrolling controls.
+            // The scroll view ends at the bar rather than running under it, so
+            // the last content is never hidden and nothing sits behind the
+            // button where a tap or VoiceOver focus could land on it.
+            VStack(spacing: 0) {
+                ScrollView {
+                    panelControls(rhymeContext: rhymeContext)
+                        .padding(RhymeAITokens.Spacing.md)
+                        .liquidGlassGroup(spacing: RhymeAITokens.Spacing.md)
+                }
+                .accessibilityIdentifier("assistantScrollView")
+
+                suggestBar
+            }
+            // Results arrive below the controls, which can be off-screen now
+            // that the button no longer sits directly above them.
+            .onChange(of: viewModel.suggestions.isEmpty) { _, isEmpty in
+                if !isEmpty { revealResults(scroll) }
+            }
+            .onChange(of: viewModel.errorMessage) { _, error in
+                if error != nil { revealResults(scroll) }
+            }
+        }
+    }
+
+    private func revealResults(_ scroll: ScrollViewProxy) {
+        withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
+            scroll.scrollTo(Self.resultsAnchor, anchor: .top)
+        }
+    }
+
+    private static let resultsAnchor = "assistantResults"
+
+    // MARK: - Suggest Button — turns into Stop while streaming
+    private var suggestBar: some View {
+        Button {
+            if viewModel.isLoading {
+                viewModel.cancelSuggestions()
+            } else {
+                viewModel.getSuggestions()
+            }
+        } label: {
+            let isDisabled = suggestionDisabled
+            HStack {
+                if viewModel.isLoading {
+                    ProgressView()
+                        .tint(appearance.palette.onAction)
+                    Text("Stop")
+                } else {
+                    Image(systemName: "sparkles")
+                    Text("Suggest Next Line")
+                }
+            }
+            .font(.body.weight(.semibold))
+            .foregroundStyle(appearance.palette.onAction)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, RhymeAITokens.Spacing.sm)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.md)
+            .opacity(isDisabled ? 0.45 : 1)
+        }
+        .disabled(suggestionDisabled)
+        .buttonStyle(.rhymePress)
+        .padding(.horizontal, RhymeAITokens.Spacing.md)
+        .padding(.top, RhymeAITokens.Spacing.sm)
+        .padding(.bottom, RhymeAITokens.Spacing.sm + bottomInset)
+        .background(appearance.palette.canvas)
+        .overlay(Divider(), alignment: .top)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: bottomInset)
     }
 
     private func panelControls(rhymeContext: RhymeContext) -> some View {
@@ -170,7 +248,7 @@ struct AssistantPanelView: View {
                                 .foregroundStyle(.primary.opacity(0.9))
 
                             if viewModel.isStressPreviewEnabled {
-                                AssistantProsodyPreviewView(text: targetLine)
+                                stressDisclosure(for: targetLine)
                             }
                         }
                     } else {
@@ -325,36 +403,8 @@ struct AssistantPanelView: View {
                 .accessibilityIdentifier("localAIReadiness")
             }
 
-            // MARK: - Suggest Button — turns into Stop while streaming
-            Button {
-                if viewModel.isLoading {
-                    viewModel.cancelSuggestions()
-                } else {
-                    viewModel.getSuggestions()
-                }
-            } label: {
-                let isDisabled = suggestionDisabled
-                HStack {
-                    if viewModel.isLoading {
-                        ProgressView()
-                            .tint(appearance.palette.onAction)
-                        Text("Stop")
-                    } else {
-                        Image(systemName: "sparkles")
-                        Text("Suggest Next Line")
-                    }
-                }
-                .font(.body.weight(.semibold))
-                .foregroundStyle(appearance.palette.onAction)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, RhymeAITokens.Spacing.sm)
-                .frame(minHeight: RhymeAITokens.Touch.minimum)
-                .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.md)
-                .opacity(isDisabled ? 0.45 : 1)
-            }
-            .disabled(suggestionDisabled)
-            .buttonStyle(.rhymePress)
-
+            // MARK: - Results
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             // MARK: - Error
             if let error = viewModel.errorMessage {
                 let recoveryAction = AIErrorRecoveryAction(errorMessage: error)
@@ -416,6 +466,35 @@ struct AssistantPanelView: View {
                     }
                 }
             }
+            }
+            .id(Self.resultsAnchor)
+        }
+    }
+
+    /// Stress pattern and IPA are reference detail: collapsed until asked
+    /// for, and the choice is remembered.
+    @ViewBuilder
+    private func stressDisclosure(for targetLine: String) -> some View {
+        Button {
+            withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
+                stressDetailExpanded.toggle()
+            }
+        } label: {
+            HStack(spacing: RhymeAITokens.Spacing.xxs) {
+                Text(stressDetailExpanded ? "Hide stress pattern" : "Show stress pattern")
+                Image(systemName: "chevron.down")
+                    .rotationEffect(.degrees(stressDetailExpanded ? 180 : 0))
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(appearance.palette.secondaryInk)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+        }
+        .buttonStyle(.rhymePress)
+        .accessibilityIdentifier("targetLineStressDisclosure")
+
+        if stressDetailExpanded {
+            AssistantProsodyPreviewView(text: targetLine)
+                .transition(.opacity)
         }
     }
 

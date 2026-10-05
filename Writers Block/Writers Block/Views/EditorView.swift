@@ -488,12 +488,25 @@ struct EditorView: View {
             if viewModel.showAssistantSheet {
                 VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                     assistantSheetDragHandle(sheetHeight: proxy.size.height)
-                        .padding(.top, proxy.safeAreaInsets.top + RhymeAITokens.Spacing.xs)
+                        .padding(.top, proxy.safeAreaInsets.top)
 
-                    AssistantPanelView(onDismiss: dismissAssistantSheetWithAnimation)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // The sheet ignores the safe area, so the panel's pinned
+                    // action is told what to clear: the keyboard while it is
+                    // up, otherwise the home-indicator inset.
+                    AssistantPanelView(
+                        bottomInset: keyboardIsVisible ? keyboardHeight : proxy.safeAreaInsets.bottom,
+                        onDismiss: dismissAssistantSheetWithAnimation
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                // The proxy reports the safe-area size, but the sheet covers
+                // the whole screen: without the insets its content stopped
+                // short of the bottom edge by their combined height.
+                .frame(
+                    width: proxy.size.width,
+                    height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom,
+                    alignment: .top
+                )
                 .background(appearance.palette.canvas)
                 .offset(y: assistantSheetDragOffset)
                 .transition(.move(edge: .bottom))

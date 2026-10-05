@@ -40,7 +40,7 @@ enum RhymeAITokens {
         static let threeColumnWorkspaceMinWidth: CGFloat = 1_100
         static let assistantColumnWidth: CGFloat = 380
         static let assistantReadableWidth: CGFloat = 420
-        static let assistantSheetHandleArea: CGFloat = 72
+        static let assistantSheetHandleArea: CGFloat = Touch.minimum
         static let assistantSheetHandleWidth: CGFloat = 52
         static let assistantSheetHandleHeight: CGFloat = 4
         static let editorMaxWidth: CGFloat = 740
