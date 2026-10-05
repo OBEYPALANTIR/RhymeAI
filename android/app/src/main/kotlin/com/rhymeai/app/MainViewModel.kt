@@ -73,7 +73,7 @@ enum class SaveStatus { IDLE, SAVING, SAVED }
 /**
  * A suggestion line paired with its phonetic tier and hook flag.
  *
- * rhymeTier: 2 = perfect/multi-syllable, 1 = near, 0 = unverified.
+ * rhymeTier: 3 = slant, 2 = perfect/multi-syllable, 1 = near, 0 = unverified.
  * isHook: true when this line repeats a chorus end-word from the first chorus
  *         instance — badge shows "hook" instead of "perfect".
  */

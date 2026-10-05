@@ -14,6 +14,7 @@ struct RhymeConstraintTests {
         "showed\tSH OW1 D",
         "stone\tS T OW1 N",
         "bones\tB OW1 N Z",
+        "wrote\tR OW1 T",
         "red\tR EH1 D",
         "night\tN AY1 T"
     ])
@@ -72,8 +73,9 @@ struct RhymeConstraintTests {
         ))
 
         #expect(perfect == ["glowed", "showed"])
-        #expect(near == ["stone"])
-        #expect(slant == ["red"])
+        // D and T are both plosives; N is a nasal, so "stone" is assonance.
+        #expect(near == ["wrote"])
+        #expect(slant == ["red", "stone", "bones"])
         #expect(perfect.isDisjoint(with: near))
         #expect(perfect.isDisjoint(with: slant))
         #expect(near.isDisjoint(with: slant))
@@ -92,6 +94,7 @@ struct RhymeConstraintTests {
     @Test func filterAndRankAdmitsOnlyTheRequestedRelation() {
         let lines = [
             "The window glowed",
+            "Words I never wrote",
             "Cold as stone",
             "Everything burned red",
             "Walking through the night"
@@ -103,14 +106,14 @@ struct RhymeConstraintTests {
             rhymeType: .near,
             want: 2,
             dictionary: relationDictionary
-        ) == ["Cold as stone"])
+        ) == ["Words I never wrote"])
         #expect(RhymeConstraint.filterAndRank(
             lines: lines,
             targetLine: "Down the road",
             rhymeType: .slant,
             want: 2,
             dictionary: relationDictionary
-        ) == ["Everything burned red"])
+        ) == ["Cold as stone", "Everything burned red"])
     }
 
     @Test func rhymeTiersAndBadgesNameEveryRelationTruthfully() {
@@ -118,8 +121,11 @@ struct RhymeConstraintTests {
             line: "The window glowed", targetWord: "road", dictionary: relationDictionary
         ) == 2)
         #expect(RhymeConstraint.rhymeTier(
-            line: "Cold as stone", targetWord: "road", dictionary: relationDictionary
+            line: "Words I never wrote", targetWord: "road", dictionary: relationDictionary
         ) == 1)
+        #expect(RhymeConstraint.rhymeTier(
+            line: "Cold as stone", targetWord: "road", dictionary: relationDictionary
+        ) == 3)
         #expect(RhymeConstraint.rhymeTier(
             line: "Everything burned red", targetWord: "road", dictionary: relationDictionary
         ) == 3)

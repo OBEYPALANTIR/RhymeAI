@@ -10,7 +10,6 @@ import kotlin.math.abs
  */
 object RhymeConstraint {
     private val wordPattern = LyricTokenizer.wordPattern
-    private val normalizedLinePattern = Regex("[^a-z0-9]+")
 
     fun lineEndWord(line: String): String {
         val lastWord = wordPattern.findAll(line).lastOrNull()?.value ?: return ""
@@ -21,16 +20,18 @@ object RhymeConstraint {
         targetWord: String,
         rhymeType: RhymeType,
         limit: Int = 12,
-        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared,
+        wordFrequency: WordFrequency = WordFrequency.shared
     ): List<String> {
-        val matches = ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary)
+        val matches = ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary, wordFrequency = wordFrequency)
         if (matches.isEmpty) return emptyList()
-        // Perfect requests stay strict; looser types may pad with near rhymes.
-        // Each pool is already frequency-ranked by findRhymes; we simply
-        // concatenate pools in priority order (perfect/multi before near).
+        // Each mode returns only its named phonetic relation, as on iOS. Perfect
+        // keeps the exact and multisyllabic pools; Near and Slant are exclusive
+        // and already ranked by findRhymes.
         val pools = when (rhymeType) {
             RhymeType.PERFECT -> listOf(matches.perfect, matches.multi)
-            RhymeType.NEAR, RhymeType.SLANT -> listOf(matches.perfect, matches.multi, matches.near)
+            RhymeType.NEAR -> listOf(matches.near)
+            RhymeType.SLANT -> listOf(matches.slant)
         }
         val normalizedTarget = ProsodyAnalyzer.normalizeWord(targetWord)
         val ordered = LinkedHashSet<String>()
@@ -42,49 +43,26 @@ object RhymeConstraint {
         return ordered.take(limit)
     }
 
+    /** 3 = slant rhyme, 2 = perfect/multi rhyme, 1 = near rhyme, 0 = miss.
+     *  Classified from every pronunciation of both words; mirrors iOS. */
     fun rhymeTier(
         line: String,
         targetWord: String,
-        dictionary: PronunciationDictionary = PronunciationDictionary.shared
-    ): Int = rhymeTier(
-        line, targetWord, ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary), dictionary
-    )
-
-    fun rhymeTier(
-        line: String,
-        targetWord: String,
-        matches: RhymeMatches,
         dictionary: PronunciationDictionary = PronunciationDictionary.shared
     ): Int {
-        val listedTier = rhymeTier(line, matches)
-        if (listedTier == 2) return listedTier
-
-        val endWord = lineEndWord(line)
-        val target = ProsodyAnalyzer.normalizeWord(targetWord)
-        if (endWord == target || dictionary.pronunciations(endWord).isEmpty() ||
-            dictionary.pronunciations(target).isEmpty()
-        ) return listedTier
-
-        // A capped near pool can include a perfect match for another pronunciation.
-        // Require dictionary pronunciations so spelling fallbacks cannot certify a rhyme.
-        val targetKeys = ProsodyAnalyzer.rhymeKeys(target, maxDepth = 1, dictionary = dictionary)
-        val endKeys = ProsodyAnalyzer.rhymeKeys(endWord, maxDepth = 1, dictionary = dictionary)
-        return if (endKeys.any { it in targetKeys }) 2 else listedTier
-    }
-
-    // Display-pool membership only; validation callers should also supply the target word.
-    fun rhymeTier(line: String, matches: RhymeMatches): Int {
         val endWord = lineEndWord(line)
         if (endWord.isEmpty()) return 0
-        return when {
-            endWord in matches.perfect || endWord in matches.multi -> 2
-            endWord in matches.near -> 1
-            else -> 0
+        return when (ProsodyAnalyzer.rhymeRelation(endWord, targetWord, dictionary)) {
+            RhymeType.PERFECT -> 2
+            RhymeType.NEAR -> 1
+            RhymeType.SLANT -> 3
+            null -> 0
         }
     }
 
-    // rhymeType mirrors the iOS contract signature; tier ranking is type-independent.
-    @Suppress("UNUSED_PARAMETER")
+    /** Dedupe, admit only the requested verified relation, then rank by
+     *  syllable distance to the target line and arrival order. Mirrors iOS:
+     *  lines that miss the relation are dropped, never used as padding. */
     fun filterAndRank(
         lines: List<String>,
         targetLine: String,
@@ -92,43 +70,77 @@ object RhymeConstraint {
         want: Int,
         dictionary: PronunciationDictionary = PronunciationDictionary.shared
     ): List<String> {
-        if (lines.isEmpty() || want <= 0) return emptyList()
+        if (want <= 0 || lines.isEmpty()) return emptyList()
+        // Unknown target word: the prompt was never constrained, so there is
+        // nothing to verify against — keep arrival order.
+        val filter = RhymeLineFilter.create(targetLine, rhymeType, dictionary)
+            ?: return dedupe(lines).take(want)
+        return filter.rank(lines, want)
+    }
 
-        val seen = mutableSetOf<String>()
-        val unique = lines.filter { line ->
-            val key = normalizedLinePattern.replace(line.lowercase().trim(), "")
-            key.isNotEmpty() && seen.add(key)
+    /** Same normalization the suggestion stream uses for dedupe keys. */
+    fun dedupeKey(line: String): String = line.lowercase().filter(Char::isLetterOrDigit)
+
+    fun dedupe(lines: List<String>): List<String> {
+        val seen = HashSet<String>()
+        return lines.filter { line ->
+            val key = dedupeKey(line)
+            key.isEmpty() || seen.add(key)
         }
-        if (unique.isEmpty()) return emptyList()
+    }
+}
 
-        val targetWord = lineEndWord(targetLine)
-        val matches = ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary)
-        val targetSyllables = ProsodyAnalyzer.analyzeLine(targetLine, dictionary).syllableCount
-
-        data class Ranked(val line: String, val tier: Int, val syllableGap: Int, val index: Int)
-        val ranked = unique.mapIndexed { index, line ->
-            Ranked(
-                line = line,
-                tier = rhymeTier(line, targetWord, matches, dictionary),
-                syllableGap = abs(ProsodyAnalyzer.analyzeLine(line, dictionary).syllableCount - targetSyllables),
-                index = index
-            )
+/** Per-request rhyme verifier; mirrors iOS `RhymeLineFilter`. */
+class RhymeLineFilter private constructor(
+    private val targetSyllables: Int,
+    private val targetWord: String,
+    val rhymeType: RhymeType,
+    private val dictionary: PronunciationDictionary
+) {
+    /** The tier when [line] ends in the requested relation, else 0. */
+    fun tier(line: String): Int {
+        val tier = RhymeConstraint.rhymeTier(line, targetWord, dictionary)
+        val wanted = when (rhymeType) {
+            RhymeType.PERFECT -> 2
+            RhymeType.NEAR -> 1
+            RhymeType.SLANT -> 3
         }
+        return if (tier == wanted) tier else 0
+    }
 
-        val chosen = ranked
+    /** Requested-relation lines only, closest syllable count first, then arrival order. */
+    fun rank(lines: List<String>, want: Int): List<String> {
+        if (want <= 0 || lines.isEmpty()) return emptyList()
+        data class Scored(val line: String, val tier: Int, val syllableDistance: Int, val index: Int)
+        val seen = HashSet<String>()
+        val scored = ArrayList<Scored>()
+        lines.forEachIndexed { index, line ->
+            val key = RhymeConstraint.dedupeKey(line)
+            if (key.isNotEmpty() && !seen.add(key)) return@forEachIndexed
+            scored += Scored(line, tier(line), abs(SyllableCounter.countText(line) - targetSyllables), index)
+        }
+        return scored
             .filter { it.tier > 0 }
-            .sortedWith(compareByDescending<Ranked> { it.tier }.thenBy { it.syllableGap }.thenBy { it.index })
+            .sortedWith(
+                compareByDescending<Scored> { it.tier }.thenBy { it.syllableDistance }.thenBy { it.index }
+            )
             .take(want)
             .map { it.line }
-            .toMutableList()
+    }
 
-        // Never starve the caller: pad with non-rhyming lines in arrival order.
-        if (chosen.size < want) {
-            val alreadyChosen = chosen.toSet()
-            unique.forEach { line ->
-                if (chosen.size < want && line !in alreadyChosen) chosen += line
-            }
+    companion object {
+        /** Null exactly when the prompt would not be constrained, so an
+         *  unconstrained generation is never filtered. */
+        fun create(
+            targetLine: String?,
+            rhymeType: RhymeType,
+            dictionary: PronunciationDictionary = PronunciationDictionary.shared
+        ): RhymeLineFilter? {
+            if (targetLine.isNullOrBlank()) return null
+            val targetWord = RhymeConstraint.lineEndWord(targetLine)
+            if (targetWord.isEmpty()) return null
+            if (RhymeConstraint.candidateEndWords(targetWord, rhymeType, dictionary = dictionary).isEmpty()) return null
+            return RhymeLineFilter(SyllableCounter.countText(targetLine), targetWord, rhymeType, dictionary)
         }
-        return chosen
     }
 }

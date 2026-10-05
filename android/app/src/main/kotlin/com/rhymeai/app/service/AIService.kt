@@ -10,6 +10,7 @@ import com.rhymeai.app.data.model.SongSection
 import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.RhymeConstraint
+import com.rhymeai.app.util.RhymeLineFilter
 import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SectionRef
 import kotlinx.coroutines.CancellationException
@@ -114,6 +115,14 @@ class AIService {
         /** End-words of lines in the first chorus instance, used for chorus-repeat
          *  candidate promotion and verse/bridge exclusion. Empty when no chorus exists. */
         val chorusEndWords: Set<String> = emptySet()
+    ) {
+        /** The returned-line filter for this request: admits only [rhymeType]. */
+        val lineFilter: RhymeLineFilter? by lazy { RhymeLineFilter.create(targetLine, rhymeType, dictionary) }
+    }
+
+    /** No returned line matched the requested relation; mirrors iOS `noMatchingRhymes`. */
+    internal class NoMatchingRhymesException(rhymeType: RhymeType) : RuntimeException(
+        "The provider returned lines, but none matched the requested ${rhymeType.name.lowercase()} rhyme. Try another rhyme type."
     )
 
     private companion object {
@@ -135,6 +144,7 @@ class AIService {
 
         fun userFacingProviderException(error: Throwable): RuntimeException {
             if (error is CancellationException) throw error
+            if (error is NoMatchingRhymesException) return error
             val causes = error.causes()
             val rawMessage = causes.joinToString(" ") { cause ->
                 "${cause::class.java.simpleName} ${cause.message.orEmpty()}"
@@ -628,17 +638,10 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
     ) {
         val buffer = StringBuilder()
         val seen = mutableSetOf<String>()
-        val held = mutableListOf<String>()
-        // Constrained requests over-generate 2x, surface verified rhymes as they
-        // stream, and keep the rest as ranked backfill for the end of the stream.
-        val matches = constraint?.let {
-            ProsodyAnalyzer.findRhymes(it.targetWord, dictionary = it.dictionary)
-        }
-        val isChorusRepeat = constraint?.let {
-            it.sectionRef?.type == SongSection.CHORUS && (it.sectionRef.ordinal) >= 2
-        } ?: false
-        val chorusEnds = constraint?.chorusEndWords ?: emptySet()
-        val acceptLimit = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        // Constrained requests over-generate 2x and emit only lines that end in
+        // the requested relation, as they arrive (iOS `emitLines`).
+        val filter = constraint?.lineFilter
+        val acceptLimit = if (filter != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
         var accepted = 0
         var emitted = 0
 
@@ -660,23 +663,12 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             accepted++
             onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "accepted"))
 
-            // Determine phonetic tier; treat chorus-repeat end-words as tier 2
-            // so they stream immediately rather than being held.
-            val endWord = RhymeConstraint.lineEndWord(cleaned)
-            val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-            val tier = when {
-                isHook -> 2
-                matches != null && constraint != null -> RhymeConstraint.rhymeTier(
-                    cleaned, constraint.targetWord, matches, constraint.dictionary
-                )
-                else -> 0
-            }
-
-            if (matches != null && tier == 0 && !isHook) {
-                held += cleaned
-                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "held_for_rhyme_ranking"))
+            val tier = filter?.tier(cleaned) ?: 0
+            if (filter != null && tier == 0) {
+                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "rhyme_mismatch"))
                 return true
             }
+            val isHook = constraint != null && isHookRepeat(cleaned, constraint)
             if (emitted < SUGGESTION_COUNT) {
                 emit(SuggestedLine(cleaned, tier, isHook))
                 emitted++
@@ -700,23 +692,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         if (buffer.isNotBlank()) {
             flushLine(buffer.toString())
         }
-        if (constraint != null && emitted < SUGGESTION_COUNT && held.isNotEmpty()) {
-            RhymeConstraint.filterAndRank(
-                lines = held,
-                targetLine = constraint.targetLine,
-                rhymeType = constraint.rhymeType,
-                want = SUGGESTION_COUNT - emitted,
-                dictionary = constraint.dictionary
-            ).forEach { line ->
-                val endWord = RhymeConstraint.lineEndWord(line)
-                val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-                val tier = RhymeConstraint.rhymeTier(
-                    line, constraint.targetWord, requireNotNull(matches), constraint.dictionary
-                )
-                emit(SuggestedLine(line, tier, isHook))
-                emitted++
-                onDecision?.invoke(LocalSuggestionDecision(line, line, "displayed_after_rhyme_ranking"))
-            }
+        if (filter != null && accepted > 0 && emitted == 0) {
+            throw NoMatchingRhymesException(filter.rhymeType)
         }
         if (requireExactCount && (accepted != SUGGESTION_COUNT || emitted != SUGGESTION_COUNT)) {
             throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
@@ -1398,26 +1375,17 @@ $outputRules
                 key.isNotEmpty() && seen.add(key)
             }
             .take(limit)
-        if (constraint == null) return cleaned.map { SuggestedLine(it, 0) }
-        val ranked = RhymeConstraint.filterAndRank(
-            lines = cleaned,
-            targetLine = constraint.targetLine,
-            rhymeType = constraint.rhymeType,
-            want = SUGGESTION_COUNT,
-            dictionary = constraint.dictionary
-        )
-        val matches = ProsodyAnalyzer.findRhymes(constraint.targetWord, dictionary = constraint.dictionary)
-        val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS &&
-                (constraint.sectionRef.ordinal) >= 2
-        val chorusEnds = constraint.chorusEndWords
-        return ranked.map { line ->
-            val endWord = RhymeConstraint.lineEndWord(line)
-            val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-            val tier = RhymeConstraint.rhymeTier(
-                line, constraint.targetWord, matches, constraint.dictionary
-            )
-            SuggestedLine(line, tier, isHook)
-        }
+        val filter = constraint?.lineFilter ?: return cleaned.map { SuggestedLine(it, 0) }
+        val ranked = filter.rank(cleaned, SUGGESTION_COUNT)
+        if (ranked.isEmpty() && cleaned.isNotEmpty()) throw NoMatchingRhymesException(constraint.rhymeType)
+        return ranked.map { line -> SuggestedLine(line, filter.tier(line), isHookRepeat(line, constraint)) }
+    }
+
+    /** A repeated first-chorus ending; only changes the badge. */
+    private fun isHookRepeat(line: String, constraint: SuggestionRhymeConstraint): Boolean {
+        val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS && constraint.sectionRef.ordinal >= 2
+        val endWord = RhymeConstraint.lineEndWord(line)
+        return isChorusRepeat && endWord.isNotEmpty() && endWord in constraint.chorusEndWords
     }
 
     internal fun buildLocalPrompt(
@@ -1464,7 +1432,7 @@ $outputRules
         val constraintBlock = constraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
         // Cloud over-generates 2x for the rhyme filter; the on-device model is
         // slow and small, and doubling its output length doubles the chance of
-        // malformed output — keep the ask at 6 and let filterAndRank re-rank.
+        // malformed output — keep the ask at 6 and let the line filter re-rank.
         val requestCount = SUGGESTION_COUNT
         val songContextInstruction = if (useWholeSongContext) {
             "Use the whole-song context for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
@@ -1514,24 +1482,15 @@ Rules:
             throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
         }
         // The local prompt asks for SUGGESTION_COUNT lines even when constrained
-        // (see buildLocalPrompt); filterAndRank still verifies and re-ranks them.
+        // (see buildLocalPrompt); the line filter still verifies and re-ranks them.
         val response = service.generateResponse(prompt)
         val ranked = validateLocalSuggestionResponse(response, lyrics, constraint)
-        val matches = constraint?.let {
-            ProsodyAnalyzer.findRhymes(it.targetWord, dictionary = it.dictionary)
-        }
+        val filter = constraint?.lineFilter
         return ranked.map { line ->
-            if (constraint == null) {
+            if (constraint == null || filter == null) {
                 SuggestedLine(line, 0)
             } else {
-                val endWord = RhymeConstraint.lineEndWord(line)
-                val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS &&
-                        (constraint.sectionRef.ordinal) >= 2
-                val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in constraint.chorusEndWords
-                val tier = RhymeConstraint.rhymeTier(
-                    line, constraint.targetWord, requireNotNull(matches), constraint.dictionary
-                )
-                SuggestedLine(line, tier, isHook)
+                SuggestedLine(line, filter.tier(line), isHookRepeat(line, constraint))
             }
         }
     }
@@ -1553,13 +1512,11 @@ Rules:
         if (sanitized.size != SUGGESTION_COUNT) {
             throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
         }
-        val ranked = if (constraint == null) sanitized else RhymeConstraint.filterAndRank(
-            lines = sanitized,
-            targetLine = constraint.targetLine,
-            rhymeType = constraint.rhymeType,
-            want = SUGGESTION_COUNT,
-            dictionary = constraint.dictionary
-        )
+        val filter = constraint?.lineFilter
+        val ranked = filter?.rank(sanitized, SUGGESTION_COUNT) ?: sanitized
+        if (filter != null && ranked.isEmpty() && sanitized.isNotEmpty()) {
+            throw NoMatchingRhymesException(filter.rhymeType)
+        }
         if (ranked.size != SUGGESTION_COUNT) {
             throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
         }

@@ -227,9 +227,8 @@ class LocalSyntheticCaptureInstrumentedTest {
             put("acceptedCount", decisions.count { it.disposition == "accepted" })
             put("rejectedCount", decisions.count { it.disposition in
                 setOf("format", "existing_lyric", "duplicate", "markup_or_control") })
-            put("heldForRankingCount", decisions.count { it.disposition == "held_for_rhyme_ranking" })
+            put("rhymeMismatchCount", decisions.count { it.disposition == "rhyme_mismatch" })
             put("displayedDirectCount", decisions.count { it.disposition == "displayed" })
-            put("rankedCount", decisions.count { it.disposition == "displayed_after_rhyme_ranking" })
             put("displayLimitCount", decisions.count { it.disposition == "display_limit" })
             put("productionDisplayed", suggestionsJson(displayed))
             put("replayDisplayed", suggestionsJson(replayDisplayed))
