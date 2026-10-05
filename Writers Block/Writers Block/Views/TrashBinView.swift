@@ -14,6 +14,7 @@ struct TrashBinView: View {
     @State private var selectedMemoIds: Set<String> = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var onDismiss: (() -> Void)? = nil
 
@@ -205,13 +206,14 @@ struct TrashBinView: View {
                     Text(project.title.isEmpty ? "Untitled Song" : project.title)
                         .font(.headline.weight(.semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .lineLimit(rowLineLimit)
 
                     Text("\(SyllableCounter.wordCount(project.lyrics)) words · \(trashRemainingText(deleteAfter: project.deleteAfter))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(rowLineLimit)
                 }
+                .multilineTextAlignment(.leading)
 
                 Spacer(minLength: RhymeAITokens.Spacing.sm)
 
@@ -288,13 +290,14 @@ struct TrashBinView: View {
                     Text(recordingDisplayName(memo.originalName))
                         .font(.headline.weight(.semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .lineLimit(rowLineLimit)
 
                     Text("\(projectTitle) · \(trashRemainingText(deleteAfter: memo.deleteAfter))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(rowLineLimit)
                 }
+                .multilineTextAlignment(.leading)
 
                 Spacer(minLength: RhymeAITokens.Spacing.sm)
 
@@ -332,15 +335,26 @@ struct TrashBinView: View {
         selectedMemoIds.formIntersection(Set(trashedMemos.map(\.id)))
     }
 
+    /// One line at standard sizes; room to wrap at accessibility sizes, where
+    /// a single line cut titles and the days-left note short.
+    private var rowLineLimit: Int {
+        dynamicTypeSize.isAccessibilitySize ? 3 : 1
+    }
+
     private var bottomActionBar: some View {
-        HStack(spacing: RhymeAITokens.Spacing.sm) {
+        // Side by side at standard sizes; stacked at accessibility sizes,
+        // where half the width truncated the labels to "Rest…" and "Dele…".
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: RhymeAITokens.Spacing.xs))
+            : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.sm))
+        return layout {
             Button {
                 restoreSelected()
             } label: {
                 Label("Restore", systemImage: "arrow.uturn.backward")
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
-                    .frame(height: RhymeAITokens.Touch.minimum)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
             }
             .buttonStyle(.bordered)
             .buttonBorderShape(.capsule)
@@ -352,7 +366,7 @@ struct TrashBinView: View {
                 Label("Delete", systemImage: "trash")
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
-                    .frame(height: RhymeAITokens.Touch.minimum)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
             }
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
