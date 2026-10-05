@@ -1151,7 +1151,7 @@ final class EditorViewModel: ObservableObject {
                       self.inspectorRange == range,
                       self.currentLine(for: range) == lineContext,
                       self.currentInspectorSynonymIdentity == identity else { return }
-                self.inspectorSynonymsError = error.localizedDescription
+                self.inspectorSynonymsError = SynonymResultPresentation.message(for: error)
                 self.inspectorSynonymsRecovery = SynonymResultPresentation.recoveryAction(
                     resultCount: self.inspectorSynonyms.count,
                     error: error
@@ -2024,7 +2024,7 @@ final class EditorViewModel: ObservableObject {
         cloudBackupHasStoredPassphrase = backupService?.hasStoredPassphrase ?? false
 
         if !cloudBackupConfigured {
-            cloudBackupStatusText = "Google Drive backup is not configured yet. Add the iOS OAuth client ID before backing up."
+            cloudBackupStatusText = "Google Drive backup is not configured in this build, so Back Up Now and Restore are unavailable."
             cloudBackupLastResultIsError = true
         } else if !cloudBackupHasStoredPassphrase {
             cloudBackupStatusText = "Enter a backup passphrase to enable Google Drive backup."

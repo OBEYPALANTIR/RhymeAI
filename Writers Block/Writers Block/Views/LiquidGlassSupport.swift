@@ -76,6 +76,10 @@ struct RhymeAIPressButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            // A custom style only hit-tests what the label draws, so a 44pt
+            // frame around a glyph or a line of text would otherwise leave
+            // just the ink tappable.
+            .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .opacity(configuration.isPressed ? 0.86 : 1)
             .animation(reduceMotion ? nil : RhymeAITokens.Motion.feedback, value: configuration.isPressed)

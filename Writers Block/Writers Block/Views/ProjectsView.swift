@@ -59,6 +59,7 @@ struct ProjectsView: View {
                 .padding(.horizontal, RhymeAITokens.Spacing.sm)
                 .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, interactive: true)
                 .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
 
                 Button {
                     viewModel.newProject()
@@ -70,11 +71,14 @@ struct ProjectsView: View {
                         Text("Create New Song")
                             .foregroundStyle(appearance.palette.onAction)
                     }
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RhymeAITokens.Spacing.sm)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(height: RhymeAITokens.Touch.minimum)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
                     .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
                 }
                 .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
 
                 Button {
                     listError = nil
@@ -86,17 +90,21 @@ struct ProjectsView: View {
                         Text("Import From File")
                             .foregroundStyle(.primary)
                     }
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RhymeAITokens.Spacing.sm)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(height: RhymeAITokens.Touch.minimum)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
                     .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
                 }
                 .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
 
                 if let listError = listError ?? viewModel.projectDeletionNotice {
                     Text(listError)
                         .font(.caption)
                         .foregroundStyle(appearance.palette.error)
                         .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
 
                 if projects.isEmpty {
@@ -106,6 +114,7 @@ struct ProjectsView: View {
                         Text("Your songs will appear here once you start writing.")
                     }
                     .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 } else if filteredProjects.isEmpty {
                     ContentUnavailableView {
                         Label("No Matching Songs", systemImage: "magnifyingglass")
@@ -113,6 +122,7 @@ struct ProjectsView: View {
                         Text("Try a title, lyric, or theme.")
                     }
                     .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 } else {
                     ForEach(filteredProjects, id: \.id) { project in
                         Button {
