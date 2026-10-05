@@ -18,7 +18,7 @@ struct TrashBinView: View {
     var onDismiss: (() -> Void)? = nil
 
     private enum TrashTab: String, CaseIterable {
-        case projects = "Projects"
+        case projects = "Songs"
         case recordings = "Recordings"
     }
 
