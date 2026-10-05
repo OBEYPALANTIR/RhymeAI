@@ -234,7 +234,12 @@ struct ProjectsDrawerView: View {
                 undoToastView(toast)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, RhymeAITokens.Spacing.lg)
-                    .padding(.bottom, RhymeAITokens.Spacing.xl)
+                    // Clear the Import / Trash row (44pt plus the panel's
+                    // bottom padding) instead of sitting on top of it.
+                    .padding(
+                        .bottom,
+                        RhymeAITokens.Touch.minimum + RhymeAITokens.Spacing.lg + RhymeAITokens.Spacing.sm
+                    )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(3)
             }
