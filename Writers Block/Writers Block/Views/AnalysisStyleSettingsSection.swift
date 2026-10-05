@@ -48,8 +48,10 @@ private struct AnalysisStylePreview: View {
             syllablesEnabled: true
         )
         .environment(\.analysisPresentationStyle, style)
+        // A sample, not a control: it sits on the group card without a
+        // second border of its own.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(RhymeAITokens.Spacing.sm)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
+        .padding(.vertical, RhymeAITokens.Spacing.xxs)
+        .accessibilityLabel("Sample lyric in the \(style.displayName) style")
     }
 }

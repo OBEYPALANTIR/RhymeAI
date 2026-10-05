@@ -115,6 +115,9 @@ struct SettingsSaveBar: View {
     @Environment(\.appAppearanceStyle) private var appearance
 
     let saved: Bool
+    /// Only API keys wait for Save, so the button is live only while a typed
+    /// key differs from the stored one.
+    let hasChanges: Bool
     let action: () -> Void
 
     var body: some View {
@@ -127,9 +130,11 @@ struct SettingsSaveBar: View {
             .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
             .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
+            .opacity(saved || hasChanges ? 1 : 0.45)
         }
         .buttonStyle(.rhymePress)
-        .disabled(saved)
+        .disabled(saved || !hasChanges)
+        .accessibilityHint(hasChanges ? "Saves your API key" : "Nothing to save. Settings apply as you change them")
         .accessibilityIdentifier("saveSettingsButton")
     }
 }
@@ -247,7 +252,6 @@ struct SettingsLocalModelSection: View {
                 .font(.title2)
                 .foregroundStyle(appearance.palette.action)
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .teal.opacity(0.14), fallbackOpacity: 0.08)
 
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                 Text("Apple Foundation Models")
@@ -261,7 +265,7 @@ struct SettingsLocalModelSection: View {
 
             Spacer(minLength: 0)
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
@@ -279,11 +283,11 @@ struct SettingsLocalModelSection: View {
                     }
                 ),
                 accessibilityIdentifier: "ggufEnginePicker",
+                label: "On-Device Engine",
                 title: \.displayName
             )
         }
-        .padding(RhymeAITokens.Spacing.lg)
-                label: "On-Device Engine",
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
@@ -314,7 +318,6 @@ struct SettingsLocalModelSection: View {
                         .font(.title3)
                         .foregroundStyle(isSelected ? appearance.palette.success : appearance.palette.action)
                         .frame(width: 36, height: 36)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(option.title)
@@ -355,7 +358,7 @@ struct SettingsLocalModelSection: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(RhymeAITokens.Spacing.md)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
         }
         .buttonStyle(.rhymePress)
         .disabled(ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isPausing ||
@@ -388,7 +391,7 @@ struct SettingsEditorSection: View {
             settingsToggleRow("Color Rhymes", help: .colorRhymes, isOn: binding(viewModel.isRhymeHighlightEnabled, setter: viewModel.saveIsRhymeHighlightEnabled))
             settingsToggleRow("Beat Grid", help: .beatGrid, isOn: binding(viewModel.isBeatGridEnabled, setter: viewModel.saveIsBeatGridEnabled))
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
         .accessibilityIdentifier("editorSettingsSection")
     }
@@ -463,7 +466,7 @@ struct SettingsCloudBackupSection: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
         .onDisappear {
             passphraseEntry = ""
@@ -484,8 +487,9 @@ struct SettingsCloudBackupSection: View {
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .font(.system(.body, design: .rounded))
-            .padding(RhymeAITokens.Spacing.md)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .padding(.horizontal, RhymeAITokens.Spacing.sm)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
             .accessibilityIdentifier("cloudBackupPassphrase")
 
             HStack(spacing: RhymeAITokens.Spacing.sm) {

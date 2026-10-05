@@ -10,6 +10,10 @@ struct SettingsView: View {
     @Environment(\.appAppearanceStyle) private var appearance
 
     @State private var editingKeys: [String: String] = [:]
+    /// Keys as last read from or written to the Keychain. API keys are the
+    /// only settings that wait for Save; everything else applies as it changes.
+    @State private var storedKeys: [String: String] = [:]
+    @State private var confirmingUnsavedKeys = false
     @State private var showKey = false
     @State private var savedConfirmation = false
     @State private var saveError: String?
@@ -43,7 +47,18 @@ struct SettingsView: View {
                         .padding(.top, RhymeAITokens.Spacing.sm)
                 }
 
-                SettingsSaveBar(saved: savedConfirmation, action: saveAll)
+                if hasUnsavedKeys {
+                    Text("Your API key is not saved yet. Other settings apply as you change them.")
+                        .font(.caption)
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("settingsUnsavedKeyNote")
+                        .padding(.horizontal, RhymeAITokens.Spacing.lg)
+                        .padding(.top, RhymeAITokens.Spacing.sm)
+                }
+
+                SettingsSaveBar(saved: savedConfirmation, hasChanges: hasUnsavedKeys, action: { saveAll() })
                     .padding(.horizontal, RhymeAITokens.Spacing.lg)
                     .padding(.top, RhymeAITokens.Spacing.sm)
                     .padding(.bottom, RhymeAITokens.Spacing.sm)
@@ -60,9 +75,30 @@ struct SettingsView: View {
             .toolbarColorScheme(appearance.preferredColorScheme, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        if hasUnsavedKeys {
+                            confirmingUnsavedKeys = true
+                        } else {
+                            dismiss()
+                        }
+                    }
                 }
             }
+            .confirmationDialog(
+                "Save your API key before closing?",
+                isPresented: $confirmingUnsavedKeys,
+                titleVisibility: .visible
+            ) {
+                Button("Save") {
+                    if saveAll() { dismiss() }
+                }
+                Button("Discard Changes", role: .destructive) { dismiss() }
+                Button("Keep Editing", role: .cancel) {}
+            } message: {
+                Text("The key you typed has not been saved. Your other settings are already applied.")
+            }
+            // A swipe would otherwise drop a typed key without asking.
+            .interactiveDismissDisabled(hasUnsavedKeys)
             .onAppear(perform: loadSettingsState)
             .sheet(item: $activeHelp) { help in
                 FeatureHelpSheet(help: help)
@@ -106,10 +142,11 @@ struct SettingsView: View {
                     set: saveProvider
                 ),
                 accessibilityIdentifier: "providerPicker",
+                label: "AI Provider",
                 title: \.displayName
             )
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
     }
 
@@ -128,7 +165,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             SettingsSectionTitle("\(viewModel.selectedProvider.displayName) API Key", systemImage: "key")
 
-            HStack(spacing: RhymeAITokens.Spacing.md) {
+            HStack(spacing: RhymeAITokens.Spacing.xs) {
                 Group {
                     if showKey {
                         TextField("API Key", text: apiKeyBinding)
@@ -142,7 +179,6 @@ struct SettingsView: View {
                 .textFieldStyle(.plain)
 
                 Button {
-                label: "AI Provider",
                     showKey.toggle()
                 } label: {
                     Image(systemName: showKey ? "eye.slash" : "eye")
@@ -153,8 +189,9 @@ struct SettingsView: View {
                 .buttonStyle(.rhymePress)
                 .accessibilityLabel(showKey ? "Hide API key" : "Show API key")
             }
-            .padding(RhymeAITokens.Spacing.md)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .padding(.horizontal, RhymeAITokens.Spacing.sm)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             Text(viewModel.selectedProvider.keyHint)
                 .font(.caption)
@@ -185,7 +222,7 @@ struct SettingsView: View {
             .tint(.indigo)
             .accessibilityIdentifier("cloudAIWholeSongConsent")
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
     }
 
@@ -203,8 +240,9 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(RhymeAITokens.Spacing.md)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .padding(.horizontal, RhymeAITokens.Spacing.sm)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             // Cloud model ids are what the provider's docs call the model; the
             // on-device placeholder id ("local-model") means nothing to a writer.
@@ -216,7 +254,7 @@ struct SettingsView: View {
                     .minimumScaleFactor(0.8)
             }
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
     }
 
@@ -233,15 +271,25 @@ struct SettingsView: View {
         }
     }
 
+    private var hasUnsavedKeys: Bool {
+        editingKeys != storedKeys
+    }
+
     private func loadSettingsState() {
-        for provider in AIProvider.allCases {
-            editingKeys[provider.rawValue] = viewModel.apiKey(for: provider)
+        // The sheet reappears after a help sheet closes; a key being typed
+        // must survive that.
+        if !hasUnsavedKeys {
+            for provider in AIProvider.allCases {
+                editingKeys[provider.rawValue] = viewModel.apiKey(for: provider)
+            }
+            storedKeys = editingKeys
         }
         viewModel.refreshCloudBackupState()
         ggufDownloadManager.refreshInstalledModels()
     }
 
-    private func saveAll() {
+    @discardableResult
+    private func saveAll() -> Bool {
         savedConfirmation = false
         saveError = nil
         for provider in AIProvider.allCases {
@@ -249,8 +297,9 @@ struct SettingsView: View {
                 guard viewModel.saveApiKey(provider: provider, key: key) else {
                     let action = key.isEmpty ? "remove" : "save"
                     saveError = "Couldn't \(action) the \(provider.displayName) API key in the Keychain. Try again after unlocking the device."
-                    return
+                    return false
                 }
+                storedKeys[provider.rawValue] = key
             }
         }
         savedConfirmation = true
@@ -258,6 +307,7 @@ struct SettingsView: View {
             try? await Task.sleep(for: .seconds(2))
             savedConfirmation = false
         }
+        return true
     }
 }
 
