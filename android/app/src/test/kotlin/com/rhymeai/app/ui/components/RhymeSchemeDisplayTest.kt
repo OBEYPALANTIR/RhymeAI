@@ -12,8 +12,9 @@ class RhymeSchemeDisplayTest {
         val lyrics = "first light\nsecond night\nthird rain"
         val rows = rowsFor(lyrics)
 
-        assertEquals(listOf("A", "A", "B"), rows.map { it.letter })
-        assertEquals(listOf(false, false, true), rows.map { it.isCurrent })
+        // The last row is the line a suggestion would add.
+        assertEquals(listOf("A", "A", "B", "B"), rows.map { it.letter })
+        assertEquals(listOf(false, false, false, true), rows.map { it.isCurrent })
     }
 
     @Test
@@ -22,30 +23,34 @@ class RhymeSchemeDisplayTest {
         val rows = rowsFor(lyrics)
 
         assertEquals("[Verse]", rows.first().line)
-        assertEquals(listOf(null, "A", "A", "B", "B"), rows.map { it.letter })
+        assertEquals(listOf(null, "A", "A", "B", "B", "A"), rows.map { it.letter })
         assertTrue(rows.last().isCurrent)
+        assertEquals("", rows.last().line)
     }
 
     @Test
-    fun blankRowsDoNotAdvanceTheSchemeAndCurrentBlankUsesAnalyzerLetter() {
+    fun whitespaceOnlyLineEndsTheStanzaAndCurrentBlankUsesAnalyzerLetter() {
         val lyrics = "[Verse]\nfirst light\n \nsecond night\n"
         val context = RhymeContextAnalyzer.compute(lyrics, lyrics.length, "AABB")
         val rows = rhymeSchemeRows(context, "AABB")
 
-        assertEquals(listOf(null, "A", null, "A", context.currentLetter), rows.map { it.letter })
-        assertFalse(rows[2].isCurrent)
-        assertTrue(rows[4].isCurrent)
-        assertEquals("", rows[4].line)
+        assertEquals(listOf("second night", ""), rows.map { it.line })
+        assertEquals("A", context.currentLetter)
+        assertEquals("second night", context.targetLine)
+        assertEquals(listOf("A", context.currentLetter), rows.map { it.letter })
+        assertFalse(rows[0].isCurrent)
+        assertTrue(rows[1].isCurrent)
     }
 
     @Test
-    fun earlierCaretMarksItsLyricWhileLaterRowsKeepTheirLetters() {
+    fun earlierCaretMarksTheLineAfterItWhileLaterRowsKeepTheirLetters() {
         val lyrics = "[Verse]\nfirst light\nsecond night\nthird rain"
         val context = RhymeContextAnalyzer.compute(lyrics, lyrics.indexOf("second") + 3, "AABB")
         val rows = rhymeSchemeRows(context, "AABB")
 
-        assertEquals(listOf(null, "A", "A", "B"), rows.map { it.letter })
-        assertEquals(listOf(false, false, true, false), rows.map { it.isCurrent })
+        assertEquals(listOf(null, "A", "A", "B", "B"), rows.map { it.letter })
+        assertEquals(listOf(false, false, false, true, false), rows.map { it.isCurrent })
+        assertEquals("", rows.single { it.isCurrent }.line)
         assertEquals(context.currentLetter, rows.single { it.isCurrent }.letter)
     }
 

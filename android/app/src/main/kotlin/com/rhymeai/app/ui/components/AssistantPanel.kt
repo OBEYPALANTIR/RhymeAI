@@ -258,7 +258,7 @@ fun AssistantPanel(
                         }
                     } else {
                         Text(
-                            "New rhyme sound (or place cursor on a line)",
+                            "New rhyme sound: no earlier line to match",
                             fontStyle = FontStyle.Italic,
                             color = colorScheme.onSurfaceVariant,
                             fontSize = DesignTokens.Typography.caption
