@@ -782,6 +782,7 @@ struct ProjectsDrawerView: View {
                                 Text(project.updatedAt, style: .date)
                                 Text("\(SyllableCounter.wordCount(project.lyrics)) words")
                             }
+                            .fixedSize(horizontal: false, vertical: true)
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
