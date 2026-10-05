@@ -106,7 +106,7 @@ struct SongNotebookView: View {
             .navigationTitle("Song Notebook")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .confirmationDialog("Restore this draft? Your current lyrics will be kept as a version.", isPresented: Binding(get: { versionToRestore != nil }, set: { if !$0 { versionToRestore = nil } })) {
+            .confirmationDialog("Restore this draft? Your current lyrics will be kept as a version.", isPresented: Binding(get: { versionToRestore != nil }, set: { if !$0 { versionToRestore = nil } }), titleVisibility: .visible) {
                 if let version = versionToRestore {
                     Button("Restore version") {
                         viewModel.restoreVersion(version)
