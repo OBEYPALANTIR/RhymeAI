@@ -8,7 +8,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.SongWorkspace
@@ -86,7 +85,6 @@ class ProjectRepository internal constructor(
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
         private val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
-        private val ANALYSIS_PRESENTATION_KEY = stringPreferencesKey("analysis_presentation")
         private val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         private val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
         private val CLAUDE_API_KEY = stringPreferencesKey("claude_api_key")
@@ -480,16 +478,6 @@ class ProjectRepository internal constructor(
     suspend fun saveAppearance(appearance: AppAppearance) {
         dataStore.edit { prefs ->
             prefs[APP_APPEARANCE_KEY] = appearance.storageValue
-        }
-    }
-
-    val analysisPresentationFlow: Flow<AnalysisPresentation> = dataStore.data.map { prefs ->
-        AnalysisPresentation.fromStorage(prefs[ANALYSIS_PRESENTATION_KEY])
-    }
-
-    suspend fun saveAnalysisPresentation(value: AnalysisPresentation) {
-        dataStore.edit { prefs ->
-            prefs[ANALYSIS_PRESENTATION_KEY] = value.storageValue
         }
     }
 

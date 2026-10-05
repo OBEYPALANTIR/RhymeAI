@@ -10,7 +10,6 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 
 val InkColorScheme = lightColorScheme(
@@ -171,13 +170,9 @@ internal fun outlineStrongColorFor(appearance: AppAppearance) = when (appearance
 @Composable
 fun RhymeAITheme(
     appearance: AppAppearance = AppAppearance.INK,
-    analysisPresentation: AnalysisPresentation = AnalysisPresentation.COLOR,
     content: @Composable () -> Unit
 ) {
-    CompositionLocalProvider(
-        LocalAppAppearance provides appearance,
-        LocalAnalysisPresentation provides analysisPresentation
-    ) {
+    CompositionLocalProvider(LocalAppAppearance provides appearance) {
         MaterialTheme(
             colorScheme = colorSchemeFor(appearance),
             typography = RhymeTypography,

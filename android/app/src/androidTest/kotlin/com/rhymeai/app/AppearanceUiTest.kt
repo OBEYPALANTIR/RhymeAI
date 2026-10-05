@@ -23,7 +23,6 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.ui.theme.InkSurfaceLow
@@ -51,7 +50,6 @@ class AppearanceUiTest {
     fun setUp() {
         runBlocking {
             repository.saveAppearance(AppAppearance.INK)
-            repository.saveAnalysisPresentation(AnalysisPresentation.COLOR)
         }
         scenario = ActivityScenario.launch(MainActivity::class.java)
     }
@@ -62,7 +60,6 @@ class AppearanceUiTest {
         scenario = null
         runBlocking {
             repository.saveAppearance(AppAppearance.INK)
-            repository.saveAnalysisPresentation(AnalysisPresentation.COLOR)
         }
     }
 
@@ -119,36 +116,6 @@ class AppearanceUiTest {
                 .isNotEmpty()
         }
         captureRootScreenshot("appearance-graphite-relaunch.png")
-    }
-
-    @Test
-    fun analysisStyleAppliesImmediatelyAndPersistsAfterRelaunch() {
-        openEditor()
-        openAppearanceSettings()
-        composeRule.onNodeWithText("Editor").performClick()
-        composeRule.onNodeWithTag("analysisStyleSelector").assertExists()
-        composeRule.onNode(hasText("Color") and isSelected()).assertExists()
-        composeRule.onNode(hasText("Ink Marks") and hasClickAction()).performClick()
-        composeRule.onNode(hasText("Ink Marks") and isSelected()).assertExists()
-        composeRule.onNodeWithText(
-            "Solid, dashed, dotted, and dash-dot lines identify rhyme families."
-        ).assertExists()
-        composeRule.onNodeWithText("Heavier words contain more syllables.").assertExists()
-
-        runBlocking {
-            withTimeout(5_000) {
-                repository.analysisPresentationFlow.first {
-                    it == AnalysisPresentation.INK_MARKS
-                }
-            }
-        }
-
-        scenario?.close()
-        scenario = ActivityScenario.launch(MainActivity::class.java)
-        openEditor()
-        openAppearanceSettings()
-        composeRule.onNodeWithText("Editor").performClick()
-        composeRule.onNode(hasText("Ink Marks") and isSelected()).assertExists()
     }
 
     @Test

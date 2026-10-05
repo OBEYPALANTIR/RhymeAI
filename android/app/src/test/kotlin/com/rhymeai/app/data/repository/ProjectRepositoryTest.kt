@@ -976,6 +976,32 @@ class ProjectRepositoryTest {
         }
     }
 
+    @Test
+    fun storedInkMarksStyleFromAnOlderVersionLeavesColorAnalysisSettingsIntact() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-legacy-ink-marks").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val dataStore = PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") }
+        val legacyStyleKey = stringPreferencesKey("analysis_presentation")
+        try {
+            // Ink Marks was removed; Color is the only analysis style, so the old value has no reader.
+            dataStore.edit { it[legacyStyleKey] = "ink_marks" }
+            val repository = ProjectRepository(dataStore, testKeyStore())
+
+            assertEquals(ProjectRepository.EditorToggles(), repository.editorTogglesFlow.first())
+            assertEquals(com.rhymeai.app.data.model.AppAppearance.INK, repository.appearanceFlow.first())
+
+            val chosen = ProjectRepository.EditorToggles(
+                isSyllableColoringEnabled = false,
+                isRhymeHighlightEnabled = true
+            )
+            repository.saveEditorToggles(chosen)
+            assertEquals(chosen, repository.editorTogglesFlow.first())
+        } finally {
+            scope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun testKeyStore(): SecureKeyStore = object : SecureKeyStore {
         override fun getKey(provider: String) = ""
         override fun setKey(provider: String, key: String) = Unit
