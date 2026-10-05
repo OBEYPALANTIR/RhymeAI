@@ -106,18 +106,15 @@ class NearSlantCandidateListTest {
     fun everyListedWordVerifiesAsItsListsRelation() {
         for (anchor in multiPronunciationAnchors) {
             assertTrue(dictionary.pronunciations(anchor).size > 1, anchor)
-            val matches = ProsodyAnalyzer.findRhymes(anchor, dictionary = dictionary, wordFrequency = frequency)
+            val targetLine = "Everything we said about $anchor"
             for (type in RhymeType.entries) {
+                // The returned-line filter the suggestion services apply for this mode.
+                val filter = RhymeLineFilter.create(targetLine, type, dictionary)
                 // Only words that survive end-word extraction can come back in a line.
                 for (word in list(anchor, type).filter { ProsodyAnalyzer.normalizeWord(it) == it }) {
                     assertEquals(type, ProsodyAnalyzer.rhymeRelation(word, anchor, dictionary), "$word is listed as $type for $anchor")
-                    // Android's returned-line tiers: 2 perfect, 1 near; it has no slant tier.
-                    val tier = RhymeConstraint.rhymeTier("I keep coming back to $word", anchor, matches, dictionary)
-                    when (type) {
-                        RhymeType.PERFECT -> assertEquals(2, tier, "perfect $word for $anchor")
-                        RhymeType.NEAR -> assertEquals(1, tier, "near $word for $anchor")
-                        RhymeType.SLANT -> Unit
-                    }
+                    val line = "I keep coming back to $word"
+                    assertEquals(listOf(line), filter?.rank(listOf(line), 1), "the $type filter rejects $word for $anchor")
                 }
             }
         }

@@ -83,9 +83,9 @@ class AIServicePromptTest {
             "I wander through the night\nI watch the lanterns wane",
             constraint
         )
-        assertEquals("I watch the lanterns wane", batch.first().text)
-        assertEquals(2, batch.first().rhymeTier)
-        assertEquals(0, batch.last().rhymeTier)
+        // Misses are dropped, not used as padding (as on iOS).
+        assertEquals(listOf("I watch the lanterns wane"), batch.map { it.text })
+        assertEquals(listOf(2), batch.map { it.rhymeTier })
 
         val chunkProcessed = CompletableDeferred<Unit>()
         val finishUpstream = CompletableDeferred<Unit>()
@@ -114,11 +114,8 @@ class AIServicePromptTest {
             finishUpstream.complete(Unit)
         }
         withTimeout(5_000) { collector.join() }
-        assertEquals(
-            listOf("I watch the lanterns wane", "I wander through the night", "I wait along the shore"),
-            streamed.map { it.text }
-        )
-        assertEquals(listOf(2, 0, 0), streamed.map { it.rhymeTier })
+        assertEquals(listOf("I watch the lanterns wane"), streamed.map { it.text })
+        assertEquals(listOf(2), streamed.map { it.rhymeTier })
     }
 
     @Test
@@ -551,7 +548,7 @@ class AIServicePromptTest {
     @Test
     fun tierBadgeIsHookWhenChorusRepeatEndWordMatches() {
         val service = AIService()
-        val lyrics = "[Chorus]\nI follow every road\n\n[Chorus]\nSecond chorus"
+        val lyrics = "[Chorus]\nThe lantern glowed\n\n[Chorus]\nSecond chorus"
         val chorusEnds = service.firstChorusEndWords(lyrics, rhymeDictionary)
         val ref = com.rhymeai.app.util.SectionRef(
             type = SongSection.CHORUS,
@@ -568,12 +565,16 @@ class AIServicePromptTest {
                 chorusEndWords = chorusEnds
             )
         )
-        // "road" is in firstChorusEndWords; parseSuggestionList should mark it isHook.
+        // "glowed" is in firstChorusEndWords; parseSuggestionList should mark it isHook.
+        // The hook flag is only a badge: the line still has to pass the filter, as on iOS,
+        // so a line ending on the target word itself is dropped.
         val results = service.parseSuggestionList(
-            raw = "I walk along the road\nI glow under the showed",
+            raw = "The window glowed\nI walk along the road",
             constraint = constraint
         )
         val hookLine = results.firstOrNull { it.isHook }
         assertNotNull(hookLine, "Expected at least one isHook=true suggestion when end word matches chorus")
+        assertEquals(listOf("The window glowed"), results.map { it.text })
+        assertEquals(2, hookLine.rhymeTier)
     }
 }

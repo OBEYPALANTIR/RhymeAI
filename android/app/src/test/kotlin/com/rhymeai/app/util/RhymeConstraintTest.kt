@@ -1,11 +1,19 @@
 package com.rhymeai.app.util
 
 import com.rhymeai.app.data.model.RhymeType
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+/**
+ * Rhyme-word-first constrained generation: candidate ending words, tier
+ * verification, and the returned-line filter. The tier and filter cases
+ * mirror iOS `RhymeConstraintTests.swift`.
+ */
 class RhymeConstraintTest {
     private val dictionary = PronunciationDictionary.fromLines(
         sequenceOf(
@@ -13,11 +21,21 @@ class RhymeConstraintTest {
             "glowed\tG L OW1 D",
             "showed\tSH OW1 D",
             "stone\tS T OW1 N",
+            "bones\tB OW1 N Z",
             "wrote\tR OW1 T",
+            "red\tR EH1 D",
             "night\tN AY1 T",
             "rain\tR EY1 N"
         )
     )
+
+    private val bundled: PronunciationDictionary by lazy {
+        sequenceOf(
+            "../../shared/pronunciation/cmudict-rhymeai.tsv",
+            "../shared/pronunciation/cmudict-rhymeai.tsv",
+            "shared/pronunciation/cmudict-rhymeai.tsv"
+        ).map(::File).first(File::isFile).bufferedReader().useLines(PronunciationDictionary::fromLines)
+    }
 
     @Test
     fun lineEndWordStripsPunctuationQuotesAndDashes() {
@@ -43,7 +61,7 @@ class RhymeConstraintTest {
     fun candidateEndWordsKeepRhymeModesExclusive() {
         // D and T are both plosives; N is a nasal, so "stone" is assonance.
         assertEquals(listOf("wrote"), RhymeConstraint.candidateEndWords("road", RhymeType.NEAR, dictionary = dictionary))
-        assertEquals(listOf("stone"), RhymeConstraint.candidateEndWords("road", RhymeType.SLANT, dictionary = dictionary))
+        assertEquals(listOf("bones", "red", "stone"), RhymeConstraint.candidateEndWords("road", RhymeType.SLANT, dictionary = dictionary))
     }
 
     @Test
@@ -60,182 +78,170 @@ class RhymeConstraintTest {
         assertEquals(0, RhymeConstraint.rhymeTier("", "road", dictionary))
     }
 
-    private fun crowdedRainDictionary(): PronunciationDictionary = PronunciationDictionary.fromLines(
-        sequenceOf("rain\tR EY1 N", "pain\tP EY1 N") +
-            (0 until 65).asSequence().map { index ->
-                "rhyme${'a' + index / 26}${'a' + index % 26}\tR EY1 N"
-            } + sequenceOf("wane\tW EY1 N", "night\tN AY1 T")
-    )
-
     @Test
-    fun perfectRhymeOutsideCappedPoolStillReceivesTierTwo() {
-        val crowded = crowdedRainDictionary()
-        val matches = ProsodyAnalyzer.findRhymes(
-            "rain", dictionary = crowded, wordFrequency = WordFrequency()
+    fun filterAndRankAdmitsOnlyTheRequestedRelation() {
+        val lines = listOf(
+            "The window glowed",
+            "Words I never wrote",
+            "Cold as stone",
+            "Everything burned red",
+            "Walking through the night"
         )
 
-        assertEquals(60, matches.perfect.size)
-        assertFalse("wane" in matches.perfect)
-        assertEquals(0, RhymeConstraint.rhymeTier("The lights wane", matches))
-        assertEquals(2, RhymeConstraint.rhymeTier("The lights wane", "rain", matches, crowded))
-        assertEquals(2, RhymeConstraint.rhymeTier("The lights wane!", "RAIN", crowded))
-        assertEquals(0, RhymeConstraint.rhymeTier("The dark night", "rain", matches, crowded))
-        assertEquals(12, RhymeConstraint.candidateEndWords("rain", RhymeType.PERFECT, dictionary = crowded).size)
+        assertEquals(
+            listOf("Words I never wrote"),
+            RhymeConstraint.filterAndRank(lines, "Down the road", RhymeType.NEAR, 2, dictionary)
+        )
+        assertEquals(
+            listOf("Cold as stone", "Everything burned red"),
+            RhymeConstraint.filterAndRank(lines, "Down the road", RhymeType.SLANT, 2, dictionary)
+        )
+        assertEquals(
+            listOf("The window glowed"),
+            RhymeConstraint.filterAndRank(lines, "Down the road", RhymeType.PERFECT, 2, dictionary)
+        )
     }
 
     @Test
-    fun pairwiseFallbackUsesAllPronunciationsFromTheSuppliedDictionary() {
+    fun nearRequestKeepsOnlyNearLinesFromAMixedResponse() {
+        // Perfect, near, slant, and non-rhyming endings, perfect first.
+        val lines = listOf(
+            "The lonely window showed",
+            "It glowed",
+            "Something that I never wrote",
+            "Cold as stone",
+            "Everything burned red",
+            "Walking through the night",
+            "I wrote"
+        )
+
+        // Closest syllable count to the three-syllable target first.
+        assertEquals(
+            listOf("I wrote", "Something that I never wrote"),
+            RhymeConstraint.filterAndRank(lines, "Down the road", RhymeType.NEAR, 6, dictionary)
+        )
+    }
+
+    @Test
+    fun slantRequestKeepsSlantLinesBehindSixPerfectAndNearOnes() {
+        val deviations = listOf(
+            "The window glowed", "The lantern showed", "Words I never wrote",
+            "It glowed", "It showed", "The note I wrote"
+        )
+        val slant = listOf("Cold as stone", "Everything burned red")
+
+        assertEquals(slant, RhymeConstraint.filterAndRank(deviations + slant, "Down the road", RhymeType.SLANT, 6, dictionary))
+    }
+
+    @Test
+    fun rhymeTiersNameEveryRelationTruthfully() {
+        assertEquals(2, RhymeConstraint.rhymeTier("The window glowed", "road", dictionary))
+        assertEquals(1, RhymeConstraint.rhymeTier("Words I never wrote", "road", dictionary))
+        assertEquals(3, RhymeConstraint.rhymeTier("Cold as stone", "road", dictionary))
+        assertEquals(3, RhymeConstraint.rhymeTier("Everything burned red", "road", dictionary))
+    }
+
+    @Test
+    fun bundledAlternateTargetPronunciationCanMakeAPerfectRhyme() {
+        assertEquals(2, bundled.pronunciations("abuse").size)
+        assertEquals(2, bundled.pronunciations("news").size)
+        assertEquals(1, bundled.pronunciations("blues").size)
+        assertEquals(2, RhymeConstraint.rhymeTier("The evening news", "abuse", bundled))
+        assertEquals(2, RhymeConstraint.rhymeTier("I sing the blues", "abuse", bundled))
+        assertEquals(2, RhymeConstraint.rhymeTier("A little juice", "abuse", bundled))
+        assertEquals(0, RhymeConstraint.rhymeTier("The long night", "abuse", bundled))
+        assertEquals(0, RhymeConstraint.rhymeTier("The evening news", "unknownzz", bundled))
+        assertEquals(0, RhymeConstraint.rhymeTier("My abuse", "abuse", bundled))
+        assertNull(ProsodyAnalyzer.rhymeTail("the", bundled))
+    }
+
+    @Test
+    fun alternateTargetAndCandidatePronunciationsPreserveNearAndSlant() {
         val variants = PronunciationDictionary.fromLines(sequenceOf(
-            "read\tR IY1 D|R EH1 D",
-            "red\tR EH1 D",
-            "reed\tR IY1 D",
-            "rain\tR EY1 N",
-            "wane\tW AH1 N"
+            "anchor\tR OW1 D|R AY1 M",
+            "match\tK AY1 M",
+            "alternate\tK EH1 P|K AY1 M",
+            "nearword\tN OW1 T",
+            "slantword\tS EH1 D",
+            "miss\tM UW1 P"
         ))
-
-        assertEquals(2, RhymeConstraint.rhymeTier("Paint it red", "read", RhymeMatches.EMPTY, variants))
-        assertEquals(2, RhymeConstraint.rhymeTier("Words I read", "red", RhymeMatches.EMPTY, variants))
-        assertEquals(2, RhymeConstraint.rhymeTier("A broken reed", "read", RhymeMatches.EMPTY, variants))
-        assertEquals(0, RhymeConstraint.rhymeTier("The lights wane", "rain", RhymeMatches.EMPTY, variants))
+        assertEquals(RhymeType.PERFECT, ProsodyAnalyzer.rhymeRelation("match", "anchor", variants))
+        assertEquals(RhymeType.PERFECT, ProsodyAnalyzer.rhymeRelation("alternate", "anchor", variants))
+        assertEquals(RhymeType.NEAR, ProsodyAnalyzer.rhymeRelation("nearword", "anchor", variants))
+        assertEquals(RhymeType.SLANT, ProsodyAnalyzer.rhymeRelation("slantword", "anchor", variants))
+        assertNull(ProsodyAnalyzer.rhymeRelation("miss", "anchor", variants))
+        assertNull(ProsodyAnalyzer.rhymeRelation("anchor", "anchor", variants))
     }
 
     @Test
-    fun alternatePronunciationPerfectRhymeOverridesCachedNearTier() {
-        // Pronunciations from the bundled CMU dictionary; abuse has noun/verb variants.
-        val variants = PronunciationDictionary.fromLines(sequenceOf(
-            "abuse\tAH0 B Y UW1 S|AH0 B Y UW1 Z",
-            "news\tN UW1 Z|N Y UW1 Z",
-            "blues\tB L UW1 Z",
-            "goose\tG UW1 S",
-            "truth\tT R UW1 TH"
-        ))
-        val matches = ProsodyAnalyzer.findRhymes("abuse", dictionary = variants)
+    fun filterAndRankClassifiesReturnedEndingsOutsidePromptCap() {
+        val words = (0 until 61).map { "zz" + "a".repeat(it + 2) }
+        val crowded = PronunciationDictionary.fromLines(
+            sequenceOf("anchor\tR AY1 M") + words.asSequence().map { "$it\tR AY1 M" }
+        )
+        val capped = ProsodyAnalyzer.findRhymes("anchor", dictionary = crowded, wordFrequency = WordFrequency()).perfect.toSet()
+        val outsideCap = words.first { it !in capped }
+        val line = "Beyond the $outsideCap"
 
-        for (word in listOf("news", "blues")) {
-            // Perfect against the /z/ pronunciation, so never offered as near.
-            assertFalse(word in matches.near)
-            assertEquals(0, RhymeConstraint.rhymeTier(word, matches))
-            assertEquals(2, RhymeConstraint.rhymeTier(word, "abuse", matches, variants))
-            assertEquals(2, RhymeConstraint.rhymeTier(word, "abuse", RhymeMatches.EMPTY, variants))
-        }
-        assertEquals(2, RhymeConstraint.rhymeTier("goose", matches))
-        assertEquals(2, RhymeConstraint.rhymeTier("goose", "abuse", matches, variants))
-        assertEquals(1, RhymeConstraint.rhymeTier("truth", matches))
-        assertEquals(1, RhymeConstraint.rhymeTier("truth", "abuse", matches, variants))
-        assertEquals(0, RhymeConstraint.rhymeTier("truth", "abuse", RhymeMatches.EMPTY, variants))
+        assertEquals(2, RhymeConstraint.rhymeTier(line, "anchor", crowded))
+        assertEquals(listOf(line), RhymeConstraint.filterAndRank(listOf(line), "Find the anchor", RhymeType.PERFECT, 1, crowded))
     }
 
     @Test
-    fun pairwiseFallbackDoesNotCertifyTargetsStopwordsOrUnknownSpellings() {
-        val guarded = PronunciationDictionary.fromLines(sequenceOf(
-            "rain\tR EY1 N", "wane\tW EY1 N", "glow\tG L OW1", "so\tS OW1"
-        ))
+    fun filterAndRankPrefersRhymingLinesRegardlessOfOrder() {
+        val rhyming = "We chase the fading light"
+        val nonRhyming = "Nothing here can save us"
 
-        assertEquals(0, RhymeConstraint.rhymeTier("The rain", "rain", RhymeMatches.EMPTY, guarded))
-        assertEquals(0, RhymeConstraint.rhymeTier("Even so", "glow", RhymeMatches.EMPTY, guarded))
-        assertEquals(0, RhymeConstraint.rhymeTier("A soft glow", "so", RhymeMatches.EMPTY, guarded))
-        assertEquals(0, RhymeConstraint.rhymeTier("Unknown spane", "rain", RhymeMatches.EMPTY, guarded))
-        assertEquals(0, RhymeConstraint.rhymeTier("The lights wane", "spane", RhymeMatches.EMPTY, guarded))
-        assertEquals(0, RhymeConstraint.rhymeTier("Unknown blane", "spane", RhymeMatches.EMPTY, guarded))
-        assertEquals(0, RhymeConstraint.rhymeTier("The lights wane", "rain", RhymeMatches.EMPTY, dictionary))
+        assertEquals(listOf(rhyming), RhymeConstraint.filterAndRank(listOf(nonRhyming, rhyming), "We own the night", RhymeType.PERFECT, 1, bundled))
+        assertEquals(listOf(rhyming), RhymeConstraint.filterAndRank(listOf(rhyming, nonRhyming), "We own the night", RhymeType.PERFECT, 1, bundled))
     }
 
     @Test
-    fun targetAwareBatchTierPreservesExistingNearAndMissClassifications() {
-        val matches = ProsodyAnalyzer.findRhymes("road", dictionary = dictionary)
-
-        assertEquals(1, RhymeConstraint.rhymeTier("Words I never wrote", "road", matches, dictionary))
-        assertEquals(0, RhymeConstraint.rhymeTier("Into the night", "road", matches, dictionary))
-        assertEquals(0, RhymeConstraint.rhymeTier("The sky rains", "road", RhymeMatches.EMPTY, dictionary))
-    }
-
-    @Test
-    fun rankingDoesNotDemotePerfectRhymesOutsideTheDisplayPool() {
-        val crowded = crowdedRainDictionary()
-        val lines = listOf("My lonely journey starts to wane", "My lonely journey brings me pain")
-
-        for (type in RhymeType.entries) {
-            assertEquals(
-                listOf(lines.first()),
-                RhymeConstraint.filterAndRank(lines, "My lonely journey ends in rain", type, 1, crowded)
-            )
-        }
-    }
-
-    @Test
-    fun filterAndRankPrefersPerfectRhymeRegardlessOfInputOrder() {
-        val lines = listOf("Walking in the night", "The window glowed")
-
+    fun filterAndRankRejectsKnownNonRhymingLines() {
+        val rhyming = "Out beyond the light"
         val ranked = RhymeConstraint.filterAndRank(
-            lines = lines,
-            targetLine = "Yellow lights on a midnight road",
-            rhymeType = RhymeType.PERFECT,
-            want = 1,
-            dictionary = dictionary
+            listOf("Nothing here can save us", rhyming, "The morning comes too soon"),
+            "We own the night", RhymeType.PERFECT, 3, bundled
         )
 
-        assertEquals(listOf("The window glowed"), ranked)
+        assertEquals(listOf(rhyming), ranked)
+    }
+
+    @Test
+    fun filterAndRankReturnsEmptyWhenKnownTargetHasNoMatchingSuggestion() {
+        val lines = listOf("The morning comes too soon", "Nothing here can save us")
+
+        assertTrue(RhymeConstraint.filterAndRank(lines, "We own the night", RhymeType.PERFECT, 2, bundled).isEmpty())
+        // No rhyme required: an unknown target word keeps arrival order.
+        assertEquals(listOf(lines[0]), RhymeConstraint.filterAndRank(lines, "Surrounded by the zzzqxv", RhymeType.PERFECT, 1, bundled))
     }
 
     @Test
     fun filterAndRankBreaksTierTiesBySyllableDistance() {
-        // Both end in perfect rhymes; the closer syllable count should win
-        // even though it arrives later in the input.
-        val lines = listOf("The lonely window showed", "It glowed")
-
         val ranked = RhymeConstraint.filterAndRank(
-            lines = lines,
-            targetLine = "Down the road",
-            rhymeType = RhymeType.PERFECT,
-            want = 2,
-            dictionary = dictionary
+            listOf("The lonely window showed", "It glowed"), "Down the road", RhymeType.PERFECT, 2, dictionary
         )
 
         assertEquals(listOf("It glowed", "The lonely window showed"), ranked)
     }
 
     @Test
-    fun filterAndRankTopsUpWithNonRhymingLinesWhenTooFewPass() {
-        val lines = listOf("Walking in the night", "The window glowed")
-
-        val ranked = RhymeConstraint.filterAndRank(
-            lines = lines,
-            targetLine = "Yellow lights on a midnight road",
-            rhymeType = RhymeType.PERFECT,
-            want = 2,
-            dictionary = dictionary
-        )
-
-        assertEquals(listOf("The window glowed", "Walking in the night"), ranked)
-    }
-
-    @Test
-    fun filterAndRankNeverReturnsEmptyForNonEmptyInput() {
-        val lines = listOf("Counting every breath", "Holding to the wheel")
-
-        val ranked = RhymeConstraint.filterAndRank(
-            lines = lines,
-            targetLine = "Yellow lights on a midnight road",
-            rhymeType = RhymeType.PERFECT,
-            want = 2,
-            dictionary = dictionary
-        )
-
-        assertEquals(lines, ranked)
-    }
-
-    @Test
     fun filterAndRankDedupesByNormalizedText() {
-        val lines = listOf("The window glowed", "the window GLOWED!!", "Cold as stone")
+        val line = "We chase the light"
 
-        val ranked = RhymeConstraint.filterAndRank(
-            lines = lines,
-            targetLine = "Yellow lights on a midnight road",
-            rhymeType = RhymeType.PERFECT,
-            want = 3,
-            dictionary = dictionary
+        assertEquals(
+            listOf(line),
+            RhymeConstraint.filterAndRank(listOf(line, "WE CHASE THE LIGHT!!"), "We own the night", RhymeType.PERFECT, 6, bundled)
         )
+    }
 
-        assertEquals(listOf("The window glowed", "Cold as stone"), ranked)
+    @Test
+    fun rhymeLineFilterMirrorsThePromptGate() {
+        assertNotNull(RhymeLineFilter.create("We own the night", RhymeType.PERFECT, bundled))
+        assertNull(RhymeLineFilter.create(null, RhymeType.PERFECT, bundled))
+        assertNull(RhymeLineFilter.create("  ", RhymeType.PERFECT, bundled))
+        assertNull(RhymeLineFilter.create("Surrounded by the zzzqxv", RhymeType.PERFECT, bundled))
+        // No near rhyme in the fixture for "rain", so a Near request is not filtered.
+        assertNull(RhymeLineFilter.create("Out in the rain", RhymeType.NEAR, dictionary))
     }
 }
