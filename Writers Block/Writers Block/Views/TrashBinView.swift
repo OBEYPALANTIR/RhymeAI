@@ -414,6 +414,9 @@ struct TrashBinView: View {
             if selected {
                 Image(systemName: "checkmark")
                     .font(.caption.weight(.bold))
+                    // The circle is a fixed 26pt, so the tick must not
+                    // outgrow it at accessibility text sizes.
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                     .foregroundStyle(appearance.palette.onAction)
                     .transition(.scale(scale: 0.72).combined(with: .opacity))
             }
