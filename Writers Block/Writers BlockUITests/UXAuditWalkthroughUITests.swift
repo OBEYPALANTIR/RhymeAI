@@ -8,8 +8,10 @@ import UIKit
 /// Opt in with `TEST_RUNNER_RUN_UX_AUDIT=1`. Optional comma-separated filters:
 /// `TEST_RUNNER_UX_AUDIT_APPEARANCES` (ink,paper,graphite),
 /// `TEST_RUNNER_UX_AUDIT_SIZES` (default,ax3),
-/// `TEST_RUNNER_UX_AUDIT_ORIENTATIONS` (portrait,landscape) and
-/// `TEST_RUNNER_UX_AUDIT_SCENES` (scene names below).
+/// `TEST_RUNNER_UX_AUDIT_ORIENTATIONS` (portrait,landscape),
+/// `TEST_RUNNER_UX_AUDIT_SCENES` (scene names below) and
+/// `TEST_RUNNER_UX_AUDIT_ANALYSIS_STYLE` (color or inkMarks; the stored
+/// choice is used when it is not set).
 /// Attachments are named `<appearance>__<size>__<orientation>__<nn>-<screen>`.
 /// Landscape attachments are the unrotated screen buffer; rotate them a
 /// quarter turn anticlockwise when exporting.
@@ -233,6 +235,12 @@ final class UXAuditWalkthroughUITests: XCTestCase {
             return
         }
         shot(app, "assistant-idle-local")
+        // The disclosure remembers its state, so it is put back afterwards.
+        let stress = app.buttons["targetLineStressDisclosure"]
+        if stress.waitForExistence(timeout: 2), stress.label == "Show stress pattern", tap(stress, "Show stress pattern") {
+            shot(app, "assistant-stress-expanded")
+            tap(stress, "Hide stress pattern")
+        }
         let scroll = app.scrollViews["assistantScrollView"]
         if tap(app.buttons["Expand rhyme options"], "Expand rhyme options", scrolling: scroll) {
             shot(app, "assistant-rhyme-options")
@@ -245,6 +253,20 @@ final class UXAuditWalkthroughUITests: XCTestCase {
             tap(app.buttons["Done"], "help Done")
         }
         app.terminate()
+
+        // The theme field only accepts input while Whole Song Context is off.
+        let typing = launch([
+            "--ui-test-seed-prosody-song", "--ui-test-open-assistant",
+            "-editor.useWholeSongContext", "NO",
+        ])
+        let theme = typing.textViews["What is this song about?"].exists
+            ? typing.textViews["What is this song about?"]
+            : typing.textFields["What is this song about?"]
+        if tap(theme, "theme field", timeout: 6) {
+            theme.typeText("Leaving town")
+            shot(typing, "assistant-keyboard")
+        }
+        typing.terminate()
     }
 
     @MainActor
@@ -339,12 +361,17 @@ final class UXAuditWalkthroughUITests: XCTestCase {
         if tap(inspector.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch, "New Song") {
             let editor = inspector.textViews["lyricsEditor"]
             if tap(editor, "lyrics editor") {
-                editor.typeText("yellow")
+                editor.typeText("night")
                 editor.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 24, dy: 14)).doubleTap()
                 if inspector.buttons["Look up word"].waitForExistence(timeout: 4) {
                     shot(inspector, "rewrite-chip-bar-keyboard")
                     tap(inspector.buttons["Look up word"], "Look up word")
                     _ = inspector.staticTexts["Word inspector"].waitForExistence(timeout: 5)
+                    // The rhyme dictionary loads off the main thread; the
+                    // result chips are the point of this capture.
+                    if !inspector.buttons["light"].waitForExistence(timeout: 20) {
+                        note("MISSING inspector rhyme chips")
+                    }
                     shot(inspector, "word-inspector", settle: 2)
                 } else {
                     note("MISSING Look up word (\(variant))")
@@ -412,6 +439,25 @@ final class UXAuditWalkthroughUITests: XCTestCase {
                 }
             }
         }
+        // A typed key is the one setting that waits for Save. The audit
+        // discards it so no key reaches the simulator's Keychain.
+        let keyField = app.secureTextFields["API Key"]
+        if tap(keyField, "API key field", scrolling: scroll) {
+            keyField.typeText("ux-audit-placeholder")
+            shot(app, "settings-unsaved-key")
+            tap(app.buttons["Done"], "settings Done (unsaved key)")
+            if app.buttons["Discard Changes"].waitForExistence(timeout: 3) {
+                shot(app, "settings-unsaved-key-dialog")
+                tap(app.buttons["Discard Changes"], "Discard Changes")
+            } else {
+                note("MISSING unsaved key dialog")
+            }
+            guard tap(app.buttons["settingsButton"], "Settings (after discard)", timeout: 6),
+                  app.navigationBars["Settings"].waitForExistence(timeout: 5) else {
+                app.terminate()
+                return
+            }
+        }
         if tap(app.buttons["Editor"], "Editor tab") {
             shot(app, "settings-editor")
             if tap(app.buttons["Whole Song Context help"], "editor help") {
@@ -453,6 +499,9 @@ final class UXAuditWalkthroughUITests: XCTestCase {
     private func launch(_ arguments: [String] = [], environment: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
         var launchArguments = ["--ui-test-in-memory-store", "-appAppearanceStyle", appearance] + arguments
+        if let style = ProcessInfo.processInfo.environment["UX_AUDIT_ANALYSIS_STYLE"], !style.isEmpty {
+            launchArguments += ["-analysisPresentationStyle", style]
+        }
         if size == "ax3" {
             launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"]
         }
@@ -482,8 +531,14 @@ final class UXAuditWalkthroughUITests: XCTestCase {
             return false
         }
         if let scrollView, scrollView.exists {
-            for _ in 0..<8 where !element.isHittable {
-                scrollView.swipeUp(velocity: .slow)
+            // A third of the visible height per step: a full swipe can carry
+            // a control straight past the visible part of a short sheet.
+            for _ in 0..<16 where !element.isHittable {
+                let start = scrollView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+                start.press(
+                    forDuration: 0.05,
+                    thenDragTo: start.withOffset(CGVector(dx: 0, dy: -scrollView.frame.height / 3))
+                )
             }
         }
         let deadline = Date().addingTimeInterval(hittableWithin)

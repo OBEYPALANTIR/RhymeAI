@@ -11,13 +11,13 @@ struct AnalysisStyleSettingsSection: View {
                 .foregroundStyle(appearance.palette.secondaryInk)
                 .textCase(.uppercase)
 
-            Picker("Analysis Style", selection: presentation) {
-                ForEach(AnalysisPresentationStyle.allCases) { style in
-                    Text(style.displayName).tag(style)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("analysisStylePicker")
+            RhymeSegmentedControl(
+                options: AnalysisPresentationStyle.allCases,
+                selection: presentation,
+                accessibilityIdentifier: "analysisStylePicker",
+                label: "Analysis Style",
+                title: \.displayName
+            )
 
             AnalysisStylePreview(style: presentation.wrappedValue)
 
@@ -48,8 +48,10 @@ private struct AnalysisStylePreview: View {
             syllablesEnabled: true
         )
         .environment(\.analysisPresentationStyle, style)
+        // A sample, not a control: it sits on the group card without a
+        // second border of its own.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(RhymeAITokens.Spacing.sm)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
+        .padding(.vertical, RhymeAITokens.Spacing.xxs)
+        .accessibilityLabel("Sample lyric in the \(style.displayName) style")
     }
 }

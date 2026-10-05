@@ -188,7 +188,9 @@ private struct FlowChips: View {
     let onTap: (String) -> Void
 
     var body: some View {
-        FlowLayout(spacing: 6) {
+        // Each chip's 44pt hit frame already separates the rows, so the
+        // layout adds no vertical gap of its own.
+        FlowLayout(spacing: 6, rowSpacing: 0) {
             ForEach(items, id: \.self) { item in
                 ChipButton(label: item, onTap: { onTap(item) })
             }
@@ -202,32 +204,66 @@ private struct ChipButton: View {
     let label: String
     let onTap: () -> Void
     @State private var copyFlash = false
+    @State private var longPressed = false
 
     var body: some View {
-        Text(label)
-            .font(.callout)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.pill, style: .continuous)
-                    .fill(Color.secondary.opacity(0.12))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.pill, style: .continuous)
-                    .stroke(copyFlash ? appearance.palette.success : appearance.palette.outline, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
-            .onTapGesture { onTap() }
-            .accessibilityAddTraits(.isButton)
-            .accessibilityHint("Replaces the selected word")
-            .onLongPressGesture(minimumDuration: 0.4) {
-                UIPasteboard.general.string = label
-                let generator = UIImpactFeedbackGenerator(style: .light)
-                generator.impactOccurred()
-                copyFlash = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { copyFlash = false }
+        Button {
+            // A long press copies; lifting the finger afterwards must not
+            // also replace the word.
+            if longPressed {
+                longPressed = false
+            } else {
+                onTap()
             }
-            .rhymeAnimation(RhymeAITokens.Motion.feedback, value: copyFlash)
+        } label: {
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(appearance.palette.primaryInk)
+                .padding(.horizontal, RhymeAITokens.Spacing.sm)
+                .padding(.vertical, Self.verticalPadding)
+                .background(
+                    RoundedRectangle(cornerRadius: RhymeAITokens.Radius.pill, style: .continuous)
+                        .fill(Color.secondary.opacity(0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: RhymeAITokens.Radius.pill, style: .continuous)
+                        .stroke(copyFlash ? appearance.palette.success : appearance.palette.outline, lineWidth: 1)
+                )
+                // The chip keeps its drawn height; the tappable area grows to
+                // the touch minimum around it. The press style makes the whole
+                // frame the hit shape. The small outer padding keeps rows
+                // apart once large text makes a chip taller than that minimum.
+                .padding(.vertical, RhymeAITokens.Spacing.xxs)
+                .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+        }
+        // The action does not run when the finger lifts outside the chip, so
+        // the suppression is cleared when the press ends, one turn later so an
+        // action for this same touch still sees it.
+        .buttonStyle(RhymeAIPressButtonStyle(onPressingChanged: { isPressed in
+            if !isPressed {
+                DispatchQueue.main.async { longPressed = false }
+            }
+        }))
+        .accessibilityLabel(label)
+        .accessibilityHint("Replaces the selected word")
+        .accessibilityAction(named: "Copy") { copy() }
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+                longPressed = true
+                copy()
+            }
+        )
+        .rhymeAnimation(RhymeAITokens.Motion.feedback, value: copyFlash)
+    }
+
+    private static let verticalPadding: CGFloat = 6
+
+    private func copy() {
+        UIPasteboard.general.string = label
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        copyFlash = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { copyFlash = false }
     }
 }
 
@@ -256,6 +292,8 @@ private struct StressDots: View {
 
 private struct FlowLayout: Layout {
     var spacing: CGFloat = 8
+    /// Gap between rows; defaults to `spacing`.
+    var rowSpacing: CGFloat?
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let maxWidth = proposal.width ?? .infinity
@@ -268,7 +306,7 @@ private struct FlowLayout: Layout {
             let size = subview.sizeThatFits(.unspecified)
             if !rows[rows.count - 1].isEmpty, currentRowWidth + spacing + size.width > maxWidth {
                 rows.append([])
-                totalHeight += currentRowHeight + spacing
+                totalHeight += currentRowHeight + (rowSpacing ?? spacing)
                 currentRowWidth = 0
                 currentRowHeight = 0
             }
@@ -291,7 +329,7 @@ private struct FlowLayout: Layout {
         for subview in subviews {
             let size = subview.sizeThatFits(.unspecified)
             if !firstInRow, x + spacing + size.width > bounds.maxX {
-                y += rowHeight + spacing
+                y += rowHeight + (rowSpacing ?? spacing)
                 x = bounds.minX
                 rowHeight = 0
                 firstInRow = true

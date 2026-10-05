@@ -16,13 +16,13 @@ struct SettingsTabPicker: View {
             options: SettingsTab.allCases,
             selection: $selection,
             accessibilityIdentifier: "settingsTabPicker",
+            label: "Settings section",
             title: \.rawValue
         )
     }
 }
 
 struct RhymeSegmentedControl<Option: Hashable>: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var selectionAnimation
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -30,25 +30,56 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
     let options: [Option]
     @Binding var selection: Option
     let accessibilityIdentifier: String
+    /// Spoken name of the whole control, e.g. "Appearance".
+    let label: String
     let title: (Option) -> String
 
     var body: some View {
         // More than two options cannot share a row at accessibility sizes
         // without truncating ("Gemi…", "Ope…", "Clau…"), so they stack.
-        let layout = dynamicTypeSize.isAccessibilitySize && options.count > 2
+        let stacked = dynamicTypeSize.isAccessibilitySize && options.count > 2
+        let layout = stacked
             ? AnyLayout(VStackLayout(spacing: RhymeAITokens.Spacing.xxs))
             : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.xxs))
-        layout { segments }
-        .padding(RhymeAITokens.Spacing.xxs)
-        .background(
-            appearance.palette.raisedSurface,
-            in: RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md, style: .continuous)
-                .strokeBorder(appearance.palette.outline, lineWidth: 1)
+        let control = layout { segments }
+            .padding(RhymeAITokens.Spacing.xxs)
+            .background(
+                appearance.palette.raisedSurface,
+                in: RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md, style: .continuous)
+                    .strokeBorder(appearance.palette.outline, lineWidth: 1)
+            }
+            // Only the sliding selection animates. The choice itself is
+            // applied at once, so a control that switches the whole
+            // appearance does not cross-fade every surface in the app.
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: selection)
+
+        if stacked {
+            // Stacked segments no longer line up with a one-row segmented
+            // control, so each button speaks for itself with its selected
+            // trait.
+            control
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(label)
+                .accessibilityIdentifier(accessibilityIdentifier)
+        } else {
+            // Assistive technology and UI tests get the system segmented
+            // control: one named group whose segments report selection and
+            // position ("2 of 3"), laid out over the equal-width segments
+            // drawn above.
+            control
+                .accessibilityRepresentation {
+                    Picker(label, selection: $selection) {
+                        ForEach(options, id: \.self) { option in
+                            Text(title(option)).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier(accessibilityIdentifier)
+                }
         }
-        .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     @ViewBuilder
@@ -56,9 +87,7 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
         ForEach(options, id: \.self) { option in
             let isSelected = selection == option
             Button {
-                withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
-                    selection = option
-                }
+                selection = option
             } label: {
                 Text(title(option))
                     .font(.caption.weight(isSelected ? .semibold : .medium))
@@ -86,6 +115,9 @@ struct SettingsSaveBar: View {
     @Environment(\.appAppearanceStyle) private var appearance
 
     let saved: Bool
+    /// Only API keys wait for Save, so the button is live only while a typed
+    /// key differs from the stored one.
+    let hasChanges: Bool
     let action: () -> Void
 
     var body: some View {
@@ -98,9 +130,11 @@ struct SettingsSaveBar: View {
             .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
             .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
+            .opacity(saved || hasChanges ? 1 : 0.45)
         }
         .buttonStyle(.rhymePress)
-        .disabled(saved)
+        .disabled(saved || !hasChanges)
+        .accessibilityHint(hasChanges ? "Saves your API key" : "Nothing to save. Settings apply as you change them")
         .accessibilityIdentifier("saveSettingsButton")
     }
 }
@@ -218,7 +252,6 @@ struct SettingsLocalModelSection: View {
                 .font(.title2)
                 .foregroundStyle(appearance.palette.action)
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .teal.opacity(0.14), fallbackOpacity: 0.08)
 
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                 Text("Apple Foundation Models")
@@ -232,7 +265,7 @@ struct SettingsLocalModelSection: View {
 
             Spacer(minLength: 0)
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
@@ -250,10 +283,11 @@ struct SettingsLocalModelSection: View {
                     }
                 ),
                 accessibilityIdentifier: "ggufEnginePicker",
+                label: "On-Device Engine",
                 title: \.displayName
             )
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
@@ -284,7 +318,6 @@ struct SettingsLocalModelSection: View {
                         .font(.title3)
                         .foregroundStyle(isSelected ? appearance.palette.success : appearance.palette.action)
                         .frame(width: 36, height: 36)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.pill, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(option.title)
@@ -325,7 +358,7 @@ struct SettingsLocalModelSection: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(RhymeAITokens.Spacing.md)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
         }
         .buttonStyle(.rhymePress)
         .disabled(ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isPausing ||
@@ -358,7 +391,7 @@ struct SettingsEditorSection: View {
             settingsToggleRow("Color Rhymes", help: .colorRhymes, isOn: binding(viewModel.isRhymeHighlightEnabled, setter: viewModel.saveIsRhymeHighlightEnabled))
             settingsToggleRow("Beat Grid", help: .beatGrid, isOn: binding(viewModel.isBeatGridEnabled, setter: viewModel.saveIsBeatGridEnabled))
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
         .accessibilityIdentifier("editorSettingsSection")
     }
@@ -433,7 +466,7 @@ struct SettingsCloudBackupSection: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
         .onDisappear {
             passphraseEntry = ""
@@ -454,8 +487,9 @@ struct SettingsCloudBackupSection: View {
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .font(.system(.body, design: .rounded))
-            .padding(RhymeAITokens.Spacing.md)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xxl, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .padding(.horizontal, RhymeAITokens.Spacing.sm)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
             .accessibilityIdentifier("cloudBackupPassphrase")
 
             HStack(spacing: RhymeAITokens.Spacing.sm) {
