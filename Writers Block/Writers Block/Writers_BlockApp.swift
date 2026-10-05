@@ -103,8 +103,6 @@ struct Writers_BlockApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppAppearanceStyle.storageKey)
     private var appearanceRawValue = AppAppearanceStyle.ink.rawValue
-    @AppStorage(AnalysisPresentationStyle.storageKey)
-    private var analysisPresentationRawValue = AnalysisPresentationStyle.color.rawValue
     @StateObject private var viewModel = EditorViewModel(backupService: BackupService.shared)
     @StateObject private var persistenceState: AppPersistenceState
     @StateObject private var ggufDownloadManager = GGUFDownloadManager.shared
@@ -125,18 +123,8 @@ struct Writers_BlockApp: App {
         )
     }
 
-    private var analysisPresentation: AnalysisPresentationStyle {
-        AnalysisPresentationStyle.resolve(analysisPresentationRawValue)
-    }
-
-    private var analysisPresentationBinding: Binding<AnalysisPresentationStyle> {
-        Binding(
-            get: { analysisPresentation },
-            set: { analysisPresentationRawValue = $0.rawValue }
-        )
-    }
-
     init() {
+        RetiredPreferences.remove()
         let bootstrap = Self.makeModelContainer()
         _persistenceState = StateObject(
             wrappedValue: AppPersistenceState(
@@ -174,8 +162,6 @@ struct Writers_BlockApp: App {
             .environmentObject(ggufDownloadManager)
             .environment(\.appAppearanceStyle, appearance)
             .environment(\.appAppearanceBinding, appearanceBinding)
-            .environment(\.analysisPresentationStyle, analysisPresentation)
-            .environment(\.analysisPresentationBinding, analysisPresentationBinding)
             .preferredColorScheme(appearance.preferredColorScheme)
             .tint(appearance.palette.action)
             .modifier(UITestDynamicTypeSizeModifier())
@@ -185,6 +171,12 @@ struct Writers_BlockApp: App {
             .task {
                 UITestFlags.seedCustomGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
+            }
+            .task {
+                // After the first frames, so launch is not competing with it.
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                await RhymeIndex.warmUpInBackground()
             }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {

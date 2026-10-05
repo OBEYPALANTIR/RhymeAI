@@ -79,30 +79,6 @@ final class AppAppearanceUITests: XCTestCase {
         attachScreenshot(app, name: "appearance-graphite-relaunch")
     }
 
-    @MainActor
-    func testAnalysisStyleAppliesImmediatelyAndPersists() throws {
-        let app = appearanceTestApp()
-        app.launch()
-        openSettings(in: app)
-
-        let picker = app.segmentedControls["analysisStylePicker"]
-        XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        picker.buttons["Color"].tap()
-        XCTAssertTrue(picker.buttons["Color"].isSelected)
-        picker.buttons["Ink Marks"].tap()
-        XCTAssertTrue(picker.buttons["Ink Marks"].isSelected)
-        XCTAssertTrue(app.staticTexts["Solid, dashed, dotted, and dash-dot lines identify rhyme families."].exists)
-
-        app.terminate()
-        app.launch()
-        openSettings(in: app)
-        let relaunchedPicker = app.segmentedControls["analysisStylePicker"]
-        XCTAssertTrue(relaunchedPicker.buttons["Ink Marks"].isSelected)
-
-        relaunchedPicker.buttons["Color"].tap()
-        XCTAssertTrue(relaunchedPicker.buttons["Color"].isSelected)
-    }
-
     private func appearanceTestApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [

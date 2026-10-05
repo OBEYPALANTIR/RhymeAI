@@ -16,6 +16,8 @@ struct WordInspectorSheetView: View {
     let onOpenSettings: () -> Void
     let onDismiss: () -> Void
 
+    @State private var lookupStarted = Date()
+
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             header
@@ -24,26 +26,39 @@ struct WordInspectorSheetView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
-                    ResultsSection(
-                        title: "Perfect rhymes",
-                        empty: "No perfect rhymes in dictionary.",
-                        items: matches?.perfect ?? [],
-                        onTap: onReplace
-                    )
+                    switch RhymeResultPresentation.state(for: matches) {
+                    case .finding:
+                        HStack(spacing: RhymeAITokens.Spacing.sm) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(RhymeResultPresentation.findingMessage)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("wordInspectorFindingRhymes")
+                    case .results(let matches):
+                        ResultsSection(
+                            title: "Perfect rhymes",
+                            empty: "No perfect rhymes in dictionary.",
+                            items: matches.perfect,
+                            onTap: onReplace
+                        )
 
-                    ResultsSection(
-                        title: "Multi-syllabic rhymes",
-                        empty: "No multi-syllabic matches.",
-                        items: matches?.multi ?? [],
-                        onTap: onReplace
-                    )
+                        ResultsSection(
+                            title: "Multi-syllabic rhymes",
+                            empty: "No multi-syllabic matches.",
+                            items: matches.multi,
+                            onTap: onReplace
+                        )
 
-                    ResultsSection(
-                        title: "Near rhymes",
-                        empty: "No near rhymes found.",
-                        items: matches?.near ?? [],
-                        onTap: onReplace
-                    )
+                        ResultsSection(
+                            title: "Near rhymes",
+                            empty: "No near rhymes found.",
+                            items: matches.near,
+                            onTap: onReplace
+                        )
+                    }
 
                     synonymsSection
                 }
@@ -57,6 +72,16 @@ struct WordInspectorSheetView: View {
         // floating buttons show through it as dark smudges.
         .background(AppWritingBackground())
         .accessibilityIdentifier("wordInspectorSheet")
+        .onAppear { lookupStarted = Date() }
+        .onChange(of: word) { lookupStarted = Date() }
+        .onChange(of: matches) { _, matches in
+            guard let matches,
+                  let message = RhymeResultPresentation.announcement(
+                      for: matches,
+                      waited: Date().timeIntervalSince(lookupStarted)
+                  ) else { return }
+            AccessibilityNotification.Announcement(message).post()
+        }
     }
 
     @ViewBuilder

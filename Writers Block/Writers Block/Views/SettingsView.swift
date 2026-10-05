@@ -118,7 +118,6 @@ struct SettingsView: View {
         case .general:
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.lg) {
                 AppearanceSettingsSection()
-                AnalysisStyleSettingsSection()
                 providerSection
                 providerSpecificSection
                 modelSection

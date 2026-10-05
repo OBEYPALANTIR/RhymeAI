@@ -3,6 +3,30 @@ nonisolated enum SynonymRecoveryAction: Equatable, Sendable {
     case openSettings
 }
 
+/// What the inspector's rhyme sections show. A lookup that is still running
+/// (no matches yet) is not the same as a finished lookup that found nothing:
+/// the first lookup after launch can wait seconds for the rhyme index.
+nonisolated enum RhymeResultPresentation {
+    enum State: Equatable {
+        case finding
+        case results(RhymeMatches)
+    }
+
+    static let findingMessage = "Finding rhymes…"
+
+    static func state(for matches: RhymeMatches?) -> State {
+        matches.map(State.results) ?? .finding
+    }
+
+    /// Spoken when results replace the finding state. Lookups that finish
+    /// before a listener could have heard "Finding rhymes" stay silent.
+    static func announcement(for matches: RhymeMatches, waited: Double) -> String? {
+        guard waited >= 1 else { return nil }
+        let count = matches.perfect.count + matches.multi.count + matches.near.count
+        return count == 0 ? "No rhymes found" : "Rhymes loaded"
+    }
+}
+
 nonisolated enum SynonymResultPresentation {
     static func recoveryAction(resultCount: Int, error: Error?) -> SynonymRecoveryAction? {
         guard let error else { return nil }

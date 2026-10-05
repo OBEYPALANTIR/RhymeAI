@@ -8,10 +8,8 @@ import UIKit
 /// Opt in with `TEST_RUNNER_RUN_UX_AUDIT=1`. Optional comma-separated filters:
 /// `TEST_RUNNER_UX_AUDIT_APPEARANCES` (ink,paper,graphite),
 /// `TEST_RUNNER_UX_AUDIT_SIZES` (default,ax3),
-/// `TEST_RUNNER_UX_AUDIT_ORIENTATIONS` (portrait,landscape),
-/// `TEST_RUNNER_UX_AUDIT_SCENES` (scene names below) and
-/// `TEST_RUNNER_UX_AUDIT_ANALYSIS_STYLE` (color or inkMarks; the stored
-/// choice is used when it is not set).
+/// `TEST_RUNNER_UX_AUDIT_ORIENTATIONS` (portrait,landscape) and
+/// `TEST_RUNNER_UX_AUDIT_SCENES` (scene names below).
 /// Attachments are named `<appearance>__<size>__<orientation>__<nn>-<screen>`.
 /// Landscape attachments are the unrotated screen buffer; rotate them a
 /// quarter turn anticlockwise when exporting.
@@ -499,9 +497,6 @@ final class UXAuditWalkthroughUITests: XCTestCase {
     private func launch(_ arguments: [String] = [], environment: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
         var launchArguments = ["--ui-test-in-memory-store", "-appAppearanceStyle", appearance] + arguments
-        if let style = ProcessInfo.processInfo.environment["UX_AUDIT_ANALYSIS_STYLE"], !style.isEmpty {
-            launchArguments += ["-analysisPresentationStyle", style]
-        }
         if size == "ax3" {
             launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"]
         }
