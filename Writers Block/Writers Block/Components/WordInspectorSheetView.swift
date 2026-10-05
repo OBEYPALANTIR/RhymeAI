@@ -204,17 +204,15 @@ private struct ChipButton: View {
     let label: String
     let onTap: () -> Void
     @State private var copyFlash = false
-    @State private var longPressedAt: Date?
+    @State private var longPressed = false
 
     var body: some View {
         Button {
             // A long press copies; lifting the finger afterwards must not
             // also replace the word.
-            // The action does not run when the finger lifts outside the
-            // chip, so a stale long press must not swallow a later tap.
-            let liftedAfterLongPress = longPressedAt.map { Date().timeIntervalSince($0) < Self.longPressLiftWindow } ?? false
-            longPressedAt = nil
-            if !liftedAfterLongPress {
+            if longPressed {
+                longPressed = false
+            } else {
                 onTap()
             }
         } label: {
@@ -238,13 +236,20 @@ private struct ChipButton: View {
                 .padding(.vertical, RhymeAITokens.Spacing.xxs)
                 .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
         }
-        .buttonStyle(.rhymePress)
+        // The action does not run when the finger lifts outside the chip, so
+        // the suppression is cleared when the press ends, one turn later so an
+        // action for this same touch still sees it.
+        .buttonStyle(RhymeAIPressButtonStyle(onPressingChanged: { isPressed in
+            if !isPressed {
+                DispatchQueue.main.async { longPressed = false }
+            }
+        }))
         .accessibilityLabel(label)
         .accessibilityHint("Replaces the selected word")
         .accessibilityAction(named: "Copy") { copy() }
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.4).onEnded { _ in
-                longPressedAt = Date()
+                longPressed = true
                 copy()
             }
         )
@@ -252,7 +257,6 @@ private struct ChipButton: View {
     }
 
     private static let verticalPadding: CGFloat = 6
-    private static let longPressLiftWindow: TimeInterval = 2
 
     private func copy() {
         UIPasteboard.general.string = label
