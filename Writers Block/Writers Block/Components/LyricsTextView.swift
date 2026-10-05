@@ -374,7 +374,12 @@ struct LyricsTextView: UIViewRepresentable {
             appliedColorSpans = spans
             appliedForeground = foreground
             appliedColorText = text
-            Self.applyColors(spans, to: textView, foreground: foreground)
+            Self.applyColors(
+                spans,
+                to: textView,
+                foreground: foreground,
+                sectionLabelForeground: UIColor(parent.appearance.palette.secondaryInk)
+            )
         }
 
         func resetColorsAfterProgrammaticTextChange(_ textView: UITextView) {
@@ -436,8 +441,20 @@ struct LyricsTextView: UIViewRepresentable {
             installColors(adjusted, for: textView.text, on: textView, foreground: foreground)
         }
 
-        static func applyColors(_ spans: [LyricsColorSpan], to textView: UITextView, foreground: UIColor) {
+        /// `sectionLabelForeground` draws section header lines ("[Verse 1]",
+        /// "[Chorus]") in a quieter neutral ink. It is a rendering attribute
+        /// only: the stored text, its brackets, glyph metrics, selection and
+        /// undo are untouched. Header lines carry no analysis spans, and spans
+        /// are applied after it, so no lyric word loses its syllable or rhyme
+        /// colour.
+        static func applyColors(
+            _ spans: [LyricsColorSpan],
+            to textView: UITextView,
+            foreground: UIColor,
+            sectionLabelForeground: UIColor? = nil
+        ) {
             // Color attributes must not change glyph metrics or the user's selection.
+            let sectionLabelRanges = sectionLabelForeground == nil ? [] : SectionMap.headerRanges(textView.text ?? "")
             let range = NSRange(location: 0, length: textView.textStorage.length)
             guard let layout = textView.textLayoutManager, let content = layout.textContentManager else { return }
             layout.renderingAttributesValidator = nil
@@ -452,6 +469,16 @@ struct LyricsTextView: UIViewRepresentable {
                 let start = content.offset(from: content.documentRange.location, to: target.location)
                 let end = content.offset(from: content.documentRange.location, to: target.endLocation)
                 let targetRange = NSRange(location: start, length: end - start)
+                if let sectionLabelForeground {
+                    for header in sectionLabelRanges {
+                        let intersection = NSIntersectionRange(header, targetRange)
+                        guard intersection.length > 0,
+                              let lower = content.location(content.documentRange.location, offsetBy: intersection.location),
+                              let upper = content.location(lower, offsetBy: intersection.length),
+                              let textRange = NSTextRange(location: lower, end: upper) else { continue }
+                        layout.setRenderingAttributes([.foregroundColor: sectionLabelForeground], for: textRange)
+                    }
+                }
                 for span in spans {
                     let intersection = NSIntersectionRange(span.range, targetRange)
                     guard intersection.length > 0,
