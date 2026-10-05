@@ -492,7 +492,7 @@ components:
 
 Writers Block is a monochrome, focused songwriting workspace. The interface should feel like a sheet of paper with a capable assistant close at hand: one flat writing surface, ink-coloured text and actions, large serif song titles, restrained controls, and hue only where it helps the writer read rhythm, rhyme, or status.
 
-Naming: the product's user-facing name is "Writers Block" on both platforms (iOS `CFBundleDisplayName`, Android `app_name`, the welcome wordmark, and the README). "RhymeAI" is the repository and code namespace only (`RhymeAITokens`, `RhymeAITheme`, package `com.rhymeai.app`); it never appears in UI copy.
+Naming: the product's user-facing name is "Writers Block" on both platforms (iOS `CFBundleDisplayName`, Android `app_name`, the welcome wordmark, and the README). "RhymeAI" is the repository and code namespace only (`RhymeAITokens`, `RhymeAITheme`, package `com.rhymeai.app`). In UI copy it appears only as the brand of the app's own on-device models: the "RhymeAI Gemma" download titles and the "RhymeAI Gemma Downloads" section in Settings on both platforms. Do not use it to name the app.
 
 Both platforms ship the same three appearances, chosen by the user in Settings under Appearance with a three-segment control:
 
@@ -619,7 +619,7 @@ Android also has a φ-rounded `Rhythm` scale of 8, 13, 21, 34, and 55dp, used fo
 
 Touch targets: iOS minimum 44pt, comfortable 56pt (floating actions), prominent 82pt (welcome app icon). Android minimum 48dp.
 
-The welcome screen is centred and calm: app icon, the Writers Block wordmark, a two-sentence explanation, then three actions (New Song, Load Song, Song Templates). On iOS:
+The welcome screen is centred and calm: app icon, the Writers Block wordmark, a two-sentence explanation, then three actions (New Song, Load Song, Song Templates). On Android, when there is a recent song, a fourth card, "Continue <title>", is shown first. On iOS:
 
 - Compact width: the three cards stack vertically with 24pt gaps and 32pt side padding; each card is a row of icon tile, title and caption, and a trailing chevron.
 - Regular width (iPad): the cards sit in one horizontal row, capped at 660pt wide, each with its icon above centred text and no chevron.
@@ -629,7 +629,7 @@ On Android the welcome content is capped at 584dp wide, and screens shorter than
 
 The editor is the primary workspace: a top toolbar with a bottom divider, the flat appearance canvas, a large title field, a word/syllable count line, and the lyric text. On iOS the writing column has 20pt side padding, is capped at 740pt wide and centred, has a 400pt minimum lyric height, and ends with a 200pt bottom rest. On Android the side padding is 21dp and the bottom rest is 300dp.
 
-Two floating actions sit at the bottom trailing edge: UnBlock and the mic. They hide while the assistant sheet, a rewrite, the rewrite chip bar, an insertion toast, or Focus mode is active.
+Two floating actions sit at the bottom trailing edge: UnBlock and the mic. On iOS they hide while the assistant sheet, a rewrite, the rewrite chip bar, an insertion toast, or Focus mode is active. On Android they hide in Focus mode, while the assistant sheet is open or about to open, while a modal is open, and while a rewrite is active; they stay visible beside the rewrite chip bar, and the "Line added" snackbar is positioned above them.
 
 Assistant placement differs by width on iOS. On a compact width it is a full-screen panel that rises from the bottom over the editor and is dragged down to dismiss. On a regular width it is a persistent 380pt column on the trailing side of the editor, separated by a divider, which the user can hide; Focus mode also hides it. On Android the assistant is always a full-screen panel that rises from the bottom; there is no side-panel layout in the Android code.
 
