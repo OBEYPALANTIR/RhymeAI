@@ -199,7 +199,8 @@ struct LocalGenerationBoundaryTests {
             #expect(prompt.contains("Rhyme scheme: \"ABAB\""))
             #expect(prompt.contains("Complexity: Complex"))
             #expect(prompt.contains(wholeSong ? "FULL SONG CONTEXT" : "FIRST CONTEXT DETAIL"))
-            #expect(!prompt.contains(wholeSong ? "quiet harbor" : "FULL SONG CONTEXT"))
+            #expect(prompt.contains("Theme: quiet harbor"))
+            if !wholeSong { #expect(!prompt.contains("FULL SONG CONTEXT")) }
         }
     }
 

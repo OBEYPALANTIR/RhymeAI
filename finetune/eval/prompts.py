@@ -33,6 +33,7 @@ SUGGESTION_COUNT = 6
 LOCAL_RECENT_CONTEXT_CHARS = 2600
 LOCAL_WHOLE_SONG_HEAD_CHARS = 900
 LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
+LOCAL_TRIM_MARKER = "[Lyrics trimmed for on-device speed]"
 LOCAL_SUGGESTION_INTENT = (
     "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
 )
@@ -316,39 +317,89 @@ def _build_section_directive(ref: Optional[SectionRef], lyrics: str) -> str:
     return ""
 
 
-def _trim_to_line_boundary(text: str, prefer_start: bool) -> str:
-    """String.trimToLineBoundary."""
-    if not text:
-        return text
-    if prefer_start:
-        newline = text.find("\n")
-        if 0 <= newline < len(text) - 1:
-            return text[newline + 1:].strip()
-        return text.strip()
-    newline = text.rfind("\n")
-    if newline > 0:
-        return text[:newline].strip()
-    return text.strip()
+def local_lyric_window(
+    lyrics: str, cursor_line: Optional[int], budget: int, head_budget: int
+) -> str:
+    """AIService.localLyricWindow (same name and rule in AIService.kt and AIService.swift).
 
-
-def local_lyrics_context(lyrics: str, use_whole_song_context: bool) -> str:
-    """AIService.localLyricsContext."""
+    Lyrics over `budget` characters keep, in order: the cursor's
+    blank-line-delimited stanza plus the lines either side of the cursor; the
+    opening lines up to `head_budget`; then the lines nearest that window,
+    one above then one below, until the budget is spent. Each skipped run
+    that holds a lyric becomes one marker line; room for two markers is
+    reserved, so the result never exceeds `budget`. A stanza too long for the
+    budget keeps only the cursor's neighbours before the nearest-line fill.
+    Lengths count UTF-16 units on
+    the platforms; Python counts code points, which match for BMP text."""
     trimmed = lyrics.strip()
-    if use_whole_song_context:
-        if len(trimmed) <= LOCAL_WHOLE_SONG_HEAD_CHARS + LOCAL_WHOLE_SONG_TAIL_CHARS:
-            return trimmed
-        head = _trim_to_line_boundary(
-            trimmed[:LOCAL_WHOLE_SONG_HEAD_CHARS], prefer_start=False
-        )
-        tail = _trim_to_line_boundary(
-            trimmed[-LOCAL_WHOLE_SONG_TAIL_CHARS:], prefer_start=True
-        )
-        return "%s\n\n[Middle lyrics trimmed for on-device speed]\n\n%s" % (head, tail)
-    if len(trimmed) <= LOCAL_RECENT_CONTEXT_CHARS:
+    if len(trimmed) <= budget:
         return trimmed
-    return "[Earlier lyrics trimmed for on-device speed]\n" + _trim_to_line_boundary(
-        trimmed[-LOCAL_RECENT_CONTEXT_CHARS:], prefer_start=True
-    )
+    lines = lyrics.split("\n")
+    last = len(lines) - 1
+    c = last if cursor_line is None else min(max(cursor_line, 0), last)
+    line_budget = budget - 2 * (len(LOCAL_TRIM_MARKER) + 1)
+
+    def cost(i: int) -> int:
+        return len(lines[i]) + 1
+
+    def blank(i: int) -> bool:
+        return not lines[i].strip()
+
+    block_start = next((i + 1 for i in range(c - 1, -1, -1) if blank(i)), 0)
+    if blank(c):
+        block_end = c
+    else:
+        block_end = next((i - 1 for i in range(c + 1, last + 1) if blank(i)), last)
+    lo = min(block_start, max(c - 1, 0))
+    hi = max(block_end, min(c + 1, last))
+    if sum(cost(i) for i in range(lo, hi + 1)) > line_budget:
+        lo, hi = max(c - 1, 0), min(c + 1, last)
+    used = sum(cost(i) for i in range(lo, hi + 1))
+
+    head_count = 0
+    head_used = 0
+    while head_count < lo and head_used + cost(head_count) <= head_budget and used + cost(head_count) <= line_budget:
+        head_used += cost(head_count)
+        used += cost(head_count)
+        head_count += 1
+
+    while True:
+        grew = False
+        if lo - 1 >= head_count and used + cost(lo - 1) <= line_budget:
+            lo -= 1
+            used += cost(lo)
+            grew = True
+        if hi + 1 <= last and used + cost(hi + 1) <= line_budget:
+            hi += 1
+            used += cost(hi)
+            grew = True
+        if not grew:
+            break
+
+    def has_lyric(a: int, b: int) -> bool:
+        return any(not blank(i) for i in range(a, b))
+
+    out = lines[:head_count]
+    if has_lyric(head_count, lo):
+        out.append(LOCAL_TRIM_MARKER)
+    out.extend(lines[lo:hi + 1])
+    if has_lyric(hi + 1, last + 1):
+        out.append(LOCAL_TRIM_MARKER)
+    return "\n".join(out).strip()
+
+
+def local_lyrics_context(
+    lyrics: str, use_whole_song_context: bool, cursor_line: Optional[int] = None
+) -> str:
+    """AIService.localLyricsContext."""
+    if use_whole_song_context:
+        return local_lyric_window(
+            lyrics,
+            cursor_line,
+            LOCAL_WHOLE_SONG_HEAD_CHARS + LOCAL_WHOLE_SONG_TAIL_CHARS,
+            LOCAL_WHOLE_SONG_HEAD_CHARS,
+        )
+    return local_lyric_window(lyrics, cursor_line, LOCAL_RECENT_CONTEXT_CHARS, 0)
 
 
 def gemma_instruction_prompt(user_prompt: str) -> str:
@@ -374,6 +425,7 @@ def build_suggestions_prompt(
     complexity: str = "MODERATE",
     use_whole_song_context: bool = False,
     constraint: Optional[SuggestionRhymeConstraint] = None,
+    cursor_line: Optional[int] = None,
 ) -> str:
     """AIService.buildLocalPrompt, wrapped in the Gemma turn template."""
     rhyme_type_display = RHYME_TYPES[rhyme_type]
@@ -398,12 +450,12 @@ def build_suggestions_prompt(
     else:
         song_context_instruction = "Use the immediate stanza, rhyme target, and theme first."
 
-    if theme.strip() and not use_whole_song_context:
+    if theme.strip():
         effective_theme = theme.strip()
     else:
         effective_theme = "Infer from the lyrics."
 
-    lyric_context = local_lyrics_context(lyrics, use_whole_song_context)
+    lyric_context = local_lyrics_context(lyrics, use_whole_song_context, cursor_line)
     section_directive = _build_section_directive(
         constraint.section_ref if constraint else None, lyrics
     )

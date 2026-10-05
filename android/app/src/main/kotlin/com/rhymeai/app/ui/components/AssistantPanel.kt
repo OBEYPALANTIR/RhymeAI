@@ -178,7 +178,6 @@ fun AssistantPanel(
                 OutlinedTextField(
                     value = viewModel.theme,
                     onValueChange = { viewModel.onThemeChanged(it) },
-                    enabled = !viewModel.useWholeSongContext,
                     placeholder = { Text("What is this song about?", fontSize = DesignTokens.Typography.caption) },
                     modifier = Modifier
                         .fillMaxWidth()

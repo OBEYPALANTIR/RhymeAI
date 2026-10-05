@@ -7,6 +7,14 @@ import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.util.RhymeConstraint
 import com.rhymeai.app.util.WordFrequency
 import java.io.File
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -110,30 +118,79 @@ class SuggestionPromptGuidanceTest {
         assertTrue(unknownTarget.endsWith(RULES_WITHOUT_LIST), unknownTarget)
     }
 
-    private fun numberedSong(lineCount: Int) =
-        (1..lineCount).joinToString("\n") { "line %04d of the song".format(it) }
+    @Test
+    fun themeIsSentWithWholeSongContext() {
+        val song = "[Verse]\nI keep the porch light on at home\nThe kettle ticks beside the phone"
+        for (wholeSong in listOf(true, false)) {
+            val local = service.buildLocalPrompt(
+                theme = "  leaving a small town ", lyrics = song, targetRhymeLine = null,
+                rhymeType = RhymeType.NEAR, rhymeScheme = "AABB", currentLetter = "A",
+                currentSection = SongSection.VERSE, complexity = RhymeComplexity.MODERATE,
+                useWholeSongContext = wholeSong
+            )
+            assertContains(local, "\nTheme: leaving a small town\n")
+            assertContains(local, "The kettle ticks beside the phone")
+            val cloud = service.buildPrompt(
+                "leaving a small town", song, null, RhymeType.NEAR, "AABB", "A",
+                SongSection.VERSE, RhymeComplexity.MODERATE, wholeSong
+            )
+            assertContains(cloud, "theme/context: \"leaving a small town\"")
+            assertEquals(wholeSong, cloud.contains("The kettle ticks beside the phone"))
+        }
+        val empty = service.buildLocalPrompt(
+            theme = " ", lyrics = song, targetRhymeLine = null, rhymeType = RhymeType.NEAR,
+            rhymeScheme = "AABB", currentLetter = "A", complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = true
+        )
+        assertContains(empty, "\nTheme: Infer from the lyrics.\n")
+        val emptyCloud = service.buildPrompt(
+            "", song, null, RhymeType.NEAR, "AABB", "A", SongSection.VERSE, RhymeComplexity.MODERATE, true
+        )
+        assertContains(emptyCloud, "Whole song context enabled; infer the theme from the full lyrics.")
+    }
 
-    private fun lines(range: IntRange) = range.joinToString("\n") { "line %04d of the song".format(it) }
+    private fun repoFile(path: String): File =
+        sequenceOf("../../$path", "../$path", path).map(::File).first(File::isFile)
+
+    private fun fixture(): JsonObject =
+        Json.parseToJsonElement(repoFile("shared/fixtures/local-lyric-window-v1.json").readText()).jsonObject
 
     @Test
-    fun localContextKeepsWholeSongWithinBudget() {
-        // 130 lines = 2,859 characters: over 2,600 but within head + tail, so sent whole.
-        val medium = numberedSong(130)
-        assertEquals(2859, medium.length)
-        assertEquals(medium, service.localLyricsContext(medium, useWholeSongContext = true))
-
-        // 300 lines = 6,599 characters: opening 900 and closing 2,200 characters, cut to whole lines.
-        val long = numberedSong(300)
-        assertEquals(
-            lines(1..40) + "\n\n[Middle lyrics trimmed for on-device speed]\n\n" + lines(201..300),
-            service.localLyricsContext(long, useWholeSongContext = true)
+    fun localContextMatchesSharedCursorWindowFixture() {
+        // iOS reads a bundled copy; it must not drift from the shared fixture.
+        assertTrue(
+            repoFile("shared/fixtures/local-lyric-window-v1.json").readBytes()
+                .contentEquals(repoFile("Writers Block/Writers BlockTests/local-lyric-window-v1.json").readBytes()),
+            "iOS fixture copy differs from shared/fixtures/local-lyric-window-v1.json"
         )
-
-        // Whole Song Context off (Android only; iOS sends the stanza) keeps the last 2,600 characters.
-        assertEquals(
-            "[Earlier lyrics trimmed for on-device speed]\n" + lines(183..300),
-            service.localLyricsContext(long, useWholeSongContext = false)
+        val fixture = fixture()
+        val song = fixture.getValue("song").jsonPrimitive.content
+        val lines = song.split("\n")
+        assertEquals(300, lines.size)
+        val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
+        assertEquals(10, cases.size)
+        for (case in cases) {
+            val name = case.getValue("name").jsonPrimitive.content
+            val cursor = case.getValue("cursorLine").jsonPrimitive.intOrNull
+            val wholeSong = case.getValue("useWholeSongContext").jsonPrimitive.boolean
+            val expected = case.getValue("expected").jsonPrimitive.content
+            val actual = service.localLyricsContext(song, wholeSong, cursor)
+            assertEquals(expected, actual, name)
+            assertTrue(actual.length <= if (wholeSong) 3100 else 2600, name)
+            // The cursor's stanza and the cursor line are always present.
+            val c = cursor ?: lines.lastIndex
+            val start = (c - 1 downTo 0).firstOrNull { lines[it].isBlank() }?.plus(1) ?: 0
+            assertContains(actual, lines.subList(start, c + 1).joinToString("\n").trim(), message = name)
+        }
+        // The cursor reaches the built prompt.
+        val middle = cases.first { it.getValue("name").jsonPrimitive.content == "middle_lyric_whole" }
+        val prompt = service.buildLocalPrompt(
+            theme = "", lyrics = song, targetRhymeLine = null, rhymeType = RhymeType.NEAR,
+            rhymeScheme = "AABB", currentLetter = "A", complexity = RhymeComplexity.MODERATE,
+            useWholeSongContext = true, cursorLine = middle.getValue("cursorLine").jsonPrimitive.int
         )
+        assertContains(prompt, "\"\"\"\n" + middle.getValue("expected").jsonPrimitive.content + "\n\"\"\"")
+        // Short lyrics are sent as is.
         assertEquals("a\nb", service.localLyricsContext("  a\nb \n", useWholeSongContext = true))
     }
 

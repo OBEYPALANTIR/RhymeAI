@@ -386,7 +386,7 @@ struct Writers_BlockTests {
             useWholeSongContext: false
         )
         let wholeSongPrompt = service.buildPrompt(
-            theme: "ignored when whole-song context is enabled",
+            theme: "",
             lyrics: "[Verse]\nYellow lights\n\n[Chorus]\nKeep moving",
             targetRhymeLine: nil,
             rhymeType: .slant,

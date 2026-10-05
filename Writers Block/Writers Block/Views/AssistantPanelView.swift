@@ -210,11 +210,10 @@ struct AssistantPanelView: View {
                     .padding(RhymeAITokens.Spacing.sm)
                     .liquidGlassSurface(
                         cornerRadius: RhymeAITokens.Radius.md,
-                        tint: viewModel.useWholeSongContext ? .gray.opacity(0.12) : .white.opacity(0.04),
-                        interactive: !viewModel.useWholeSongContext,
-                        fallbackOpacity: viewModel.useWholeSongContext ? 0.04 : 0.06
+                        tint: .white.opacity(0.04),
+                        interactive: true,
+                        fallbackOpacity: 0.06
                     )
-                    .disabled(viewModel.useWholeSongContext)
             }
 
             Divider()

@@ -252,17 +252,26 @@ final class UXAuditWalkthroughUITests: XCTestCase {
         }
         app.terminate()
 
-        // The theme field only accepts input while Whole Song Context is off.
+        // The theme field accepts input with Whole Song Context on (the default,
+        // pinned here so a value saved on the simulator cannot change the scene).
         let typing = launch([
             "--ui-test-seed-prosody-song", "--ui-test-open-assistant",
-            "-editor.useWholeSongContext", "NO",
+            "-editor.useWholeSongContext", "YES",
         ])
-        let theme = typing.textViews["What is this song about?"].exists
-            ? typing.textViews["What is this song about?"]
+        let themeView = typing.textViews["What is this song about?"]
+        let theme = themeView.waitForExistence(timeout: 6)
+            ? themeView
             : typing.textFields["What is this song about?"]
         if tap(theme, "theme field", timeout: 6) {
+            XCTAssertTrue(theme.isEnabled, "Context & Theme must stay editable with Whole Song Context on")
             theme.typeText("Leaving town")
+            // The placeholder no longer names the field once it holds text, so find it by value.
+            let typed = typing.descendants(matching: .any)
+                .matching(NSPredicate(format: "value == %@", "Leaving town")).firstMatch
+            XCTAssertTrue(typed.waitForExistence(timeout: 3), "Typed theme did not appear in Context & Theme")
             shot(typing, "assistant-keyboard")
+        } else {
+            XCTFail("Context & Theme field was not reachable")
         }
         typing.terminate()
     }

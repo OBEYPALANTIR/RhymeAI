@@ -90,30 +90,102 @@ struct SuggestionPromptGuidanceTests {
         #expect(!noTarget.contains("allowed list"))
     }
 
-    private func numberedSong(_ range: ClosedRange<Int>) -> String {
-        range.map { String(format: "line %04d of the song", $0) }.joined(separator: "\n")
+    private struct WindowFixture: Decodable {
+        struct Case: Decodable {
+            let name: String
+            let cursorLine: Int?
+            let useWholeSongContext: Bool
+            let expected: String
+        }
+        let song: String
+        let cases: [Case]
     }
 
-    @Test func localContextKeepsWholeSongWithinBudget() {
-        // 130 lines = 2,859 characters: over 2,600 but within head + tail, so sent whole.
-        let medium = numberedSong(1...130)
-        #expect(medium.count == 2859)
-        #expect(AIService.trimmedWholeSongContext(medium) == medium)
+    private final class BundleToken {}
 
-        // 300 lines = 6,599 characters: opening 900 and closing 2,200 characters, cut to whole lines.
-        let long = numberedSong(1...300)
-        #expect(AIService.trimmedWholeSongContext(long)
-            == numberedSong(1...40) + "\n\n[Middle lyrics trimmed for on-device speed]\n\n" + numberedSong(201...300))
-        #expect(AIService.trimmedWholeSongContext("  a\nb \n") == "a\nb")
+    /// Bundled copy of shared/fixtures/local-lyric-window-v1.json (the simulator
+    /// cannot read the repo). Android `SuggestionPromptGuidanceTest` checks the
+    /// two copies are byte-identical and runs the same cases.
+    private func windowFixture() throws -> WindowFixture {
+        let url = try #require(Bundle(for: BundleToken.self)
+            .url(forResource: "local-lyric-window-v1", withExtension: "json"))
+        return try JSONDecoder().decode(WindowFixture.self, from: Data(contentsOf: url))
+    }
 
-        // The built prompt carries the trimmed context, not the whole long song.
-        let prompt = AIService().buildLocalSuggestionPromptForTest(
-            theme: "", lyrics: long, targetRhymeLine: nil, rhymeType: .near,
-            rhymeScheme: "AABB", currentLetter: "A", currentSection: .unknown, sectionOrdinal: 1,
-            firstChorusLines: nil, useWholeSongContext: true
+    @Test func localContextMatchesSharedCursorWindowFixture() throws {
+        let fixture = try windowFixture()
+        let lines = fixture.song.components(separatedBy: "\n")
+        #expect(lines.count == 300)
+        // iOS only trims whole-song context; with it off the cursor's stanza is sent untrimmed.
+        let cases = fixture.cases.filter(\.useWholeSongContext)
+        #expect(cases.count == 5)
+        for testCase in cases {
+            let actual = AIService.localLyricWindow(
+                fixture.song,
+                cursorLine: testCase.cursorLine,
+                budget: AIService.localWholeSongHeadChars + AIService.localWholeSongTailChars,
+                headBudget: AIService.localWholeSongHeadChars
+            )
+            #expect(actual == testCase.expected, "\(testCase.name)")
+            #expect(actual.utf16.count <= 3100, "\(testCase.name)")
+            let c = testCase.cursorLine ?? lines.count - 1
+            let start = (0..<c).last(where: { lines[$0].trimmingCharacters(in: .whitespaces).isEmpty }).map { $0 + 1 } ?? 0
+            let stanza = lines[start...c].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            #expect(actual.contains(stanza), "\(testCase.name)")
+        }
+        #expect(AIService.localLyricWindow("  a\nb \n", cursorLine: nil, budget: 3100, headBudget: 900) == "a\nb")
+
+        // Production path: the editor cursor reaches the built prompt.
+        let middle = try #require(fixture.cases.first { $0.name == "middle_lyric_whole" })
+        let cursorLine = try #require(middle.cursorLine)
+        let viewModel = EditorViewModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        viewModel.lyrics = fixture.song
+        viewModel.cursorPosition = lines[0...cursorLine].reduce(0) { $0 + $1.utf16.count + 1 } - 1
+        let input = viewModel.suggestionInputForTest()
+        #expect(input.useWholeSongContext)
+        #expect(input.cursorLineIndex == cursorLine)
+        let prompt = AIService().buildLocalSuggestionPromptForTest(input: input)
+        #expect(prompt.contains("\"\"\"\n" + middle.expected + "\n\"\"\""))
+    }
+
+    @Test func themeIsSentWithWholeSongContext() {
+        let song = "[Verse]\nI keep the porch light on at home\nThe kettle ticks beside the phone"
+        for wholeSong in [true, false] {
+            let local = AIService().buildLocalSuggestionPromptForTest(
+                theme: "  leaving a small town ", lyrics: song, stanzaLines: song.components(separatedBy: "\n"),
+                targetRhymeLine: nil, rhymeType: .near, rhymeScheme: "AABB", currentLetter: "A",
+                currentSection: .verse, sectionOrdinal: 1, firstChorusLines: nil, useWholeSongContext: wholeSong
+            )
+            #expect(local.contains("\nTheme: leaving a small town\n"))
+            #expect(local.contains("The kettle ticks beside the phone"))
+            let cloud = AIService().buildPrompt(
+                theme: "leaving a small town", lyrics: song, targetRhymeLine: nil, rhymeType: .near,
+                rhymeScheme: "AABB", currentLetter: "A", currentSection: .verse,
+                complexity: .moderate, useWholeSongContext: wholeSong
+            )
+            #expect(cloud.contains("theme/context: \"leaving a small town\""))
+            #expect(cloud.contains("The kettle ticks beside the phone") == wholeSong)
+        }
+        let empty = AIService().buildLocalSuggestionPromptForTest(
+            theme: " ", lyrics: song, targetRhymeLine: nil, rhymeType: .near, rhymeScheme: "AABB",
+            currentLetter: "A", currentSection: .verse, sectionOrdinal: 1, firstChorusLines: nil,
+            useWholeSongContext: true
         )
-        #expect(prompt.contains("[Middle lyrics trimmed for on-device speed]"))
-        #expect(!prompt.contains("line 0150 of the song"))
+        #expect(empty.contains("\nTheme: Infer from the lyrics.\n"))
+        let emptyCloud = AIService().buildPrompt(
+            theme: "", lyrics: song, targetRhymeLine: nil, rhymeType: .near, rhymeScheme: "AABB",
+            currentLetter: "A", currentSection: .verse, complexity: .moderate, useWholeSongContext: true
+        )
+        #expect(emptyCloud.contains("Whole song context enabled; infer the theme from the full lyrics."))
+
+        // The production input carries the theme with Whole Song Context on (the default).
+        let viewModel = EditorViewModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        viewModel.lyrics = song
+        viewModel.theme = "leaving a small town"
+        viewModel.cursorPosition = (song as NSString).length
+        let input = viewModel.suggestionInputForTest()
+        #expect(input.useWholeSongContext)
+        #expect(AIService().buildLocalSuggestionPromptForTest(input: input).contains("\nTheme: leaving a small town\n"))
     }
 
     @Test func wholeSongContextDefaultsOnAndRespectsSavedValue() {

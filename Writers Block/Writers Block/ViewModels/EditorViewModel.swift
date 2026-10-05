@@ -152,6 +152,8 @@ struct AISuggestionInput {
     let firstChorusLines: [String]?
     let complexity: RhymeComplexity
     let useWholeSongContext: Bool
+    /// Editor line the cursor is on, so on-device trimming keeps the stanza being written.
+    var cursorLineIndex: Int? = nil
 }
 
 final class EditorViewModel: ObservableObject {
@@ -768,7 +770,8 @@ final class EditorViewModel: ObservableObject {
             sectionOrdinal: input.sectionOrdinal,
             firstChorusLines: input.firstChorusLines,
             complexity: input.complexity,
-            useWholeSongContext: input.useWholeSongContext
+            useWholeSongContext: input.useWholeSongContext,
+            cursorLineIndex: input.cursorLineIndex
         )
 
         // Compute tier per emitted line using the same filter the streaming
@@ -829,7 +832,11 @@ final class EditorViewModel: ObservableObject {
             sectionOrdinal: context.sectionOrdinal,
             firstChorusLines: context.firstChorusLines,
             complexity: rhymeComplexity,
-            useWholeSongContext: useWholeSongContext
+            useWholeSongContext: useWholeSongContext,
+            cursorLineIndex: NextLinePlacement(
+                lyrics: lyrics,
+                cursorCharacterOffset: Self.characterOffset(forUTF16Offset: cursorPosition, in: lyrics)
+            ).cursorLineIndex
         )
     }
 
