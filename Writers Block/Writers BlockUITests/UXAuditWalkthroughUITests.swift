@@ -383,8 +383,9 @@ final class UXAuditWalkthroughUITests: XCTestCase {
             app.terminate()
             return
         }
-        // On iPad the editor and assistant scroll views sit behind the sheet.
-        let scroll = app.scrollViews.containing(NSPredicate(format: "identifier == %@", "appearancePicker")).firstMatch
+        // On iPad the editor and assistant scroll views sit behind the sheet;
+        // the sheet's own scroll view is the last one in the hierarchy.
+        let scroll = app.scrollViews.element(boundBy: max(app.scrollViews.count - 1, 0))
         captureScrolling(app, in: scroll, name: "settings-general-local", pages: 4)
         if tap(app.buttons["cloudBackupDisclosure"], "Cloud backup disclosure", scrolling: scroll) {
             shot(app, "settings-cloud-backup")
