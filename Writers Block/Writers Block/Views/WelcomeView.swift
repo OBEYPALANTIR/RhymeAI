@@ -45,8 +45,10 @@ struct WelcomeView: View {
                             .padding(.bottom, RhymeAITokens.Spacing.xs)
 
                         if !dynamicTypeSize.isAccessibilitySize {
-                            // Subtitle
-                            Text("Your intelligent songwriting companion.\nStart from scratch, load a project, or pick a template.")
+                            // Subtitle. The non-breaking spaces keep "pick a
+                            // template." together, so a narrow screen cannot
+                            // strand its last word or two on a line.
+                            Text("Your intelligent songwriting companion.\nStart fresh, load a song, or pick\u{00A0}a\u{00A0}template.")
                                 .font(.body)
                                 .foregroundStyle(appearance.palette.secondaryInk)
                                 .multilineTextAlignment(.center)
