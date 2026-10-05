@@ -790,6 +790,7 @@ struct ProjectsDrawerView: View {
                             .foregroundStyle(appearance.palette.action)
                     }
                 }
+                .frame(minHeight: RhymeAITokens.Touch.minimum)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.rhymePress)

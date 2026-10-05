@@ -123,11 +123,15 @@ struct WordInspectorSheetView: View {
                         Button(action: onRetrySynonyms) {
                             Label("Retry", systemImage: "arrow.clockwise")
                                 .font(.caption.weight(.semibold))
+                                .frame(minHeight: RhymeAITokens.Touch.minimum)
+                                .contentShape(Rectangle())
                         }
                     case .openSettings:
                         Button(action: onOpenSettings) {
                             Label("Settings", systemImage: "gearshape")
                                 .font(.caption.weight(.semibold))
+                                .frame(minHeight: RhymeAITokens.Touch.minimum)
+                                .contentShape(Rectangle())
                         }
                     }
                 }
