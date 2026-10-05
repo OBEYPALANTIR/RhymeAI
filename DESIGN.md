@@ -346,7 +346,7 @@ components:
   top-bar-android:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.on-surface-muted}"
-    titleRule: "A Material TopAppBar on the surface colour holding the save status, undo, redo, the song-actions menu, and Focus. Settings is an item inside the song-actions menu, not a top-bar button. The song name is not shown; the in-scroll title field is the only song title."
+    titleRule: "A Material TopAppBar on the surface colour holding a navigation icon that opens the songs drawer, the save status, undo, redo, the song-actions menu, and Focus. Settings is an item inside the song-actions menu, not a top-bar button. The song name is not shown; the in-scroll title field is the only song title."
   editor-title-field-android:
     backgroundColor: "transparent"
     textColor: "{colors.on-background}"
@@ -499,7 +499,7 @@ components:
 
 Writers Block is a monochrome, focused songwriting workspace. The interface should feel like a sheet of paper with a capable assistant close at hand: one flat writing surface, ink-coloured text and actions, large serif song titles, restrained controls, and hue only where it helps the writer read rhythm, rhyme, or status.
 
-Naming: the product's user-facing name is "Writers Block" on both platforms (iOS `CFBundleDisplayName`, Android `app_name`, the welcome wordmark, and the README). "RhymeAI" is the repository and code namespace only (`RhymeAITokens`, `RhymeAITheme`, package `com.rhymeai.app`). It still appears in UI copy in two places on both platforms: as the brand of the app's own on-device models (the "RhymeAI Gemma" download titles and the "RhymeAI Gemma Downloads" section in Settings), and in the import error "Pick a RhymeAI project JSON", which names the project file format. Do not use it to name the app.
+Naming: the product's user-facing name is "Writers Block" on both platforms (iOS `CFBundleDisplayName`, Android `app_name`, the welcome wordmark, and the README). "RhymeAI" is the repository and code namespace only (`RhymeAITokens`, `RhymeAITheme`, package `com.rhymeai.app`). It still appears in UI copy in two places on both platforms: as the brand of the app's own on-device models (the "RhymeAI Gemma" download titles and the "RhymeAI Gemma Downloads" section in Settings), in the import error "Pick a RhymeAI project JSON", which names the project file format, and on iOS in the local-model error "This GGUF model is not registered with RhymeAI". This list was built by searching the code and may not be complete. Do not use the name for the app in new copy.
 
 Both platforms ship the same three appearances, chosen by the user in Settings under Appearance with a three-segment control:
 
@@ -745,6 +745,8 @@ Values below are the shipped ones. iOS values are in points, Android values in d
 These describe the current code. They are not rules to copy.
 
 - iOS recordings selection toolbar: the text-only Cancel, Delete and Select buttons in the songs drawer have no 44pt minimum frame, so their hit areas are the size of their text.
+- Word inspector result chips are below the touch-target minimum on both platforms: callout text with 6pt vertical padding on iOS, and 6dp vertical padding with no minimum size on Android.
+- Touch targets have not been audited control by control; other gaps may exist.
 - iOS Settings mixes two segmented styles: the General/Editor tabs and AI Provider use the custom action-fill control, while Appearance and Analysis Style use the system segmented picker. The drawer, notebook, trash, and rhyme-density controls also use the system picker.
 - iOS Settings input fields and provider cards use the 32pt radius inside 22pt-radius groups, while comparable fields elsewhere (drawer search) use 16pt.
 - Graphite switches have weak contrast on iOS: the on-state track is the warm white action colour (`#F6F2E8`) behind a white thumb.
