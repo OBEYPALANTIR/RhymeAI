@@ -91,7 +91,8 @@ class SettingsModelMotionUiTest {
     @Test fun unloadExitDisablesActionAndCanReverse() {
         loaded.value = true
         showSettings(animations = true)
-        compose.onNodeWithText("Unload Model").performScrollTo().assertIsEnabled()
+        scrollLoadActionIntoView()
+        compose.onNodeWithText("Unload Model").assertIsDisplayed().assertIsEnabled()
 
         compose.mainClock.autoAdvance = false
         compose.onNodeWithText("Unload Model").performClick()
@@ -113,8 +114,9 @@ class SettingsModelMotionUiTest {
     @Test fun reducedMotionRemovesStatusAndActionImmediately() {
         loaded.value = true
         showSettings(animations = false)
+        scrollLoadActionIntoView()
         compose.mainClock.autoAdvance = false
-        compose.onNodeWithText("Unload Model").performScrollTo().performClick()
+        compose.onNodeWithText("Unload Model").assertIsDisplayed().performClick()
         compose.mainClock.advanceTimeByFrame()
         compose.onNodeWithText("Unload Model").assertDoesNotExist()
         compose.onNodeWithText("Model loaded").assertDoesNotExist()
@@ -176,6 +178,14 @@ class SettingsModelMotionUiTest {
         }
         compose.onNodeWithText("AI setup").performScrollTo().performClick()
         savedModelButton().performScrollTo()
+    }
+
+    /**
+     * The load action sits below the downloads list, off-screen on a phone. Scroll while the
+     * clock still advances: a scroll requested under a paused clock never settles.
+     */
+    private fun scrollLoadActionIntoView() {
+        compose.onNodeWithText("Choose Model File").performScrollTo().assertIsDisplayed()
     }
 
     private fun savedModelButton() =
