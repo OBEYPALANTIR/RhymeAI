@@ -36,7 +36,7 @@ enum FeatureHelp: String, Identifiable {
         }
     }
 
-    func message(for presentation: AnalysisPresentationStyle) -> String {
+    var message: String {
         switch self {
         case .contextTheme:
             return "Adds a short topic or mood for the assistant when Whole Song Context is off. Use it to steer the next line without sending the full lyric."
@@ -53,21 +53,11 @@ enum FeatureHelp: String, Identifiable {
         case .highlightRhymes:
             return "Highlights rhyme words in suggestions so matching sounds are easier to spot before you insert a line."
         case .underlineSyllables:
-            switch presentation {
-            case .color:
-                return "Marks words by syllable count with semantic colors. When Rhyme Families is on, the syllable colors move to underlines so both guides remain readable."
-            case .inkMarks:
-                return "Uses progressively heavier text for higher syllable counts, so syllable cues remain distinct alongside rhyme-family underline patterns."
-            }
+            return "Marks words by syllable count with semantic colors. When Rhyme Families is on, the syllable colors move to underlines so both guides remain readable."
         case .stressIPA:
             return "Shows dictionary-backed syllable stress and IPA previews for the target line and suggestions. Primary stress is ˈDA, secondary stress is ˌDA, and unstressed syllables are da."
         case .colorRhymes:
-            switch presentation {
-            case .color:
-                return "Colors identify words that share a rhyme sound. Matching colors belong to the same rhyme family."
-            case .inkMarks:
-                return "Underline patterns identify words that share a rhyme sound. Matching patterns belong to the same rhyme family."
-            }
+            return "Colors identify words that share a rhyme sound. Matching colors belong to the same rhyme family."
         case .beatGrid:
             return "Shows how many beats each line fills at the current BPM. Lines that fit within one bar are normal, tight lines use one extra beat of grace, and overflow lines exceed the bar in red."
         }
@@ -107,13 +97,12 @@ struct AssistantProsodyPreviewView: View {
 struct FeatureHelpSheet: View {
     let help: FeatureHelp
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.analysisPresentationStyle) private var analysisPresentation
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.lg) {
-                    Text(help.message(for: analysisPresentation))
+                    Text(help.message)
                         .font(.body)
                         .foregroundStyle(.primary.opacity(0.9))
                         .fixedSize(horizontal: false, vertical: true)
@@ -148,24 +137,16 @@ struct FeatureHelpSheet: View {
 
 private struct SyllableLegendView: View {
     @Environment(\.appAppearanceStyle) private var appearance
-    @Environment(\.analysisPresentationStyle) private var analysisPresentation
 
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
-            Text(analysisPresentation == .color ? "Syllable colors" : "Syllable weights")
+            Text("Syllable colors")
                 .font(.subheadline.weight(.semibold))
 
-            if analysisPresentation == .color {
-                SyllableLegendRow(color: syllableColor(1), label: "1 syllable")
-                SyllableLegendRow(color: syllableColor(2), label: "2 syllables")
-                SyllableLegendRow(color: syllableColor(3), label: "3 syllables")
-                SyllableLegendRow(color: syllableColor(4), label: "4+ syllables")
-            } else {
-                SyllableWeightLegendRow(count: 1, label: "1 syllable")
-                SyllableWeightLegendRow(count: 2, label: "2 syllables")
-                SyllableWeightLegendRow(count: 3, label: "3 syllables")
-                SyllableWeightLegendRow(count: 4, label: "4+ syllables")
-            }
+            SyllableLegendRow(color: syllableColor(1), label: "1 syllable")
+            SyllableLegendRow(color: syllableColor(2), label: "2 syllables")
+            SyllableLegendRow(color: syllableColor(3), label: "3 syllables")
+            SyllableLegendRow(color: syllableColor(4), label: "4+ syllables")
         }
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
@@ -176,22 +157,6 @@ private struct SyllableLegendView: View {
             for: count,
             usesDarkPalette: appearance.usesDarkAnalysisPalette
         )
-    }
-}
-
-private struct SyllableWeightLegendRow: View {
-    let count: Int
-    let label: String
-
-    var body: some View {
-        HStack(spacing: RhymeAITokens.Spacing.sm) {
-            Text("Aa")
-                .font(.caption.weight(analysisFontWeight(syllableCount: count)))
-                .frame(width: 28)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
     }
 }
 
@@ -213,7 +178,6 @@ private struct SyllableLegendRow: View {
 
 private struct RhymeLegendView: View {
     @Environment(\.appAppearanceStyle) private var appearance
-    @Environment(\.analysisPresentationStyle) private var analysisPresentation
 
     private let palettePastel: [Color] = [
         Color(red: 252/255, green: 165/255, blue: 165/255),
@@ -239,45 +203,26 @@ private struct RhymeLegendView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
-            Text(analysisPresentation == .color ? "Rhyme family colors" : "Rhyme family patterns")
+            Text("Rhyme family colors")
                 .font(.subheadline.weight(.semibold))
 
-            Text(
-                analysisPresentation == .color
-                    ? "Matching colors belong to the same rhyme family."
-                    : "Matching underline patterns belong to the same rhyme family."
-            )
+            Text("Matching colors belong to the same rhyme family.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if analysisPresentation == .color {
-                HStack(spacing: RhymeAITokens.Spacing.xs) {
-                    ForEach(Array(palette.enumerated()), id: \.offset) { _, color in
-                        Circle()
-                            .fill(color)
-                            .frame(width: RhymeAITokens.Spacing.md, height: RhymeAITokens.Spacing.md)
-                            .overlay(
-                                Circle()
-                                    .strokeBorder(.white.opacity(0.18), lineWidth: RhymeAITokens.Spacing.hairline)
-                            )
-                    }
-                }
-            } else {
-                HStack(spacing: RhymeAITokens.Spacing.md) {
-                    ForEach(InkUnderlinePattern.allCases, id: \.self) { pattern in
-                        patternSample(pattern)
-                    }
+            HStack(spacing: RhymeAITokens.Spacing.xs) {
+                ForEach(Array(palette.enumerated()), id: \.offset) { _, color in
+                    Circle()
+                        .fill(color)
+                        .frame(width: RhymeAITokens.Spacing.md, height: RhymeAITokens.Spacing.md)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(.white.opacity(0.18), lineWidth: RhymeAITokens.Spacing.hairline)
+                        )
                 }
             }
         }
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.04), fallbackOpacity: 0.06)
-    }
-
-    private func patternSample(_ pattern: InkUnderlinePattern) -> Text {
-        var sample = AttributedString("rhyme")
-        sample.foregroundColor = appearance.palette.primaryInk
-        sample.underlineStyle = pattern.lineStyle
-        return Text(sample).font(.caption)
     }
 }

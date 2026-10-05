@@ -87,8 +87,9 @@ separately.
 - Undo and redo edits, select text containing emoji, and switch songs while an
   autosave or rewrite is pending. These paths preserve the intended song and
   selection.
-- Try the appearance and analysis styles on iPhone and iPad, including large text,
-  the keyboard, rewrite controls, and the iPad projects sidebar.
+- Try the appearances on iPhone and iPad, including large text, the keyboard,
+  rewrite controls, and the iPad projects sidebar.
+- The Ink Marks analysis style and its Settings selector are removed on iOS; rhyme and syllable analysis is shown in colour.
 - Restore or remove trashed songs and recordings. Recording cleanup rejects paths
   outside its storage directory; backup and sync validate restored metadata and
   keep provider API keys in the Keychain.

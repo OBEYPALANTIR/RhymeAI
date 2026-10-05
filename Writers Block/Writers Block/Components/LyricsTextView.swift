@@ -10,7 +10,6 @@ struct LyricsRewriteHighlight: Equatable {
 
 struct LyricsTextView: UIViewRepresentable {
     @Environment(\.appAppearanceStyle) private var appearance
-    @Environment(\.analysisPresentationStyle) private var analysisPresentation
 
     @Binding var text: String
     var selection: NSRange? = nil
@@ -139,8 +138,7 @@ struct LyricsTextView: UIViewRepresentable {
             _ text: String,
             _ rhymeEnabled: Bool,
             _ syllablesEnabled: Bool,
-            _ isDark: Bool,
-            _ style: AnalysisPresentationStyle
+            _ isDark: Bool
         ) async -> [LyricsColorSpan]
 
         var parent: LyricsTextView
@@ -175,20 +173,18 @@ struct LyricsTextView: UIViewRepresentable {
             let rhyme: Bool
             let syllables: Bool
             let appearance: AppAppearanceStyle
-            let style: AnalysisPresentationStyle
         }
         var isApplyingProgrammaticUpdate = false
 
         init(
             _ parent: LyricsTextView,
             colorAnalysisDebounce: Duration = .milliseconds(120),
-            colorSpanProvider: @escaping ColorSpanProvider = { text, rhyme, syllables, isDark, style in
+            colorSpanProvider: @escaping ColorSpanProvider = { text, rhyme, syllables, isDark in
                 await LyricsHighlighting.spans(
                     text: text,
                     rhymeEnabled: rhyme,
                     syllablesEnabled: syllables,
-                    isDark: isDark,
-                    style: style
+                    isDark: isDark
                 )
             }
         ) {
@@ -321,8 +317,7 @@ struct LyricsTextView: UIViewRepresentable {
         func updateColors(_ textView: UITextView) {
             guard textView.markedTextRange == nil else { return }
             let request = ColorRequest(text: textView.text, rhyme: parent.rhymeHighlightEnabled,
-                                       syllables: parent.syllableColoringEnabled, appearance: parent.appearance,
-                                       style: parent.analysisPresentation)
+                                       syllables: parent.syllableColoringEnabled, appearance: parent.appearance)
             guard colorRequest != request else { return }
             let previousRequest = colorRequest
             colorRequest = request
@@ -337,7 +332,6 @@ struct LyricsTextView: UIViewRepresentable {
                     && $0.rhyme == request.rhyme
                     && $0.syllables == request.syllables
                     && $0.appearance == request.appearance
-                    && $0.style == request.style
             } ?? false
             colorTask = Task { [weak self, weak textView] in
                 guard let self else { return }
@@ -353,8 +347,7 @@ struct LyricsTextView: UIViewRepresentable {
                     request.text,
                     request.rhyme,
                     request.syllables,
-                    request.appearance == .graphite,
-                    request.style
+                    request.appearance == .graphite
                 )
                 guard !Task.isCancelled, let textView,
                       self.colorRequest == request, textView.text == request.text,
@@ -410,9 +403,7 @@ struct LyricsTextView: UIViewRepresentable {
                     adjusted.append(LyricsColorSpan(
                         range: NSRange(location: span.range.location + delta, length: span.range.length),
                         foreground: span.foreground,
-                        underline: span.underline,
-                        underlineStyle: span.underlineStyle,
-                        inkStrokeWidth: span.inkStrokeWidth
+                        underline: span.underline
                     ))
                 } else {
                     let prefixLength = max(edit.range.location - span.range.location, 0)
@@ -420,9 +411,7 @@ struct LyricsTextView: UIViewRepresentable {
                         adjusted.append(LyricsColorSpan(
                             range: NSRange(location: span.range.location, length: prefixLength),
                             foreground: span.foreground,
-                            underline: span.underline,
-                            underlineStyle: span.underlineStyle,
-                            inkStrokeWidth: span.inkStrokeWidth
+                            underline: span.underline
                         ))
                     }
                     let suffixLength = max(spanEnd - editEnd, 0)
@@ -430,9 +419,7 @@ struct LyricsTextView: UIViewRepresentable {
                         adjusted.append(LyricsColorSpan(
                             range: NSRange(location: edit.range.location + replacementLength, length: suffixLength),
                             foreground: span.foreground,
-                            underline: span.underline,
-                            underlineStyle: span.underlineStyle,
-                            inkStrokeWidth: span.inkStrokeWidth
+                            underline: span.underline
                         ))
                     }
                 }
@@ -461,7 +448,6 @@ struct LyricsTextView: UIViewRepresentable {
             layout.removeRenderingAttribute(.foregroundColor, for: content.documentRange)
             layout.removeRenderingAttribute(.underlineStyle, for: content.documentRange)
             layout.removeRenderingAttribute(.underlineColor, for: content.documentRange)
-            layout.removeRenderingAttribute(.strokeWidth, for: content.documentRange)
             layout.invalidateRenderingAttributes(for: content.documentRange)
             let render: (NSTextLayoutManager, NSTextRange) -> Void = { layout, target in
                 guard let content = layout.textContentManager else { return }
@@ -489,12 +475,6 @@ struct LyricsTextView: UIViewRepresentable {
                     if let underline = span.underline {
                         attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
                         attributes[.underlineColor] = UIColor(underline)
-                    }
-                    if let underlineStyle = span.underlineStyle {
-                        attributes[.underlineStyle] = underlineStyle
-                    }
-                    if let inkStrokeWidth = span.inkStrokeWidth {
-                        attributes[.strokeWidth] = inkStrokeWidth
                     }
                     layout.setRenderingAttributes(attributes, for: textRange)
                 }
