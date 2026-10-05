@@ -204,15 +204,17 @@ private struct ChipButton: View {
     let label: String
     let onTap: () -> Void
     @State private var copyFlash = false
-    @State private var longPressed = false
+    @State private var longPressedAt: Date?
 
     var body: some View {
         Button {
             // A long press copies; lifting the finger afterwards must not
             // also replace the word.
-            if longPressed {
-                longPressed = false
-            } else {
+            // The action does not run when the finger lifts outside the
+            // chip, so a stale long press must not swallow a later tap.
+            let liftedAfterLongPress = longPressedAt.map { Date().timeIntervalSince($0) < Self.longPressLiftWindow } ?? false
+            longPressedAt = nil
+            if !liftedAfterLongPress {
                 onTap()
             }
         } label: {
@@ -242,22 +244,15 @@ private struct ChipButton: View {
         .accessibilityAction(named: "Copy") { copy() }
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.4).onEnded { _ in
-                longPressed = true
+                longPressedAt = Date()
                 copy()
-            }
-        )
-        // The button action does not run when the finger lifts outside the
-        // chip, so clear the suppression whenever the touch ends. Deferred one
-        // turn so an action for this same touch still sees the flag.
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0).onEnded { _ in
-                DispatchQueue.main.async { longPressed = false }
             }
         )
         .rhymeAnimation(RhymeAITokens.Motion.feedback, value: copyFlash)
     }
 
     private static let verticalPadding: CGFloat = 6
+    private static let longPressLiftWindow: TimeInterval = 2
 
     private func copy() {
         UIPasteboard.general.string = label
