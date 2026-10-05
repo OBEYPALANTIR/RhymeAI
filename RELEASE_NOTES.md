@@ -1,5 +1,25 @@
 # Release Notes
 
+## Pending Android lyric analysis and editor fixes
+
+The Ink Marks analysis style has been removed from Android. Lyric analysis is
+always shown in colour, the Analysis Style control is gone from the Editor tab
+of Settings, and the Rhyme Families and Syllable Guide switches are unchanged.
+If Ink Marks was selected in an earlier version, the app now simply uses
+colour; no other setting is changed.
+
+Words keep their syllable and rhyme colours while text is selected; the
+selection highlight sits behind the coloured words. Focus mode still removes
+analysis colour.
+
+Selecting lyrics now hides the UnBlock and mic buttons while the rewrite bar is
+showing, for screen readers as well, and brings them back when the selection is
+cleared.
+
+The Word Inspector shows the pronunciation and syllable count straight away and
+a "Finding rhymes…" indicator while the first rhyme search of a session runs,
+instead of saying there are no rhymes until the search finishes.
+
 ## Pending iOS draft safety during backup and restore
 
 Text typed while a Google Drive backup or restore is running is now also

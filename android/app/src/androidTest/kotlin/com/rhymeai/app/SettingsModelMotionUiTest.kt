@@ -14,7 +14,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.service.AIModel
@@ -147,8 +146,6 @@ class SettingsModelMotionUiTest {
                     SettingsDialog(
                         currentAppearance = AppAppearance.INK,
                         onAppearanceChange = {},
-                        currentAnalysisPresentation = AnalysisPresentation.COLOR,
-                        onAnalysisPresentationChange = {},
                         apiKeyPresence = emptyMap(),
                         currentProvider = AIProvider.LOCAL,
                         currentModel = AIModel.LOCAL_MODEL,

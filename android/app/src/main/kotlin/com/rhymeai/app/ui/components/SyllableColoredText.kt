@@ -5,11 +5,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.TextLayoutResult
-import com.rhymeai.app.ui.theme.InkUnderlinePattern
 import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.SectionMap
@@ -77,31 +75,7 @@ fun Modifier.syllableUnderlines(
             endExclusive = span.endExclusive,
             color = span.color,
             underlineGap = underlineGap,
-            strokeWidth = strokeWidth,
-            pattern = InkUnderlinePattern.SOLID
-        )
-    }
-}
-
-fun Modifier.rhymeUnderlines(
-    spans: List<RhymeUnderlineSpan>,
-    textLayoutResult: TextLayoutResult?,
-    underlineGap: Float,
-    strokeWidth: Float
-): Modifier = drawBehind {
-    val layout = textLayoutResult ?: return@drawBehind
-    if (spans.isEmpty()) return@drawBehind
-
-    spans.forEach { span ->
-        if (span.endExclusive > layout.layoutInput.text.length) return@forEach
-        drawWordUnderline(
-            layout = layout,
-            start = span.start,
-            endExclusive = span.endExclusive,
-            color = span.color,
-            underlineGap = underlineGap,
-            strokeWidth = strokeWidth,
-            pattern = span.pattern
+            strokeWidth = strokeWidth
         )
     }
 }
@@ -112,8 +86,7 @@ private fun DrawScope.drawWordUnderline(
     endExclusive: Int,
     color: Color,
     underlineGap: Float,
-    strokeWidth: Float,
-    pattern: InkUnderlinePattern
+    strokeWidth: Float
 ) {
     if (start >= endExclusive) return
 
@@ -123,13 +96,13 @@ private fun DrawScope.drawWordUnderline(
     for (offset in (start + 1) until endExclusive) {
         val line = layout.getLineForOffset(offset)
         if (line != segmentLine) {
-            drawUnderlineSegment(layout, segmentStart, offset, color, underlineGap, strokeWidth, pattern)
+            drawUnderlineSegment(layout, segmentStart, offset, color, underlineGap, strokeWidth)
             segmentStart = offset
             segmentLine = line
         }
     }
 
-    drawUnderlineSegment(layout, segmentStart, endExclusive, color, underlineGap, strokeWidth, pattern)
+    drawUnderlineSegment(layout, segmentStart, endExclusive, color, underlineGap, strokeWidth)
 }
 
 private fun DrawScope.drawUnderlineSegment(
@@ -138,8 +111,7 @@ private fun DrawScope.drawUnderlineSegment(
     endExclusive: Int,
     color: Color,
     underlineGap: Float,
-    strokeWidth: Float,
-    pattern: InkUnderlinePattern
+    strokeWidth: Float
 ) {
     val safeEnd = (endExclusive - 1).coerceAtLeast(start)
     val startBox = layout.getBoundingBox(start)
@@ -155,20 +127,6 @@ private fun DrawScope.drawUnderlineSegment(
         start = Offset(left, y),
         end = Offset(right, y),
         strokeWidth = strokeWidth,
-        cap = StrokeCap.Round,
-        pathEffect = pattern.pathEffect(strokeWidth)
-    )
-}
-
-private fun InkUnderlinePattern.pathEffect(strokeWidth: Float): PathEffect? = when (this) {
-    InkUnderlinePattern.SOLID -> null
-    InkUnderlinePattern.DASHED -> PathEffect.dashPathEffect(
-        floatArrayOf(4 * strokeWidth, 3 * strokeWidth)
-    )
-    InkUnderlinePattern.DOTTED -> PathEffect.dashPathEffect(
-        floatArrayOf(strokeWidth, 2.5f * strokeWidth)
-    )
-    InkUnderlinePattern.DASH_DOT -> PathEffect.dashPathEffect(
-        floatArrayOf(4 * strokeWidth, 2 * strokeWidth, strokeWidth, 2 * strokeWidth)
+        cap = StrokeCap.Round
     )
 }

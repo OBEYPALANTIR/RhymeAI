@@ -74,10 +74,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val viewModel = mainViewModel
-            RhymeAITheme(
-                appearance = viewModel.appAppearance,
-                analysisPresentation = viewModel.analysisPresentation
-            ) {
+            RhymeAITheme(appearance = viewModel.appAppearance) {
                 val darkSystemBars = viewModel.appAppearance.isDark
                 DisposableEffect(window, darkSystemBars) {
                     WindowInsetsControllerCompat(window, window.decorView).apply {
@@ -273,8 +270,6 @@ class MainActivity : ComponentActivity() {
                         SettingsDialog(
                             currentAppearance = viewModel.appAppearance,
                             onAppearanceChange = viewModel::setAppAppearance,
-                            currentAnalysisPresentation = viewModel.analysisPresentation,
-                            onAnalysisPresentationChange = viewModel::setAnalysisPresentation,
                             apiKeyPresence = viewModel.apiKeyPresence,
                             currentProvider = viewModel.selectedProvider,
                             currentModel = viewModel.selectedModel,

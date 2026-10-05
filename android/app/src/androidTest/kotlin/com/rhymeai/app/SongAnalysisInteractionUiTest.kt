@@ -102,7 +102,8 @@ class SongAnalysisInteractionUiTest {
             .contains(SemanticsProperties.Heading))
         check(composeRule.onNodeWithText("Assistant").fetchSemanticsNode().config
             .contains(SemanticsProperties.Heading))
-        composeRule.onNodeWithTag("analysisStyleSelector").assertIsDisplayed()
+        composeRule.onNodeWithTag("analysisStyleSelector").assertDoesNotExist()
+        composeRule.onNodeWithText("Ink Marks").assertDoesNotExist()
         check(composeRule.onAllNodesWithText("Save Settings").fetchSemanticsNodes().isEmpty())
 
         composeRule.onNodeWithText("Syllable Guide").assertIsOn()

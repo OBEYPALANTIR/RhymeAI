@@ -16,7 +16,6 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -42,7 +41,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
@@ -276,14 +274,12 @@ class NewFeatureUiTest {
             .assertHasClickAction()
             .performClick()
         composeRule.onNodeWithText("Editor").performClick()
-        composeRule.onNode(hasText("Ink Marks") and isSelected()).assertExists()
         composeRule.onNodeWithText("Syllable Guide").assertIsOn()
         composeRule.onNodeWithText("Rhyme Families").assertIsOn()
         composeRule.onNodeWithContentDescription("Rhyme Families help").performClick()
         composeRule.onNodeWithText(
-            "Underlines matching rhyme sounds throughout the current lyric. " +
-                "Solid, dashed, dotted, and dash-dot lines identify rhyme families; " +
-                "this does not change generated suggestions."
+            "Colors matching rhyme sounds throughout the current lyric. " +
+                "Each color represents one rhyme family; this does not change generated suggestions."
         ).assertIsDisplayed()
     }
 
@@ -539,10 +535,6 @@ class NewFeatureUiTest {
     @Test
     fun editorSettingsSwitchesExposeAccessibleNames() {
         composeRule.onNodeWithText("New Song").performClick()
-        scenario?.onActivity { activity ->
-            ViewModelProvider(activity)[MainViewModel::class.java]
-                .setAnalysisPresentation(AnalysisPresentation.COLOR)
-        }
         composeRule.onNodeWithTag("songActionsMenuButton").performClick()
         composeRule.onNodeWithText("Settings").performClick()
         composeRule.onNodeWithText("Editor").performClick()

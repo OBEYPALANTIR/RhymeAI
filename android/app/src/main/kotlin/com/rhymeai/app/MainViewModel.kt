@@ -8,7 +8,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SavedLocalModel
@@ -437,9 +436,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var _appAppearance by mutableStateOf(AppAppearance.INK)
     val appAppearance: AppAppearance
         get() = _appAppearance
-    private var _analysisPresentation by mutableStateOf(AnalysisPresentation.COLOR)
-    val analysisPresentation: AnalysisPresentation
-        get() = _analysisPresentation
     var appearanceLoaded by mutableStateOf(false)
         private set
     private var _selectedProvider by mutableStateOf(AIProvider.LOCAL)
@@ -869,8 +865,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _appAppearance = runCatching { repo.appearanceFlow.first() }
                 .getOrDefault(AppAppearance.INK)
-            _analysisPresentation = runCatching { repo.analysisPresentationFlow.first() }
-                .getOrDefault(AnalysisPresentation.COLOR)
             appearanceLoaded = true
 
             // Load projects
@@ -1064,19 +1058,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setAnalysisPresentation(value: AnalysisPresentation) {
-        _analysisPresentation = value
-        viewModelScope.launch {
-            try {
-                repo.saveAnalysisPresentation(value)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                errorMessage = error.message ?: "Failed to save analysis style"
-            }
-        }
-    }
-
     fun requestRewrite(action: RewriteAction) {
         val selection = pendingRewriteRange ?: lyricsFieldValue.selection
         val start = selection.min.coerceIn(0, lyrics.length)
@@ -1180,7 +1161,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentProjectId = null
         restoreEditorPosition()
         suggestions = emptyList()
-        _analysisPresentation = AnalysisPresentation.INK_MARKS
         isSyllableColoringEnabled = true
         isRhymeHighlightEnabled = true
         saveStatus = SaveStatus.SAVED

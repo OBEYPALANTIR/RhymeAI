@@ -103,7 +103,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.ui.theme.DesignTokens
@@ -121,8 +120,6 @@ import kotlinx.coroutines.withContext
 internal fun SettingsDialog(
     currentAppearance: AppAppearance,
     onAppearanceChange: (AppAppearance) -> Unit,
-    currentAnalysisPresentation: AnalysisPresentation,
-    onAnalysisPresentationChange: (AnalysisPresentation) -> Unit,
     apiKeyPresence: Map<String, Boolean>,
     currentProvider: AIProvider,
     currentModel: AIModel,
@@ -407,12 +404,6 @@ internal fun SettingsDialog(
                     // ── Editor tab ────────────────────────────────────────────
                     // The six toggles previously living in the assistant panel,
                     // now here so the panel stays focused on generation controls.
-                    AnalysisStyleSelector(
-                        current = currentAnalysisPresentation,
-                        onChange = onAnalysisPresentationChange,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(DesignTokens.Rhythm.section))
                     EditorTogglesSection(
                         useWholeSongContext = useWholeSongContext,
                         onWholeSongContextChange = onWholeSongContextChange,

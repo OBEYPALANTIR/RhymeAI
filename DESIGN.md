@@ -579,7 +579,7 @@ The editor's word count uses the 1-syllable colour and its syllable count uses t
 
 Lyric analysis colours and underlines are drawn in the editor's own text on both platforms, so they stay visible while text is selected (the selection highlight sits behind the coloured words) and are removed only in Focus mode and during an active rewrite.
 
-Analysis is shown in colour: rhyme families tint the word in its family colour at semibold weight; when rhyme colouring and syllable cues are both on, syllable count appears as an underline in the syllable colour, and when rhyme colouring is off the syllable cue instead tints the whole word (semibold) so the foreground colour is never double-claimed. On iOS this is the only presentation: the Ink Marks style and the Analysis Style selector were removed, and a stored Ink Marks choice is discarded at launch. Android still offers an Analysis Style selector in Settings with **Color** (default, as above) and **Ink Marks** (no analysis hue; rhyme families are identified by underline pattern (solid, dashed, dotted, dash-dot) in primary ink, and syllable count is shown by font weight (regular for 1, medium for 2, semibold for 3, bold for 4+)) until the style is removed there too.
+Lyric analysis is shown in colour on both platforms. Rhyme families tint the word in its family colour at semibold weight; when rhyme colouring and syllable cues are both on, syllable count appears as an underline in the syllable colour, and when rhyme colouring is off the syllable cue instead tints the whole word (semibold) so the foreground colour is never double-claimed. There is no Analysis Style setting on either platform: the Ink Marks presentation (underline patterns and font weights in place of hue) has been removed from both, and a stored Ink Marks choice from an older version is discarded on iOS and ignored on Android.
 
 Texture is part of the appearance. On iOS, Paper draws faint ruled lines every 28pt (primary ink at 5.5%) plus sparse fibre marks (2.4%), Graphite draws a fine grain (1.8%), and Ink is plain; the texture is removed when Reduce Transparency or Increase Contrast is on. Android draws only the Graphite grain (1.8%), removed when the system high-contrast-text setting is on; Android Paper is untextured.
 
@@ -784,7 +784,7 @@ Do use the action fill with its on-action colour for the one primary action on a
 
 Do use serif type for song identity and sans type for controls.
 
-Do keep rhyme and syllable colours semantically stable. On Android, make every analysis cue work in Ink Marks without colour for as long as that style exists there.
+Do keep rhyme and syllable colours semantically stable.
 
 Do separate surfaces with a 1px palette outline and a tonal step.
 

@@ -3,7 +3,6 @@ package com.rhymeai.app.ui.components
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.ui.theme.SyllableBlue
 import com.rhymeai.app.ui.theme.SyllableBlueOnLight
@@ -36,7 +35,6 @@ class SyllableWordColorTest {
         baseTextColor = base,
         rhymePalette = rhymePalette(isDark),
         isDark = isDark,
-        presentation = AnalysisPresentation.COLOR,
         rhymeEnabled = rhymeEnabled,
         syllablesEnabled = true
     )
@@ -59,7 +57,7 @@ class SyllableWordColorTest {
         assertEquals(AppAppearance.entries.toSet(), expectedByAppearance.keys)
 
         expectedByAppearance.forEach { (appearance, palette) ->
-            val analysed = analyse(isDark = appearance.isDark, rhymeEnabled = false).text
+            val analysed = analyse(isDark = appearance.isDark, rhymeEnabled = false)
 
             assertEquals(lyric, analysed.text)
             syllablesByWord.forEach { (word, syllables) ->
@@ -78,7 +76,7 @@ class SyllableWordColorTest {
 
     @Test
     fun selectionMapsOntoColouredWordsWithoutClearingThem() {
-        val analysed = analyse(isDark = true, rhymeEnabled = false).text
+        val analysed = analyse(isDark = true, rhymeEnabled = false)
         val transformed = lyricAnalysisTransformation(active = true, analysed = analysed)
             .filter(AnnotatedString(lyric))
         val selection = TextRange(lyric.indexOf("harbor"), lyric.indexOf("harbor") + "harbor".length)
@@ -94,7 +92,7 @@ class SyllableWordColorTest {
 
     @Test
     fun staleOrInactiveAnalysisLeavesTheTypedTextUnstyled() {
-        val analysed = analyse(isDark = false, rhymeEnabled = false).text
+        val analysed = analyse(isDark = false, rhymeEnabled = false)
         val typed = AnnotatedString("$lyric and more")
 
         assertEquals(typed, lyricAnalysisTransformation(active = true, analysed = analysed).filter(typed).text)
@@ -113,10 +111,9 @@ class SyllableWordColorTest {
             baseTextColor = base,
             rhymePalette = rhymePalette,
             isDark = false,
-            presentation = AnalysisPresentation.COLOR,
             rhymeEnabled = true,
             syllablesEnabled = true
-        ).text
+        )
 
         fun colourOf(word: String) = analysed.spanStyles.single { it.start == text.indexOf(word) }.item.color
         assertEquals(Color.Magenta, colourOf("light"))

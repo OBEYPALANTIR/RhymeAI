@@ -148,7 +148,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.SaveStatus
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.ExportFormat
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SongProject
@@ -157,9 +156,8 @@ import com.rhymeai.app.ui.components.ExportSheet
 import com.rhymeai.app.ui.components.EditorUndoRedoControls
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
-import com.rhymeai.app.ui.components.rememberAnalysisTextResult
+import com.rhymeai.app.ui.components.rememberAnalysisText
 import com.rhymeai.app.ui.components.lyricAnalysisTransformation
-import com.rhymeai.app.ui.components.rhymeUnderlines
 import com.rhymeai.app.ui.components.WordInspectorSheet
 import com.rhymeai.app.ui.components.analyzeSyllableUnderlines
 import com.rhymeai.app.ui.components.colorSyllableUnderlines
@@ -167,7 +165,6 @@ import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.components.keyboardAwareBottomPadding
 import com.rhymeai.app.ui.components.syllableUnderlines
 import com.rhymeai.app.ui.theme.DesignTokens
-import com.rhymeai.app.ui.theme.LocalAnalysisPresentation
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.appWritingSurface
@@ -964,10 +961,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         !viewModel.hasActiveRewrite &&
                         lyricAnalysisReady
                     // Underlines only when rhyme coloring owns the foreground; otherwise syllables tint the word itself.
-                    val analysisPresentation = LocalAnalysisPresentation.current
                     val syllableUnderlineActive = !focusMode && viewModel.isSyllableColoringEnabled &&
                         viewModel.isRhymeHighlightEnabled &&
-                        analysisPresentation == AnalysisPresentation.COLOR &&
                         viewModel.lyrics.isNotEmpty() &&
                         !viewModel.hasActiveRewrite &&
                         lyricAnalysisReady
@@ -1015,16 +1010,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         )
                     }
                     val analysisTextActive = analysisOverlayActive && !focusMode
-                    val analysisTextResult = rememberAnalysisTextResult(
+                    val analysisText = rememberAnalysisText(
                         text = analyzedLyrics,
                         enabled = analysisTextActive && viewModel.isRhymeHighlightEnabled,
                         syllablesEnabled = analysisTextActive && viewModel.isSyllableColoringEnabled
                     )
-                    val analysisTransformation = remember(analysisTextActive, analysisTextResult) {
-                        lyricAnalysisTransformation(analysisTextActive, analysisTextResult.text)
+                    val analysisTransformation = remember(analysisTextActive, analysisText) {
+                        lyricAnalysisTransformation(analysisTextActive, analysisText)
                     }
-                    val rhymeUnderlineGap = with(density) { 2.dp.toPx() }
-                    val rhymeUnderlineWidth = with(density) { 3.dp.toPx() }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1075,12 +1068,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                             colorScheme.tertiary.copy(alpha = 0.78f)
                                         }
                                     )
-                                )
-                                .rhymeUnderlines(
-                                    spans = if (analysisTextActive) analysisTextResult.rhymeSpans else emptyList(),
-                                    textLayoutResult = lyricsTextLayout,
-                                    underlineGap = rhymeUnderlineGap,
-                                    strokeWidth = rhymeUnderlineWidth
                                 )
                                 .syllableUnderlines(
                                     spans = syllableUnderlineSpans,
