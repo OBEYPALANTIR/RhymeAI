@@ -728,6 +728,28 @@ class NewFeatureUiTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test
+    fun rewriteChipBarReplacesFloatingActionsUntilSelectionClears() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val lyrics = "The harbor lights are burning low"
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        editor.performClick().performTextInput(lyrics)
+        composeRule.onNodeWithTag("unBlockAction").assertIsDisplayed()
+        composeRule.onNodeWithTag("micButton").assertIsDisplayed()
+
+        editor.performTextInputSelection(TextRange(4, 10))
+        composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        composeRule.onNodeWithTag("unBlockAction").assertDoesNotExist()
+        composeRule.onNodeWithTag("micButton").assertDoesNotExist()
+
+        editor.performTextInputSelection(TextRange(lyrics.length))
+        composeRule.onNodeWithTag("rewriteChipBar").assertDoesNotExist()
+        composeRule.onNodeWithTag("unBlockAction").assertIsDisplayed()
+        composeRule.onNodeWithTag("micButton").assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
     fun singleWordSelectionShowsRewriteChipWithLookupIntoInspector() {
         composeRule.onNodeWithText("New Song").performClick()
 

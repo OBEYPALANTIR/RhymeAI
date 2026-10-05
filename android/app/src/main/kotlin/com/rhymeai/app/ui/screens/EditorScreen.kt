@@ -508,7 +508,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             .fillMaxSize()
             .appWritingSurface()
     ) {
-        val fabRowVisible = !focusMode && !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite
+        // The rewrite chip bar takes the floating actions' place, so they leave the screen and
+        // the accessibility tree until the selection is gone.
+        val fabRowVisible = !focusMode && !showBottomSheet && !pendingAssistantSheet && !modalOpen &&
+            !viewModel.hasActiveRewrite && !rewriteVisible
         val memoService = viewModel.voiceMemoService
         LaunchedEffect(memoService) {
             val activity = context as? android.app.Activity
