@@ -1,13 +1,6 @@
 package com.rhymeai.app.ui.components
 
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -15,103 +8,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.dp
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.ui.theme.InkUnderlinePattern
-import com.rhymeai.app.ui.theme.LocalAnalysisPresentation
-import com.rhymeai.app.ui.theme.LocalAppAppearance
-import com.rhymeai.app.ui.theme.analysisFontWeight
 import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
 
 private val wordPattern = LyricTokenizer.alphanumericWordPattern
-
-fun buildSyllableWordColorAnnotatedString(
-    text: String,
-    baseTextColor: Color,
-    isDark: Boolean
-): AnnotatedString = buildSyllableWordAnnotatedString(
-    text = text,
-    baseTextColor = baseTextColor,
-    isDark = isDark,
-    presentation = AnalysisPresentation.COLOR
-)
-
-fun buildSyllableWordAnnotatedString(
-    text: String,
-    baseTextColor: Color,
-    isDark: Boolean,
-    presentation: AnalysisPresentation
-): AnnotatedString = buildAnnotatedString {
-    val headerRanges = SectionMap.headerRanges(text)
-    var cursor = 0
-    for (match in wordPattern.findAll(text).filterNot { word ->
-        SectionMap.intersectsHeader(word.range, headerRanges)
-    }) {
-        val start = match.range.first
-        val end = match.range.last + 1
-        if (start > cursor) {
-            withStyle(SpanStyle(color = baseTextColor)) {
-                append(text.substring(cursor, start))
-            }
-        }
-        val syllableCount = SyllableCounter.count(match.value)
-        val wordStyle = when (presentation) {
-            AnalysisPresentation.COLOR -> SpanStyle(
-                color = syllableColor(syllableCount, isDark),
-                fontWeight = FontWeight.SemiBold
-            )
-            AnalysisPresentation.INK_MARKS -> SpanStyle(
-                color = baseTextColor,
-                fontWeight = analysisFontWeight(syllableCount)
-            )
-        }
-        withStyle(wordStyle) {
-            append(match.value)
-        }
-        cursor = end
-    }
-    if (cursor < text.length) {
-        withStyle(SpanStyle(color = baseTextColor)) {
-            append(text.substring(cursor))
-        }
-    }
-}
-
-@Composable
-fun SyllableWordColoredText(
-    text: String,
-    modifier: Modifier = Modifier,
-    style: TextStyle = TextStyle.Default
-) {
-    val baseTextColor = MaterialTheme.colorScheme.onBackground
-    val isDark = LocalAppAppearance.current.isDark
-    val presentation = LocalAnalysisPresentation.current
-    val annotated = remember(text, baseTextColor, isDark, presentation) {
-        buildSyllableWordAnnotatedString(
-            text = text,
-            baseTextColor = baseTextColor,
-            isDark = isDark,
-            presentation = presentation
-        )
-    }
-
-    Text(
-        text = annotated,
-        modifier = modifier,
-        style = style
-    )
-}
 
 @Immutable
 data class SyllableUnderlineSpan(
@@ -153,43 +57,6 @@ fun colorSyllableUnderlines(
         start = token.start,
         endExclusive = token.endExclusive,
         color = syllableColor(token.syllableCount, isDark)
-    )
-}
-
-fun buildSyllableUnderlineSpans(
-    text: String,
-    enabled: Boolean,
-    isDark: Boolean
-): List<SyllableUnderlineSpan> =
-    colorSyllableUnderlines(analyzeSyllableUnderlines(text, enabled), isDark)
-
-@Composable
-fun SyllableColoredText(
-    text: String,
-    enabled: Boolean,
-    modifier: Modifier = Modifier,
-    style: TextStyle = TextStyle.Default
-) {
-    val baseTextColor = MaterialTheme.colorScheme.onBackground
-    val isDark = LocalAppAppearance.current.isDark
-    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val density = LocalDensity.current
-    val strokeWidth = with(density) { 3.dp.toPx() }
-    val underlineGap = with(density) { 2.dp.toPx() }
-    val analysis = remember(text, enabled) { analyzeSyllableUnderlines(text, enabled) }
-    val spans = remember(analysis, isDark) { colorSyllableUnderlines(analysis, isDark) }
-
-    Text(
-        text = text,
-        modifier = modifier.syllableUnderlines(
-            spans = spans,
-            textLayoutResult = layoutResult,
-            underlineGap = underlineGap,
-            strokeWidth = strokeWidth
-        ),
-        style = style,
-        color = baseTextColor,
-        onTextLayout = { layoutResult = it }
     )
 }
 

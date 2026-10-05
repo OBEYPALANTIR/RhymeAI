@@ -17,6 +17,9 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -314,6 +317,18 @@ internal fun buildAnalysisText(
     }
 
     return AnalysisTextResult(annotated, rhymeSpans, weights)
+}
+
+/**
+ * Draws the analysed lyric inside the editor field. Offsets map one to one, so the
+ * cursor and any selection sit on the coloured words instead of replacing them.
+ */
+internal fun lyricAnalysisTransformation(
+    active: Boolean,
+    analysed: AnnotatedString
+): VisualTransformation = VisualTransformation { source ->
+    val transformed = if (active && analysed.text == source.text) analysed else source
+    TransformedText(transformed, OffsetMapping.Identity)
 }
 
 internal fun assignRhymeFamilyColors(

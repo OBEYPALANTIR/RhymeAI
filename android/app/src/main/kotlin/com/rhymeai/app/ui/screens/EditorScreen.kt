@@ -137,10 +137,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.input.TransformedText
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -161,6 +158,7 @@ import com.rhymeai.app.ui.components.EditorUndoRedoControls
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.rememberAnalysisTextResult
+import com.rhymeai.app.ui.components.lyricAnalysisTransformation
 import com.rhymeai.app.ui.components.rhymeUnderlines
 import com.rhymeai.app.ui.components.WordInspectorSheet
 import com.rhymeai.app.ui.components.analyzeSyllableUnderlines
@@ -954,13 +952,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
                     // Expensive lyric analysis waits until typing pauses so editor redraws stay stable.
+                    // It stays on while text is selected: the field draws its selection behind the coloured words.
                     val lyricAnalysisReady = analyzedLyrics == viewModel.lyrics
                     val analysisOverlayActive = (
                         viewModel.isRhymeHighlightEnabled || viewModel.isSyllableColoringEnabled
                     ) &&
                         viewModel.lyrics.isNotEmpty() &&
                         !viewModel.hasActiveRewrite &&
-                        selection.collapsed &&
                         lyricAnalysisReady
                     // Underlines only when rhyme coloring owns the foreground; otherwise syllables tint the word itself.
                     val analysisPresentation = LocalAnalysisPresentation.current
@@ -969,7 +967,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         analysisPresentation == AnalysisPresentation.COLOR &&
                         viewModel.lyrics.isNotEmpty() &&
                         !viewModel.hasActiveRewrite &&
-                        selection.collapsed &&
                         lyricAnalysisReady
                     // Center glyphs in the 28sp line box and drop legacy font padding so the
                     // cursor, placeholder, and color overlays all share one vertical metric.
@@ -1021,16 +1018,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         syllablesEnabled = analysisTextActive && viewModel.isSyllableColoringEnabled
                     )
                     val analysisTransformation = remember(analysisTextActive, analysisTextResult) {
-                        VisualTransformation { source ->
-                            val transformed = if (
-                                analysisTextActive && analysisTextResult.text.text == source.text
-                            ) {
-                                analysisTextResult.text
-                            } else {
-                                source
-                            }
-                            TransformedText(transformed, OffsetMapping.Identity)
-                        }
+                        lyricAnalysisTransformation(analysisTextActive, analysisTextResult.text)
                     }
                     val rhymeUnderlineGap = with(density) { 2.dp.toPx() }
                     val rhymeUnderlineWidth = with(density) { 3.dp.toPx() }
