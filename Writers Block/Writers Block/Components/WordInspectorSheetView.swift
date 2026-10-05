@@ -246,6 +246,14 @@ private struct ChipButton: View {
                 copy()
             }
         )
+        // The button action does not run when the finger lifts outside the
+        // chip, so clear the suppression whenever the touch ends. Deferred one
+        // turn so an action for this same touch still sees the flag.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0).onEnded { _ in
+                DispatchQueue.main.async { longPressed = false }
+            }
+        )
         .rhymeAnimation(RhymeAITokens.Motion.feedback, value: copyFlash)
     }
 
