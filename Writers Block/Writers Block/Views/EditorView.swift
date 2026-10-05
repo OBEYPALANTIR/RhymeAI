@@ -883,8 +883,8 @@ struct EditorView: View {
                 projectDrawerOpen = true
             } label: {
                 Image(systemName: "line.3.horizontal")
-                    .font(.system(size: EditorViewConstants.ControlChrome.iconSize))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
+                    .foregroundStyle(appearance.palette.secondaryInk)
                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
             }
             .accessibilityLabel("Open songs drawer")
@@ -943,12 +943,18 @@ struct EditorView: View {
                     if usesCompactControlChrome {
                         Image(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "viewfinder")
                             .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
+                            .foregroundStyle(appearance.palette.secondaryInk)
                     } else {
-                        ZStack {
+                        // The hidden label reserves the wider title so the
+                        // bar does not shift; the visible one sits against
+                        // the trailing icons so the three read as one group.
+                        ZStack(alignment: .trailing) {
                             Text("Exit Focus").hidden()
                             Text(isFocusMode ? "Exit Focus" : "Focus")
                         }
                         .font(.subheadline.weight(.medium))
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .padding(.horizontal, RhymeAITokens.Spacing.xs)
                         .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -995,8 +1001,8 @@ struct EditorView: View {
                         .disabled(viewModel.lyrics.isEmpty)
                     } label: {
                         Image(systemName: "ellipsis.circle")
-                            .font(.system(size: EditorViewConstants.ControlChrome.iconSize))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
+                            .foregroundStyle(appearance.palette.secondaryInk)
                             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                     }
                     .accessibilityLabel("Song actions")
@@ -1008,8 +1014,8 @@ struct EditorView: View {
                         viewModel.showSettingsSheet = true
                     } label: {
                         Image(systemName: "gearshape")
-                            .font(.system(size: EditorViewConstants.ControlChrome.iconSize))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
+                            .foregroundStyle(appearance.palette.secondaryInk)
                             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                     }
                     .accessibilityLabel("Settings")

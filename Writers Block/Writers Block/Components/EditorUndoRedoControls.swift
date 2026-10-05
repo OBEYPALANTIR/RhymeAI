@@ -9,7 +9,9 @@ struct EditorUndoRedoControls: View {
     let onRedo: () -> Void
 
     var body: some View {
-        HStack(spacing: RhymeAITokens.Spacing.xs) {
+        // Same gap as the rest of the top bar, so the leading group reads as
+        // one evenly spaced run.
+        HStack(spacing: RhymeAITokens.Spacing.xxs) {
             historyButton(
                 systemImage: "arrow.uturn.backward",
                 accessibilityLabel: "Undo last edit",
@@ -36,8 +38,8 @@ struct EditorUndoRedoControls: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(appearance.palette.primaryInk.opacity(isEnabled ? 1 : 0.35))
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(appearance.palette.secondaryInk.opacity(isEnabled ? 1 : 0.35))
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
         }
         .buttonStyle(.rhymePress)
