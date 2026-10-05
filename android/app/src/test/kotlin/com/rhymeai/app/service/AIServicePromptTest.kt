@@ -58,7 +58,8 @@ class AIServicePromptTest {
         sequenceOf(
             "road\tR OW1 D",
             "glowed\tG L OW1 D",
-            "showed\tSH OW1 D"
+            "showed\tSH OW1 D",
+            "wrote\tR OW1 T"
         )
     )
 

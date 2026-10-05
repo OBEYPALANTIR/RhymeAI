@@ -1,5 +1,6 @@
 package com.rhymeai.app.util
 
+import com.rhymeai.app.data.model.RhymeType
 import java.io.InputStream
 
 data class WordProsody(
@@ -22,14 +23,19 @@ data class LineProsody(
 data class RhymeMatches(
     val perfect: List<String>,
     val near: List<String>,
-    val multi: List<String>
+    val multi: List<String>,
+    val slant: List<String> = emptyList()
 ) {
-    val isEmpty: Boolean get() = perfect.isEmpty() && near.isEmpty() && multi.isEmpty()
+    val isEmpty: Boolean get() = perfect.isEmpty() && near.isEmpty() && multi.isEmpty() && slant.isEmpty()
 
     companion object {
         val EMPTY = RhymeMatches(emptyList(), emptyList(), emptyList())
     }
 }
+
+data class RhymeTail(val vowel: String, val coda: List<String>)
+
+private class RhymeTailEntry(val word: String, val tail: RhymeTail)
 
 class PronunciationDictionary private constructor(
     private val entries: Map<String, List<List<String>>>
@@ -89,6 +95,26 @@ object ProsodyAnalyzer {
         "it", "its", "this", "that", "these", "those", "i", "you", "he",
         "she", "we", "they", "them", "his", "her", "our", "their", "my",
         "do", "does", "did", "have", "has", "had", "not", "if", "so", "no"
+    )
+    /** Grammatical words; identical list on iOS. */
+    private val functionWords = stopwords + setOf(
+        "me", "mine", "myself", "your", "yours", "yourself", "yourselves", "him", "himself",
+        "hers", "herself", "itself", "us", "ours", "ourselves", "theirs", "themselves",
+        "who", "whom", "whose", "which", "what", "whatever", "whoever", "whichever",
+        "when", "whenever", "where", "wherever", "why", "how", "however", "whether",
+        "while", "whereas", "though", "although", "because", "unless", "then", "than",
+        "yet", "nor", "there", "here", "some", "any", "each", "every", "either", "neither",
+        "both", "all", "such", "more", "most", "much", "many", "few", "less", "least",
+        "into", "onto", "from", "upon", "unto", "via", "per", "among", "amongst", "toward",
+        "towards", "during", "until", "till", "since", "despite", "except", "against",
+        "between", "through", "within", "without", "across", "am", "been", "being",
+        "having", "will", "would", "shall", "should", "can", "could", "may", "might",
+        "must", "ought", "just", "very", "too", "also", "really", "quite", "rather", "else",
+        "i'm", "you're", "he's", "she's", "it's", "we're", "they're", "i've", "you've",
+        "we've", "they've", "i'd", "you'd", "he'd", "she'd", "we'd", "they'd", "i'll",
+        "you'll", "he'll", "she'll", "we'll", "they'll", "isn't", "aren't", "wasn't",
+        "weren't", "don't", "doesn't", "didn't", "won't", "wouldn't", "can't", "couldn't",
+        "shouldn't", "that's", "there's", "what's", "who's", "let's", "ain't"
     )
     private val substitutions = listOf(
         "tion" to "shn",
@@ -221,7 +247,9 @@ object ProsodyAnalyzer {
     @Volatile private var indexBuiltFor: PronunciationDictionary? = null
     @Volatile private var perfectByKey: Map<String, List<String>> = emptyMap()
     @Volatile private var multiByKey: Map<String, List<String>> = emptyMap()
-    @Volatile private var nearByVowel: Map<String, List<String>> = emptyMap()
+    @Volatile private var tailsByVowel: Map<String, List<RhymeTailEntry>> = emptyMap()
+    @Volatile private var tailsByCoda: Map<String, List<RhymeTailEntry>> = emptyMap()
+    @Volatile private var weakTailsByKey: Map<String, List<RhymeTailEntry>> = emptyMap()
     private val indexLock = Any()
 
     fun findRhymes(
@@ -240,28 +268,70 @@ object ProsodyAnalyzer {
         if (keys.isEmpty()) return RhymeMatches.EMPTY
         val k0 = keys[0]
         val k1 = keys.getOrNull(1)
-        val vowel0 = k0.split(' ').firstOrNull().orEmpty()
-        if (vowel0.isBlank()) return RhymeMatches.EMPTY
 
         ensureIndex(dictionary)
         val perfectAll = (perfectByKey[k0] ?: emptyList()).filter { it != normalized }
         val multiAll = if (k1 != null) {
             (multiByKey[k1] ?: emptyList()).filter { it != normalized && it !in perfectAll }
         } else emptyList()
-        val perfectSet = perfectAll.toSet()
-        val multiSet = multiAll.toSet()
-        val nearAll = (nearByVowel[vowel0] ?: emptyList())
-            .filter { it != normalized && it !in perfectSet && it !in multiSet }
+        val exclude = perfectAll.toHashSet().apply { addAll(multiAll) }
 
-        // Re-rank each pool by word frequency (most common first) before the
-        // limit cut, so both candidateEndWords and the rhyme inspector surface
-        // familiar words rather than dictionary-hash-order obscurities.
+        val near: List<String>
+        val slant: List<String>
+        val targetTail = rhymeTail(word, dictionary)
+        if (targetTail == null) {
+            near = emptyList()
+            slant = emptyList()
+        } else {
+            // Every entry that can stand in a near or slant relation: the same
+            // stressed vowel, the same coda, or a stress-shifted tail.
+            val pool = ArrayList<RhymeTailEntry>()
+            pool += tailsByVowel[targetTail.vowel].orEmpty()
+            if (targetTail.coda.isNotEmpty()) pool += tailsByCoda[codaKey(targetTail.coda)].orEmpty()
+            pool += weakTailsByKey[codaKey(listOf(targetTail.vowel) + targetTail.coda)].orEmpty()
+            targetTail.coda.filter(::isVowelPhone).toSet().forEach { vowel ->
+                if (vowel != targetTail.vowel) pool += tailsByVowel[vowel].orEmpty()
+            }
+
+            // A word's best relation wins: near over slant, then the closer near tier.
+            val best = HashMap<String, TailRelation>()
+            for (entry in pool) {
+                if (entry.word == normalized || entry.word in exclude || isInflection(entry.word, normalized) ||
+                    !isSpelledAsWord(entry.word)
+                ) continue
+                val relation = tailRelation(targetTail, entry.tail) ?: continue
+                val current = best[entry.word]
+                if (current == null || relation.rank < current.rank) best[entry.word] = relation
+            }
+            near = songwriterOrder(best.filterValues { it.type == RhymeType.NEAR }, wordFrequency)
+            slant = songwriterOrder(best.filterValues { it.type == RhymeType.SLANT }, wordFrequency)
+        }
+
+        // Rank each pool before the limit cut, so both candidateEndWords and
+        // the rhyme inspector surface familiar words rather than
+        // dictionary-hash-order obscurities.
         return RhymeMatches(
             perfect = wordFrequency.sortByFrequency(perfectAll).take(perfectLimit),
-            near = wordFrequency.sortByFrequency(nearAll).take(nearLimit),
-            multi = wordFrequency.sortByFrequency(multiAll).take(multiLimit)
+            near = near.take(nearLimit),
+            multi = wordFrequency.sortByFrequency(multiAll).take(multiLimit),
+            slant = slant.take(nearLimit)
         )
     }
+
+    /** Near and slant order for a songwriter: content words before function
+     *  words, closer relations first, then common before rare, then spelling
+     *  so ties are identical on every platform. */
+    private fun songwriterOrder(relations: Map<String, TailRelation>, wordFrequency: WordFrequency): List<String> =
+        relations.entries
+            .sortedWith(
+                compareBy<Map.Entry<String, TailRelation>> { if (isFunctionWord(it.key)) 1 else 0 }
+                    .thenBy { it.value.tier }
+                    .thenBy { wordFrequency.rankOf(it.key) }
+                    .thenBy { it.key }
+            )
+            .map { it.key }
+
+    private fun codaKey(coda: List<String>): String = coda.joinToString(" ")
 
     private fun ensureIndex(dictionary: PronunciationDictionary) {
         if (indexBuiltFor === dictionary) return
@@ -269,21 +339,36 @@ object ProsodyAnalyzer {
             if (indexBuiltFor === dictionary) return
             val perfectBuild = HashMap<String, MutableList<String>>(32_768)
             val multiBuild = HashMap<String, MutableList<String>>(32_768)
-            val nearBuild = HashMap<String, MutableList<String>>(64)
+            val vowelBuild = HashMap<String, MutableList<RhymeTailEntry>>(64)
+            val codaBuild = HashMap<String, MutableList<RhymeTailEntry>>(4_096)
+            val weakBuild = HashMap<String, MutableList<RhymeTailEntry>>(4_096)
             dictionary.forEachEntry { word, variants ->
-                if (word.length < 2 || word in stopwords) return@forEachEntry
+                if (word.length < 2) return@forEachEntry
+                val isStopword = word in stopwords
                 val seenK0 = HashSet<String>(2)
                 val seenK1 = HashSet<String>(2)
-                val seenVowel = HashSet<String>(2)
+                val seenTails = HashSet<RhymeTail>(2)
                 for (phones in variants) {
+                    val tail = rhymeTailForPhones(phones)
+                    if (tail != null && seenTails.add(tail)) {
+                        val entry = RhymeTailEntry(word, tail)
+                        vowelBuild.getOrPut(tail.vowel) { ArrayList(256) }.add(entry)
+                        if (tail.coda.isNotEmpty()) {
+                            codaBuild.getOrPut(codaKey(tail.coda)) { ArrayList(8) }.add(entry)
+                        }
+                        // Unstressed syllables after the stress ("happy" ends in an
+                        // unstressed IY), for stress-shifted near rhymes.
+                        tail.coda.forEachIndexed { index, phone ->
+                            if (isVowelPhone(phone)) {
+                                weakBuild.getOrPut(codaKey(tail.coda.drop(index))) { ArrayList(8) }.add(entry)
+                            }
+                        }
+                    }
+                    if (isStopword) continue
                     val ks = rhymeKeysForPhones(phones, maxDepth = 2)
                     val k0 = ks.getOrNull(0) ?: continue
                     if (seenK0.add(k0)) {
                         perfectBuild.getOrPut(k0) { ArrayList(8) }.add(word)
-                    }
-                    val v0 = k0.split(' ').firstOrNull().orEmpty()
-                    if (v0.isNotBlank() && seenVowel.add(v0)) {
-                        nearBuild.getOrPut(v0) { ArrayList(256) }.add(word)
                     }
                     val k1 = ks.getOrNull(1) ?: continue
                     if (seenK1.add(k1)) {
@@ -293,9 +378,141 @@ object ProsodyAnalyzer {
             }
             perfectByKey = perfectBuild
             multiByKey = multiBuild
-            nearByVowel = nearBuild
+            tailsByVowel = vowelBuild
+            tailsByCoda = codaBuild
+            weakTailsByKey = weakBuild
             indexBuiltFor = dictionary
         }
+    }
+
+    /** Stressed vowel and everything after it, from the first pronunciation. */
+    fun rhymeTail(
+        word: String,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+    ): RhymeTail? {
+        val normalized = normalizeWord(word)
+        if (normalized.length < 2 || normalized in stopwords) return null
+        return dictionary.pronunciations(normalized).firstOrNull()?.let(::rhymeTailForPhones)
+    }
+
+    /** How a candidate's rhyme tail relates to the target's when the two are
+     *  not a perfect rhyme. [tier] orders near rhymes from closest (1) to
+     *  loosest (2); slant rhymes are all tier 1. */
+    data class TailRelation(val type: RhymeType, val tier: Int) {
+        /** Lower is better: any near before any slant, then by tier. */
+        val rank: Int get() = (if (type == RhymeType.NEAR) 0 else 10) + tier
+    }
+
+    /**
+     * Near and slant rhymes as songwriters classify them (family, additive and
+     * subtractive rhymes; assonance; consonance). Identical on iOS
+     * (`ProsodyAnalyzer.swift`).
+     *
+     * Near, tier 1: same stressed vowel, and the codas differ by one consonant
+     * from the same family (plosives, fricatives, nasals) or by one added or
+     * dropped consonant ("night"/"ride", "home"/"phone", "chair"/"stairs").
+     * Near, tier 2: one coda adds an unstressed syllable to the other
+     * ("chair"/"caring"), or the stress falls differently on the same tail
+     * ("free"/"happy").
+     * Slant: consonance, a different stressed vowel before an identical coda
+     * ("chair"/"door"), or assonance, the same stressed vowel and syllable
+     * shape before unrelated consonants ("night"/"time").
+     *
+     * A vowel followed by R is treated as its own vowel ("chair" is not
+     * assonant with "then"), as it is in American English.
+     */
+    fun tailRelation(target: RhymeTail, candidate: RhymeTail): TailRelation? {
+        if (target == candidate) return null
+        if (target.vowel == candidate.vowel) {
+            val targetRColored = target.coda.firstOrNull() == "R"
+            val candidateRColored = candidate.coda.firstOrNull() == "R"
+            if (targetRColored == candidateRColored) {
+                val targetRest = if (targetRColored) target.coda.drop(1) else target.coda
+                val candidateRest = if (candidateRColored) candidate.coda.drop(1) else candidate.coda
+                if (isCloseCodaEdit(targetRest, candidateRest)) return TailRelation(RhymeType.NEAR, 1)
+                if (addsUnstressedSyllable(targetRest, candidateRest)) return TailRelation(RhymeType.NEAR, 2)
+                if (isStressShift(target, candidate)) return TailRelation(RhymeType.NEAR, 2)
+                if (targetRest.filter(::isVowelPhone) == candidateRest.filter(::isVowelPhone)) {
+                    return TailRelation(RhymeType.SLANT, 1)
+                }
+            }
+            return if (isStressShift(target, candidate)) TailRelation(RhymeType.NEAR, 2) else null
+        }
+        if (isStressShift(target, candidate)) return TailRelation(RhymeType.NEAR, 2)
+        if (target.coda.isNotEmpty() && target.coda == candidate.coda) return TailRelation(RhymeType.SLANT, 1)
+        return null
+    }
+
+    fun isVowelPhone(phone: String): Boolean = phone in vowels
+
+    /** Grammatical words rank after content words in near and slant lists. */
+    fun isFunctionWord(normalizedWord: String): Boolean = normalizedWord in functionWords
+
+    /** True when [word] is just [base] with an inflection ("chairs", "homing"),
+     *  which is no help to a songwriter looking for a new ending. */
+    fun isInflection(word: String, base: String): Boolean {
+        if (base.isEmpty() || word.length <= base.length) return false
+        val stems = if (base.endsWith("e")) listOf(base, base.dropLast(1)) else listOf(base)
+        return stems.any { stem -> word.startsWith(stem) && word.substring(stem.length) in inflectionSuffixes }
+    }
+
+    /** Rejects abbreviations spelled without a vowel letter ("mr", "st"). */
+    fun isSpelledAsWord(word: String): Boolean = word.any { it in "aeiouy" }
+
+    private val inflectionSuffixes = setOf("s", "es", "'s", "ed", "ing")
+
+    /** Same family: plosives, fricatives (with affricates), nasals. */
+    private val consonantFamilies = listOf(
+        setOf("P", "B", "T", "D", "K", "G"),
+        setOf("F", "V", "TH", "DH", "S", "Z", "SH", "ZH", "CH", "JH"),
+        setOf("M", "N", "NG")
+    )
+
+    private fun isCloseConsonant(lhs: String, rhs: String): Boolean =
+        consonantFamilies.any { lhs in it && rhs in it }
+
+    /** One family substitution, or one consonant added or dropped. */
+    private fun isCloseCodaEdit(lhs: List<String>, rhs: List<String>): Boolean {
+        if (lhs.size == rhs.size) {
+            val differences = lhs.zip(rhs).filter { it.first != it.second }
+            if (differences.size != 1) return false
+            val (a, b) = differences.first()
+            return !isVowelPhone(a) && !isVowelPhone(b) && isCloseConsonant(a, b)
+        }
+        if (kotlin.math.abs(lhs.size - rhs.size) != 1) return false
+        val shorter = if (lhs.size < rhs.size) lhs else rhs
+        val longer = if (lhs.size < rhs.size) rhs else lhs
+        return longer.indices.any { index ->
+            !isVowelPhone(longer[index]) && longer.take(index) + longer.drop(index + 1) == shorter
+        }
+    }
+
+    /** The longer coda is the shorter plus exactly one more (unstressed) syllable. */
+    private fun addsUnstressedSyllable(lhs: List<String>, rhs: List<String>): Boolean {
+        if (lhs.size == rhs.size) return false
+        val shorter = if (lhs.size < rhs.size) lhs else rhs
+        val longer = if (lhs.size < rhs.size) rhs else lhs
+        if (longer.take(shorter.size) != shorter) return false
+        return longer.drop(shorter.size).count(::isVowelPhone) == 1
+    }
+
+    /** One word's stressed tail is the other's unstressed ending ("free"/"happy"). */
+    private fun isStressShift(lhs: RhymeTail, rhs: RhymeTail): Boolean {
+        val lhsFull = listOf(lhs.vowel) + lhs.coda
+        val rhsFull = listOf(rhs.vowel) + rhs.coda
+        return (rhs.coda.size >= lhsFull.size && rhs.coda.takeLast(lhsFull.size) == lhsFull) ||
+            (lhs.coda.size >= rhsFull.size && lhs.coda.takeLast(rhsFull.size) == rhsFull)
+    }
+
+    private fun rhymeTailForPhones(phones: List<String>): RhymeTail? {
+        val vowelIndexes = phones.indices.filter { basePhone(phones[it]) in vowels }
+        if (vowelIndexes.isEmpty()) return null
+        val stressed = vowelIndexes.filter { (stressForPhone(phones[it]) ?: 0) > 0 }
+        val vowelIndex = (stressed.ifEmpty { vowelIndexes }).last()
+        return RhymeTail(
+            vowel = basePhone(phones[vowelIndex]),
+            coda = phones.drop(vowelIndex + 1).map(::basePhone)
+        )
     }
 
     fun metricFeet(stressPattern: List<Int>): String {

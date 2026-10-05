@@ -13,6 +13,7 @@ class RhymeConstraintTest {
             "glowed\tG L OW1 D",
             "showed\tSH OW1 D",
             "stone\tS T OW1 N",
+            "wrote\tR OW1 T",
             "night\tN AY1 T",
             "rain\tR EY1 N"
         )
@@ -39,10 +40,10 @@ class RhymeConstraintTest {
     }
 
     @Test
-    fun candidateEndWordsPadsLooserTypesWithNearRhymes() {
-        val words = RhymeConstraint.candidateEndWords("road", RhymeType.SLANT, dictionary = dictionary)
-
-        assertEquals(listOf("glowed", "showed", "stone"), words)
+    fun candidateEndWordsKeepRhymeModesExclusive() {
+        // D and T are both plosives; N is a nasal, so "stone" is assonance.
+        assertEquals(listOf("wrote"), RhymeConstraint.candidateEndWords("road", RhymeType.NEAR, dictionary = dictionary))
+        assertEquals(listOf("stone"), RhymeConstraint.candidateEndWords("road", RhymeType.SLANT, dictionary = dictionary))
     }
 
     @Test
@@ -54,7 +55,7 @@ class RhymeConstraintTest {
     @Test
     fun rhymeTierClassifiesPerfectNearAndMisses() {
         assertEquals(2, RhymeConstraint.rhymeTier("The window glowed", "road", dictionary))
-        assertEquals(1, RhymeConstraint.rhymeTier("Cold as stone", "road", dictionary))
+        assertEquals(1, RhymeConstraint.rhymeTier("Words I never wrote", "road", dictionary))
         assertEquals(0, RhymeConstraint.rhymeTier("Walking in the night", "road", dictionary))
         assertEquals(0, RhymeConstraint.rhymeTier("", "road", dictionary))
     }
@@ -141,7 +142,7 @@ class RhymeConstraintTest {
     fun targetAwareBatchTierPreservesExistingNearAndMissClassifications() {
         val matches = ProsodyAnalyzer.findRhymes("road", dictionary = dictionary)
 
-        assertEquals(1, RhymeConstraint.rhymeTier("Cold as stone", "road", matches, dictionary))
+        assertEquals(1, RhymeConstraint.rhymeTier("Words I never wrote", "road", matches, dictionary))
         assertEquals(0, RhymeConstraint.rhymeTier("Into the night", "road", matches, dictionary))
         assertEquals(0, RhymeConstraint.rhymeTier("The sky rains", "road", RhymeMatches.EMPTY, dictionary))
     }

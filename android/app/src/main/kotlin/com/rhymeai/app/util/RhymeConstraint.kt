@@ -21,16 +21,18 @@ object RhymeConstraint {
         targetWord: String,
         rhymeType: RhymeType,
         limit: Int = 12,
-        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared,
+        wordFrequency: WordFrequency = WordFrequency.shared
     ): List<String> {
-        val matches = ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary)
+        val matches = ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary, wordFrequency = wordFrequency)
         if (matches.isEmpty) return emptyList()
-        // Perfect requests stay strict; looser types may pad with near rhymes.
-        // Each pool is already frequency-ranked by findRhymes; we simply
-        // concatenate pools in priority order (perfect/multi before near).
+        // Each mode returns only its named phonetic relation, as on iOS. Perfect
+        // keeps the exact and multisyllabic pools; Near and Slant are exclusive
+        // and already ranked by findRhymes.
         val pools = when (rhymeType) {
             RhymeType.PERFECT -> listOf(matches.perfect, matches.multi)
-            RhymeType.NEAR, RhymeType.SLANT -> listOf(matches.perfect, matches.multi, matches.near)
+            RhymeType.NEAR -> listOf(matches.near)
+            RhymeType.SLANT -> listOf(matches.slant)
         }
         val normalizedTarget = ProsodyAnalyzer.normalizeWord(targetWord)
         val ordered = LinkedHashSet<String>()
