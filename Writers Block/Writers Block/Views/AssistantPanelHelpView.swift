@@ -41,7 +41,7 @@ enum FeatureHelp: String, Identifiable {
         case .contextTheme:
             return "Adds a short topic or mood for the assistant when Whole Song Context is off. Use it to steer the next line without sending the full lyric."
         case .targetLine:
-            return "The lyric line the assistant is matching. Put the cursor on a line when you want suggestions to rhyme with that exact sound."
+            return "The earlier line the next suggestion has to rhyme with, picked by your rhyme scheme for the line being added. It is empty when the next line starts a new rhyme sound."
         case .rhymeScheme:
             return "Chooses the pattern the song should follow. Common patterns like AABB pair nearby lines, while Custom lets you type your own letter pattern."
         case .rhymeDensity:

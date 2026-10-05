@@ -83,6 +83,14 @@ data class SuggestedLine(
     val isHook: Boolean = false
 )
 
+/**
+ * Rhyme context of the line a next-line suggestion will be inserted as
+ * (see [NextLinePlacement]), not of the line the cursor is on.
+ *
+ * [targetLine] is the rhyme anchor: the latest earlier line in the stanza with
+ * [currentLetter]. [stanzaLines] is the cursor's blank-line-delimited block with an
+ * empty row at [currentLineIndex] standing for the line to be inserted.
+ */
 data class RhymeContext(
     val targetLine: String?,
     val currentLetter: String,
@@ -1373,19 +1381,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun insertSuggestion(suggestion: String) {
-        val pos = cursorPosition
-        val text = lyrics
-        val before = text.substring(0, pos)
-        val after = text.substring(pos)
-        val needsNewline = before.isNotEmpty() && !before.endsWith("\n")
-        val insertText = (if (needsNewline) "\n" else "") + suggestion + "\n"
-        val newText = before + insertText + after
-        val newPos = pos + insertText.length
-        applyAtomicLyricsEdit(TextFieldValue(newText, TextRange(newPos)))
+        // Same placement the rhyme context was computed for: a blank cursor line is
+        // filled, otherwise the suggestion becomes a new line after the cursor's line.
+        val insertion = NextLinePlacement(lyrics, cursorPosition).inserting(suggestion)
+        applyAtomicLyricsEdit(TextFieldValue(insertion.text, TextRange(insertion.cursor)))
         suggestionInsertion = SuggestionInsertion(
             id = ++suggestionInsertionRevision,
-            range = TextRange(pos + if (needsNewline) 1 else 0, newPos - 1),
-            lyrics = newText
+            range = TextRange(insertion.start, insertion.end),
+            lyrics = insertion.text
         )
         suggestions = emptyList()
         triggerAutoSave()

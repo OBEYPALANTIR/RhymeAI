@@ -661,67 +661,26 @@ final class EditorViewModel: ObservableObject {
         }
 
         let pos = Self.characterOffset(forUTF16Offset: cursorPosition, in: lyrics)
-        let rawLines = lyrics.components(separatedBy: "\n")
+        // The context describes the line a suggestion will be inserted as, not the cursor's line.
+        let placement = NextLinePlacement(lyrics: lyrics, cursorCharacterOffset: pos)
+        let rawLines = placement.lines
         let sectionMap = SectionMap(lyrics: lyrics)
 
-        // Determine which full-document line index the cursor sits on.
-        let textBeforeCursor = String(lyrics.prefix(pos))
-        let globalCursorLineIndex = textBeforeCursor.components(separatedBy: "\n").count - 1
-
         let sectionContext = Self.sectionContext(
-            forLineIndex: globalCursorLineIndex,
+            forLineIndex: placement.cursorLineIndex,
             sectionMap: sectionMap,
             rawLines: rawLines
         )
-        let currentSection = sectionContext.currentSection
-        let sectionOrdinal = sectionContext.sectionOrdinal
-        let firstChorusLines = sectionContext.firstChorusLines
-
-        let cursorLineIndex = min(max(globalCursorLineIndex, 0), rawLines.count - 1)
-        let isBlankLine: (Int) -> Bool = { index in
-            rawLines[index].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        let stanzaStartLine = rawLines.indices.prefix(cursorLineIndex)
-            .last(where: isBlankLine)
-            .map { $0 + 1 } ?? 0
-        let stanzaEndLine: Int
-        if isBlankLine(cursorLineIndex) {
-            stanzaEndLine = cursorLineIndex + 1
-        } else {
-            stanzaEndLine = rawLines.indices.dropFirst(cursorLineIndex + 1)
-                .first(where: isBlankLine) ?? rawLines.endIndex
-        }
-        let stanzaLines = Array(rawLines[stanzaStartLine..<stanzaEndLine])
-
-        // Determine the raw cursor line, then map only real lyric lines to the rhyme scheme.
-        let rawCursorLineIndex = cursorLineIndex - stanzaStartLine
-        let lyricLinePosition = stanzaLines.prefix(rawCursorLineIndex + 1).filter { line in
-            !Self.isSectionHeader(line) && !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }.count - 1
-        let effectiveLineIndex = max(lyricLinePosition, 0)
-
         let schemeLetters = Array(activeRhymeScheme)
-        guard !schemeLetters.isEmpty else {
-            return RhymeContext(targetLine: nil, currentLetter: "A", stanzaLines: stanzaLines, currentLineIndex: rawCursorLineIndex, currentSection: currentSection, sectionOrdinal: sectionOrdinal, firstChorusLines: firstChorusLines)
-        }
-
-        let currentLetter = String(schemeLetters[effectiveLineIndex % schemeLetters.count])
-
-        let targetLine = Self.targetLine(
-            in: stanzaLines,
-            before: rawCursorLineIndex,
-            matching: currentLetter,
-            schemeLetters: schemeLetters
-        )
 
         return RhymeContext(
-            targetLine: targetLine,
-            currentLetter: currentLetter,
-            stanzaLines: stanzaLines,
-            currentLineIndex: rawCursorLineIndex,
-            currentSection: currentSection,
-            sectionOrdinal: sectionOrdinal,
-            firstChorusLines: firstChorusLines
+            targetLine: placement.anchorLine(scheme: schemeLetters),
+            currentLetter: placement.letter(scheme: schemeLetters).map { String($0) } ?? "A",
+            stanzaLines: placement.stanzaRows,
+            currentLineIndex: placement.rowIndex,
+            currentSection: sectionContext.currentSection,
+            sectionOrdinal: sectionContext.sectionOrdinal,
+            firstChorusLines: sectionContext.firstChorusLines
         )
     }
 
@@ -751,33 +710,6 @@ final class EditorViewModel: ObservableObject {
             sectionOrdinal: sectionOrdinal,
             firstChorusLines: firstChorusLines
         )
-    }
-
-    nonisolated private static func targetLine(
-        in stanzaLines: [String],
-        before rawCursorLineIndex: Int,
-        matching currentLetter: String,
-        schemeLetters: [Character]
-    ) -> String? {
-        var targetLine: String?
-        var lyricCount = 0
-        for i in stanzaLines.indices {
-            if i >= rawCursorLineIndex { break }
-
-            let line = stanzaLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
-            if Self.isSectionHeader(line) || line.isEmpty { continue }
-
-            let letter = String(schemeLetters[lyricCount % schemeLetters.count])
-            if letter == currentLetter {
-                targetLine = line
-            }
-            lyricCount += 1
-        }
-        return targetLine
-    }
-
-    nonisolated private static func isSectionHeader(_ line: String) -> Bool {
-        SectionMap.headerTitle(line.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
     }
 
     // Keep for backward compatibility — some callers use this directly.
@@ -885,7 +817,7 @@ final class EditorViewModel: ObservableObject {
             modelID: selectedModel.id,
             theme: theme,
             lyrics: lyrics,
-            stanzaLines: context.stanzaLines,
+            stanzaLines: context.existingStanzaLines,
             targetRhymeLine: context.targetLine,
             rhymeType: rhymeType,
             rhymeScheme: activeRhymeScheme,
@@ -1233,20 +1165,14 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Suggestion Insertion
 
     func insertSuggestion(_ suggestion: String) {
+        // Same placement the rhyme context was computed for: a blank cursor line is
+        // filled, otherwise the suggestion becomes a new line after the cursor's line.
         let pos = Self.characterOffset(forUTF16Offset: cursorPosition, in: lyrics)
-        let beforeIndex = lyrics.index(lyrics.startIndex, offsetBy: pos)
-        let before = String(lyrics[lyrics.startIndex..<beforeIndex])
-        let after = String(lyrics[beforeIndex..<lyrics.endIndex])
+        let insertion = NextLinePlacement(lyrics: lyrics, cursorCharacterOffset: pos).inserting(suggestion)
 
-        let needsNewline = !before.isEmpty && !before.hasSuffix("\n")
-        let insertText = (needsNewline ? "\n" : "") + suggestion + "\n"
-
-        applyAtomicLyricsEdit(
-            text: before + insertText + after,
-            // cursorPosition is a UTF-16 offset (UITextView units).
-            cursorPosition: before.utf16.count + insertText.utf16.count
-        )
-        insertedLineRange = NSRange(location: before.utf16.count + (needsNewline ? 1 : 0), length: suggestion.utf16.count)
+        // cursorPosition is a UTF-16 offset (UITextView units).
+        applyAtomicLyricsEdit(text: insertion.text, cursorPosition: insertion.cursor)
+        insertedLineRange = insertion.insertedRange
         insertionFeedbackText = lyrics
         insertionFeedbackID = UUID()
         suggestions = []
@@ -1636,8 +1562,10 @@ final class EditorViewModel: ObservableObject {
 
     func positionSeededProsodyCursorForUITests() {
         guard UITestFlags.isEnabled(UITestFlags.seedProsodySong) else { return }
-        if let range = lyrics.range(of: "follow music") {
-            cursorPosition = lyrics.utf16.distance(from: lyrics.utf16.startIndex, to: range.lowerBound)
+        // End of the first lyric line: the next line is then the second "A" of AABB,
+        // so the Target Line card shows "yellow music".
+        if let range = lyrics.range(of: "yellow music") {
+            cursorPosition = lyrics.utf16.distance(from: lyrics.utf16.startIndex, to: range.upperBound)
         } else {
             cursorPosition = max(lyrics.utf16.count - 1, 0)
         }

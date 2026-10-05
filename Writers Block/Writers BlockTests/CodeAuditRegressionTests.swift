@@ -25,8 +25,16 @@ struct CodeAuditRegressionTests {
 
         let context = viewModel.computeRhymeContext()
 
-        #expect(context.currentLetter == "A")
-        #expect(context.targetLine == "🔥🔥 first light")
+        // The next line is line 3 of AABB: "B", a new sound.
+        #expect(context.currentLetter == "B")
+        #expect(context.targetLine == nil)
+
+        // At the UTF-16 end of line 1 the offset (16) exceeds the line's Character
+        // count (14); read as characters it would land in line 2 and report "B".
+        viewModel.cursorPosition = ("🔥🔥 first light" as NSString).length
+        let firstLineContext = viewModel.computeRhymeContext()
+        #expect(firstLineContext.currentLetter == "A")
+        #expect(firstLineContext.targetLine == "🔥🔥 first light")
     }
 
     @Test func currentLineUsesUTF16OffsetsAfterEmoji() {

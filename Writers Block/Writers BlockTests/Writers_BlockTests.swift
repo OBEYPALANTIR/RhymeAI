@@ -19,9 +19,10 @@ struct Writers_BlockTests {
 
         let context = viewModel.computeRhymeContext()
 
-        #expect(context.currentLetter == "A")
-        #expect(context.targetLine == "first light")
-        #expect(context.currentLineIndex == 2)
+        // The next line is the verse's third lyric line: "B", a new sound.
+        #expect(context.currentLetter == "B")
+        #expect(context.targetLine == nil)
+        #expect(context.currentLineIndex == 3)
         #expect(context.currentSection == .verse)
     }
 
@@ -33,8 +34,10 @@ struct Writers_BlockTests {
 
         let context = viewModel.computeRhymeContext()
 
-        #expect(context.currentLetter == "B")
-        #expect(context.targetLine == "second rain")
+        // The next line is the fifth lyric line: the scheme repeats, so it is "A",
+        // anchored to the latest "A" line (line 3), not the first.
+        #expect(context.currentLetter == "A")
+        #expect(context.targetLine == "third road")
         #expect(context.currentSection == .chorus)
     }
 
@@ -71,9 +74,10 @@ struct Writers_BlockTests {
 
         viewModel.insertSuggestion("new line")
 
-        let insertedPrefix = "🌙\nnew line\n"
-        #expect(viewModel.lyrics == insertedPrefix + " glow")
-        #expect(viewModel.cursorPosition == (insertedPrefix as NSString).length)
+        // A cursor inside a lyric line never splits it: the suggestion follows the line.
+        let inserted = "🌙 glow\nnew line\n"
+        #expect(viewModel.lyrics == inserted)
+        #expect(viewModel.cursorPosition == (inserted as NSString).length)
     }
 
     @Test func openAIModelPickerStartsWithCurrentGPT5Models() {

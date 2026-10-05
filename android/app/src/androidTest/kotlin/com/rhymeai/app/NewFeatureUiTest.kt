@@ -614,7 +614,8 @@ class NewFeatureUiTest {
         // Enable it there first, then open the assistant panel to verify prosody renders.
         openNewSong()
         composeRule.onNodeWithTag("lyricsEditor").performClick()
-        composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music\nfollow music")
+        // One lyric line: the next line is the second "A" of AABB, so the target line is "yellow music".
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music")
 
         // Open Settings and navigate to the Editor tab.
         composeRule.onNodeWithTag("songActionsMenuButton").performClick()
