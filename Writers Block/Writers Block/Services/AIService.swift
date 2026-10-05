@@ -76,6 +76,15 @@ struct AIService {
 
     private static let suggestionCount = 6
     private static let localRewriteAttempts = 2
+    /// On-device whole-song context budget, shared with Android
+    /// `localLyricsContext` (see PARITY.md): text up to head + tail characters
+    /// is sent as is; longer songs keep the opening `head` and closing `tail`
+    /// characters cut to whole lines.
+    static let localWholeSongHeadChars = 900
+    static let localWholeSongTailChars = 2200
+    /// Next-line intent sentence, byte-identical to Android.
+    static let localSuggestionIntent =
+        "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
     private static let fallbackRephraseWords: [String: [String]] = [
         "believe": ["imagine", "trust", "dream"],
         "birds": ["sparrows", "voices", "wings"],
@@ -1097,9 +1106,13 @@ struct AIService {
         if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
             prompt += "\n" + sectionInstanceHint
         }
+        let endWordRule = constraintBlock == nil
+            ? "- End each line on a different word."
+            : "- End each line on a different word from the allowed list."
         prompt += """
 
         \(rhymeHint)
+        \(Self.localSuggestionIntent)
         \(songContextInstruction)
         Complexity: \(complexity.label). \(complexity.promptHint)
 
@@ -1112,6 +1125,11 @@ struct AIService {
         - Return exactly \(requestCount) lines.
         - One suggestion per line.
         - Return only candidate lyric lines.
+        - Make the six lines six different directions: a different idea, image or angle in each. Do not write the same thought six ways.
+        \(endWordRule)
+        - Write them as raw material in the writer's own voice: match the length, plainness and capitalisation of the lines around it.
+        - Do not resolve or conclude the song, do not sum it up, and no grand statements.
+        - Stay inside what the song is already about.
         - Do not copy any existing lyric line.
         - Do not repeat the same suggestion.
         - No numbering, bullets, quotes, markdown, labels, or explanation.
@@ -1126,10 +1144,35 @@ struct AIService {
         stanzaLines: [String]?,
         useWholeSongContext: Bool
     ) -> String {
-        if useWholeSongContext { return lyrics }
+        if useWholeSongContext { return Self.trimmedWholeSongContext(lyrics) }
+        // The cursor's stanza is kept whole (localPromptRetainsLongStanzaAndWholeSongPolicy).
         let stanza = (stanzaLines ?? []).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return stanza
+    }
+
+    /// Mirrors the whole-song branch of Android `AIService.localLyricsContext`
+    /// so a long song cannot overflow the on-device context window.
+    static func trimmedWholeSongContext(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= localWholeSongHeadChars + localWholeSongTailChars { return trimmed }
+        let head = trimToLineBoundary(String(trimmed.prefix(localWholeSongHeadChars)), preferStart: false)
+        let tail = trimToLineBoundary(String(trimmed.suffix(localWholeSongTailChars)), preferStart: true)
+        return "\(head)\n\n[Middle lyrics trimmed for on-device speed]\n\n\(tail)"
+    }
+
+    /// Drops the partial first (`preferStart`) or last line of a cut slice.
+    private static func trimToLineBoundary(_ text: String, preferStart: Bool) -> String {
+        if text.isEmpty { return text }
+        if preferStart {
+            if let newline = text.firstIndex(of: "\n"), newline < text.index(before: text.endIndex) {
+                return String(text[text.index(after: newline)...])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        } else if let newline = text.lastIndex(of: "\n"), newline > text.startIndex {
+            return String(text[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @available(iOS 26.0, *)

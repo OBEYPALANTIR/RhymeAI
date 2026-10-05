@@ -346,7 +346,11 @@ struct CloudPrivacyFlowTests {
 
     private static func makeDefaults() -> (UserDefaults, String) {
         let name = "rhymeai.cloud-privacy.\(UUID().uuidString)"
-        return (UserDefaults(suiteName: name)!, name)
+        let defaults = UserDefaults(suiteName: name)!
+        // These flows exercise the selected-context scope; Whole Song Context
+        // defaults on, so start each one from an explicit off.
+        defaults.set(false, forKey: "editor.useWholeSongContext")
+        return (defaults, name)
     }
 
     private static func waitUntil(

@@ -15,10 +15,11 @@ enum class RhymeType(val displayName: String) {
 }
 
 enum class RhymeComplexity(val level: Int, val label: String, val description: String, val promptHint: String) {
-    SIMPLE(0, "Simple", "Basic vocabulary, straightforward rhymes",
-        "Use simple, everyday vocabulary. Keep the language accessible and straightforward. Aim for clear, easy-to-understand rhymes."),
-    MODERATE(1, "Moderate", "Balanced vocabulary, clever wordplay",
-        "Use a balanced vocabulary with some clever wordplay. The rhymes should be interesting but not overly complex."),
-    COMPLEX(2, "Complex", "Advanced vocabulary, intricate rhymes",
-        "Use advanced, rich vocabulary with intricate multi-syllable rhymes, internal rhymes, and sophisticated wordplay. Push the boundaries of lyrical complexity.")
+    // Only COMPLEX asks for wordplay. promptHint is byte-identical to iOS RhymeComplexity.promptHint.
+    SIMPLE(0, "Simple", "Plain language, no wordplay",
+        "Use plain, simple, everyday language. No wordplay, puns, or clever twists. Use clear rhymes that are easy to hear."),
+    MODERATE(1, "Moderate", "Balanced vocabulary, natural phrasing",
+        "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear rather than clever."),
+    COMPLEX(2, "Complex", "Advanced vocabulary, wordplay, intricate rhymes",
+        "Use advanced, rich vocabulary with clever wordplay and intricate rhymes: multi-syllable rhymes, internal rhymes, and double meanings.")
 }

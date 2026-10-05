@@ -33,6 +33,9 @@ SUGGESTION_COUNT = 6
 LOCAL_RECENT_CONTEXT_CHARS = 2600
 LOCAL_WHOLE_SONG_HEAD_CHARS = 900
 LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
+LOCAL_SUGGESTION_INTENT = (
+    "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
+)
 SYNONYM_LIMIT_DEFAULT = 8  # AIService.getSynonyms(limit: Int = 8)
 
 # ---------------------------------------------------------------------------
@@ -70,15 +73,15 @@ RHYME_TYPES = {
 RHYME_COMPLEXITIES = {
     "SIMPLE": (
         "Simple",
-        "Use simple, everyday vocabulary. Keep the language accessible and straightforward. Aim for clear, easy-to-understand rhymes.",
+        "Use plain, simple, everyday language. No wordplay, puns, or clever twists. Use clear rhymes that are easy to hear.",
     ),
     "MODERATE": (
         "Moderate",
-        "Use a balanced vocabulary with some clever wordplay. The rhymes should be interesting but not overly complex.",
+        "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear rather than clever.",
     ),
     "COMPLEX": (
         "Complex",
-        "Use advanced, rich vocabulary with intricate multi-syllable rhymes, internal rhymes, and sophisticated wordplay. Push the boundaries of lyrical complexity.",
+        "Use advanced, rich vocabulary with clever wordplay and intricate rhymes: multi-syllable rhymes, internal rhymes, and double meanings.",
     ),
 }
 
@@ -331,10 +334,9 @@ def _trim_to_line_boundary(text: str, prefer_start: bool) -> str:
 def local_lyrics_context(lyrics: str, use_whole_song_context: bool) -> str:
     """AIService.localLyricsContext."""
     trimmed = lyrics.strip()
-    if len(trimmed) <= LOCAL_RECENT_CONTEXT_CHARS:
-        return trimmed
-
     if use_whole_song_context:
+        if len(trimmed) <= LOCAL_WHOLE_SONG_HEAD_CHARS + LOCAL_WHOLE_SONG_TAIL_CHARS:
+            return trimmed
         head = _trim_to_line_boundary(
             trimmed[:LOCAL_WHOLE_SONG_HEAD_CHARS], prefer_start=False
         )
@@ -342,6 +344,8 @@ def local_lyrics_context(lyrics: str, use_whole_song_context: bool) -> str:
             trimmed[-LOCAL_WHOLE_SONG_TAIL_CHARS:], prefer_start=True
         )
         return "%s\n\n[Middle lyrics trimmed for on-device speed]\n\n%s" % (head, tail)
+    if len(trimmed) <= LOCAL_RECENT_CONTEXT_CHARS:
+        return trimmed
     return "[Earlier lyrics trimmed for on-device speed]\n" + _trim_to_line_boundary(
         trimmed[-LOCAL_RECENT_CONTEXT_CHARS:], prefer_start=True
     )
@@ -403,6 +407,10 @@ def build_suggestions_prompt(
     section_directive = _build_section_directive(
         constraint.section_ref if constraint else None, lyrics
     )
+    if constraint:
+        end_word_rule = "- End each line on a different word from the allowed list."
+    else:
+        end_word_rule = "- End each line on a different word."
 
     user_prompt = (
         "You are RhymeAI's on-device songwriting assistant.\n"
@@ -413,6 +421,7 @@ def build_suggestions_prompt(
         "Current song section: %s.\n"
         "%s\n"
         "%s%s%s\n"
+        "%s\n"
         "%s\n"
         "Complexity: %s. %s\n"
         "\n"
@@ -425,6 +434,11 @@ def build_suggestions_prompt(
         "- Return exactly %d lines.\n"
         "- One suggestion per line.\n"
         "- Return only candidate lyric lines.\n"
+        "- Make the six lines six different directions: a different idea, image or angle in each. Do not write the same thought six ways.\n"
+        "%s\n"
+        "- Write them as raw material in the writer's own voice: match the length, plainness and capitalisation of the lines around it.\n"
+        "- Do not resolve or conclude the song, do not sum it up, and no grand statements.\n"
+        "- Stay inside what the song is already about.\n"
         "- Do not copy any existing lyric line.\n"
         "- Do not repeat the same suggestion.\n"
         "- No numbering, bullets, quotes, markdown, labels, or explanation.\n"
@@ -440,11 +454,13 @@ def build_suggestions_prompt(
         section_directive,
         rhyme_hint,
         constraint_block,
+        LOCAL_SUGGESTION_INTENT,
         song_context_instruction,
         complexity_label,
         complexity_hint,
         lyric_context,
         request_count,
+        end_word_rule,
     )
     return gemma_instruction_prompt(user_prompt)
 

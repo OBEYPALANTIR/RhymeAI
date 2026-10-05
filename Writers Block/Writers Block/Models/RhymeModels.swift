@@ -48,20 +48,21 @@ enum RhymeComplexity: Int, CaseIterable, Codable {
 
     var description: String {
         switch self {
-        case .simple: return "Basic vocabulary, straightforward rhymes"
-        case .moderate: return "Balanced vocabulary, clever wordplay"
-        case .complex: return "Advanced vocabulary, intricate rhymes"
+        case .simple: return "Plain language, no wordplay"
+        case .moderate: return "Balanced vocabulary, natural phrasing"
+        case .complex: return "Advanced vocabulary, wordplay, intricate rhymes"
         }
     }
 
+    /// Only Complex asks for wordplay. Byte-identical to Android `RhymeComplexity.promptHint`.
     var promptHint: String {
         switch self {
         case .simple:
-            return "Use simple, everyday vocabulary. Keep the language accessible and straightforward. Aim for clear, easy-to-understand rhymes."
+            return "Use plain, simple, everyday language. No wordplay, puns, or clever twists. Use clear rhymes that are easy to hear."
         case .moderate:
-            return "Use a balanced vocabulary with some clever wordplay. The rhymes should be interesting but not overly complex."
+            return "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear rather than clever."
         case .complex:
-            return "Use advanced, rich vocabulary with intricate multi-syllable rhymes, internal rhymes, and sophisticated wordplay. Push the boundaries of lyrical complexity."
+            return "Use advanced, rich vocabulary with clever wordplay and intricate rhymes: multi-syllable rhymes, internal rhymes, and double meanings."
         }
     }
 }

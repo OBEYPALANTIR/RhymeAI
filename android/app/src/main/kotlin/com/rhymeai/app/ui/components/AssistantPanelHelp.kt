@@ -61,7 +61,7 @@ internal enum class FeatureHelp(
     ),
     COMPLEXITY(
         "Complexity",
-        "Changes how advanced the generated line should be. Higher complexity leans toward richer wording, multisyllable rhymes, and denser phrasing."
+        "Changes how advanced the suggested lines should be. Simple keeps the language plain with no wordplay, Moderate uses a balanced vocabulary, and Complex asks for clever wordplay and intricate rhymes."
     ),
     WHOLE_SONG_CONTEXT(
         "Whole Song Context",

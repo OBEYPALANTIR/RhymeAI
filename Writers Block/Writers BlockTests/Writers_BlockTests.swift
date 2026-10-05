@@ -450,7 +450,8 @@ struct Writers_BlockTests {
 
         #expect(viewModel.cloudAISharingRequest?.provider == .gemini)
         #expect(viewModel.cloudAISharingRequest?.purpose == "suggestions")
-        #expect(viewModel.cloudAISharingRequest?.scope == .selectedContext)
+        // Whole Song Context is on by default, so the first request asks to share the whole song.
+        #expect(viewModel.cloudAISharingRequest?.scope == .wholeSong)
         #expect(!viewModel.isLoading)
     }
 
@@ -478,6 +479,7 @@ struct Writers_BlockTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), defaults: defaults)
         viewModel.saveProvider(.gemini)
+        viewModel.saveUseWholeSongContext(false)
         viewModel.lyrics = "private line"
         viewModel.getSuggestions()
         #expect(viewModel.cloudAISharingRequest != nil)

@@ -221,7 +221,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _rhymeComplexity = value
         }
     // Editor toggles — initialized from DataStore in init{}, persisted on every change.
-    var useWholeSongContext by mutableStateOf(false)
+    var useWholeSongContext by mutableStateOf(ProjectRepository.DEFAULT_USE_WHOLE_SONG_CONTEXT)
         private set
 
     fun saveUseWholeSongContext(value: Boolean) {

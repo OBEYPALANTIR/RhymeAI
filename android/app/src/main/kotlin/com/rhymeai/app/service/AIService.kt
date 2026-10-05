@@ -127,9 +127,13 @@ class AIService {
 
     private companion object {
         const val SUGGESTION_COUNT = 6
+        // On-device lyric context budget, shared with iOS (see PARITY.md).
         const val LOCAL_RECENT_CONTEXT_CHARS = 2600
         const val LOCAL_WHOLE_SONG_HEAD_CHARS = 900
         const val LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
+        /** Next-line intent sentence, byte-identical to iOS `localSuggestionIntent`. */
+        const val LOCAL_SUGGESTION_INTENT =
+            "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
         const val LOCAL_REWRITE_ATTEMPTS = 2
         const val LOCAL_INCOMPLETE_RESPONSE =
             "Local model returned an incomplete response. Try again or use a cloud provider."
@@ -1446,6 +1450,11 @@ $outputRules
         }
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext)
         val sectionDirective = buildSectionDirective(constraint?.sectionRef, lyrics)
+        val endWordRule = if (constraint == null) {
+            "- End each line on a different word."
+        } else {
+            "- End each line on a different word from the allowed list."
+        }
         return """
 You are RhymeAI's on-device songwriting assistant.
 
@@ -1455,6 +1464,7 @@ Rhyme scheme: "$rhymeScheme"; next line is "$currentLetter".
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
 ${sectionDirective}$rhymeHint$constraintBlock
+$LOCAL_SUGGESTION_INTENT
 $songContextInstruction
 Complexity: ${complexity.label}. ${complexity.promptHint}
 
@@ -1467,6 +1477,11 @@ Rules:
 - Return exactly $requestCount lines.
 - One suggestion per line.
 - Return only candidate lyric lines.
+- Make the six lines six different directions: a different idea, image or angle in each. Do not write the same thought six ways.
+$endWordRule
+- Write them as raw material in the writer's own voice: match the length, plainness and capitalisation of the lines around it.
+- Do not resolve or conclude the song, do not sum it up, and no grand statements.
+- Stay inside what the song is already about.
 - Do not copy any existing lyric line.
 - Do not repeat the same suggestion.
 - No numbering, bullets, quotes, markdown, labels, or explanation.
@@ -1618,15 +1633,21 @@ Rules:
         }.getOrDefault(emptyList())
     }
 
-    private fun localLyricsContext(lyrics: String, useWholeSongContext: Boolean): String {
+    /**
+     * Keeps long songs inside the on-device context window. Whole-song text up
+     * to head + tail characters is sent as is (a shorter cut would repeat the
+     * overlap); longer songs keep the opening and closing lines. Mirrors iOS
+     * `AIService.trimmedLocalLyricsContext`.
+     */
+    internal fun localLyricsContext(lyrics: String, useWholeSongContext: Boolean): String {
         val trimmed = lyrics.trim()
-        if (trimmed.length <= LOCAL_RECENT_CONTEXT_CHARS) return trimmed
-
         return if (useWholeSongContext) {
+            if (trimmed.length <= LOCAL_WHOLE_SONG_HEAD_CHARS + LOCAL_WHOLE_SONG_TAIL_CHARS) return trimmed
             val head = trimmed.take(LOCAL_WHOLE_SONG_HEAD_CHARS).trimToLineBoundary(preferStart = false)
             val tail = trimmed.takeLast(LOCAL_WHOLE_SONG_TAIL_CHARS).trimToLineBoundary(preferStart = true)
             "$head\n\n[Middle lyrics trimmed for on-device speed]\n\n$tail"
         } else {
+            if (trimmed.length <= LOCAL_RECENT_CONTEXT_CHARS) return trimmed
             "[Earlier lyrics trimmed for on-device speed]\n" +
                 trimmed.takeLast(LOCAL_RECENT_CONTEXT_CHARS).trimToLineBoundary(preferStart = true)
         }

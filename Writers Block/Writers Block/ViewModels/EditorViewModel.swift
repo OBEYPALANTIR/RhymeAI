@@ -218,9 +218,9 @@ final class EditorViewModel: ObservableObject {
     }
     @Published var rhymeComplexity: RhymeComplexity = .moderate
     // These six are persisted to UserDefaults so the user's editor preferences
-    // survive app restarts. Defaults match the previous hard-coded in-memory values.
-    // Keys use an "editor." prefix to namespace them away from provider/model keys.
-    @Published var useWholeSongContext: Bool = false
+    // survive app restarts. Keys use an "editor." prefix to namespace them away
+    // from provider/model keys. Whole Song Context defaults on (Android parity).
+    @Published var useWholeSongContext: Bool = true
     @Published var isHighlightEnabled: Bool = true
     @Published var isSyllableColoringEnabled: Bool = true
     @Published var isStressPreviewEnabled: Bool = false
@@ -518,11 +518,14 @@ final class EditorViewModel: ObservableObject {
         }
 
         // Restore editor toggle states. Booleans default false when the key is absent,
-        // which matches the desired default for all except isHighlightEnabled and
-        // isSyllableColoringEnabled — those default true, so we treat a missing key
-        // as "never set" and leave the in-memory default in place rather than reading
-        // the UserDefaults zero-value.
-        useWholeSongContext = defaults.bool(forKey: "editor.useWholeSongContext")
+        // which matches the desired default for all except useWholeSongContext,
+        // isHighlightEnabled and isSyllableColoringEnabled — those default true, so
+        // we treat a missing key as "never set" and leave the in-memory default in
+        // place rather than reading the UserDefaults zero-value. An explicitly saved
+        // false is still respected.
+        if defaults.object(forKey: "editor.useWholeSongContext") != nil {
+            useWholeSongContext = defaults.bool(forKey: "editor.useWholeSongContext")
+        }
         if defaults.object(forKey: "editor.isHighlightEnabled") != nil {
             isHighlightEnabled = defaults.bool(forKey: "editor.isHighlightEnabled")
         }

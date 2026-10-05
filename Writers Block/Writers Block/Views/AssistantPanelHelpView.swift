@@ -47,7 +47,7 @@ enum FeatureHelp: String, Identifiable {
         case .rhymeDensity:
             return "Controls how tightly the suggestion should rhyme. Perfect is strict, Near gives a little room, and Slant is the most flexible."
         case .complexity:
-            return "Changes how advanced the generated line should be. Higher complexity leans toward richer wording, multisyllable rhymes, and denser phrasing."
+            return "Changes how advanced the suggested lines should be. Simple keeps the language plain with no wordplay, Moderate uses a balanced vocabulary, and Complex asks for clever wordplay and intricate rhymes."
         case .wholeSongContext:
             return "Uses the full current lyric as context so suggestions fit the story, tone, and previous lines. Turning it off uses only the theme and target line."
         case .highlightRhymes:
