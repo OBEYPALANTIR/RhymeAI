@@ -11,13 +11,13 @@ struct AnalysisStyleSettingsSection: View {
                 .foregroundStyle(appearance.palette.secondaryInk)
                 .textCase(.uppercase)
 
-            Picker("Analysis Style", selection: presentation) {
-                ForEach(AnalysisPresentationStyle.allCases) { style in
-                    Text(style.displayName).tag(style)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("analysisStylePicker")
+            RhymeSegmentedControl(
+                options: AnalysisPresentationStyle.allCases,
+                selection: presentation,
+                accessibilityIdentifier: "analysisStylePicker",
+                label: "Analysis Style",
+                title: \.displayName
+            )
 
             AnalysisStylePreview(style: presentation.wrappedValue)
 

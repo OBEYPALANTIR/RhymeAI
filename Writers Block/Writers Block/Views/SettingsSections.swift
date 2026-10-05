@@ -16,13 +16,13 @@ struct SettingsTabPicker: View {
             options: SettingsTab.allCases,
             selection: $selection,
             accessibilityIdentifier: "settingsTabPicker",
+            label: "Settings section",
             title: \.rawValue
         )
     }
 }
 
 struct RhymeSegmentedControl<Option: Hashable>: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var selectionAnimation
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -30,25 +30,56 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
     let options: [Option]
     @Binding var selection: Option
     let accessibilityIdentifier: String
+    /// Spoken name of the whole control, e.g. "Appearance".
+    let label: String
     let title: (Option) -> String
 
     var body: some View {
         // More than two options cannot share a row at accessibility sizes
         // without truncating ("Gemi…", "Ope…", "Clau…"), so they stack.
-        let layout = dynamicTypeSize.isAccessibilitySize && options.count > 2
+        let stacked = dynamicTypeSize.isAccessibilitySize && options.count > 2
+        let layout = stacked
             ? AnyLayout(VStackLayout(spacing: RhymeAITokens.Spacing.xxs))
             : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.xxs))
-        layout { segments }
-        .padding(RhymeAITokens.Spacing.xxs)
-        .background(
-            appearance.palette.raisedSurface,
-            in: RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md, style: .continuous)
-                .strokeBorder(appearance.palette.outline, lineWidth: 1)
+        let control = layout { segments }
+            .padding(RhymeAITokens.Spacing.xxs)
+            .background(
+                appearance.palette.raisedSurface,
+                in: RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.md, style: .continuous)
+                    .strokeBorder(appearance.palette.outline, lineWidth: 1)
+            }
+            // Only the sliding selection animates. The choice itself is
+            // applied at once, so a control that switches the whole
+            // appearance does not cross-fade every surface in the app.
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: selection)
+
+        if stacked {
+            // Stacked segments no longer line up with a one-row segmented
+            // control, so each button speaks for itself with its selected
+            // trait.
+            control
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(label)
+                .accessibilityIdentifier(accessibilityIdentifier)
+        } else {
+            // Assistive technology and UI tests get the system segmented
+            // control: one named group whose segments report selection and
+            // position ("2 of 3"), laid out over the equal-width segments
+            // drawn above.
+            control
+                .accessibilityRepresentation {
+                    Picker(label, selection: $selection) {
+                        ForEach(options, id: \.self) { option in
+                            Text(title(option)).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier(accessibilityIdentifier)
+                }
         }
-        .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     @ViewBuilder
@@ -56,9 +87,7 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
         ForEach(options, id: \.self) { option in
             let isSelected = selection == option
             Button {
-                withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
-                    selection = option
-                }
+                selection = option
             } label: {
                 Text(title(option))
                     .font(.caption.weight(isSelected ? .semibold : .medium))
@@ -254,6 +283,7 @@ struct SettingsLocalModelSection: View {
             )
         }
         .padding(RhymeAITokens.Spacing.lg)
+                label: "On-Device Engine",
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 

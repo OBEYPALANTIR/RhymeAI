@@ -142,6 +142,7 @@ struct SettingsView: View {
                 .textFieldStyle(.plain)
 
                 Button {
+                label: "AI Provider",
                     showKey.toggle()
                 } label: {
                     Image(systemName: showKey ? "eye.slash" : "eye")

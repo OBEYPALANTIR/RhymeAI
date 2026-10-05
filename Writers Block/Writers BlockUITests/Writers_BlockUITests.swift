@@ -745,6 +745,41 @@ final class Writers_BlockUITests: XCTestCase {
         }
     }
 
+    /// The provider control sits below the fold on short sheets (iPad), so
+    /// its segments must stay tappable, and report selection, after the
+    /// settings list scrolls.
+    @MainActor
+    func testProviderSegmentsWorkAfterScrollingSettings() throws {
+        let app = isolatedUITestApp()
+        app.launch()
+        createNewSong(in: app)
+
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+
+        let picker = app.segmentedControls["providerPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "Provider control is missing from Settings")
+        let scroll = app.scrollViews.element(boundBy: app.scrollViews.count - 1)
+        let claude = picker.buttons["Claude"]
+        // Short drags: a full swipe can carry the control straight past the
+        // visible part of a short sheet.
+        for _ in 0..<12 where !claude.isHittable {
+            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -90)))
+        }
+        XCTAssertTrue(claude.isHittable, "Claude segment is not tappable after scrolling: \(claude.frame) in \(scroll.frame)")
+        claude.tap()
+        XCTAssertTrue(claude.isSelected, "Claude did not become the selected provider")
+        XCTAssertTrue(app.secureTextFields["API Key"].waitForExistence(timeout: 5))
+
+        let local = picker.buttons["Local"]
+        local.tap()
+        XCTAssertTrue(local.isSelected, "Local did not become the selected provider")
+        XCTAssertFalse(claude.isSelected)
+    }
+
     @MainActor
     func testLyricsUndoAndRedoControlsRestoreTyping() throws {
         let app = isolatedUITestApp()
@@ -1129,6 +1164,7 @@ final class Writers_BlockUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+        expandTargetLineStressDetail(in: app)
         XCTAssertTrue(app.staticTexts["ˈDA da | ˈDA da"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "jɛloʊ")).firstMatch.waitForExistence(timeout: 3))
     }
@@ -1164,7 +1200,6 @@ final class Writers_BlockUITests: XCTestCase {
         app.buttons["Stop"].tap()
         XCTAssertTrue(suggest.waitForExistence(timeout: 1))
     }
-        expandTargetLineStressDetail(in: app)
 
     @MainActor
     func testAssistantStopCancelsSuggestionRequest() throws {
@@ -1228,6 +1263,7 @@ final class Writers_BlockUITests: XCTestCase {
 
             XCTAssertTrue(app.textViews["lyricsEditor"].waitForExistence(timeout: 5))
             XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
+            expandTargetLineStressDetail(in: app)
             XCTAssertTrue(app.staticTexts["ˈDA da | ˈDA da"].waitForExistence(timeout: 5))
             XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "jɛloʊ")).firstMatch.waitForExistence(timeout: 3))
 
@@ -1263,7 +1299,6 @@ final class Writers_BlockUITests: XCTestCase {
             app.buttons["Move UI Trash Song to Trash"].tap()
 
             // Delete is immediate (no confirmation); the undo toast confirms the move.
-            expandTargetLineStressDetail(in: app)
             XCTAssertTrue(app.buttons["Undo"].waitForExistence(timeout: 3))
 
             XCTAssertTrue(app.buttons["Open Trash Bin"].waitForExistence(timeout: 5))
@@ -1759,6 +1794,19 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(app.textViews["lyricsEditor"].exists)
     }
 
+    /// The target line keeps its stress pattern and IPA behind a disclosure
+    /// whose state is remembered between launches, so only expand it when it
+    /// is collapsed.
+    private func expandTargetLineStressDetail(in app: XCUIApplication) {
+        let disclosure = app.buttons["targetLineStressDisclosure"]
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5), "Target line stress disclosure is missing")
+        if disclosure.label == "Show stress pattern" {
+            XCTAssertFalse(app.staticTexts["ˈDA da | ˈDA da"].exists, "Stress detail should stay hidden until asked for")
+            disclosure.tap()
+        }
+        XCTAssertEqual(disclosure.label, "Hide stress pattern")
+    }
+
     private func isolatedUITestApp(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-in-memory-store"] + arguments
@@ -1794,19 +1842,6 @@ final class Writers_BlockUITests: XCTestCase {
         if loadSongButton.waitForExistence(timeout: 2) {
             loadSongButton.tap()
         } else {
-    /// The target line keeps its stress pattern and IPA behind a disclosure
-    /// whose state is remembered between launches, so only expand it when it
-    /// is collapsed.
-    private func expandTargetLineStressDetail(in app: XCUIApplication) {
-        let disclosure = app.buttons["targetLineStressDisclosure"]
-        XCTAssertTrue(disclosure.waitForExistence(timeout: 5), "Target line stress disclosure is missing")
-        if disclosure.label == "Show stress pattern" {
-            XCTAssertFalse(app.staticTexts["ˈDA da | ˈDA da"].exists, "Stress detail should stay hidden until asked for")
-            disclosure.tap()
-        }
-        XCTAssertEqual(disclosure.label, "Hide stress pattern")
-    }
-
             let openDrawerButton = app.buttons["Open songs drawer"]
             XCTAssertTrue(openDrawerButton.waitForExistence(timeout: 5))
             openDrawerButton.tap()

@@ -10,13 +10,13 @@ struct AppearanceSettingsSection: View {
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
 
-            Picker("Appearance", selection: appearance) {
-                ForEach(AppAppearanceStyle.allCases) { style in
-                    Text(style.displayName).tag(style)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("appearancePicker")
+            RhymeSegmentedControl(
+                options: AppAppearanceStyle.allCases,
+                selection: appearance,
+                accessibilityIdentifier: "appearancePicker",
+                label: "Appearance",
+                title: \.displayName
+            )
         }
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl)
