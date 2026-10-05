@@ -385,14 +385,22 @@ final class UXAuditWalkthroughUITests: XCTestCase {
         }
         // On iPad the editor and assistant scroll views sit behind the sheet;
         // the sheet's own scroll view is the last one in the hierarchy.
-        let scroll = app.scrollViews.element(boundBy: max(app.scrollViews.count - 1, 0))
+        var scroll = app.scrollViews.element(boundBy: max(app.scrollViews.count - 1, 0))
         captureScrolling(app, in: scroll, name: "settings-general-local", pages: 4)
         if tap(app.buttons["cloudBackupDisclosure"], "Cloud backup disclosure", scrolling: scroll) {
             shot(app, "settings-cloud-backup")
             scroll.swipeUp()
             shot(app, "settings-cloud-backup-scrolled")
         }
-        for _ in 0..<6 { scroll.swipeDown() }
+        // Reopen rather than swipe back to the top: a swipe down at the top
+        // of the sheet dismisses it.
+        tap(app.buttons["Done"], "settings Done")
+        guard tap(app.buttons["settingsButton"], "Settings (reopen)", timeout: 6),
+              app.navigationBars["Settings"].waitForExistence(timeout: 5) else {
+            app.terminate()
+            return
+        }
+        scroll = app.scrollViews.element(boundBy: max(app.scrollViews.count - 1, 0))
         for provider in ["Gemini", "OpenAI", "Claude"] {
             let segment = app.buttons[provider]
             if tap(segment, "provider \(provider)", scrolling: scroll) {
@@ -400,7 +408,7 @@ final class UXAuditWalkthroughUITests: XCTestCase {
                 if provider == "Gemini" {
                     scroll.swipeUp()
                     shot(app, "settings-provider-gemini-scrolled")
-                    for _ in 0..<4 { scroll.swipeDown() }
+                    scroll.swipeDown()
                 }
             }
         }
