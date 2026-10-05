@@ -292,7 +292,7 @@ motion:
   spring-expressive: "iOS response 400ms, damping 0.76; Android damping 0.76, stiffness 247"
   press-scale: 0.98
   purpose:
-    phi-ladder: "Fast, standard, and settle tiers use a golden-ratio ladder: 160ms, 260ms, 420ms."
+    phi-ladder: "iOS fast, standard, and settle tiers use a golden-ratio ladder: 160ms, 260ms, 420ms. Android shares 160ms and 260ms and settles with a spring."
     feedback-dismiss: "160ms for press feedback, save-status changes, and dismissals."
     state-dialog: "260ms for ordinary state changes, segmented selection, assistant panels, sheets, drawers, and rewrite chips."
     drag-settle: "420ms spring for drag release and disclosure settle; the expressive spring drives the mic and UnBlock choreography."
@@ -328,6 +328,7 @@ components:
     rounded: "{rounded.ios-lg}"
     padding: 24px
   welcome-card-android:
+    backgroundColor: "{colors.surface-container-low}"
     textColor: "{colors.on-surface}"
     borderColor: "{colors.outline-strong}"
     typography: "{typography.title-md}"
@@ -373,6 +374,8 @@ components:
     size: 56px
     recordingWidth: 220px
   mic-button-android:
+    backgroundColor: "{colors.surface-container-high}"
+    borderColor: "{colors.outline-strong}"
     rounded: "{rounded.pill}"
     size: 55px
     recordingWidth: 216px
@@ -537,7 +540,7 @@ Android also defines the remaining Material container steps and a subtle text to
 | `surfaceContainerHighest` / `primaryContainer` | `#DADAD2` | `#D2C8B0` | `#343430` (`primaryContainer` is `#41413D`) |
 | Subtle text | `#666660` | `#6E675C` | `#9B968C` |
 
-Status colours are the only non-analysis hues. Ink and Paper share the light set; Graphite uses the dark set.
+Status colours are the only non-analysis hues in the palettes. Ink and Paper share the light set; Graphite uses the dark set. iOS also uses a few system hues outside the palettes; they are listed under Known inconsistencies.
 
 | Status | Ink and Paper | Graphite |
 | --- | --- | --- |
@@ -548,9 +551,9 @@ Status colours are the only non-analysis hues. Ink and Paper share the light set
 
 Android additionally themes `tertiary` as success, with success containers `#D1FAE5` / `#064E3B` (light) and `#005235` / `#90F7C4` (dark), on-error `#FFFFFF` (light) and `#690005` (dark), and on-warning `#4A2800` (dark).
 
-The action colour is the ink itself. Primary buttons, the UnBlock pill, the mic button, the selected segment, slider and switch tints, and the app tint all use the action fill with the on-action colour for content. There is no brand accent hue.
+The action colour is the ink itself; neither palette defines a brand accent hue. On iOS the action fill, with the on-action colour for content, is used for primary buttons, the UnBlock pill, the mic button, the selected segment of the custom segmented control, sliders, the app tint, and the switches in the Editor settings tab and the assistant. The two cloud-sharing consent switches in iOS Settings are a deliberate exception: they use system indigo, because the action colour gave too little contrast on the Graphite switch. On Android `primary` carries the action fill for primary buttons, the UnBlock pill, and checked switches; the Android mic button is not an action fill (see Components).
 
-Rhyme and syllable colours are functional tokens, not decoration, and are identical on both platforms. Ink and Paper use the dark-on-light set; Graphite uses the pastel set.
+Rhyme and syllable colours are functional tokens, not decoration. Ink and Paper use the dark-on-light set; Graphite uses the pastel set. The syllable colours and the Graphite rhyme colours are the same on both platforms. The Ink and Paper rhyme colours below are the ones in iOS `AppAppearance` and Android `RhymePaletteLight`, but the iOS lyric editor does not draw with them (see the note after the list).
 
 | Syllables | Ink and Paper | Graphite |
 | --- | --- | --- |
@@ -564,9 +567,11 @@ Rhyme families cycle through twelve colours so matching colour implies a matchin
 - Ink and Paper: `#B91C1C`, `#92400E`, `#166534`, `#0369A1`, `#6D28D9`, `#BE185D`, `#9A3412`, `#155E75`, `#047857`, `#7E22CE`, `#854D0E`, `#3F6212`.
 - Graphite: `#FCA5A5`, `#FCD34D`, `#86EFAC`, `#7DD3FC`, `#C4B5FD`, `#F9A8D4`, `#FDBA74`, `#67E8F9`, `#A7F3D0`, `#E9D5FF`, `#FEF08A`, `#BEF264`.
 
+On iOS the list above colours the SwiftUI previews (Settings Analysis Style preview, suggestion cards). The lyric editor itself uses a separate array, `LyricsHighlighting.paletteDark` in `Components/RhymeHighlightedText.swift`, whenever the appearance is Ink or Paper. Six of its twelve entries differ from the list: amber is rgb(180, 83, 9), green rgb(21, 128, 61), orange rgb(194, 65, 12), cyan rgb(14, 116, 144), yellow rgb(161, 98, 7), and lime rgb(77, 124, 15). The assistant help sheet holds a third, six-colour copy. Android uses `RhymePaletteLight` everywhere.
+
 The editor's word count uses the 1-syllable colour and its syllable count uses the 4+ colour.
 
-Settings offers two Analysis Style presentations on both platforms. **Color** (default): rhyme families tint the word in its family colour at semibold weight; when rhyme colouring and syllable cues are both on, syllable count appears as an underline in the syllable colour, and when rhyme colouring is off the syllable cue instead tints the whole word (semibold) so the foreground colour is never double-claimed. **Ink Marks**: no hue at all; rhyme families are identified by underline pattern (solid, dashed, dotted, dash-dot) in primary ink, and syllable count is shown by font weight (regular for 1, medium for 2, semibold for 3, bold for 4+).
+Settings offers two Analysis Style presentations on both platforms. **Color** (default): rhyme families tint the word in its family colour at semibold weight; when rhyme colouring and syllable cues are both on, syllable count appears as an underline in the syllable colour, and when rhyme colouring is off the syllable cue instead tints the whole word (semibold) so the foreground colour is never double-claimed. **Ink Marks**: no analysis hue; rhyme families are identified by underline pattern (solid, dashed, dotted, dash-dot) in primary ink, and syllable count is shown by font weight (regular for 1, medium for 2, semibold for 3, bold for 4+).
 
 Texture is part of the appearance. On iOS, Paper draws faint ruled lines every 28pt (primary ink at 5.5%) plus sparse fibre marks (2.4%), Graphite draws a fine grain (1.8%), and Ink is plain; the texture is removed when Reduce Transparency or Increase Contrast is on. Android draws only the Graphite grain (1.8%), removed when the system high-contrast-text setting is on; Android Paper is untextured.
 
@@ -574,7 +579,7 @@ Texture is part of the appearance. On iOS, Paper draws faint ruled lines every 2
 
 The typographic voice pairs a bold system serif for song identity with the plain system sans for everything else. No custom font files ship on either platform.
 
-Serif (iOS `design: .serif`, Android `FontFamily.Serif`) is used for the welcome wordmark, the editor's song title field, the Word Inspector headword, and — at regular weight — suggested lyric lines and the quoted target line in the assistant. Monospace is used for IPA, syllable-count badges, the recording timer, and API-key entry. iOS uses the rounded design only for the suggestion tier badge and one settings field.
+Serif (iOS `design: .serif`, Android `FontFamily.Serif`) is used on both platforms for the welcome wordmark, the editor's song title field, the Word Inspector headword, and — at regular weight — suggested lyric lines and the quoted target line in the assistant. Monospace is used on both platforms for IPA and syllable-count badges; iOS also uses it for the recording timer and API-key entry, where Android keeps the default sans. iOS uses the rounded design in two places: the suggestion tier badge and one settings field.
 
 iOS uses Dynamic Type text styles rather than fixed sizes:
 
@@ -593,7 +598,7 @@ Android uses the Material type scale in `Type.kt`: serif bold for `displayLarge`
 
 Dynamic Type behaviour on iOS is enforced in code, not left to chance:
 
-- Lyrics, titles, and all labels scale with the user's text size.
+- Lyrics, titles, and labels set with text styles scale with the user's text size. Symbol glyphs given a fixed point size (the 17pt toolbar icons, the 20pt welcome and mic icons, the 13pt chevron) do not scale.
 - At accessibility sizes on a compact width, the editor top bar and the floating action row are clamped to the `large` size so the toolbar stays on one row; on a regular width the top bar instead splits into two rows.
 - Multi-option rows restack vertically at accessibility sizes: welcome cards, custom segmented controls with more than two options, suggestion actions, and notebook actions. Rewrite chips instead switch to a horizontally scrolling row at natural width so the bar stays one line tall.
 - The welcome screen drops the app icon and the subtitle at accessibility sizes so the three actions stay reachable.
@@ -619,7 +624,7 @@ Android also has a φ-rounded `Rhythm` scale of 8, 13, 21, 34, and 55dp, used fo
 
 Touch targets: iOS minimum 44pt, comfortable 56pt (floating actions), prominent 82pt (welcome app icon). Android minimum 48dp.
 
-The welcome screen is centred and calm: app icon, the Writers Block wordmark, a two-sentence explanation, then three actions (New Song, Load Song, Song Templates). On Android, when there is a recent song, a fourth card, "Continue <title>", is shown first. On iOS:
+The welcome screen is centred and calm on both platforms: app icon, the Writers Block wordmark, a short explanation, then the actions New Song, Load Song, and Song Templates. The explanation is two sentences on iOS and the single line "A space for your next song." on Android. On Android, when there is a recent song, a fourth card, "Continue <title>", is shown first. On iOS:
 
 - Compact width: the three cards stack vertically with 24pt gaps and 32pt side padding; each card is a row of icon tile, title and caption, and a trailing chevron.
 - Regular width (iPad): the cards sit in one horizontal row, capped at 660pt wide, each with its icon above centred text and no chevron.
@@ -631,7 +636,7 @@ The editor is the primary workspace: a top toolbar with a bottom divider, the fl
 
 Two floating actions sit at the bottom trailing edge: UnBlock and the mic. On iOS they hide while the assistant sheet, a rewrite, the rewrite chip bar, an insertion toast, or Focus mode is active. On Android they hide in Focus mode, while the assistant sheet is open or about to open, while a modal is open, and while a rewrite is active; they stay visible beside the rewrite chip bar, and the "Line added" snackbar is positioned above them.
 
-Assistant placement differs by width on iOS. On a compact width it is a full-screen panel that rises from the bottom over the editor and is dragged down to dismiss. On a regular width it is a persistent 380pt column on the trailing side of the editor, separated by a divider, which the user can hide; Focus mode also hides it. On Android the assistant is always a full-screen panel that rises from the bottom; there is no side-panel layout in the Android code.
+Assistant placement differs by width on iOS. On a compact width it is a full-screen panel that rises from the bottom over the editor and is dragged down to dismiss. On a regular width it is a persistent 380pt column on the trailing side of the editor, separated by a divider, which the user can hide; Focus mode also hides it. On Android the assistant is a full-screen panel that rises from the bottom, with its content capped at 584dp wide and centred; there is no side-panel layout in the Android code.
 
 The songs drawer enters from the leading edge and covers the full height and the full width of the window on both platforms, at every size including iPad. On iOS its order is: search with a close button, a Songs/Recordings switch, Create New Song, the Recent Songs list, then Import From File and Trash at the bottom. On Android the drawer goes from search straight to Create New Song and the song list; it has no Songs/Recordings switch, and the only Projects/Recordings segmented control is inside the Trash screen.
 
@@ -639,9 +644,9 @@ Settings is a native sheet on iOS (on a regular width it requests at least 420pt
 
 ## Elevation & Depth
 
-The interface is flat. Surfaces are separated by a 1px border and a small tonal step, not by blur or shadow.
+The interface is flat. Surfaces are separated by a 1px border and a small tonal step, not by blur; shadows are confined to the few places listed below.
 
-On iOS every bordered surface goes through `liquidGlassSurface`, which draws an opaque palette fill with a 1px border: resting surfaces use the surface colour and the outline colour; interactive surfaces use the raised surface colour and the strong outline. With Increase Contrast on, every border uses the strong outline. There is no `.ultraThinMaterial`, `.glassEffect`, or blur in the app, and `liquidGlassGroup` is a no-op.
+On iOS most bordered surfaces go through `liquidGlassSurface`, which draws an opaque palette fill with a 1px border: resting surfaces use the surface colour and the outline colour; interactive surfaces use the raised surface colour and the strong outline. With Increase Contrast on, those borders all use the strong outline. A few controls draw their own 1px border instead and do not react to Increase Contrast: the custom segmented control, the Word Inspector chips, and the welcome app icon. There is no `.ultraThinMaterial`, `.glassEffect`, or blur in the iOS app, and `liquidGlassGroup` is a no-op.
 
 Shadows on iOS are limited to five places:
 
@@ -653,13 +658,13 @@ Shadows on iOS are limited to five places:
 
 Cards, rows, suggestion cards, chips, settings groups, the assistant panel, and the editor have no shadow.
 
-On Android, depth is Material tonal colour plus 1dp borders. The drawer and settings page set tonal elevation to 0. The only elevated elements are the welcome app icon (4dp tonal, 6dp shadow) and the recordings selection bar (3dp tonal). The floating actions are flat fills.
+On Android, depth is Material tonal colour plus 1dp borders. The drawer and settings page set tonal elevation to 0. The only elevations set explicitly in the UI code are the welcome app icon (4dp tonal, 6dp shadow) and the recordings selection bar (3dp tonal). The floating actions are flat fills. Stock Material components — alert dialogs, dropdown menus, modal bottom sheets, and snackbars — keep their default Material elevation.
 
 Scrims are functional. The palette scrim is the ink colour at 42% on Ink and Paper and black at 55% on Graphite. The iOS songs drawer uses black at 42% in every appearance.
 
 ## Motion
 
-Motion must explain cause, state, or spatial origin. Both platforms share a golden-ratio duration ladder:
+Motion must explain cause, state, or spatial origin. iOS uses a three-tier golden-ratio duration ladder. Android shares the 160ms and 260ms tiers as constants; it has no 420ms constant and settles with a spring instead. The uses in the table are the iOS ones:
 
 | Tier | Duration | Used for |
 | --- | --- | --- |
@@ -667,17 +672,17 @@ Motion must explain cause, state, or spatial origin. Both platforms share a gold
 | State / presentation | 260ms | Segmented selection, welcome-to-editor fade, chips and toasts appearing, panels, sheets, and drawers presenting |
 | Settle | 420ms | Drag release and disclosure settle |
 
-iOS curves: feedback, dismiss, and state use ease-in-out; presentation is a spring (response 0.26, damping 0.88); settle is a spring (response 0.42, damping 0.80); the mic and UnBlock choreography uses the expressive spring (response 0.40, damping 0.76). Pressed controls scale to 0.98 and fade to 86% opacity.
+iOS curves: feedback, dismiss, and state use ease-in-out; presentation is a spring (response 0.26, damping 0.88); settle is a spring (response 0.42, damping 0.80); the mic and UnBlock choreography uses the expressive spring (response 0.40, damping 0.76). Buttons that use the `rhymePress` style (most custom buttons) scale to 0.98 and fade to 86% opacity while pressed; the few buttons with system styles use the system press state.
 
-Android curves: standard and emphasized easing are both cubic-bezier(0.2, 0, 0, 1); exit easing is cubic-bezier(0.4, 0, 1, 1). Springs mirror iOS: standard damping 0.88 (medium-low stiffness), settle damping 0.80 (low stiffness), expressive damping 0.76 with stiffness 247. Android also defines a 140ms page fade and a 200ms disclosure duration.
+Android curves: standard and emphasized easing are both cubic-bezier(0.2, 0, 0, 1); exit easing is cubic-bezier(0.4, 0, 1, 1). Springs mirror iOS: standard damping 0.88 (medium-low stiffness), settle damping 0.80 (low stiffness), expressive damping 0.76 with stiffness 247. Android also defines a 140ms page fade and a 200ms disclosure duration. The Android drawer presents in 260ms on the standard easing and dismisses in 160ms on the exit easing.
 
-Reduced motion is enforced in code. On iOS, token animations go through `rhymeAnimation` / `withRhymeAnimation`, which disable the animation when Reduce Motion is on; move and scale transitions fall back to opacity, and the press style keeps its opacity change but drops the scale. On Android, Compose honours the system animator duration scale, and custom drag and slide transitions snap when animations are disabled.
+Reduced motion is handled in code. On iOS, animations go through `rhymeAnimation` / `withRhymeAnimation` or an explicit Reduce Motion check, all of which disable the animation when Reduce Motion is on; the press style keeps its opacity change but drops the scale. The editor's floating actions, chip bar, and toasts also swap their move and scale transitions for opacity. Other move and scale transitions (drawer toasts, the Trash screen, the cloud-backup disclosure, the assistant sheet) have no opacity fallback and rely on the animation being disabled. On Android, Compose honours the system animator duration scale, and custom drag and slide transitions snap when animations are disabled.
 
 Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
 
 ## Shapes
 
-The shape language is soft but not bubbly. All iOS rounded rectangles use the continuous corner style. Radii differ by platform, and the same token name does not mean the same value:
+The shape language is soft but not bubbly. iOS rounded rectangles use the continuous corner style, with two exceptions noted under Known inconsistencies. Radii differ by platform, and the same token name does not mean the same value:
 
 | Token | iOS `Radius` | Android `Radius` |
 | --- | --- | --- |
@@ -693,7 +698,7 @@ The shape language is soft but not bubbly. All iOS rounded rectangles use the co
 
 How iOS uses them: 6 for small badges; 8 for the selected segment and inline assistant fields; 12 for icon tiles, suggestion cards, the custom segmented track, and the assistant's primary button; 16 for welcome cards, drawer buttons and search, toasts, and Save Settings; 22 for settings groups; 32 for settings input fields and provider cards; 52 for the UnBlock pill, mic, rewrite chips, and inspector chips.
 
-How Android uses them: 12 for suggestion cards, drawer rows and fields, and most settings surfaces; 16 for welcome cards and the Word Inspector; 22 for the rewrite chip bar; 28 for floating actions, chips, and the segmented control. Material `small`, `medium`, and `large` shapes map to 8, 10, and 12.
+How Android uses them: 12 for suggestion cards, drawer fields and recording rows, and most settings surfaces; 14 for song rows in the drawer; 16 for welcome cards and the Word Inspector; 22 for the rewrite chip bar; 28 for floating actions, chips, and the segmented control. Material `small`, `medium`, and `large` shapes map to 8, 10, and 12.
 
 The app icon keeps a 22pt inner corner inside a 30pt bordered shell on iOS; Android rounds its icon at 22% of its size.
 
@@ -705,31 +710,31 @@ Values below are the shipped ones. iOS values are in points, Android values in d
 
 **Editor top bar.** iOS: 8pt padding, bottom divider, and from the leading edge: songs drawer button, undo, redo, save status; then Focus, song actions menu, Settings. Icon buttons are 17pt symbols in a 44×44pt frame with an accessibility label ("Open songs drawer", "Undo last edit", "Redo last edit", "Song actions", "Settings"); Focus reports its value as On or Off. The top bar does not show the song name on either platform; the in-scroll title field is the song title. Android uses a Material `TopAppBar` on the surface colour with the save status, undo, redo, the song-actions menu and Focus; Settings is an item inside the song-actions menu, not a top-bar button.
 
-**Save-status indicator.** A compact indicator beside undo/redo, animated with the 160ms feedback tier. iOS has three states: saving shows a small spinner labelled "Saving..."; saved shows a caption-size checkmark in the success colour at 80% opacity labelled "Saved"; failed shows a warning triangle in the error colour (with the words "Save failed" when they fit) as a 44pt button labelled "Save failed. Retry saving" that retries the save. Android has saving (14dp spinner, 2dp stroke) and saved (14dp check) only.
+**Save-status indicator.** A compact indicator in the top bar next to undo/redo. iOS animates it with the 160ms feedback tier and has three states: saving shows a small spinner labelled "Saving..."; saved shows a caption-size checkmark in the success colour at 80% opacity labelled "Saved"; failed shows a warning triangle in the error colour (with the words "Save failed" when they fit) as a 44pt button labelled "Save failed. Retry saving" that retries the save. Android has saving (14dp spinner, 2dp stroke) and saved (a 14dp animated check, or a static check when animations are off) only.
 
-**UnBlock action.** A pill in the action fill with a pencil icon and the word "UnBlock" over a hand-drawn scribble underline (iOS: 58×5pt, 1.6pt round stroke at 90% opacity). It should read as a creative writing action, not as magic or automation. iOS: 56pt tall, 136pt wide expanded, 52pt radius, collapsing to a 56pt circle (icon only) while recording or at accessibility sizes on compact width; on iPad with the inline assistant open it reads "Hide AI". Android: 55dp tall, 144dp wide, 28dp radius, 68dp scribble.
+**UnBlock action.** On both platforms, a pill in the action fill with a pencil icon and the word "UnBlock" over a hand-drawn scribble underline (iOS: 58×5pt, 1.6pt round stroke at 90% opacity). It should read as a creative writing action, not as magic or automation. iOS: 56pt tall, 136pt wide expanded, 52pt radius, collapsing to a 56pt circle (icon only) while recording or at accessibility sizes on compact width; on iPad with the inline assistant open it reads "Hide AI". Android: 55dp tall, 144dp wide, 28dp radius, 68dp scribble.
 
-**Mic and recording pill.** A circle in the action fill (iOS 56pt, Android 55dp) that stretches leftward into a pill while recording (iOS 220pt, Android 216dp) on the expressive spring, showing a 22-bar level meter 24 high and a monospaced elapsed time, with the stop control staying where the mic was. Labels: "Record voice memo" and "Stop recording". Under Reduce Motion on iOS the change is instant.
+**Mic and recording pill.** A circle (iOS 56pt, Android 55dp) that stretches into a pill while recording (iOS 220pt, Android 216dp) on the expressive spring, showing a 22-bar level meter 24 high and the elapsed time, with the stop control staying where the mic was. Labels on both platforms: "Record voice memo" and "Stop recording". iOS: action fill with the on-action glyph, a monospaced semibold caption timer, and an instant change under Reduce Motion. Android: the high container colour with a 1dp outline rather than the action fill, and a 12sp timer in the default sans.
 
-**Assistant panel.** A dense operational surface on the canvas colour. iOS compact: a 72pt drag area with a 52×4pt grabber at 45% opacity, labelled "Dismiss Assistant", then an "Assistant" header with a 44pt close button. iOS regular: a 56pt header row with "Assistant" and a 44pt hide button. Contents in order: Context & Theme, Target Line with a monospaced syllable badge, a collapsible Rhyme Options row (scheme menu, rhyme-density segmented control, complexity slider), model readiness, one full-width primary button ("Suggest Next Line", 44pt minimum, 12pt radius, action fill), then Suggestions with an "AI-generated · review before use" note. Every feature label has a 44pt help button labelled "<feature> help". Android follows the same order with a 64dp handle area, Material sliders, and the sliding segmented control.
+**Assistant panel.** A dense operational surface on the canvas colour. iOS compact: a 72pt drag area with a 52×4pt grabber at 45% opacity, labelled "Dismiss Assistant", then an "Assistant" header with a 44pt close button. iOS regular: a 56pt header row with "Assistant" and a 44pt hide button. Contents in order: Context & Theme, Target Line with a monospaced syllable badge, a collapsible Rhyme Options row (scheme menu, rhyme-density segmented control, complexity slider), model readiness, one full-width primary button ("Suggest Next Line", 44pt minimum, 12pt radius, action fill), then Suggestions with an "AI-generated · review before use" note. Feature labels that have help text carry a 44pt help button labelled "<feature> help". Android has a 64dp handle area and the same named sections (Context & Theme, Target Line, Rhyme Options with Rhyme Scheme, Rhyme Density and Complexity, a local-model readiness line, "Suggest Next Line", and Suggestions with the same note), built from Material sliders and the sliding segmented control; its exact spacing and control sizes were not compared with iOS.
 
 **Suggestion card.** iOS: surface fill, 1px outline, 12pt radius, 24pt padding; the line in serif body text, a monospaced syllable count badge, an optional tier badge, then "Use line" (semibold) and "Keep for later" / "Kept", each at least 44pt tall; actions stack at accessibility sizes. Android: outlined card, 12dp radius, 48dp minimum height, serif line, tonal "Use" button.
 
-**Rewrite chip bar.** Appears at the bottom of the editor while lyric text is selected. iOS: a 52pt-radius bordered capsule, 8pt padding, at most 360pt wide, holding a "Look up word" magnifier (44×44pt) and caption-weight chips at least 44pt tall. Android: a 22dp-radius bar on the high container colour with 28dp-radius, 48dp-tall chips. The rewrite review bar that follows uses the same capsule on iOS (22pt radius when showing an error or at accessibility sizes) with Retry/Apply at least 72×44pt and a "Regenerate rewrite" icon button.
+**Rewrite chip bar.** Appears at the bottom of the editor for a lyric selection (iOS: while text is selected and no rewrite, inspector, assistant sheet, or Focus mode is active; Android: while a rewrite range is pending and no assistant sheet, modal, active rewrite, or Focus mode is in the way). iOS: a 52pt-radius bordered capsule, 8pt padding, at most 360pt wide, holding a "Look up word" magnifier (44×44pt) and caption-weight chips at least 44pt tall. Android: a 22dp-radius bar on the high container colour with 28dp-radius, 48dp-tall chips. The rewrite review bar that follows uses the same capsule on iOS (22pt radius when showing an error or at accessibility sizes) with Retry/Apply at least 72×44pt and a "Regenerate rewrite" icon button.
 
 **Word Inspector.** iOS: a native sheet with 20pt padding: a "Word inspector" header with a 44pt Close button, the headword in bold serif large title, IPA in monospaced footnote, syllable count, then rhyme and synonym groups as wrapping chips (callout text, 12×6pt padding, 52pt radius, 1px outline that flashes the success colour on use; hint "Replaces the selected word"). Empty and error states are caption text, with errors in the error colour. Android: bordered card with a serif headword and monospace IPA.
 
-**Songs drawer.** Utilitarian and stable. iOS: search field (16pt radius, raised fill, strong outline, 44pt minimum, "Clear search" button) with a "Close drawer" button; a system segmented Songs/Recordings switch; Create New Song (action fill, 52pt minimum height, 16pt radius); a "Recent Songs" caption header; rows at least 76pt tall with a semibold title, caption metadata, a selected checkmark, and a 44pt trash button labelled "Move <title> to Trash"; Import From File and an "Open Trash Bin" button at the bottom. Opening Trash pushes the drawer 30% to the left. Android mirrors the order with 12dp-radius fields and rows.
+**Songs drawer.** Utilitarian and stable. iOS: search field (16pt radius, raised fill, strong outline, 44pt minimum, "Clear search" button) with a "Close drawer" button; a system segmented Songs/Recordings switch; Create New Song (action fill, 52pt minimum height, 16pt radius); a "Recent Songs" caption header; rows at least 76pt tall with a semibold title, caption metadata, a selected checkmark, and a 44pt trash button labelled "Move <title> to Trash"; Import From File and an "Open Trash Bin" button at the bottom. Opening Trash pushes the drawer 30% to the left. Android: a "Song Library" heading with a close button, a 12dp-radius search field, Create New Song, the song list (14dp-radius rows), then Import Files and an "Open Trash Bin" button; there is no Songs/Recordings switch.
 
-**Welcome cards.** Large repeated actions on the raised surface with the strong outline and a 16pt radius on iOS (16dp outlined cards on Android). Each has a 44pt icon tile (12pt radius, 20pt semibold symbol in the action colour), a headline title, and a caption subtitle in secondary ink.
+**Welcome cards.** Large repeated actions. iOS: raised surface fill, strong outline, 16pt radius; a 44pt bordered icon tile (12pt radius, 20pt semibold symbol in the action colour), a headline title, and a caption subtitle in secondary ink. Android: a Material outlined card on `surfaceContainerLow` with a 1dp `outlineVariant` border and 16dp radius, 20dp padding, a bare 28dp icon in the primary colour with no tile, a `titleMedium` title, and a `bodySmall` subtitle in `onSurfaceVariant`.
 
-**Settings.** iOS: a sheet with Done, a General/Editor tab switch, grouped cards (surface fill, 1px outline, 22pt radius, 20pt padding) with small uppercase caption headers, and a pinned full-width Save Settings button (action fill, 44pt minimum, 16pt radius). The General tab holds Appearance, Analysis Style (with a live preview), AI Provider, and provider-specific sections that expand in place; the Editor tab holds labelled switches, each with a 44pt help button. Switches and sliders are tinted with the action colour. Android: a full-screen page using the sliding segmented control, Material switches, and 12dp-radius surfaces.
+**Settings.** iOS: a sheet with Done, a General/Editor tab switch, grouped cards (surface fill, 1px outline, 22pt radius, 20pt padding) with small uppercase caption headers, and a pinned full-width Save Settings button (action fill, 44pt minimum, 16pt radius). The General tab holds Appearance, Analysis Style (with a live preview), AI Provider, and provider-specific sections that expand in place; the Editor tab holds labelled switches, each with a 44pt help button. Editor-tab switches are tinted with the action colour; the two cloud-sharing consent switches are tinted system indigo. Android: a full-screen page with the same General/Editor tabs, using the sliding segmented control, 12dp-radius surfaces, and Material switches whose checked track is `primary` with an `onPrimary` thumb.
 
-**Segmented controls.** iOS custom control (`RhymeSegmentedControl`): raised-surface track, 1px outline, 12pt radius, 4pt padding; the selected segment is an 8pt-radius action fill that slides between options; segments are at least 44pt tall, caption text, and expose Selected / Not selected. Android (`SlidingSegmentedControl`): a 48dp-tall, 28dp-radius outlined track with a sliding selection driven by the standard spring.
+**Segmented controls.** iOS custom control (`RhymeSegmentedControl`): raised-surface track, 1px outline, 12pt radius, 4pt padding; the selected segment is an 8pt-radius action fill that slides between options; segments are at least 44pt tall, caption text, and expose Selected / Not selected. Android (`SlidingSegmentedControl`): a 48dp-tall touch area around a 42dp visible, 28dp-radius outlined track, with a sliding selection driven by the standard spring (it snaps when animations are disabled).
 
-**Song Notebook.** iOS: a native sheet with a system segmented switch between Alternates and Draft History, plain rows at least 44pt tall, and secondary-ink empty states. Android: `SongNotebookSheet`.
+**Song Notebook.** iOS: a native sheet with a system segmented switch between Alternates and Draft History, plain rows at least 44pt tall, and secondary-ink empty states. Android (`SongNotebookSheet`): a Material modal bottom sheet with a "Song Notebook" title and Close button, a Material tab row for Alternates and Draft History, and text-button actions; its row sizes were not compared with iOS.
 
-**Accessibility requirements.** Every interactive control must have a hit area of at least 44×44pt on iOS and 48×48dp on Android, even when its glyph is smaller. The code meets this for icon buttons and the main controls; a known gap is listed below. iOS custom buttons use the `rhymePress` style, which makes the whole frame tappable rather than just the drawn glyph. Every icon-only button carries an accessibility label. Switches are labelled with their row text. Decorative layers (background texture, tier badges) are hidden from assistive technology.
+**Accessibility requirements.** Every interactive control must have a hit area of at least 44×44pt on iOS and 48×48dp on Android, even when its glyph is smaller. The code meets this for icon buttons and the main controls; a known gap is listed below. iOS custom buttons use the `rhymePress` style, which makes the whole frame tappable rather than just the drawn glyph. Icon-only buttons must carry an accessibility label; the ones named in this section do (iOS `accessibilityLabel`, Android `contentDescription`), but this was not audited for every button. On iOS, switches with a hidden visual label are labelled with their row text, and decorative layers (background texture, tier badges) are hidden from assistive technology. On Android, Editor-tab switches are merged into their labelled row, and decorative icons pass a null content description.
 
 ### Known inconsistencies
 
@@ -747,6 +752,14 @@ These describe the current code. They are not rules to copy.
 - Android maps both `outline` and `outlineVariant` to the strong outline, so resting borders are darker than on iOS, which uses the lighter outline at rest.
 - Android has no save-failed state in the top bar and no persistent assistant side panel on large screens.
 - Lyric size and bottom rest differ: 16pt and 200pt on iOS, 17sp and 300dp on Android.
+- The iOS lyric editor's Ink and Paper rhyme colours come from a second array whose amber, green, orange, cyan, yellow, and lime entries differ from `AppAppearance` and from Android; the iOS assistant help sheet has a third copy.
+- iOS uses system hues outside the palettes: system indigo on the two cloud-sharing consent switches (deliberate, for Graphite contrast); system indigo, teal, and red for the pending-rewrite highlight and shimmer in the editor; and system indigo, green, and orange for the suggestion tier badge. Android draws the rewrite highlight and tier badge from the colour scheme.
+- The mic button is an action fill on iOS and an outlined high-container surface on Android. The recording timer is monospaced on iOS only.
+- Welcome differs by platform: two sentences of copy and tiled icons on a raised surface on iOS; one line of copy, bare icons on `surfaceContainerLow`, and an extra "Continue" card on Android.
+- Two iOS views use non-continuous rounded rectangles: `RhymeSchemeDisplayView` and the beat-grid preview.
+- Some iOS move and scale transitions have no explicit opacity fallback under Reduce Motion (drawer toasts, Trash, cloud-backup disclosure, assistant sheet).
+- Android has no 420ms duration constant, and its dialogs, menus, bottom sheets, and snackbars keep stock Material elevation.
+- Several iOS controls draw their own border (custom segmented control, inspector chips, app icon) and so ignore Increase Contrast.
 
 ## Do's and Don'ts
 
@@ -768,11 +781,11 @@ Do give every control a 44pt (iOS) or 48dp (Android) hit area and every icon but
 
 Do let actions and panels animate from their physical origin, and route animations through the reduced-motion helpers.
 
-Don't add an accent hue, gradient, or tint to chrome. Hue is reserved for rhyme, syllable, and status meaning.
+Don't add an accent hue, gradient, or tint to chrome. Hue is reserved for rhyme, syllable, and status meaning; the existing exceptions are listed under Known inconsistencies and should not be extended.
 
 Don't reintroduce blur, translucent "glass" materials, or glow.
 
-Don't add shadows to cards, rows, or panels; shadows are limited to the floating actions, the app icon, the drawer edge, and toasts.
+Don't add shadows to cards, rows, or panels; on iOS, shadows are limited to the floating actions, the app icon, the drawer edge, and toasts.
 
 Don't follow the system light/dark setting or Android dynamic colour; appearance is the user's choice in Settings.
 
