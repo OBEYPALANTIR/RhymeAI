@@ -417,6 +417,12 @@ struct ProjectsDrawerView: View {
 
     // MARK: - Recordings Tab
 
+    /// Text-only toolbar actions still need the minimum touch target.
+    private func recordingsToolbarLabel(_ title: String) -> some View {
+        Text(title)
+            .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+    }
+
     private var recordingsTabContent: some View {
         Group {
             if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && filteredRecordingFolders.isEmpty {
@@ -434,20 +440,26 @@ struct ProjectsDrawerView: View {
                     HStack {
                         Spacer()
                         if isSelectingRecordings {
-                            Button("Cancel") {
+                            Button {
                                 isSelectingRecordings = false
                                 selectedRecordingIDs = []
+                            } label: {
+                                recordingsToolbarLabel("Cancel")
                             }
                             .buttonStyle(.rhymePress)
 
-                            Button("Delete (\(selectedRecordingIDs.count))", role: .destructive) {
+                            Button(role: .destructive) {
                                 pendingBulkDelete = true
+                            } label: {
+                                recordingsToolbarLabel("Delete (\(selectedRecordingIDs.count))")
                             }
                             .buttonStyle(.rhymePress)
                             .disabled(selectedRecordingIDs.isEmpty)
                         } else {
-                            Button("Select") {
+                            Button {
                                 isSelectingRecordings = true
+                            } label: {
+                                recordingsToolbarLabel("Select")
                             }
                             .buttonStyle(.rhymePress)
                         }
