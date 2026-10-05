@@ -8,6 +8,23 @@ struct LyricsRewriteHighlight: Equatable {
     var isInsertion: Bool = false
 }
 
+/// Lyrics leave the editor as plain text. The syllable underline lives on the
+/// text storage, and the stock copy and cut would put it on the pasteboard as
+/// rich text.
+final class LyricsUITextView: UITextView {
+    override func copy(_ sender: Any?) {
+        let copied = selectedTextRange.flatMap(text(in:))
+        super.copy(sender)
+        if let copied, !copied.isEmpty { UIPasteboard.general.string = copied }
+    }
+
+    override func cut(_ sender: Any?) {
+        let removed = selectedTextRange.flatMap(text(in:))
+        super.cut(sender)
+        if let removed, !removed.isEmpty { UIPasteboard.general.string = removed }
+    }
+}
+
 struct LyricsTextView: UIViewRepresentable {
     @Environment(\.appAppearanceStyle) private var appearance
 
@@ -26,7 +43,7 @@ struct LyricsTextView: UIViewRepresentable {
     var placeholder: String = "Start writing your lyrics here..."
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView(usingTextLayoutManager: true)
+        let textView = LyricsUITextView(usingTextLayoutManager: true)
         textView.delegate = context.coordinator
         Self.configureTypography(textView)
         textView.backgroundColor = .clear
@@ -434,6 +451,10 @@ struct LyricsTextView: UIViewRepresentable {
         /// undo are untouched. Header lines carry no analysis spans, and spans
         /// are applied after it, so no lyric word loses its syllable or rhyme
         /// colour.
+        ///
+        /// Word colours are rendering attributes. The syllable underline is
+        /// not: the text view draws only the foreground colour from rendering
+        /// attributes, so underlines go on the text storage (`applyUnderlines`).
         static func applyColors(
             _ spans: [LyricsColorSpan],
             to textView: UITextView,
@@ -441,13 +462,12 @@ struct LyricsTextView: UIViewRepresentable {
             sectionLabelForeground: UIColor? = nil
         ) {
             // Color attributes must not change glyph metrics or the user's selection.
+            applyUnderlines(spans, to: textView)
             let sectionLabelRanges = sectionLabelForeground == nil ? [] : SectionMap.headerRanges(textView.text ?? "")
             let range = NSRange(location: 0, length: textView.textStorage.length)
             guard let layout = textView.textLayoutManager, let content = layout.textContentManager else { return }
             layout.renderingAttributesValidator = nil
             layout.removeRenderingAttribute(.foregroundColor, for: content.documentRange)
-            layout.removeRenderingAttribute(.underlineStyle, for: content.documentRange)
-            layout.removeRenderingAttribute(.underlineColor, for: content.documentRange)
             layout.invalidateRenderingAttributes(for: content.documentRange)
             let render: (NSTextLayoutManager, NSTextRange) -> Void = { layout, target in
                 guard let content = layout.textContentManager else { return }
@@ -471,12 +491,10 @@ struct LyricsTextView: UIViewRepresentable {
                           let lower = content.location(content.documentRange.location, offsetBy: intersection.location),
                           let upper = content.location(lower, offsetBy: intersection.length),
                           let textRange = NSTextRange(location: lower, end: upper) else { continue }
-                    var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: span.foreground.map(UIColor.init) ?? foreground]
-                    if let underline = span.underline {
-                        attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                        attributes[.underlineColor] = UIColor(underline)
-                    }
-                    layout.setRenderingAttributes(attributes, for: textRange)
+                    layout.setRenderingAttributes(
+                        [.foregroundColor: span.foreground.map(UIColor.init) ?? foreground],
+                        for: textRange
+                    )
                 }
             }
             layout.renderingAttributesValidator = { layout, fragment in
@@ -484,6 +502,75 @@ struct LyricsTextView: UIViewRepresentable {
             }
             if range.length > 0 { render(layout, content.documentRange) }
             textView.setNeedsDisplay()
+        }
+
+        /// The underline attributes kept on the text storage. Neither changes
+        /// glyph advances, so line breaks and the caret do not move.
+        static let underlineAttributeKeys: [NSAttributedString.Key] = [.underlineStyle, .underlineColor]
+
+        private struct Underline: Equatable {
+            let range: NSRange
+            let color: UIColor
+        }
+
+        /// Writes each span's syllable underline to the text storage and
+        /// removes the ones no span asks for, so turning a guide off leaves
+        /// nothing behind. The storage is touched only when the underlines
+        /// differ from what is already there. Only the plain `text` is ever
+        /// published, saved or exported, and an attribute change is not a user
+        /// edit: no delegate callback, no undo entry.
+        static func applyUnderlines(_ spans: [LyricsColorSpan], to textView: UITextView) {
+            // Restyling the storage would end an in-progress composition.
+            guard textView.markedTextRange == nil else { return }
+            let storage = textView.textStorage
+            let full = NSRange(location: 0, length: storage.length)
+
+            let wanted: [Underline] = spans.compactMap { span in
+                let range = NSIntersectionRange(span.range, full)
+                guard range.length > 0, let underline = span.underline else { return nil }
+                return Underline(range: range, color: UIColor(underline))
+            }.sorted { $0.range.location < $1.range.location }
+
+            var present: [Underline] = []
+            var unexpected = false
+            storage.enumerateAttributes(in: full) { attributes, range, _ in
+                let style = attributes[.underlineStyle] as? Int
+                let color = attributes[.underlineColor] as? UIColor
+                guard style != nil || color != nil else { return }
+                if style == NSUnderlineStyle.single.rawValue, let color {
+                    present.append(Underline(range: range, color: color))
+                } else {
+                    unexpected = true
+                }
+            }
+            guard unexpected || present != wanted else { return }
+
+            let selection = textView.selectedRange
+            storage.beginEditing()
+            for key in underlineAttributeKeys {
+                storage.removeAttribute(key, range: full)
+            }
+            for underline in wanted {
+                storage.addAttributes(
+                    [.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: underline.color],
+                    range: underline.range
+                )
+            }
+            storage.endEditing()
+            if textView.selectedRange != selection {
+                textView.selectedRange = selection
+            }
+            removeUnderlineFromTypingAttributes(textView)
+        }
+
+        /// Text typed next to an underlined word must not inherit the underline.
+        static func removeUnderlineFromTypingAttributes(_ textView: UITextView) {
+            guard underlineAttributeKeys.contains(where: { textView.typingAttributes[$0] != nil }) else { return }
+            var attributes = textView.typingAttributes
+            for key in underlineAttributeKeys {
+                attributes.removeValue(forKey: key)
+            }
+            textView.typingAttributes = attributes
         }
 
         func updatePlaceholder(_ textView: UITextView, text: String) {
@@ -541,6 +628,7 @@ struct LyricsTextView: UIViewRepresentable {
             replacementText text: String
         ) -> Bool {
             pendingColorEdit = (textView.text, range, text)
+            Self.removeUnderlineFromTypingAttributes(textView)
             return true
         }
 
