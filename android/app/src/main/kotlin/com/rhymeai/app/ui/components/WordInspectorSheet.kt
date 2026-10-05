@@ -223,46 +223,65 @@ fun WordInspectorSheet(
                                 .fillMaxWidth()
                                 .verticalScroll(rememberScrollState())
                         ) {
-                            val perfect = matches?.perfect.orEmpty()
-                            val multi = matches?.multi.orEmpty()
-                            val near = matches?.near.orEmpty()
-
-                            ResultsSection(
-                                title = "Perfect rhymes",
-                                empty = "No perfect rhymes in dictionary.",
-                                items = perfect,
-                                onTap = { onReplace(it) },
-                                onLongPress = { value ->
-                                    clipboard.setText(AnnotatedString(value))
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            // The first lookup of a session builds the rhyme index, which takes
+                            // seconds; until it returns there is no result to call empty.
+                            if (matches == null) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("wordInspectorRhymesLoading"),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 1.5.dp,
+                                        color = colorScheme.primary
+                                    )
+                                    Text(
+                                        "Finding rhymes…",
+                                        fontSize = 12.sp,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
                                 }
-                            )
+                            } else {
+                                ResultsSection(
+                                    title = "Perfect rhymes",
+                                    empty = "No perfect rhymes in dictionary.",
+                                    items = matches.perfect,
+                                    onTap = { onReplace(it) },
+                                    onLongPress = { value ->
+                                        clipboard.setText(AnnotatedString(value))
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    }
+                                )
 
-                            Spacer(Modifier.height(DesignTokens.Spacing.md))
+                                Spacer(Modifier.height(DesignTokens.Spacing.md))
 
-                            ResultsSection(
-                                title = "Multi-syllabic rhymes",
-                                empty = "No multi-syllabic matches.",
-                                items = multi,
-                                onTap = { onReplace(it) },
-                                onLongPress = { value ->
-                                    clipboard.setText(AnnotatedString(value))
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                }
-                            )
+                                ResultsSection(
+                                    title = "Multi-syllabic rhymes",
+                                    empty = "No multi-syllabic matches.",
+                                    items = matches.multi,
+                                    onTap = { onReplace(it) },
+                                    onLongPress = { value ->
+                                        clipboard.setText(AnnotatedString(value))
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    }
+                                )
 
-                            Spacer(Modifier.height(DesignTokens.Spacing.md))
+                                Spacer(Modifier.height(DesignTokens.Spacing.md))
 
-                            ResultsSection(
-                                title = "Near rhymes",
-                                empty = "No near rhymes found.",
-                                items = near,
-                                onTap = { onReplace(it) },
-                                onLongPress = { value ->
-                                    clipboard.setText(AnnotatedString(value))
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                }
-                            )
+                                ResultsSection(
+                                    title = "Near rhymes",
+                                    empty = "No near rhymes found.",
+                                    items = matches.near,
+                                    onTap = { onReplace(it) },
+                                    onLongPress = { value ->
+                                        clipboard.setText(AnnotatedString(value))
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    }
+                                )
+                            }
 
                             Spacer(Modifier.height(DesignTokens.Spacing.md))
 

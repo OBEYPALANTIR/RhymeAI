@@ -1298,13 +1298,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Local word results remain valid when autosave assigns this song its first project ID.
         val inspectorLyrics = lyrics
+        inspectorProsody = null
+        inspectorMatches = null
         viewModelScope.launch {
+            fun stillCurrent() = inspectorWord == word && inspectorRange == range && lyrics == inspectorLyrics
+            // Pronunciation is a direct dictionary read; publish it before the rhyme search,
+            // whose first run of a session builds the whole rhyme index.
             val prosodyResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.analyzeWord(word) }
+            if (stillCurrent()) inspectorProsody = prosodyResult
             val matchesResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.findRhymes(word) }
-            if (inspectorWord == word && inspectorRange == range && lyrics == inspectorLyrics) {
-                inspectorProsody = prosodyResult
-                inspectorMatches = matchesResult
-            }
+            if (stillCurrent()) inspectorMatches = matchesResult
         }
 
         fetchInspectorSynonyms(word, range)
