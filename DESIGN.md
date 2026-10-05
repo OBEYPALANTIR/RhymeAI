@@ -339,10 +339,14 @@ components:
     borderColor: "{colors.outline}"
     rounded: "{rounded.ios-md}"
     size: 44px
-  top-bar:
+  top-bar-ios:
+    backgroundColor: "transparent"
+    textColor: "{colors.on-surface-muted}"
+    titleRule: "No fill of its own: the bar sits on the appearance canvas above a bottom divider. It holds the songs-drawer button, undo, redo, a compact save-status indicator, Focus, song actions, and Settings. The song name is not shown; the large in-scroll title field is the only song title."
+  top-bar-android:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.on-surface-muted}"
-    titleRule: "Neither platform shows the song name in the top bar. The bar holds the songs-drawer button, undo/redo, a compact save-status indicator, Focus, song actions, and Settings; the large in-scroll title field is the only song title."
+    titleRule: "A Material TopAppBar on the surface colour holding the save status, undo, redo, the song-actions menu, and Focus. Settings is an item inside the song-actions menu, not a top-bar button. The song name is not shown; the in-scroll title field is the only song title."
   editor-title-field-android:
     backgroundColor: "transparent"
     textColor: "{colors.on-background}"
@@ -495,7 +499,7 @@ components:
 
 Writers Block is a monochrome, focused songwriting workspace. The interface should feel like a sheet of paper with a capable assistant close at hand: one flat writing surface, ink-coloured text and actions, large serif song titles, restrained controls, and hue only where it helps the writer read rhythm, rhyme, or status.
 
-Naming: the product's user-facing name is "Writers Block" on both platforms (iOS `CFBundleDisplayName`, Android `app_name`, the welcome wordmark, and the README). "RhymeAI" is the repository and code namespace only (`RhymeAITokens`, `RhymeAITheme`, package `com.rhymeai.app`). In UI copy it appears only as the brand of the app's own on-device models: the "RhymeAI Gemma" download titles and the "RhymeAI Gemma Downloads" section in Settings on both platforms. Do not use it to name the app.
+Naming: the product's user-facing name is "Writers Block" on both platforms (iOS `CFBundleDisplayName`, Android `app_name`, the welcome wordmark, and the README). "RhymeAI" is the repository and code namespace only (`RhymeAITokens`, `RhymeAITheme`, package `com.rhymeai.app`). It still appears in UI copy in two places on both platforms: as the brand of the app's own on-device models (the "RhymeAI Gemma" download titles and the "RhymeAI Gemma Downloads" section in Settings), and in the import error "Pick a RhymeAI project JSON", which names the project file format. Do not use it to name the app.
 
 Both platforms ship the same three appearances, chosen by the user in Settings under Appearance with a three-segment control:
 
