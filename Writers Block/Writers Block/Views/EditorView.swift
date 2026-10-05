@@ -1048,7 +1048,7 @@ private struct InlineRewriteReviewBar: View {
 
                 Text(statusText)
                     .font(.caption.weight(.semibold))
-                    .lineLimit(error == nil ? EditorViewConstants.RewriteReview.statusLineLimit : EditorViewConstants.RewriteReview.errorLineLimit)
+                    .lineLimit(error == nil ? EditorViewConstants.RewriteReview.statusLineLimit : (stacked ? nil : EditorViewConstants.RewriteReview.errorLineLimit))
                     .minimumScaleFactor(EditorViewConstants.RewriteReview.statusMinimumScale)
                     .fixedSize(horizontal: false, vertical: true)
             }
