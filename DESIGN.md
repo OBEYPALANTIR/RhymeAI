@@ -802,3 +802,32 @@ Don't make Android and iOS visually identical at the expense of platform convent
 Don't use magic-wand imagery for UnBlock or context controls.
 
 Don't let panel transitions snap, jump, or recenter after content has already appeared.
+
+## Local AI songwriting contract
+
+This is a required contract for local-AI suggestions and rhyme-preserving rewrites, and for the training and evaluation work behind them. It records the user's requirements; it does not certify shipped behaviour. Treat implementation gaps as defects to fix, not as a reason to relax the contract.
+
+**Rhyme is an acceptance requirement.** The user-selected rhyme scheme (`RhymeScheme`) and rhyme type (`RhymeType`) are hard acceptance requirements, not optional style preferences. An answer that misses the requested scheme or type fails.
+
+**Anchor to the right line.** Derive the target line's scheme letter from its stanza and its actual line or cursor position, then find the existing rhyme anchor for that letter:
+
+- A letter that already appears in the stanza must rhyme with that letter's established sound.
+- When no anchor exists for a letter yet, its first generated line establishes a new sound. A rewrite must preserve established relationships, including matches with later lines.
+- Do not always rhyme with the immediately previous line.
+- Respect section headers and stanza boundaries: a header is not a lyric line, and an anchor does not carry across a stanza boundary.
+- Custom schemes follow the same rules as the presets and must stay supported.
+
+When writing a new stanza from the beginning:
+
+| Line | AABB | ABAB |
+|------|------|------|
+| 1 | A: introduces a sound | A: introduces a sound |
+| 2 | A: rhymes with line 1 | B: introduces a new sound |
+| 3 | B: introduces a new sound | A: rhymes with line 1, not line 2 |
+| 4 | B: rhymes with line 3 | B: rhymes with line 2 |
+
+**Judge quality alongside compliance.** Assess natural phrasing, imagery, meaning, voice, and meter together with rhyme compliance. Creative appeal cannot compensate for failing the requested scheme or type.
+
+**Never fake compliance.** Do not silently fill missing suggestion slots with non-rhyming or unverified lines, relax the rhyme type, or call an unchecked answer compliant. Return fewer verified answers, or an honest no-match state, and leave the next step to the user.
+
+**Train and evaluate the real task.** Training data, teacher screening, student evaluation, and blind reviews must exercise the actual scheme-aware task: the selected scheme and type, the lyric context, the line position, and the rhyme anchor. General free-form quality or single-word rhyme success alone is not enough to select or promote a teacher or student model for this product. Report compliance evidence and creative-quality evidence separately. Model scores and source checks do not prove app or runtime acceptance; verify that in the app.

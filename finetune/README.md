@@ -6,6 +6,9 @@ the Android app's **exact** local-model prompts against a GGUF via llama.cpp
 before/after quality gate for LoRA fine-tunes: run it on the base model to get
 a baseline, run it again on the tuned model, and compare the reports.
 
+All local-model training and evaluation must follow the
+[Local AI songwriting contract](../DESIGN.md#local-ai-songwriting-contract).
+
 Python 3 stdlib only — no pip dependencies.
 
 ## Layout
