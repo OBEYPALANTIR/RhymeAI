@@ -522,7 +522,10 @@ class NewFeatureUiTest {
 
         composeRule.onNodeWithText("Trash").assertIsDisplayed()
         composeRule.onNodeWithText("UI Trash Song").assertIsDisplayed()
-        composeRule.onNode(hasText("30 days left", substring = true)).assertIsDisplayed()
+        // The header states the retention rule; each row carries its own countdown.
+        composeRule.onNodeWithText("Deleted songs stay here for 30 days.").assertIsDisplayed()
+        composeRule.onNode(hasText("30 days left", substring = true)).assertDoesNotExist()
+        composeRule.onNode(hasText("Deletes in 30 days", substring = true)).assertIsDisplayed()
 
         val trashSelection = composeRule.onNodeWithText("UI Trash Song")
         val semantics = trashSelection.fetchSemanticsNode().config
