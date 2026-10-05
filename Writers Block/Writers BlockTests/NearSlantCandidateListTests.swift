@@ -59,6 +59,38 @@ struct NearSlantCandidateListTests {
         }
     }
 
+    @Test func everyAnchorPronunciationDecidesTheRelation() {
+        // abuse ends in /s/ or /z/: "news" is perfect against /z/, "used" near.
+        #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: "news", targetWord: "abuse") == .perfect)
+        #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: "used", targetWord: "abuse") == .near)
+        #expect(!list("abuse", .near).contains("news"))
+        #expect(!list("abuse", .slant).contains("news"))
+        #expect(!list("abuse", .slant).contains("used"))
+    }
+
+    /// Anchors with more than one pronunciation in the bundled dictionary.
+    static let multiPronunciationAnchors = [
+        "abuse", "read", "live", "close", "lead", "tear", "wind", "wound",
+        "bow", "news", "minute", "record", "present", "object"
+    ]
+
+    @Test(arguments: multiPronunciationAnchors)
+    func everyListedWordVerifiesAsItsListsRelation(anchor: String) {
+        #expect(PronunciationDictionary.shared.pronunciations(for: anchor).count > 1)
+        let targetLine = "Everything we said about \(anchor)"
+        for type in RhymeType.allCases {
+            // The returned-line filter the suggestion services apply for this mode.
+            let filter = RhymeLineFilter(targetLine: targetLine, rhymeType: type)
+            // Only words that survive end-word extraction can come back in a line.
+            for word in list(anchor, type) where ProsodyAnalyzer.normalizeWord(word) == word {
+                #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: word, targetWord: anchor) == type,
+                        "\(word) is listed as \(type) for \(anchor)")
+                let line = "I keep coming back to \(word)"
+                #expect(filter?.rank([line], want: 1) == [line], "the \(type) filter rejects \(word) for \(anchor)")
+            }
+        }
+    }
+
     @Test func theObservedChairEndingIsNoRhymeAtAll() {
         let matches = RhymeIndex.shared.find(word: "chair")
         #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: "then", targetWord: "chair") == nil)

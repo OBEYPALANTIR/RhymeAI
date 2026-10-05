@@ -112,7 +112,9 @@ class RhymeConstraintTest {
         val matches = ProsodyAnalyzer.findRhymes("abuse", dictionary = variants)
 
         for (word in listOf("news", "blues")) {
-            assertEquals(1, RhymeConstraint.rhymeTier(word, matches))
+            // Perfect against the /z/ pronunciation, so never offered as near.
+            assertFalse(word in matches.near)
+            assertEquals(0, RhymeConstraint.rhymeTier(word, matches))
             assertEquals(2, RhymeConstraint.rhymeTier(word, "abuse", matches, variants))
             assertEquals(2, RhymeConstraint.rhymeTier(word, "abuse", RhymeMatches.EMPTY, variants))
         }

@@ -30,11 +30,8 @@ class NearSlantCandidateListTest {
     private fun list(anchor: String, type: RhymeType): List<String> =
         RhymeConstraint.candidateEndWords(anchor, type, dictionary = dictionary, wordFrequency = frequency)
 
-    private fun relation(candidate: String, target: String): RhymeType? {
-        val targetTail = ProsodyAnalyzer.rhymeTail(target, dictionary) ?: return null
-        val candidateTail = ProsodyAnalyzer.rhymeTail(candidate, dictionary) ?: return null
-        return ProsodyAnalyzer.tailRelation(targetTail, candidateTail)?.type
-    }
+    private fun relation(candidate: String, target: String): RhymeType? =
+        ProsodyAnalyzer.rhymeRelation(candidate, target, dictionary)
 
     private class Case(
         val anchor: String,
@@ -75,17 +72,53 @@ class NearSlantCandidateListTest {
             assertFalse(anchor in near || anchor in slant)
             assertTrue(perfect.intersect(near.toSet()).isEmpty() && perfect.intersect(slant.toSet()).isEmpty())
             assertTrue(near.intersect(slant.toSet()).isEmpty())
-            // Words with one pronunciation can be checked tail to tail.
-            near.filter { dictionary.pronunciations(it).size == 1 }.forEach {
+            near.forEach {
                 assertEquals(RhymeType.NEAR, relation(it, anchor), "$it is listed as near for $anchor")
             }
-            slant.filter { dictionary.pronunciations(it).size == 1 }.forEach {
+            slant.forEach {
                 assertEquals(RhymeType.SLANT, relation(it, anchor), "$it is listed as slant for $anchor")
             }
             // Content words come before function words.
             for (words in listOf(near, slant)) {
                 val firstFunction = words.indexOfFirst(ProsodyAnalyzer::isFunctionWord).takeIf { it >= 0 } ?: words.size
                 assertTrue(words.drop(firstFunction).all(ProsodyAnalyzer::isFunctionWord), "$words")
+            }
+        }
+    }
+
+    @Test
+    fun everyAnchorPronunciationDecidesTheRelation() {
+        // abuse ends in /s/ or /z/: "news" is perfect against /z/, "used" near.
+        assertEquals(RhymeType.PERFECT, ProsodyAnalyzer.rhymeRelation("news", "abuse", dictionary))
+        assertEquals(RhymeType.NEAR, ProsodyAnalyzer.rhymeRelation("used", "abuse", dictionary))
+        assertFalse("news" in list("abuse", RhymeType.NEAR))
+        assertFalse("news" in list("abuse", RhymeType.SLANT))
+        assertFalse("used" in list("abuse", RhymeType.SLANT))
+    }
+
+    /** Anchors with more than one pronunciation in the bundled dictionary. */
+    private val multiPronunciationAnchors = listOf(
+        "abuse", "read", "live", "close", "lead", "tear", "wind", "wound",
+        "bow", "news", "minute", "record", "present", "object"
+    )
+
+    @Test
+    fun everyListedWordVerifiesAsItsListsRelation() {
+        for (anchor in multiPronunciationAnchors) {
+            assertTrue(dictionary.pronunciations(anchor).size > 1, anchor)
+            val matches = ProsodyAnalyzer.findRhymes(anchor, dictionary = dictionary, wordFrequency = frequency)
+            for (type in RhymeType.entries) {
+                // Only words that survive end-word extraction can come back in a line.
+                for (word in list(anchor, type).filter { ProsodyAnalyzer.normalizeWord(it) == it }) {
+                    assertEquals(type, ProsodyAnalyzer.rhymeRelation(word, anchor, dictionary), "$word is listed as $type for $anchor")
+                    // Android's returned-line tiers: 2 perfect, 1 near; it has no slant tier.
+                    val tier = RhymeConstraint.rhymeTier("I keep coming back to $word", anchor, matches, dictionary)
+                    when (type) {
+                        RhymeType.PERFECT -> assertEquals(2, tier, "perfect $word for $anchor")
+                        RhymeType.NEAR -> assertEquals(1, tier, "near $word for $anchor")
+                        RhymeType.SLANT -> Unit
+                    }
+                }
             }
         }
     }

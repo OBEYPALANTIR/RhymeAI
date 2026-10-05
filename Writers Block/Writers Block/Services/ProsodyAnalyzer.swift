@@ -36,6 +36,8 @@ nonisolated struct RhymeTail: Equatable, Hashable, Sendable {
 private struct RhymeTailEntry {
     let word: String
     let tail: RhymeTail
+    /// Every pronunciation of `word`, shared by all its entries.
+    let profiles: [ProsodyAnalyzer.RhymeProfile]
 }
 
 nonisolated final class RhymeIndex: @unchecked Sendable {
@@ -64,7 +66,10 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         let keys = ProsodyAnalyzer.rhymeKeys(for: word, maxDepth: 2, dictionary: dictionary)
         guard let k0 = keys.first else { return .empty }
         let k1 = keys.count > 1 ? keys[1] : nil
-        guard let targetTail = ProsodyAnalyzer.rhymeTail(for: word, dictionary: dictionary) else {
+        // Every pronunciation of the target, so "abuse" (/s/ and /z/) is
+        // classified the same way `rhymeRelation` verifies a returned line.
+        let targetProfiles = dictionary.pronunciations(for: normalized).compactMap(ProsodyAnalyzer.RhymeProfile.init)
+        guard !targetProfiles.isEmpty, ProsodyAnalyzer.rhymeTail(for: word, dictionary: dictionary) != nil else {
             return .empty
         }
 
@@ -80,29 +85,38 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
         }
         let exclude = Set(perfectAll).union(multiAll)
 
-        // Every entry that can stand in a near or slant relation: the same
-        // stressed vowel, the same coda, or a stress-shifted tail.
-        var pool = nearMap[targetTail.vowel] ?? []
-        if !targetTail.coda.isEmpty {
-            pool += slantMap[Self.codaKey(targetTail.coda)] ?? []
-        }
-        pool += weakMap[Self.codaKey([targetTail.vowel] + targetTail.coda)] ?? []
-        for vowel in Set(targetTail.coda.filter(ProsodyAnalyzer.isVowelPhone)) where vowel != targetTail.vowel {
-            pool += nearMap[vowel] ?? []
+        // Every word that can stand in a near or slant relation to any target
+        // pronunciation: the same stressed vowel, the same coda, or a
+        // stress-shifted tail.
+        var pool: [String: [ProsodyAnalyzer.RhymeProfile]] = [:]
+        for tail in Set(targetProfiles.map(\.tail)) {
+            var entries = nearMap[tail.vowel] ?? []
+            if !tail.coda.isEmpty {
+                entries += slantMap[Self.codaKey(tail.coda)] ?? []
+            }
+            entries += weakMap[Self.codaKey([tail.vowel] + tail.coda)] ?? []
+            for vowel in Set(tail.coda.filter(ProsodyAnalyzer.isVowelPhone)) where vowel != tail.vowel {
+                entries += nearMap[vowel] ?? []
+            }
+            for entry in entries { pool[entry.word] = entry.profiles }
         }
 
-        // A word's best relation wins: near over slant, then the closer near tier.
+        // Each word takes its closest relation over every pronunciation pair;
+        // a word that is perfect under any pairing is in neither list.
         var best: [String: ProsodyAnalyzer.TailRelation] = [:]
-        for entry in pool {
-            guard entry.word != normalized,
-                  !exclude.contains(entry.word),
-                  !ProsodyAnalyzer.isInflection(entry.word, of: normalized),
-                  ProsodyAnalyzer.isSpelledAsWord(entry.word),
-                  let relation = ProsodyAnalyzer.tailRelation(target: targetTail, candidate: entry.tail) else {
+        for (candidate, profiles) in pool {
+            guard candidate != normalized,
+                  !exclude.contains(candidate),
+                  !ProsodyAnalyzer.isInflection(candidate, of: normalized),
+                  ProsodyAnalyzer.isSpelledAsWord(candidate),
+                  let relation = ProsodyAnalyzer.bestRelation(
+                      target: targetProfiles,
+                      candidate: profiles
+                  ),
+                  relation.type != .perfect else {
                 continue
             }
-            if let current = best[entry.word], current.rank <= relation.rank { continue }
-            best[entry.word] = relation
+            best[candidate] = relation
         }
         let nearAll = Self.songwriterOrder(
             best.filter { $0.value.type == .near }, wordFrequency: wordFrequency
@@ -205,30 +219,34 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
             guard word.count >= 2 else { return }
             var seenK0 = Set<String>()
             var seenK1 = Set<String>()
-            var seenTails = Set<RhymeTail>()
+            var profiles: [ProsodyAnalyzer.RhymeProfile] = []
             for phones in variants {
                 let ks = ProsodyAnalyzer.rhymeKeysForPhonesPublic(phones, maxDepth: 2)
                 guard let k0 = ks.first else { continue }
                 if seenK0.insert(k0).inserted {
                     perfectBuild[k0, default: []].append(word)
                 }
-                if let tail = ProsodyAnalyzer.rhymeTailForPhonesPublic(phones), seenTails.insert(tail).inserted {
-                    let entry = RhymeTailEntry(word: word, tail: tail)
-                    nearBuild[tail.vowel, default: []].append(entry)
-                    if !tail.coda.isEmpty {
-                        slantBuild[Self.codaKey(tail.coda), default: []].append(entry)
-                    }
-                    // Unstressed syllables after the stress ("happy" ends in an
-                    // unstressed IY), for stress-shifted near rhymes.
-                    for index in tail.coda.indices where ProsodyAnalyzer.isVowelPhone(tail.coda[index]) {
-                        weakBuild[Self.codaKey(Array(tail.coda[index...])), default: []].append(entry)
-                    }
+                if let tail = ProsodyAnalyzer.rhymeTailForPhonesPublic(phones) {
+                    profiles.append(ProsodyAnalyzer.RhymeProfile(key: k0, multiKey: ks.count > 1 ? ks[1] : nil, tail: tail))
                 }
                 if ks.count > 1 {
                     let k1 = ks[1]
                     if seenK1.insert(k1).inserted {
                         multiBuild[k1, default: []].append(word)
                     }
+                }
+            }
+            var seenTails = Set<RhymeTail>()
+            for tail in profiles.map(\.tail) where seenTails.insert(tail).inserted {
+                let entry = RhymeTailEntry(word: word, tail: tail, profiles: profiles)
+                nearBuild[tail.vowel, default: []].append(entry)
+                if !tail.coda.isEmpty {
+                    slantBuild[Self.codaKey(tail.coda), default: []].append(entry)
+                }
+                // Unstressed syllables after the stress ("happy" ends in an
+                // unstressed IY), for stress-shifted near rhymes.
+                for index in tail.coda.indices where ProsodyAnalyzer.isVowelPhone(tail.coda[index]) {
+                    weakBuild[Self.codaKey(Array(tail.coda[index...])), default: []].append(entry)
                 }
             }
         }
@@ -523,32 +541,51 @@ nonisolated enum ProsodyAnalyzer {
         let normalizedCandidate = normalizeWord(candidateWord)
         let normalizedTarget = normalizeWord(targetWord)
         guard normalizedCandidate != normalizedTarget else { return nil }
-        let candidatePronunciations = dictionary.pronunciations(for: normalizedCandidate)
-        var near = false
-        var slant = false
-        for targetPhones in dictionary.pronunciations(for: normalizedTarget) {
-            let targetKeys = rhymeKeysForPhones(targetPhones, maxDepth: 2)
-            guard let targetKey = targetKeys.first,
-                  let targetTail = rhymeTailForPhones(targetPhones) else { continue }
-            let targetMultiKey = targetKeys.dropFirst().first
+        return bestRelation(
+            target: dictionary.pronunciations(for: normalizedTarget).compactMap(RhymeProfile.init),
+            candidate: dictionary.pronunciations(for: normalizedCandidate).compactMap(RhymeProfile.init)
+        )?.type
+    }
 
-            for candidatePhones in candidatePronunciations {
-                let candidateKeys = rhymeKeysForPhones(candidatePhones, maxDepth: 2)
-                if candidateKeys.first == targetKey ||
-                    (targetMultiKey != nil && candidateKeys.dropFirst().first == targetMultiKey) {
-                    return .perfect
+    /// One pronunciation's rhyme keys and tail.
+    struct RhymeProfile: Sendable {
+        let key: String
+        let multiKey: String?
+        let tail: RhymeTail
+
+        init(key: String, multiKey: String?, tail: RhymeTail) {
+            self.key = key
+            self.multiKey = multiKey
+            self.tail = tail
+        }
+
+        init?(_ phones: [String]) {
+            let keys = ProsodyAnalyzer.rhymeKeysForPhones(phones, maxDepth: 2)
+            guard let key = keys.first, let tail = ProsodyAnalyzer.rhymeTailForPhones(phones) else { return nil }
+            self.key = key
+            self.multiKey = keys.dropFirst().first
+            self.tail = tail
+        }
+    }
+
+    /// The closest relation over every target x candidate pronunciation, with
+    /// Perfect > Near > Slant. The rhyme lists and `rhymeRelation` both use it,
+    /// so a listed word always verifies as its list's relation.
+    static func bestRelation(target: [RhymeProfile], candidate: [RhymeProfile]) -> TailRelation? {
+        var best: TailRelation?
+        for targetProfile in target {
+            for candidateProfile in candidate {
+                if candidateProfile.key == targetProfile.key ||
+                    (targetProfile.multiKey != nil && candidateProfile.multiKey == targetProfile.multiKey) {
+                    return TailRelation(type: .perfect, tier: 0)
                 }
-                guard let candidateTail = rhymeTailForPhones(candidatePhones) else { continue }
-                switch tailRelation(target: targetTail, candidate: candidateTail)?.type {
-                case .near: near = true
-                case .slant: slant = true
-                default: break
+                guard let relation = tailRelation(target: targetProfile.tail, candidate: candidateProfile.tail) else {
+                    continue
                 }
+                if best.map({ relation.rank < $0.rank }) ?? true { best = relation }
             }
         }
-        if near { return .near }
-        if slant { return .slant }
-        return nil
+        return best
     }
 
     /// How a candidate's rhyme tail relates to the target's when the two are
@@ -558,8 +595,14 @@ nonisolated enum ProsodyAnalyzer {
         let type: RhymeType
         let tier: Int
 
-        /// Lower is better: any near before any slant, then by tier.
-        var rank: Int { (type == .near ? 0 : 10) + tier }
+        /// Lower is better: perfect, then near, then slant, then by tier.
+        var rank: Int {
+            switch type {
+            case .perfect: return tier
+            case .near: return 10 + tier
+            case .slant: return 20 + tier
+            }
+        }
     }
 
     /// Near and slant rhymes as songwriters classify them (family, additive and
