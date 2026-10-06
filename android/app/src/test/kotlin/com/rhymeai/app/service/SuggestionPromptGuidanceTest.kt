@@ -152,6 +152,39 @@ class SuggestionPromptGuidanceTest {
     private fun repoFile(path: String): File =
         sequenceOf("../../$path", "../$path", path).map(::File).first(File::isFile)
 
+    @Test
+    fun everyWindowStaysWithinBudget() {
+        val songs = fixture().getValue("songs").jsonObject.mapValues { it.value.jsonPrimitive.content }
+        for ((id, song) in songs) {
+            val lineCount = song.split("\n").size
+            for (cursor in (0 until lineCount).map<Int, Int?> { it } + null) {
+                for ((wholeSong, budget) in listOf(true to 3100, false to 2600)) {
+                    val window = service.localLyricsContext(song, wholeSong, cursor)
+                    assertTrue(window.length <= budget, "$id cursor=$cursor wholeSong=$wholeSong: ${window.length}")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun endWordRuleFollowsAllowedListSize() {
+        assertEquals("- End each line on a different word.", service.localEndWordRule(null))
+        assertEquals(FEWER_THAN_SIX_RULE, service.localEndWordRule(3))
+        assertEquals(FEWER_THAN_SIX_RULE, service.localEndWordRule(5))
+        assertEquals("- End each line on a different word from the allowed list.", service.localEndWordRule(6))
+
+        fun promptWith(words: List<String>) = localPrompt(
+            constraint = AIService.SuggestionRhymeConstraint(target, "home", words, RhymeType.NEAR, dictionary)
+        )
+        val three = promptWith(listOf("phone", "alone", "known"))
+        assertContains(three, "End each line with one of these rhyming words: phone, alone, known (choose the most natural fit).")
+        assertTrue(three.endsWith(RULES_HEAD + FEWER_THAN_SIX_RULE + "\n" + RULES_TAIL), three)
+        assertFalse(three.contains("different word from the allowed list"))
+        val six = promptWith(listOf("phone", "alone", "known", "own", "show", "go"))
+        assertTrue(six.endsWith(RULES_WITH_LIST), six)
+        assertFalse(six.contains("may repeat"))
+    }
+
     private fun fixture(): JsonObject =
         Json.parseToJsonElement(repoFile("shared/fixtures/local-lyric-window-v1.json").readText()).jsonObject
 
@@ -164,23 +197,29 @@ class SuggestionPromptGuidanceTest {
             "iOS fixture copy differs from shared/fixtures/local-lyric-window-v1.json"
         )
         val fixture = fixture()
-        val song = fixture.getValue("song").jsonPrimitive.content
+        val songs = fixture.getValue("songs").jsonObject.mapValues { it.value.jsonPrimitive.content }
+        val song = songs.getValue("main")
         val lines = song.split("\n")
         assertEquals(300, lines.size)
+        assertEquals(4000, songs.getValue("oneLongLine").length)
+        assertEquals(listOf(14, 4000, 16), songs.getValue("longMiddleLine").split("\n").map { it.length })
         val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
-        assertEquals(10, cases.size)
+        assertEquals(20, cases.size)
         for (case in cases) {
             val name = case.getValue("name").jsonPrimitive.content
+            val songId = case.getValue("song").jsonPrimitive.content
             val cursor = case.getValue("cursorLine").jsonPrimitive.intOrNull
             val wholeSong = case.getValue("useWholeSongContext").jsonPrimitive.boolean
             val expected = case.getValue("expected").jsonPrimitive.content
-            val actual = service.localLyricsContext(song, wholeSong, cursor)
+            val actual = service.localLyricsContext(songs.getValue(songId), wholeSong, cursor)
             assertEquals(expected, actual, name)
             assertTrue(actual.length <= if (wholeSong) 3100 else 2600, name)
-            // The cursor's stanza and the cursor line are always present.
-            val c = cursor ?: lines.lastIndex
-            val start = (c - 1 downTo 0).firstOrNull { lines[it].isBlank() }?.plus(1) ?: 0
-            assertContains(actual, lines.subList(start, c + 1).joinToString("\n").trim(), message = name)
+            if (songId == "main") {
+                // The cursor's stanza and the cursor line are always present.
+                val c = cursor ?: lines.lastIndex
+                val start = (c - 1 downTo 0).firstOrNull { lines[it].isBlank() }?.plus(1) ?: 0
+                assertContains(actual, lines.subList(start, c + 1).joinToString("\n").trim(), message = name)
+            }
         }
         // The cursor reaches the built prompt.
         val middle = cases.first { it.getValue("name").jsonPrimitive.content == "middle_lyric_whole" }
@@ -209,6 +248,8 @@ class SuggestionPromptGuidanceTest {
 - No numbering, bullets, quotes, markdown, labels, or explanation.
 - Do not apologize, explain limitations, or restate the rules.
 - Keep each suggestion under 16 words."""
+        const val FEWER_THAN_SIX_RULE =
+            "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
         const val RULES_WITH_LIST = RULES_HEAD + "- End each line on a different word from the allowed list.\n" + RULES_TAIL
         const val RULES_WITHOUT_LIST = RULES_HEAD + "- End each line on a different word.\n" + RULES_TAIL
     }

@@ -1423,6 +1423,16 @@ $outputRules
             cursorLine
         )
 
+    /**
+     * End-word rule for the on-device Rules list, byte-identical to iOS
+     * `localEndWordRule`: a list too short for six distinct endings allows repeats.
+     */
+    internal fun localEndWordRule(allowedWordCount: Int?): String = when {
+        allowedWordCount == null -> "- End each line on a different word."
+        allowedWordCount >= SUGGESTION_COUNT -> "- End each line on a different word from the allowed list."
+        else -> "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
+    }
+
     internal fun buildLocalSuggestionUserPrompt(
         theme: String,
         lyrics: String,
@@ -1454,11 +1464,7 @@ $outputRules
         val effectiveTheme = if (theme.isNotBlank()) theme.trim() else "Infer from the lyrics."
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext, cursorLine)
         val sectionDirective = buildSectionDirective(constraint?.sectionRef, lyrics)
-        val endWordRule = if (constraint == null) {
-            "- End each line on a different word."
-        } else {
-            "- End each line on a different word from the allowed list."
-        }
+        val endWordRule = localEndWordRule(constraint?.candidateWords?.size)
         return """
 You are RhymeAI's on-device songwriting assistant.
 
@@ -1656,7 +1662,9 @@ $endWordRule
      * until the budget is spent. Each skipped run that holds a lyric becomes one
      * marker line, and room for two markers is reserved, so the result never exceeds
      * [budget]. A stanza too long for the budget keeps only the cursor's neighbours
-     * before the nearest-line fill. Byte-identical to iOS `AIService.localLyricWindow`
+     * before the nearest-line fill, and if those are still too long, only the cursor
+     * line. A cursor line longer than the budget keeps its end (where the next line is
+     * inserted) after a marker; the cut never starts on a low surrogate. Byte-identical to iOS `AIService.localLyricWindow`
      * and `finetune/eval/prompts.py` (shared fixture: shared/fixtures/local-lyric-window-v1.json).
      */
     internal fun localLyricWindow(lyrics: String, cursorLine: Int?, budget: Int, headBudget: Int): String {
@@ -1678,7 +1686,17 @@ $endWordRule
             lo = maxOf(c - 1, 0)
             hi = minOf(c + 1, last)
         }
-        var used = cost(lo..hi)
+        if (cost(lo..hi) > lineBudget) {
+            lo = c
+            hi = c
+        }
+        val cut: String? = if (cost(c) > lineBudget) {
+            val line = lines[c]
+            var start = line.length - (lineBudget - 1)
+            if (line[start].isLowSurrogate()) start++
+            line.substring(start)
+        } else null
+        var used = if (cut != null) lineBudget else cost(lo..hi)
 
         var headCount = 0
         var headUsed = 0
@@ -1705,8 +1723,8 @@ $endWordRule
 
         fun hasLyric(from: Int, until: Int) = (from until until).any { !blank(it) }
         val out = lines.subList(0, headCount).toMutableList()
-        if (hasLyric(headCount, lo)) out += LOCAL_TRIM_MARKER
-        out += lines.subList(lo, hi + 1)
+        if (hasLyric(headCount, lo) || cut != null) out += LOCAL_TRIM_MARKER
+        out += (lo..hi).map { if (it == c) cut ?: lines[it] else lines[it] }
         if (hasLyric(hi + 1, last + 1)) out += LOCAL_TRIM_MARKER
         return out.joinToString("\n").trim()
     }

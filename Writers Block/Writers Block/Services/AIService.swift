@@ -759,6 +759,21 @@ struct AIService {
         currentSection: SongSection = .unknown,
         firstChorusEndWords: [String]? = nil
     ) -> String? {
+        rhymeConstraintWords(
+            targetRhymeLine: targetRhymeLine,
+            rhymeType: rhymeType,
+            currentSection: currentSection,
+            firstChorusEndWords: firstChorusEndWords
+        ).map(rhymeConstraintText)
+    }
+
+    /// The target and allowed end words behind `rhymeConstraintBlock`; nil in the same cases.
+    static func rhymeConstraintWords(
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        currentSection: SongSection = .unknown,
+        firstChorusEndWords: [String]? = nil
+    ) -> (target: String, targetWord: String, words: [String])? {
         guard let target = targetRhymeLine,
               !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
@@ -785,10 +800,23 @@ struct AIService {
             }
         }
 
-        return """
-        The new line must rhyme with: "\(target)" (it ends with "\(targetWord)").
-        End each line with one of these rhyming words: \(candidates.joined(separator: ", ")) (choose the most natural fit).
+        return (target, targetWord, candidates)
+    }
+
+    private static func rhymeConstraintText(_ constraint: (target: String, targetWord: String, words: [String])) -> String {
         """
+        The new line must rhyme with: "\(constraint.target)" (it ends with "\(constraint.targetWord)").
+        End each line with one of these rhyming words: \(constraint.words.joined(separator: ", ")) (choose the most natural fit).
+        """
+    }
+
+    /// End-word rule for the on-device Rules list, byte-identical to Android
+    /// `localEndWordRule`: a list too short for six distinct endings allows repeats.
+    static func localEndWordRule(allowedWordCount: Int?) -> String {
+        guard let allowedWordCount else { return "- End each line on a different word." }
+        return allowedWordCount >= suggestionCount
+            ? "- End each line on a different word from the allowed list."
+            : "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
     }
 
     /// Verbatim section-instance sentence inserted after the section hint.
@@ -1057,12 +1085,13 @@ struct AIService {
         cursorLineIndex: Int? = nil
     ) -> String {
         let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
-        let constraintBlock = Self.rhymeConstraintBlock(
+        let constraint = Self.rhymeConstraintWords(
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
             currentSection: currentSection,
             firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) }
         )
+        let constraintBlock = constraint.map(Self.rhymeConstraintText)
         let requestCount = Self.suggestionCount
 
         var rhymeHint: String
@@ -1115,9 +1144,7 @@ struct AIService {
         if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
             prompt += "\n" + sectionInstanceHint
         }
-        let endWordRule = constraintBlock == nil
-            ? "- End each line on a different word."
-            : "- End each line on a different word from the allowed list."
+        let endWordRule = Self.localEndWordRule(allowedWordCount: constraint?.words.count)
         prompt += """
 
         \(rhymeHint)
@@ -1175,7 +1202,9 @@ struct AIService {
     /// skipped run that holds a lyric becomes one marker line, and room for two
     /// markers is reserved, so the result never exceeds `budget`. A stanza too
     /// long for the budget keeps only the cursor's neighbours before the
-    /// nearest-line fill. `cursorLine` is `NextLinePlacement.cursorLineIndex`;
+    /// nearest-line fill, and if those are still too long, only the cursor
+    /// line. A cursor line longer than the budget keeps its end (where the next
+    /// line is inserted) after a marker; the cut never starts on a low surrogate. `cursorLine` is `NextLinePlacement.cursorLineIndex`;
     /// nil means the last line. Byte-identical to Android
     /// `AIService.localLyricWindow` (shared/fixtures/local-lyric-window-v1.json).
     static func localLyricWindow(_ lyrics: String, cursorLine: Int?, budget: Int, headBudget: Int) -> String {
@@ -1197,7 +1226,19 @@ struct AIService {
             lo = max(c - 1, 0)
             hi = min(c + 1, last)
         }
+        if cost(lo...hi) > lineBudget {
+            lo = c
+            hi = c
+        }
+        var cut: String?
         var used = cost(lo...hi)
+        if cost(c) > lineBudget {
+            let units = Array(lines[c].utf16)
+            var start = units.count - (lineBudget - 1)
+            if UTF16.isTrailSurrogate(units[start]) { start += 1 }
+            cut = String(decoding: units[start...], as: UTF16.self)
+            used = lineBudget
+        }
 
         var headCount = 0
         var headUsed = 0
@@ -1224,8 +1265,8 @@ struct AIService {
 
         func hasLyric(_ from: Int, _ until: Int) -> Bool { (from..<max(from, until)).contains { !blank($0) } }
         var out = Array(lines[0..<headCount])
-        if hasLyric(headCount, lo) { out.append(localTrimMarker) }
-        out += lines[lo...hi]
+        if hasLyric(headCount, lo) || cut != nil { out.append(localTrimMarker) }
+        out += (lo...hi).map { $0 == c ? (cut ?? lines[$0]) : lines[$0] }
         if hasLyric(hi + 1, last + 1) { out.append(localTrimMarker) }
         return out.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }

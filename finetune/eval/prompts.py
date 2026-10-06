@@ -317,6 +317,15 @@ def _build_section_directive(ref: Optional[SectionRef], lyrics: str) -> str:
     return ""
 
 
+def local_end_word_rule(allowed_word_count: Optional[int]) -> str:
+    """AIService.localEndWordRule: a list too short for six distinct endings allows repeats."""
+    if allowed_word_count is None:
+        return "- End each line on a different word."
+    if allowed_word_count >= SUGGESTION_COUNT:
+        return "- End each line on a different word from the allowed list."
+    return "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
+
+
 def local_lyric_window(
     lyrics: str, cursor_line: Optional[int], budget: int, head_budget: int
 ) -> str:
@@ -328,9 +337,11 @@ def local_lyric_window(
     one above then one below, until the budget is spent. Each skipped run
     that holds a lyric becomes one marker line; room for two markers is
     reserved, so the result never exceeds `budget`. A stanza too long for the
-    budget keeps only the cursor's neighbours before the nearest-line fill.
-    Lengths count UTF-16 units on
-    the platforms; Python counts code points, which match for BMP text."""
+    budget keeps only the cursor's neighbours before the nearest-line fill, and
+    if those are still too long, only the cursor line. A cursor line longer
+    than the budget keeps its end (where the next line is inserted) after a
+    marker. Lengths count UTF-16 units on the platforms (a cut never starts on
+    a low surrogate); Python counts code points, which match for BMP text."""
     trimmed = lyrics.strip()
     if len(trimmed) <= budget:
         return trimmed
@@ -354,7 +365,14 @@ def local_lyric_window(
     hi = max(block_end, min(c + 1, last))
     if sum(cost(i) for i in range(lo, hi + 1)) > line_budget:
         lo, hi = max(c - 1, 0), min(c + 1, last)
-    used = sum(cost(i) for i in range(lo, hi + 1))
+    if sum(cost(i) for i in range(lo, hi + 1)) > line_budget:
+        lo, hi = c, c
+    cut = None
+    if cost(c) > line_budget:
+        cut = lines[c][len(lines[c]) - (line_budget - 1):]
+        used = line_budget
+    else:
+        used = sum(cost(i) for i in range(lo, hi + 1))
 
     head_count = 0
     head_used = 0
@@ -380,9 +398,9 @@ def local_lyric_window(
         return any(not blank(i) for i in range(a, b))
 
     out = lines[:head_count]
-    if has_lyric(head_count, lo):
+    if has_lyric(head_count, lo) or cut is not None:
         out.append(LOCAL_TRIM_MARKER)
-    out.extend(lines[lo:hi + 1])
+    out.extend(cut if cut is not None and i == c else lines[i] for i in range(lo, hi + 1))
     if has_lyric(hi + 1, last + 1):
         out.append(LOCAL_TRIM_MARKER)
     return "\n".join(out).strip()
@@ -459,10 +477,7 @@ def build_suggestions_prompt(
     section_directive = _build_section_directive(
         constraint.section_ref if constraint else None, lyrics
     )
-    if constraint:
-        end_word_rule = "- End each line on a different word from the allowed list."
-    else:
-        end_word_rule = "- End each line on a different word."
+    end_word_rule = local_end_word_rule(len(constraint.candidate_words) if constraint else None)
 
     user_prompt = (
         "You are RhymeAI's on-device songwriting assistant.\n"
