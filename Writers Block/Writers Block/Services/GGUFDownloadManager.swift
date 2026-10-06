@@ -15,7 +15,10 @@ struct GGUFDownloadOption: Identifiable, Equatable, Sendable {
 }
 
 enum GGUFDownloadCatalog {
-    nonisolated static let huggingFaceRevision = "27492c6696f2f868bbbe3aeafb633009ef932598"
+    // Model versions:
+    // - E2B: v2, trained 2026-10-06 on teacher-data-v2 (embeds a revised chat template).
+    // - E4B: v1, unchanged; the pinned revision still serves the same E4B bytes.
+    nonisolated static let huggingFaceRevision = "1647aace10f942ba8dca76e9e37d6be22566fef9"
 
     nonisolated static let options: [GGUFDownloadOption] = [
         GGUFDownloadOption(
@@ -24,8 +27,8 @@ enum GGUFDownloadCatalog {
             subtitle: "Recommended for iPhone and iPad",
             size: "3.43 GB",
             fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
-            expectedBytes: 3_427_878_784,
-            sha256: "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+            expectedBytes: 3_427_880_800,
+            sha256: "b250c2f6a91d9f7659f7ac2c90ccc563ca96a84aea4c1e8a3463fafc77d004af",
             url: requiredURL(
                 "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true"
             ),
@@ -96,18 +99,80 @@ enum GGUFModelStorage {
     }
 
     nonisolated static func installedModelFileNames() -> [String] {
-        guard let directory = try? modelsDirectory(create: false),
-              let contents = try? FileManager.default.contentsOfDirectory(
-                  at: directory,
-                  includingPropertiesForKeys: nil
-              ) else {
+        guard let directory = try? modelsDirectory(create: false) else { return [] }
+        return installedModelFileNames(in: directory)
+    }
+
+    /// A catalog file name counts as installed only when its size matches the current
+    /// catalog entry, so a previous model version kept under the same name is offered
+    /// for re-download instead of being reported as ready. The full SHA-256 check still
+    /// runs at download install and model load.
+    nonisolated static func installedModelFileNames(in directory: URL) -> [String] {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        ) else {
             return []
         }
         return contents
+            .filter { url in
+                let fileName = url.lastPathComponent
+                guard fileName.lowercased().hasSuffix(".gguf") else { return false }
+                guard let option = GGUFDownloadCatalog.options.first(where: { $0.fileName == fileName }) else {
+                    return true
+                }
+                let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+                return bytes == option.expectedBytes
+            }
             .map(\.lastPathComponent)
-            .filter { $0.lowercased().hasSuffix(".gguf") }
             .sorted()
     }
+
+    /// Resume data is keyed by the artifact SHA-256, so a paused download of a previous
+    /// model version is never resumed into the current catalog entry.
+    nonisolated static func resumeDataURL(for option: GGUFDownloadOption, in directory: URL) -> URL {
+        directory.appendingPathComponent("\(option.fileName).\(option.sha256.prefix(16)).resume")
+    }
+
+    /// Removes what a previous version of `option` left under the same name: an installed
+    /// file whose size no longer matches the catalog entry (it can never pass load-time
+    /// validation) and resume data keyed to another artifact. Returns the bytes freed.
+    @discardableResult
+    nonisolated static func removeStaleArtifacts(for option: GGUFDownloadOption, in directory: URL) throws -> Int64 {
+        let fileManager = FileManager.default
+        var freedBytes: Int64 = 0
+        let installedURL = directory.appendingPathComponent(option.fileName)
+        if let bytes = try? installedURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           Int64(bytes) != option.expectedBytes {
+            try fileManager.removeItem(at: installedURL)
+            freedBytes += Int64(bytes)
+        }
+        let currentResumeName = resumeDataURL(for: option, in: directory).lastPathComponent
+        for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            let name = url.lastPathComponent
+            if name.hasPrefix("\(option.fileName).") && name.hasSuffix(".resume") && name != currentResumeName {
+                try fileManager.removeItem(at: url)
+            }
+        }
+        return freedBytes
+    }
+
+    /// Reclaims stale artifacts first, then requires room for the full download plus a
+    /// reserve, so a device that only has room once the previous version is gone can upgrade.
+    nonisolated static func prepareSpace(
+        for option: GGUFDownloadOption,
+        in directory: URL,
+        availableCapacity: (URL) throws -> Int64?
+    ) throws {
+        try removeStaleArtifacts(for: option, in: directory)
+        guard let available = try availableCapacity(directory) else { return }
+        let required = option.expectedBytes + downloadReserveBytes
+        guard available >= required else {
+            throw GGUFDownloadError.insufficientSpace(required: required, available: available)
+        }
+    }
+
+    nonisolated static let downloadReserveBytes: Int64 = 512 * 1024 * 1024
 }
 
 @MainActor
@@ -210,7 +275,10 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 return
             }
             try removeLegacyDownloadArtifacts(in: directory, for: option)
-            try verifyFreeSpace(for: option, in: directory)
+            try GGUFModelStorage.prepareSpace(for: option, in: directory) { directory in
+                try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+                    .volumeAvailableCapacityForImportantUsage
+            }
             let resumeURL = resumeDataURL(for: option, directory: directory)
             let task: URLSessionDownloadTask
             if let resumeData = try? Data(contentsOf: resumeURL), !resumeData.isEmpty {
@@ -338,20 +406,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         errorMessage = nil
     }
 
-    private func verifyFreeSpace(for option: GGUFDownloadOption, in directory: URL) throws {
-        let values = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        guard let available = values.volumeAvailableCapacityForImportantUsage else { return }
-        let reserve: Int64 = 512 * 1024 * 1024
-        guard available >= option.expectedBytes + reserve else {
-            throw GGUFDownloadError.insufficientSpace(
-                required: option.expectedBytes + reserve,
-                available: available
-            )
-        }
-    }
-
     private func resumeDataURL(for option: GGUFDownloadOption, directory: URL) -> URL {
-        directory.appendingPathComponent("\(option.fileName).resume")
+        GGUFModelStorage.resumeDataURL(for: option, in: directory)
     }
 
     private func removeLegacyDownloadArtifacts(in directory: URL, for option: GGUFDownloadOption) throws {
@@ -479,7 +535,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
            let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data,
            let directory = try? GGUFModelStorage.modelsDirectory(create: true) {
             try? resumeData.write(
-                to: directory.appendingPathComponent("\(option.fileName).resume"),
+                to: GGUFModelStorage.resumeDataURL(for: option, in: directory),
                 options: .atomic
             )
         }
@@ -501,7 +557,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         in directory: URL,
         option: GGUFDownloadOption
     ) throws {
-        let resumeURL = directory.appendingPathComponent("\(option.fileName).resume")
+        let resumeURL = GGUFModelStorage.resumeDataURL(for: option, in: directory)
         do {
             try validateDownload(at: stagingURL, option: option)
         } catch let error as GGUFDownloadError {
