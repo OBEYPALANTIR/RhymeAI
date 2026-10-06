@@ -137,6 +137,78 @@ struct GGUFDownloadCatalogTests {
         #expect(GGUFModelStorage.installedModelFileNames(in: directory).contains(e2b.fileName))
     }
 
+    private func makeModelsDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gguf-stale-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func writeSparseFile(_ url: URL, bytes: Int64) throws {
+        #expect(FileManager.default.createFile(atPath: url.path, contents: Data("GGUF".utf8)))
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(bytes))
+        try handle.close()
+    }
+
+    @Test func staleSameNameModelAndForeignResumeDataAreReclaimed() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let staleModel = directory.appendingPathComponent(e2b.fileName)
+        try writeSparseFile(staleModel, bytes: 3_427_878_784)
+        try writeSparseFile(directory.appendingPathComponent(e4b.fileName), bytes: e4b.expectedBytes)
+        // Resume data written by the previous build (unkeyed) and for another artifact.
+        let legacyResume = directory.appendingPathComponent("\(e2b.fileName).resume")
+        let foreignResume = directory.appendingPathComponent("\(e2b.fileName).059e73281d764ba0.resume")
+        let currentResume = GGUFModelStorage.resumeDataURL(for: e2b, in: directory)
+        for url in [legacyResume, foreignResume, currentResume] {
+            try Data("resume".utf8).write(to: url)
+        }
+        #expect(currentResume.lastPathComponent.contains(String(e2b.sha256.prefix(16))))
+
+        let freed = try GGUFModelStorage.removeStaleArtifacts(for: e2b, in: directory)
+
+        #expect(freed == 3_427_878_784)
+        #expect(!FileManager.default.fileExists(atPath: staleModel.path))
+        #expect(!FileManager.default.fileExists(atPath: legacyResume.path))
+        #expect(!FileManager.default.fileExists(atPath: foreignResume.path))
+        #expect(FileManager.default.fileExists(atPath: currentResume.path))
+        #expect(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent(e4b.fileName).path
+        ))
+
+        // A file matching the current entry is never removed.
+        try writeSparseFile(staleModel, bytes: e2b.expectedBytes)
+        #expect(try GGUFModelStorage.removeStaleArtifacts(for: e2b, in: directory) == 0)
+        #expect(FileManager.default.fileExists(atPath: staleModel.path))
+    }
+
+    @Test func upgradeSpaceCheckCountsTheReclaimedStaleModel() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let staleModel = directory.appendingPathComponent(e2b.fileName)
+        let staleBytes: Int64 = 3_427_878_784
+        try writeSparseFile(staleModel, bytes: staleBytes)
+        // Free space only suffices once the stale model's bytes are returned to the volume.
+        let freeWithStaleModel = e2b.expectedBytes + GGUFModelStorage.downloadReserveBytes - staleBytes
+        let capacity: (URL) throws -> Int64? = { _ in
+            FileManager.default.fileExists(atPath: staleModel.path)
+                ? freeWithStaleModel
+                : freeWithStaleModel + staleBytes
+        }
+
+        try GGUFModelStorage.prepareSpace(for: e2b, in: directory, availableCapacity: capacity)
+        #expect(!FileManager.default.fileExists(atPath: staleModel.path))
+
+        // Without anything to reclaim, the same volume is still too full.
+        #expect(throws: (any Error).self) {
+            try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in freeWithStaleModel }
+        }
+    }
+
     @Test func preferredModelUsesCatalogOrder() {
         let options = GGUFDownloadCatalog.options
         let preferred = GGUFModelSelection.preferredFileName(
@@ -384,7 +456,7 @@ struct GGUFDownloadIntegrityTests {
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
         )
         let staging = directory.appendingPathComponent("fixture.gguf.download")
-        let resume = directory.appendingPathComponent("fixture.gguf.resume")
+        let resume = GGUFModelStorage.resumeDataURL(for: option, in: directory)
         let destination = directory.appendingPathComponent(option.fileName)
         let previousModel = Data("existing model".utf8)
         try previousModel.write(to: destination)
@@ -447,7 +519,7 @@ struct GGUFDownloadIntegrityTests {
         )
         let staging = directory.appendingPathComponent("fixture.gguf.download")
         let destination = directory.appendingPathComponent(option.fileName)
-        let resume = directory.appendingPathComponent("fixture.gguf.resume")
+        let resume = GGUFModelStorage.resumeDataURL(for: option, in: directory)
         try valid.write(to: staging)
         try previousModel.write(to: destination)
         try Data([1, 2]).write(to: resume)

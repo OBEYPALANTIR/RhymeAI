@@ -227,6 +227,103 @@ class GemmaDownloadsTest {
     }
 
     @Test
+    fun resumeStateFromAnotherArtifactOrOlderFormatIsDiscarded() = runBlocking {
+        val expected = validTinyGguf()
+        val model = tinyGemma(expectedBytes = expected.size.toLong(), sha256 = sha256(expected))
+        val previousVersion = model.copy(sha256 = "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626")
+        val writeForeignState = listOf<(File) -> Unit>(
+            // Current format, recorded for the previous artifact under the same file name.
+            { state -> saveDownloadState(state, previousVersion, longArrayOf(8L)) },
+            // The format written by builds before artifact-keyed state (no SHA recorded).
+            { state ->
+                java.io.DataOutputStream(state.outputStream()).use { output ->
+                    output.writeInt(0x52484D44)
+                    output.writeInt(1)
+                    output.writeInt(1)
+                    output.writeLong(8L)
+                }
+            }
+        )
+        writeForeignState.forEach { writeState ->
+            val dir = tempDir()
+            val tempFile = File(dir, "tiny.gguf.download").apply { writeBytes(ByteArray(8) { 0x7f }) }
+            writeState(gemmaDownloadStateFile(tempFile))
+            val ranges = mutableListOf<String>()
+            val url = startServer { request, output ->
+                val range = Regex("Range: bytes=(\\d+)-(\\d+)").find(request)!!
+                ranges += range.value
+                val start = range.groupValues[1].toInt()
+                val end = range.groupValues[2].toInt()
+                output.writeResponse(
+                    206,
+                    expected.copyOfRange(start, end + 1),
+                    contentRange = "bytes $start-$end/${expected.size}"
+                )
+            }
+
+            downloadGemmaToTemp(
+                model = model.copy(url = url),
+                tempFile = tempFile,
+                onProgress = {},
+                connectionCount = 1
+            )
+
+            assertEquals(listOf("Range: bytes=0-23"), ranges)
+            assertEquals(expected.toList(), tempFile.readBytes().toList())
+            server?.close()
+            server = null
+        }
+    }
+
+    @Test
+    fun staleInstalledFileIsReclaimedButAValidOneIsKept() {
+        val dir = tempDir()
+        val expected = validTinyGguf()
+        val model = tinyGemma(expectedBytes = expected.size.toLong(), sha256 = sha256(expected))
+        val destination = File(dir, model.fileName)
+
+        // Previous version under the same name: different size.
+        destination.writeBytes(expected.copyOf(20))
+        assertEquals(20L, reclaimStaleInstalledGemma(model, destination))
+        assertFalse(destination.exists())
+
+        // Same size, different bytes: still fails the current SHA-256.
+        destination.writeBytes(expected.copyOf().also { it[23] = 9 })
+        assertEquals(24L, reclaimStaleInstalledGemma(model, destination))
+        assertFalse(destination.exists())
+
+        destination.writeBytes(expected)
+        assertEquals(0L, reclaimStaleInstalledGemma(model, destination))
+        assertEquals(expected.toList(), destination.readBytes().toList())
+    }
+
+    @Test
+    fun upgradeSpaceCheckCountsTheReclaimedStaleModel() {
+        val dir = tempDir()
+        val model = tinyGemma(expectedBytes = 1_000L)
+        val destination = File(dir, model.fileName).apply { writeBytes(validTinyGguf()) }
+        val tempFile = File(dir, "${model.fileName}.download")
+        val staleBytes = destination.length()
+        val required = model.expectedBytes + MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES
+        // Free space only suffices once the stale model's bytes are returned to the volume.
+        val usable: (File) -> Long = { if (destination.exists()) required - staleBytes else required }
+
+        ensureEnoughSpaceForGemma(model, destination, tempFile, usable)
+        assertFalse(destination.exists())
+
+        // A valid installed file is kept until replacement, so it is not counted as free.
+        val kept = validTinyGguf()
+        val installed = tinyGemma(expectedBytes = kept.size.toLong(), sha256 = sha256(kept))
+        val installedFile = File(dir, installed.fileName).apply { writeBytes(kept) }
+        val tight = installed.expectedBytes + MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES - 1L
+        val error = runCatching {
+            ensureEnoughSpaceForGemma(installed, installedFile, tempFile) { tight }
+        }.exceptionOrNull()
+        assertNotNull(error)
+        assertTrue(installedFile.exists())
+    }
+
+    @Test
     fun downloadGemmaToTempSurfacesHttpFailure() = runBlocking {
         val dir = tempDir()
         val tempFile = File(dir, "tiny.gguf.download")
