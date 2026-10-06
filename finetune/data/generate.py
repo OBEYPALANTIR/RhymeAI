@@ -64,9 +64,13 @@ MARKER_PREFIX_RE = re.compile(
     r"<?/?(?:start_of_turn|end_of_turn)>?\w*)\s*",
     re.IGNORECASE,
 )
+# "<[^>|]+>" leaves Gemma 4's pipe-delimited control tokens (<turn|>,
+# <|channel>, ...) in place even on a line of their own, so the scorer
+# rejects the sample instead of the cleaner hiding a derailment. An echoed
+# <|turn>model opener is already cut by scoring.strip_model_output.
 MARKER_ONLY_RE = re.compile(
     r"^\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|"
-    r"model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>]+>|>+|"
+    r"model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>|]+>|>+|"
     r"[<>/]+|user|model|assistant)\s*$",
     re.IGNORECASE,
 )
