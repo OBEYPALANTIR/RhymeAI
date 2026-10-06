@@ -113,8 +113,6 @@ class EnvelopeTests(unittest.TestCase):
         text = prepare_dataset.build_text(SAMPLE_PROMPT, COMPLETION, prompts.GEMMA_LEGACY)
         self.assertEqual(text, "<start_of_turn>user\n" + SAMPLE_PROMPT
                          + "\n<end_of_turn>\n<start_of_turn>model\n" + COMPLETION + "<end_of_turn>")
-        self.assertEqual(prompts.gemma_instruction_prompt(SAMPLE_PROMPT),
-                         swift_gemma_prompt(SAMPLE_PROMPT, "gemmaLegacy"))
 
     def test_app_prompt_mirrors_swift_rule(self):
         for name, envelope in prompts.ENVELOPES.items():
@@ -213,7 +211,8 @@ class EnvelopeTests(unittest.TestCase):
 
             with open(source, "w", encoding="utf-8") as handle:
                 handle.write(json.dumps({"task": "suggestions", "completion": COMPLETION,
-                                         "user_prompt": prompts.gemma_instruction_prompt("x")}) + "\n")
+                                         "user_prompt": prompts.app_prompt("x", prompts.GEMMA_LEGACY)})
+                             + "\n")
             failed = subprocess.run(command, capture_output=True, text=True)
             self.assertNotEqual(failed.returncode, 0)
             self.assertIn("inner prompt", failed.stderr)

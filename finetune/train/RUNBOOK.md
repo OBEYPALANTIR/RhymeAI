@@ -17,7 +17,7 @@ Key design facts (do not change casually):
   so the app sends `<|turn>user\n{prompt}<turn|>\n<|turn>model\n` and
   llama.cpp adds one `<bos>`; the text has no `<bos>` and `train_lora.py`
   prepends exactly one (Gemma 4's HF tokenizer adds none itself), then
-  checks row 0. `prepare_dataset.py --envelope gemmaLegacy` is only for
+  checks row 0. `prepare_dataset.py --envelope legacy` is only for
   Gemma 1-3n bases; `train_lora.py` refuses a dataset whose markers are not
   single special tokens of `--base`.
 - LoRA is text-only (`finetune_vision_layers=False`, language layers only).

@@ -1,18 +1,23 @@
 """HTTP client for the teacher model used by the training-data generator.
 
-Two API shapes against a single base URL:
+Two API shapes against a single base URL; both take the INNER user prompt:
 
-  api="completion"  llama-server's raw /completion endpoint. Sends the fully
-                    Gemma-templated prompt (``<start_of_turn>user ...
-                    <start_of_turn>model``) with stop ``<end_of_turn>`` —
-                    identical transport to finetune/eval/run_eval.py, but with
-                    a higher default temperature for diversity.
+  api="completion"  llama-server's raw /completion endpoint (no chat
+                    template). Sends the app's exact on-device request,
+                    eval.prompts.app_prompt(user_prompt, envelope), with the
+                    envelope's end-of-turn as stop — the same transport as
+                    finetune/eval/run_eval.py, with a higher default
+                    temperature for diversity. No <bos> in the text:
+                    llama-server adds one when the GGUF sets add_bos_token,
+                    as llama.cpp does in the app.
 
   api="chat"        Any OpenAI-compatible /v1/chat/completions server (vLLM,
-                    llama-server --chat-template, TGI, a cloud gateway...).
-                    Sends the INNER user prompt only; the server applies its
-                    own chat template. Use this when the teacher is a big
-                    Gemma (or other instruct model) behind an OpenAI facade.
+                    llama-server, TGI, a cloud gateway...). Sends the inner
+                    prompt unwrapped; the server applies the model's own chat
+                    template, so no envelope is added here. That rendering is
+                    the server's, not byte-identical to the app's (Gemma 4's
+                    template trims the content, and server options such as
+                    thinking can change it).
 
 Stdlib only.
 """
@@ -24,9 +29,7 @@ import time
 import urllib.error
 import urllib.request
 
-GEMMA_PREFIX = "<start_of_turn>user\n"
-GEMMA_SUFFIX = "\n<end_of_turn>\n<start_of_turn>model"
-STOP = ["<end_of_turn>"]
+from eval import prompts
 
 DEFAULT_TEMPERATURE = 0.9  # higher than the app's 0.8: diversity for training data
 DEFAULT_TOP_K = 40
@@ -40,20 +43,12 @@ class TeacherError(RuntimeError):
     """Raised after all retries against the teacher endpoint are exhausted."""
 
 
-def inner_user_prompt(templated_prompt: str) -> str:
-    """Recover the inner user prompt from a Gemma-templated prompt built by
-    eval.prompts.gemma_instruction_prompt."""
-    if not (templated_prompt.startswith(GEMMA_PREFIX)
-            and templated_prompt.endswith(GEMMA_SUFFIX)):
-        raise ValueError("prompt does not carry the expected Gemma turn template")
-    return templated_prompt[len(GEMMA_PREFIX):-len(GEMMA_SUFFIX)]
-
-
 class TeacherClient:
     def __init__(
         self,
         endpoint: str,
         api: str = "completion",
+        envelope: prompts.PromptEnvelope = prompts.GEMMA4,
         temperature: float = DEFAULT_TEMPERATURE,
         top_k: int = DEFAULT_TOP_K,
         top_p: float = DEFAULT_TOP_P,
@@ -68,6 +63,7 @@ class TeacherClient:
             raise ValueError("api must be 'completion' or 'chat'")
         self.endpoint = endpoint.rstrip("/")
         self.api = api
+        self.envelope = envelope
         self.temperature = temperature
         self.top_k = top_k
         self.top_p = top_p
@@ -80,14 +76,14 @@ class TeacherClient:
 
     # -- request bodies ------------------------------------------------------
 
-    def _completion_body(self, templated_prompt: str, seed):
+    def _completion_body(self, user_prompt: str, seed):
         body = {
-            "prompt": templated_prompt,
+            "prompt": prompts.app_prompt(user_prompt, self.envelope),
             "n_predict": self.n_predict,
             "temperature": self.temperature,
             "top_k": self.top_k,
             "top_p": self.top_p,
-            "stop": STOP,
+            "stop": [self.envelope.end_of_turn],
             "cache_prompt": False,
         }
         if seed is not None:
@@ -120,12 +116,12 @@ class TeacherClient:
         with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def generate(self, templated_prompt: str, seed=None) -> str:
-        """Return the raw teacher text for one prompt (retries built in)."""
+    def generate(self, user_prompt: str, seed=None) -> str:
+        """Return the raw teacher text for one inner prompt (retries built in)."""
         if self.api == "completion":
-            path, body = self._completion_body(templated_prompt, seed)
+            path, body = self._completion_body(user_prompt, seed)
         else:
-            path, body = self._chat_body(inner_user_prompt(templated_prompt), seed)
+            path, body = self._chat_body(user_prompt, seed)
 
         last_error = None
         for attempt in range(self.retries + 1):

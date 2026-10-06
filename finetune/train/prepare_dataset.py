@@ -19,7 +19,7 @@ EXACTLY the text the app tokenizes at inference time. It carries no <bos>:
 llama.cpp adds one in the app, and train_lora.py makes sure training sees
 exactly one (Gemma 4's HF tokenizer adds none itself). The model turn closes
 with the family's end-of-turn token, which the app stops on.
---envelope gemmaLegacy keeps the <start_of_turn> form for Gemma 1-3n bases;
+--envelope legacy keeps the <start_of_turn> form for Gemma 1-3n bases;
 that prompt ends at "<start_of_turn>model", so the completion follows a
 newline there.
 
@@ -57,10 +57,9 @@ _FINETUNE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _FINETUNE_DIR not in sys.path:
     sys.path.insert(0, _FINETUNE_DIR)
 
-from eval.prompts import ENVELOPES, GEMMA4, app_prompt  # noqa: E402  (parity source of truth)
-
 # Records hold the INNER prompt; the envelope is added here, once.
-TURN_MARKERS = ("<start_of_turn>", "<end_of_turn>", "<|turn>", "<turn|>")
+from eval.prompts import (  # noqa: E402  (parity source of truth)
+    ENVELOPE_OPTIONS, GEMMA4, TURN_MARKERS, app_prompt)
 
 
 def build_text(user_prompt: str, completion: str, envelope=GEMMA4) -> str:
@@ -114,9 +113,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="Convert verified (prompt -> completion) records into "
                     "app-envelope SFT JSONL with a train/val split.")
-    parser.add_argument("--envelope", choices=sorted(ENVELOPES), default=GEMMA4.name,
+    parser.add_argument("--envelope", choices=sorted(ENVELOPE_OPTIONS), default="gemma4",
                         help="Prompt envelope of the base model family "
-                             "(default gemma4: the shipped E2B/E4B models)")
+                             "(default gemma4: the shipped E2B/E4B models; "
+                             "legacy: Gemma 1-3n)")
     parser.add_argument("--in", dest="input", default="finetune/data/out/train-v1.jsonl",
                         help="Phase 2 JSONL (default finetune/data/out/train-v1.jsonl)")
     parser.add_argument("--out-dir", default="finetune/train/out",
@@ -133,7 +133,7 @@ def main():
     args = parser.parse_args()
 
     records = load_records(args.input)
-    envelope = ENVELOPES[args.envelope]
+    envelope = ENVELOPE_OPTIONS[args.envelope]
 
     # Build texts, dedup exact (task, text) repeats defensively (generate.py
     # already dedups completions per task, so this normally drops nothing).

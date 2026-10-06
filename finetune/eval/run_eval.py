@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Desktop eval harness for RhymeAI's on-device Gemma models.
 
-Replays the Android app's exact local-model prompts (see prompts.py, a parity
-port of AIService.kt) against a GGUF served by llama.cpp's llama-server, and
-scores the raw outputs programmatically. Intended as the before/after gate for
-LoRA fine-tunes.
+Replays the app's exact local-model requests against a GGUF served by
+llama.cpp's llama-server, and scores the raw outputs programmatically.
+Intended as the before/after gate for LoRA fine-tunes.
+
+Each request is the inner prompt (prompts.py, a parity port of AIService.kt)
+wrapped in the app's on-device envelope (prompts.app_prompt, the port of
+GGUFModelService.gemmaPrompt) and posted as raw text to /completion, which
+applies no chat template. The text carries no <bos>: for a raw prompt
+llama-server adds one when the GGUF sets tokenizer.ggml.add_bos_token, exactly
+as llama.cpp does in the app (a literal <bos> would make two). --envelope
+gemma4 (default) is what the app sends the shipped E2B/E4B models; --envelope
+legacy is for imported Gemma 1-3n GGUFs and reproduces the harness's
+pre-Gemma-4 requests. The served chat template is checked against the choice.
 
 Usage:
   python3 finetune/eval/run_eval.py --model /path/to/model.gguf \
-      [--cases N] [--out report.json]
+      [--envelope gemma4|legacy] [--cases N] [--out report.json]
 
 Requires llama-server (Homebrew llama.cpp: /opt/homebrew/bin/llama-server).
 Stdlib only.
@@ -44,15 +53,19 @@ TEMPERATURE = 0.8
 TOP_K = 40
 TOP_P = 0.95
 N_PREDICT = 256
-STOP = ["<end_of_turn>"]
 
 HEALTH_TIMEOUT_S = 300
 REQUEST_TIMEOUT_S = 600
 
 
 # ---------------------------------------------------------------------------
-# Case preparation: turn a case dict into (prompt, scoring context)
+# Case preparation: turn a case dict into (inner prompt, scoring context)
 # ---------------------------------------------------------------------------
+
+def request_text(prepared, envelope):
+    """The raw /completion prompt: the app's envelope around the inner prompt."""
+    return prompts.app_prompt(prepared["user_prompt"], envelope)
+
 
 def prepare_case(case):
     task = case["task"]
@@ -79,7 +92,7 @@ def prepare_case(case):
             chorus_end_words=chorus_ends,
         )
         prepared["constraint"] = constraint
-        prepared["prompt"] = prompts.build_suggestions_prompt(
+        prepared["user_prompt"] = prompts.build_suggestions_prompt(
             theme=case["theme"],
             lyrics=case["lyrics"],
             target_rhyme_line=case["target_rhyme_line"],
@@ -92,7 +105,7 @@ def prepare_case(case):
             constraint=constraint,
         )
     elif task == "rewrite_passage":
-        prepared["prompt"] = prompts.build_rewrite_prompt(
+        prepared["user_prompt"] = prompts.build_rewrite_prompt(
             action=case["action"],
             lyrics=case["lyrics"],
             selection=case["selection"],
@@ -101,7 +114,7 @@ def prepare_case(case):
     elif task == "rewrite_word":
         selection_start = cases_mod.selection_start_for(case)
         prepared["selection_start"] = selection_start
-        prepared["prompt"] = prompts.build_rewrite_prompt(
+        prepared["user_prompt"] = prompts.build_rewrite_prompt(
             action=case["action"],
             lyrics=case["lyrics"],
             selection=case["selection"],
@@ -110,7 +123,7 @@ def prepare_case(case):
             rejected_candidates=case["rejected"],
         )
     elif task == "synonyms":
-        prepared["prompt"] = prompts.build_synonyms_prompt(
+        prepared["user_prompt"] = prompts.build_synonyms_prompt(
             word=case["word"].strip(),
             line_context=case["line_context"],
             limit=case["limit"],
@@ -258,15 +271,32 @@ def stop_server(process, log_handle):
     log_handle.close()
 
 
-def completion(port, prompt):
-    """POST the raw pre-templated prompt to /completion (no chat template)."""
+def envelope_mismatch(base_url, envelope):
+    """None when the served chat template uses `envelope`'s markers (the
+    template half of GGUFPromptFormat.resolve, read from llama-server's
+    /props, which does not report the architecture); otherwise why not."""
+    try:
+        with urllib.request.urlopen(base_url.rstrip("/") + "/props", timeout=30) as response:
+            template = json.loads(response.read().decode("utf-8")).get("chat_template") or ""
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        return "could not read the chat template from %s/props (%s)" % (base_url, error)
+    served = prompts.template_envelope(template)
+    if served is envelope:
+        return None
+    return ("the served chat template uses %s turn markers, so the app would not send "
+            "the %s envelope to this model" % (served.name if served else "no supported",
+                                               envelope.name))
+
+
+def completion(port, prompt, stop):
+    """POST the raw request text to /completion (no chat template)."""
     body = json.dumps({
         "prompt": prompt,
         "n_predict": N_PREDICT,
         "temperature": TEMPERATURE,
         "top_k": TOP_K,
         "top_p": TOP_P,
-        "stop": STOP,
+        "stop": stop,
         "cache_prompt": False,
     }).encode("utf-8")
     request = urllib.request.Request(
@@ -342,7 +372,14 @@ def main():
                         help="Only run the first N cases (default: all)")
     parser.add_argument("--out", default="report.json",
                         help="Path for the JSON report (default: report.json)")
+    parser.add_argument("--envelope", choices=sorted(prompts.ENVELOPE_OPTIONS),
+                        default="gemma4",
+                        help="Turn envelope (default gemma4: what the app sends the "
+                             "shipped E2B/E4B models; legacy: imported Gemma 1-3n "
+                             "GGUFs and the pre-Gemma-4 harness requests)")
     args = parser.parse_args()
+    envelope = prompts.ENVELOPE_OPTIONS[args.envelope]
+    stop = [envelope.end_of_turn]
 
     all_cases = cases_mod.CASES
     selected = all_cases[: args.cases] if args.cases else all_cases
@@ -359,9 +396,14 @@ def main():
     results = []
     try:
         wait_for_health(port, process)
-        print("server healthy; running %d cases" % len(prepared_cases))
+        envelope_check = envelope_mismatch("http://127.0.0.1:%d" % port, envelope)
+        if envelope_check:
+            print("WARNING: %s" % envelope_check)
+        print("server healthy; running %d cases with the %s envelope"
+              % (len(prepared_cases), envelope.name))
         for index, prepared in enumerate(prepared_cases, 1):
-            payload, latency = completion(port, prepared["prompt"])
+            prompt = request_text(prepared, envelope)
+            payload, latency = completion(port, prompt, stop)
             output_text = payload.get("content", "")
             tokens = payload.get("tokens_predicted", 0)
             score = score_case(prepared, output_text)
@@ -373,7 +415,7 @@ def main():
             results.append({
                 "id": prepared["id"],
                 "task": prepared["task"],
-                "prompt_chars": len(prepared["prompt"]),
+                "prompt_chars": len(prompt),
                 "latency_s": round(latency, 3),
                 "tokens_predicted": tokens,
                 "output": output_text,
@@ -385,13 +427,15 @@ def main():
 
     report = {
         "model": args.model,
+        "envelope": envelope.name,
+        "envelope_check": envelope_check or "matches the served chat template",
         "sampler": {
             "ctx_size": CTX_SIZE,
             "temperature": TEMPERATURE,
             "top_k": TOP_K,
             "top_p": TOP_P,
             "n_predict": N_PREDICT,
-            "stop": STOP,
+            "stop": stop,
         },
         "case_count": len(results),
         "results": results,

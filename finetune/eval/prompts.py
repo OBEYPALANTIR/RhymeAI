@@ -482,16 +482,29 @@ GEMMA_LEGACY = PromptEnvelope(
     "gemmaLegacy", "<start_of_turn>user\n", "\n<end_of_turn>\n<start_of_turn>model",
     "", "<end_of_turn>")
 ENVELOPES = {envelope.name: envelope for envelope in (GEMMA4, GEMMA_LEGACY)}
+# --envelope values shared by prepare_dataset.py, run_eval.py and generate.py.
+ENVELOPE_OPTIONS = {"gemma4": GEMMA4, "legacy": GEMMA_LEGACY}
+# The builders return the inner prompt, which never carries these.
+TURN_MARKERS = ("<start_of_turn>", "<end_of_turn>", "<|turn>", "<turn|>")
+
+
+def template_envelope(chat_template: str) -> Optional[PromptEnvelope]:
+    """The envelope whose markers a chat template uses: the template half of
+    GGUFPromptFormat.resolve. None when it has neither or both."""
+    has_legacy = "<start_of_turn>" in chat_template and "<end_of_turn>" in chat_template
+    has_gemma4 = "<|turn>" in chat_template and "<turn|>" in chat_template
+    if has_gemma4 == has_legacy:
+        return None
+    return GEMMA4 if has_gemma4 else GEMMA_LEGACY
 
 
 def resolve_prompt_envelope(architecture: str, chat_template: str) -> Optional[PromptEnvelope]:
     """GGUFPromptFormat.resolve; None means the app refuses the model."""
-    has_legacy = "<start_of_turn>" in chat_template and "<end_of_turn>" in chat_template
-    has_gemma4 = "<|turn>" in chat_template and "<turn|>" in chat_template
+    envelope = template_envelope(chat_template)
     if architecture == "gemma4":
-        return GEMMA4 if has_gemma4 and not has_legacy else None
+        return envelope if envelope is GEMMA4 else None
     if architecture in ("gemma", "gemma2", "gemma3", "gemma3n"):
-        return GEMMA_LEGACY if has_legacy and not has_gemma4 else None
+        return envelope if envelope is GEMMA_LEGACY else None
     return None
 
 
@@ -507,16 +520,9 @@ def app_prompt(user_prompt: str, envelope: PromptEnvelope = GEMMA4) -> str:
     return envelope.user_marker + content + envelope.model_marker + envelope.suffix
 
 
-def gemma_instruction_prompt(user_prompt: str) -> str:
-    """The legacy-family envelope, ending exactly with "<start_of_turn>model".
-
-    The eval harness and data generator still send this to llama-server; the
-    shipped Gemma 4 models receive app_prompt(user_prompt, GEMMA4) instead."""
-    return app_prompt(user_prompt, GEMMA_LEGACY)
-
-
 # ---------------------------------------------------------------------------
-# Public prompt builders
+# Public prompt builders. Each returns the INNER prompt, as AIService does;
+# a raw-text request wraps it with app_prompt, as the app's runner does.
 # ---------------------------------------------------------------------------
 
 def build_suggestions_prompt(
@@ -616,7 +622,7 @@ def build_suggestions_prompt(
         request_count,
         end_word_rule,
     )
-    return gemma_instruction_prompt(user_prompt)
+    return user_prompt
 
 
 def _rewrite_reject_keys(selection: str, rejected_candidates: Sequence[str]) -> List[str]:
@@ -725,7 +731,7 @@ def build_rewrite_prompt(
         selection,
         output_rules,
     )
-    return gemma_instruction_prompt(user_prompt)
+    return user_prompt
 
 
 def build_synonyms_prompt(word: str, line_context: str, limit: int = SYNONYM_LIMIT_DEFAULT) -> str:
@@ -745,7 +751,7 @@ def build_synonyms_prompt(word: str, line_context: str, limit: int = SYNONYM_LIM
         '- Do not include "%s".\n'
         "- Prefer words with similar tone and syllable count."
     ) % (limit, word, context_block, word)
-    return gemma_instruction_prompt(user_prompt)
+    return user_prompt
 
 
 # ---------------------------------------------------------------------------

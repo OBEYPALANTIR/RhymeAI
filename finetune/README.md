@@ -52,9 +52,14 @@ python3 finetune/eval/run_eval.py \
 ```
 
 The runner starts `llama-server` itself (ctx 2048; temp 0.8, top-k 40,
-top-p 0.95 — the mobile sampler contract), POSTs each raw pre-templated
-prompt to `/completion` (which applies **no** chat template — exactly what we
-want, since the prompt already carries the Gemma turn markers), scores each
+top-p 0.95 — the mobile sampler contract), POSTs each request to `/completion`
+(which applies **no** chat template) as the inner prompt wrapped in the app's
+on-device envelope — `--envelope gemma4` by default, as the app sends the
+shipped E2B/E4B models; `--envelope legacy` for imported Gemma 1-3n GGUFs and
+to reproduce pre-Gemma-4 baselines. The text carries no `<bos>`: llama-server
+adds one to a raw prompt when the GGUF sets `add_bos_token`, as llama.cpp
+does in the app. It warns when the served chat template uses other turn
+markers than the chosen envelope. It then scores each
 response, writes the JSON report, and prints a per-task summary: format-pass
 rates, rhyme-compliance tiers (perfect end-word from the candidate list /
 rhymes-with-target / miss), average latency, and average output tokens. The

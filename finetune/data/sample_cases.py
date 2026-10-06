@@ -266,6 +266,7 @@ def sample_case(rng: random.Random):
 
 def _self_test():
     from collections import Counter
+    from eval.prompts import TURN_MARKERS
     from eval.run_eval import prepare_case
 
     counts = Counter()
@@ -277,7 +278,7 @@ def _self_test():
             skipped += 1
             continue
         prepared = prepare_case(case)  # must not raise
-        assert prepared["prompt"].endswith("<start_of_turn>model")
+        assert not any(marker in prepared["user_prompt"] for marker in TURN_MARKERS)
         counts[case["task"]] += 1
 
     # Determinism check.
