@@ -12,8 +12,9 @@ Python 3 stdlib only — no pip dependencies.
 
 - `eval/prompts.py` — byte-identical ports of the Kotlin prompt builders
   (`buildLocalPrompt`, `buildLocalRewritePrompt`, `buildLocalSynonymsPrompt`,
-  the Gemma `<start_of_turn>` template, section directives, and the
-  rhyme-constraint construction from `AIService.kt`).
+  section directives, and the rhyme-constraint construction from
+  `AIService.kt`), plus the app's on-device turn envelope (`app_prompt`,
+  ported from `GGUFModelService.swift`).
 - `eval/scoring.py` — CMU-dictionary phonetics ported from
   `ProsodyAnalyzer.kt` / `RhymeConstraint.kt` (rime extraction, perfect-rhyme
   check, candidate end-words, syllable counting) plus output-format validators

@@ -6,8 +6,10 @@ drift. Sources of truth (Kotlin):
   - android/.../service/AIService.kt
       buildLocalPrompt, buildLocalRewritePrompt, buildLocalSynonymsPrompt,
       constraintInstruction, buildSectionDirective, firstChorusLines,
-      firstChorusEndWords, localLyricsContext, gemmaInstructionPrompt,
+      firstChorusEndWords, localLyricsContext,
       suggestionRhymeConstraint, SUGGESTION_COUNT
+  - Writers Block/.../Services/GGUFModelService.swift
+      GGUFPromptFormat.resolve, gemmaPrompt (the on-device turn envelope)
   - android/.../data/model/RewriteAction.kt   (label + instruction strings)
   - android/.../data/model/SongSection.kt     (displayName + promptHint)
   - android/.../data/model/RhymeScheme.kt     (RhymeType / RhymeComplexity strings)
@@ -441,12 +443,76 @@ def local_lyrics_context(
     return local_lyric_window(lyrics, cursor_line, LOCAL_RECENT_CONTEXT_CHARS, 0)
 
 
-def gemma_instruction_prompt(user_prompt: str) -> str:
-    """AIService.gemmaInstructionPrompt — the <start_of_turn> template.
+# ---------------------------------------------------------------------------
+# On-device prompt envelope
+# ---------------------------------------------------------------------------
+# The builders below return the INNER prompt; the app adds the turn markers
+# for the loaded model's family in exactly one place. Mirror of
+# "Writers Block/Writers Block/Services/GGUFModelService.swift":
+#   GGUFPromptFormat.resolve      lines 339-350 (family from GGUF metadata)
+#   GGUFModelService.gemmaPrompt  lines 469-491 (the envelope bytes)
+# llama.cpp prepends <bos> itself (llama_tokenize with addSpecialTokens,
+# lines 434 and 720; the GGUFs set tokenizer.ggml.add_bos_token), so an
+# envelope never contains <bos>, and parseSpecialTokens maps each marker to
+# its single special token. The model ends its turn by emitting
+# `end_of_turn`, an end-of-generation token. Android renders the same bytes
+# from the GGUF's own chat template (LocalModelService.formatPrompt), which
+# additionally trims the content.
+# The shipped RhymeAI E2B/E4B GGUFs are general.architecture "gemma4" with a
+# <|turn>/<turn|> chat template, so the app always gives them GEMMA4.
 
-    NOTE: Kotlin trimIndent() drops the trailing newline, so the prompt ends
-    exactly with "<start_of_turn>model" (no trailing newline)."""
-    return "<start_of_turn>user\n%s\n<end_of_turn>\n<start_of_turn>model" % user_prompt
+
+@dataclass(frozen=True)
+class PromptEnvelope:
+    name: str          # GGUFModelService's tokenizerEnvelope spelling
+    user_marker: str
+    model_marker: str
+    suffix: str        # appended after model_marker
+    end_of_turn: str
+
+    @property
+    def generation_prefix(self) -> str:
+        """The model-turn opener the app's prompt ends with."""
+        return self.model_marker.rsplit("\n", 1)[-1] + self.suffix
+
+
+GEMMA4 = PromptEnvelope(
+    "gemma4", "<|turn>user\n", "<turn|>\n<|turn>model", "\n", "<turn|>")
+GEMMA_LEGACY = PromptEnvelope(
+    "gemmaLegacy", "<start_of_turn>user\n", "\n<end_of_turn>\n<start_of_turn>model",
+    "", "<end_of_turn>")
+ENVELOPES = {envelope.name: envelope for envelope in (GEMMA4, GEMMA_LEGACY)}
+
+
+def resolve_prompt_envelope(architecture: str, chat_template: str) -> Optional[PromptEnvelope]:
+    """GGUFPromptFormat.resolve; None means the app refuses the model."""
+    has_legacy = "<start_of_turn>" in chat_template and "<end_of_turn>" in chat_template
+    has_gemma4 = "<|turn>" in chat_template and "<turn|>" in chat_template
+    if architecture == "gemma4":
+        return GEMMA4 if has_gemma4 and not has_legacy else None
+    if architecture in ("gemma", "gemma2", "gemma3", "gemma3n"):
+        return GEMMA_LEGACY if has_legacy and not has_gemma4 else None
+    return None
+
+
+def app_prompt(user_prompt: str, envelope: PromptEnvelope = GEMMA4) -> str:
+    """GGUFModelService.gemmaPrompt: the exact text the app tokenizes."""
+    content = user_prompt
+    while content.startswith(envelope.user_marker):
+        normalized = (content[:-1] if content.endswith(envelope.model_marker + "\n")
+                      else content)
+        if not normalized.endswith(envelope.model_marker):
+            break
+        content = normalized[len(envelope.user_marker):-len(envelope.model_marker)]
+    return envelope.user_marker + content + envelope.model_marker + envelope.suffix
+
+
+def gemma_instruction_prompt(user_prompt: str) -> str:
+    """The legacy-family envelope, ending exactly with "<start_of_turn>model".
+
+    The eval harness and data generator still send this to llama-server; the
+    shipped Gemma 4 models receive app_prompt(user_prompt, GEMMA4) instead."""
+    return app_prompt(user_prompt, GEMMA_LEGACY)
 
 
 # ---------------------------------------------------------------------------

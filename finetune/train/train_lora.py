@@ -5,15 +5,18 @@ DO NOT run on the Mac. This script targets a rented CUDA box (RunPod/Lambda,
 A100 or RTX 4090) with `unsloth` installed — see finetune/train/RUNBOOK.md.
 
 Input is the output of prepare_dataset.py: JSONL rows whose "text" field is
-the FULL app-templated example
+the FULL example in the app's on-device envelope; for Gemma 4
 
-    <start_of_turn>user\n{prompt}\n<end_of_turn>\n<start_of_turn>model\n{completion}<end_of_turn>
+    <|turn>user\n{prompt}<turn|>\n<|turn>model\n{completion}<turn|>
 
 We deliberately do NOT apply the tokenizer's own chat template
-(unsloth.chat_templates.get_chat_template): the deployed app builds raw
-<start_of_turn> prompts itself (AIService gemmaInstructionPrompt) and posts
-them to llama.cpp /completion with no template, so training must see exactly
-that surface form. Prompt tokens are masked from the loss via
+(unsloth.chat_templates.get_chat_template): the app renders these exact bytes
+itself (GGUFModelService.gemmaPrompt) and llama.cpp adds one <bos>, so
+training must see exactly that surface form; the <bos> is added here when
+the base tokenizer does not add one (Gemma 4's does not). The envelope is
+read from the dataset and its markers must be single special tokens of the
+base model, so a dataset prepared for another model family fails instead of
+training on plain-text markers. Prompt tokens are masked from the loss via
 train_on_responses_only with the same markers.
 
 Text-only LoRA: `finetune_vision_layers=False` (and no audio modules are
@@ -45,9 +48,35 @@ import torch  # noqa: E402
 from datasets import load_dataset  # noqa: E402
 from trl import SFTConfig, SFTTrainer  # noqa: E402
 
-# Must match prepare_dataset.py / eval.prompts.gemma_instruction_prompt.
-INSTRUCTION_PART = "<start_of_turn>user\n"
-RESPONSE_PART = "<start_of_turn>model\n"
+# Masking markers and special tokens per app prompt envelope. Must match
+# prepare_dataset.masking_markers / eval.prompts.ENVELOPES (checked by
+# test_envelope.py); this script runs alone on the GPU box, so no import.
+ENVELOPES = {
+    # The shipped E2B/E4B GGUFs (general.architecture "gemma4").
+    "gemma4": {"instruction_part": "<|turn>user\n",
+               "response_part": "<|turn>model\n",
+               "special_tokens": ("<|turn>", "<turn|>")},
+    # Gemma 1-3n GGUFs that carry the <start_of_turn> template.
+    "gemmaLegacy": {"instruction_part": "<start_of_turn>user\n",
+                    "response_part": "<start_of_turn>model\n",
+                    "special_tokens": ("<start_of_turn>", "<end_of_turn>")},
+}
+
+
+def dataset_envelope(paths):
+    """Name of the one envelope every row's "text" starts with."""
+    found = set()
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    text = json.loads(line)["text"]
+                    found.add(next((name for name, envelope in ENVELOPES.items()
+                                    if text.startswith(envelope["instruction_part"])), None))
+    if len(found) != 1 or None in found:
+        raise SystemExit("dataset rows do not share one known prompt envelope "
+                         "(%s); re-run prepare_dataset.py" % sorted(map(str, found)))
+    return found.pop()
 
 
 def parse_args():
@@ -89,6 +118,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    envelope_name = dataset_envelope([args.data, args.val])
+    envelope = ENVELOPES[envelope_name]
+    print("prompt envelope:", envelope_name)
     os.makedirs(args.out, exist_ok=True)
 
     model, tokenizer = FastModel.from_pretrained(
@@ -102,20 +134,19 @@ def main():
         full_finetuning=False,
     )
 
-    # Sanity: the app's turn markers must be real tokens in this tokenizer,
-    # otherwise the deployed prompt format and the training format diverge.
-    for marker in ("<start_of_turn>", "<end_of_turn>"):
-        # FastModel returns a multimodal Processor for gemma-4; positional text
-        # lands in its `images` arg. Use the inner tokenizer directly.
-        ids = getattr(tokenizer, "tokenizer", tokenizer)(marker, add_special_tokens=False)["input_ids"]
-        # gemma-4 tokenizers treat these markers as PLAIN TEXT (7 tokens each),
-        # unlike gemma-3 where they were single special tokens. That is fine:
-        # the app sends the raw-string template and stops on the <end_of_turn>
-        # STRING, and SFT teaches the model this exact deployed format.
+    # FastModel returns a multimodal Processor for gemma-4; positional text
+    # lands in its `images` arg. Use the inner tokenizer directly.
+    text_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
+    # The app tokenizes its envelope with parse_special, so each marker is one
+    # special token there. A marker that splits here means the dataset was
+    # prepared for a different model family than --base.
+    for marker in envelope["special_tokens"]:
+        ids = text_tokenizer(marker, add_special_tokens=False)["input_ids"]
         if len(ids) != 1:
-            print("WARNING: %r tokenizes to %d tokens in %s "
-                  "(plain-text template — expected for gemma-4)"
-                  % (marker, len(ids), args.base))
+            raise SystemExit("%r tokenizes to %d tokens in %s: the %s dataset does not "
+                             "match this model's prompt envelope. Re-run "
+                             "prepare_dataset.py --envelope for this family."
+                             % (marker, len(ids), args.base, envelope_name))
 
     # Text-only LoRA on attention + MLP of the language tower. Vision stays
     # frozen; audio modules are never selected because we only opt into
@@ -136,6 +167,11 @@ def main():
 
     dataset = load_dataset(
         "json", data_files={"train": args.data, "val": args.val})
+    # The app's llama.cpp prepends one <bos> to the envelope (the GGUFs set
+    # add_bos_token); the rows carry none. Gemma 4's HF tokenizer adds no BOS
+    # of its own, so supply it here when the tokenizer will not.
+    if text_tokenizer("x")["input_ids"][:1] != [text_tokenizer.bos_token_id]:
+        dataset = dataset.map(lambda row: {"text": text_tokenizer.bos_token + row["text"]})
 
     bf16 = torch.cuda.is_bf16_supported()
     config = SFTConfig(
@@ -172,18 +208,24 @@ def main():
         args=config,
     )
 
+    # Train must see what the app decodes: exactly one <bos>, then the envelope.
+    first_ids = list(trainer.train_dataset[0]["input_ids"][:2])
+    bos = text_tokenizer.bos_token_id
+    if first_ids[:1] != [bos] or first_ids[1:] == [bos]:
+        raise SystemExit("row 0 must start with exactly one <bos> (id %s); got %r"
+                         % (bos, first_ids))
+
     if not args.no_mask:
         # Mask everything before (and including) the model-turn marker so the
-        # loss covers only the completion + <end_of_turn>. Markers are the
-        # app's raw Gemma markers (NOT the gemma-4 chat-template ones — we
-        # never applied get_chat_template; see module docstring).
+        # loss covers only the completion + its end-of-turn token. The
+        # markers are the app's envelope (see module docstring).
         trainer = train_on_responses_only(
             trainer,
-            instruction_part=INSTRUCTION_PART,
-            response_part=RESPONSE_PART,
+            instruction_part=envelope["instruction_part"],
+            response_part=envelope["response_part"],
         )
         # Show what the loss actually sees for row 0 — should be the
-        # completion plus <end_of_turn>, nothing from the prompt.
+        # completion plus its end-of-turn token, nothing from the prompt.
         sample = trainer.train_dataset[0]
         supervised = [t for t, l in zip(sample["input_ids"], sample["labels"]) if l != -100]
         print("--- supervised tokens of first row ---")
