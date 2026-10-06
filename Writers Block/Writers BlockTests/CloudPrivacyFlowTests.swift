@@ -184,6 +184,52 @@ struct CloudPrivacyFlowTests {
         #expect(viewModel.rewritePreview == nil)
     }
 
+    @Test func themeEditDropsInFlightSuggestionsWithWholeSongContextOn() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.saveUseWholeSongContext(true)
+        viewModel.setCloudAISharingConsent(true, scope: .wholeSong)
+        viewModel.lyrics = "A first unfinished line"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+        viewModel.theme = "leaving town"
+
+        // Control: an undisturbed request lands its suggestions. The next line rhymes
+        // with "line", so the fixture lines end on perfect rhymes for it.
+        let rhymingLines = "Under the pine\nHolding the sign\nPouring the wine\nAll of it mine\nDrawing the design\nTelling me fine"
+        PrivacyURLProtocol.reset(suggestionText: rhymingLines)
+        viewModel.getSuggestions()
+        #expect(await Self.waitUntil { !viewModel.isLoading && !viewModel.suggestions.isEmpty })
+
+        // A theme edit while the next request is in flight drops it.
+        PrivacyURLProtocol.reset(suggestionText: rhymingLines, holdResponse: true)
+        defer { PrivacyURLProtocol.releaseHeldResponse() }
+        viewModel.getSuggestions()
+        #expect(await Self.waitUntil { PrivacyURLProtocol.capturedBodies().count == 1 })
+        #expect(PrivacyURLProtocol.capturedBodies()[0].contains("leaving town"))
+        let requestID = try #require(viewModel.suggestionsRequestIDForTest())
+        #expect(viewModel.isLoading)
+
+        viewModel.theme = "coming home"
+
+        #expect(viewModel.suggestionsRequestIDForTest() != requestID)
+        #expect(!viewModel.isLoading)
+        #expect(viewModel.suggestions.isEmpty)
+        PrivacyURLProtocol.releaseHeldResponse()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(viewModel.suggestions.isEmpty)
+        #expect(viewModel.errorMessage == nil)
+        #expect(!viewModel.isLoading)
+        #expect(viewModel.theme == "coming home")
+    }
+
     @Test func delayedSuggestionResponseCannotCrossSongNavigation() async throws {
         let (defaults, suiteName) = Self.makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }

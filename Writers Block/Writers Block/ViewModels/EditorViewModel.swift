@@ -169,7 +169,13 @@ final class EditorViewModel: ObservableObject {
     }
     @Published var theme: String = "" {
         didSet {
-            if theme != oldValue { triggerAutoSave() }
+            guard theme != oldValue else { return }
+            // The theme field stays editable while a request runs, so a theme edit
+            // drops in-flight AI work and its results, as Android onThemeChanged does.
+            cancelEditorAIWork()
+            suggestions = []
+            errorMessage = nil
+            triggerAutoSave()
         }
     }
     @Published var cursorPosition: Int = 0 {
@@ -842,6 +848,10 @@ final class EditorViewModel: ObservableObject {
 
     func suggestionInputForTest() -> AISuggestionInput {
         makeSuggestionInput()
+    }
+
+    func suggestionsRequestIDForTest() -> UUID? {
+        suggestionsRequestID
     }
 
     func cancelSuggestions() {
