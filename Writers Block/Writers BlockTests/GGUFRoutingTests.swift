@@ -96,11 +96,45 @@ struct GGUFDownloadCatalogTests {
             $0.url.path.contains("/resolve/\(GGUFDownloadCatalog.huggingFaceRevision)/")
         })
         #expect(options.allSatisfy { !$0.url.path.contains("/resolve/main/") })
-        #expect(options.map(\.expectedBytes) == [3_427_878_784, 5_335_290_784])
+        #expect(options.map(\.expectedBytes) == [3_427_880_800, 5_335_290_784])
         #expect(options.map(\.sha256) == [
-            "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+            "b250c2f6a91d9f7659f7ac2c90ccc563ca96a84aea4c1e8a3463fafc77d004af",
             "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3",
         ])
+    }
+
+    // The catalog must pin an immutable commit, never a branch or placeholder.
+    @Test func catalogPinsAnImmutableHuggingFaceCommit() {
+        let revision = GGUFDownloadCatalog.huggingFaceRevision
+        #expect(revision.count == 40 && revision.allSatisfy { "0123456789abcdef".contains($0) })
+    }
+
+    @Test func previousModelVersionUnderTheSameNameIsNotReportedInstalled() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gguf-installed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func sparseFile(_ name: String, bytes: Int64) throws {
+            let url = directory.appendingPathComponent(name)
+            #expect(FileManager.default.createFile(atPath: url.path, contents: Data("GGUF".utf8)))
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: UInt64(bytes))
+            try handle.close()
+        }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+
+        // The shipped v1 E2B file: same name, 2,016 bytes smaller than the v2 entry.
+        try sparseFile(e2b.fileName, bytes: 3_427_878_784)
+        try sparseFile(e4b.fileName, bytes: e4b.expectedBytes)
+        try sparseFile("my-custom-model.gguf", bytes: 1_024)
+        #expect(GGUFModelStorage.installedModelFileNames(in: directory) == [
+            e4b.fileName,
+            "my-custom-model.gguf",
+        ].sorted())
+
+        try sparseFile(e2b.fileName, bytes: e2b.expectedBytes)
+        #expect(GGUFModelStorage.installedModelFileNames(in: directory).contains(e2b.fileName))
     }
 
     @Test func preferredModelUsesCatalogOrder() {

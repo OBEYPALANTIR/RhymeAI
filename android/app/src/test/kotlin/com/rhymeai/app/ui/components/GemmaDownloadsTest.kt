@@ -139,12 +139,12 @@ class GemmaDownloadsTest {
     @Test
     fun catalogPinsTheSameImmutableHuggingFaceArtifactsAsIos() {
         assertEquals(
-            listOf(3_427_878_784L, 5_335_290_784L),
+            listOf(3_427_880_800L, 5_335_290_784L),
             GEMMA_DOWNLOADS.map(GemmaDownload::expectedBytes)
         )
         assertEquals(
             listOf(
-                "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+                "b250c2f6a91d9f7659f7ac2c90ccc563ca96a84aea4c1e8a3463fafc77d004af",
                 "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3"
             ),
             GEMMA_DOWNLOADS.map(GemmaDownload::sha256)
@@ -153,6 +153,43 @@ class GemmaDownloadsTest {
             assertTrue(model.url.contains("/resolve/$GEMMA_HUGGING_FACE_REVISION/"))
             assertFalse(model.url.contains("/resolve/main/"))
         }
+    }
+
+    // The catalog must pin an immutable commit, never a branch or placeholder.
+    @Test
+    fun catalogPinsAnImmutableHuggingFaceCommit() {
+        assertTrue(
+            "GEMMA_HUGGING_FACE_REVISION must be a 40-character commit hash",
+            GEMMA_HUGGING_FACE_REVISION.matches(Regex("[0-9a-f]{40}"))
+        )
+    }
+
+    @Test
+    fun catalogRecordsEachModelsEmbeddedChatTemplate() {
+        assertEquals(
+            listOf(GEMMA4_E2B_V2_CHAT_TEMPLATE_SHA256, GEMMA4_CHAT_TEMPLATE_SHA256),
+            GEMMA_DOWNLOADS.map(GemmaDownload::chatTemplateSha256)
+        )
+    }
+
+    @Test
+    fun previousE2bVersionUnderTheSameNameIsNotTreatedAsInstalled() {
+        val e2b = GEMMA_DOWNLOADS.first()
+        val file = File(tempDir(), e2b.fileName)
+        // The shipped v1 E2B file: same name, 2,016 bytes smaller than the v2 entry.
+        java.io.RandomAccessFile(file, "rw").use { output ->
+            output.write(validTinyGguf())
+            output.setLength(3_427_878_784L)
+        }
+        val previousSha = "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626"
+
+        // A registration verified against the old catalog SHA is not reused...
+        assertFalse(
+            hasCurrentGemmaVerification(e2b, file, previousSha, file.length(), file.lastModified())
+        )
+        // ...and the re-check (also the download short-circuit) rejects the old bytes.
+        assertNotNull(validateDownloadedGemma(e2b, file))
+        assertNotNull(validateDownloadedGemmaIntegrity(e2b, file))
     }
 
     @Test

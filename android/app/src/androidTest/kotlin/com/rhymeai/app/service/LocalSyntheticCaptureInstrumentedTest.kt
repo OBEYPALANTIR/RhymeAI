@@ -288,8 +288,7 @@ class LocalSyntheticCaptureInstrumentedTest {
         .digest(bytes).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     private companion object {
-        const val EXPECTED_MODEL_SHA =
-            "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626"
+        val EXPECTED_MODEL_SHA = com.rhymeai.app.ui.components.GEMMA_DOWNLOADS.first().sha256
         const val SHARED_MANIFEST_SHA =
             "649b0a49e5a90626bf26ad6f66eb8b0979cd42992db5ff16ea51bf197e1acb2d"
     }

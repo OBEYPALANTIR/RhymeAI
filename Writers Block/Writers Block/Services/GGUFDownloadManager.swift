@@ -15,7 +15,10 @@ struct GGUFDownloadOption: Identifiable, Equatable, Sendable {
 }
 
 enum GGUFDownloadCatalog {
-    nonisolated static let huggingFaceRevision = "27492c6696f2f868bbbe3aeafb633009ef932598"
+    // Model versions:
+    // - E2B: v2, trained 2026-10-06 on teacher-data-v2 (embeds a revised chat template).
+    // - E4B: v1, unchanged; the pinned revision still serves the same E4B bytes.
+    nonisolated static let huggingFaceRevision = "1647aace10f942ba8dca76e9e37d6be22566fef9"
 
     nonisolated static let options: [GGUFDownloadOption] = [
         GGUFDownloadOption(
@@ -24,8 +27,8 @@ enum GGUFDownloadCatalog {
             subtitle: "Recommended for iPhone and iPad",
             size: "3.43 GB",
             fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
-            expectedBytes: 3_427_878_784,
-            sha256: "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+            expectedBytes: 3_427_880_800,
+            sha256: "b250c2f6a91d9f7659f7ac2c90ccc563ca96a84aea4c1e8a3463fafc77d004af",
             url: requiredURL(
                 "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true"
             ),
@@ -96,16 +99,32 @@ enum GGUFModelStorage {
     }
 
     nonisolated static func installedModelFileNames() -> [String] {
-        guard let directory = try? modelsDirectory(create: false),
-              let contents = try? FileManager.default.contentsOfDirectory(
-                  at: directory,
-                  includingPropertiesForKeys: nil
-              ) else {
+        guard let directory = try? modelsDirectory(create: false) else { return [] }
+        return installedModelFileNames(in: directory)
+    }
+
+    /// A catalog file name counts as installed only when its size matches the current
+    /// catalog entry, so a previous model version kept under the same name is offered
+    /// for re-download instead of being reported as ready. The full SHA-256 check still
+    /// runs at download install and model load.
+    nonisolated static func installedModelFileNames(in directory: URL) -> [String] {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        ) else {
             return []
         }
         return contents
+            .filter { url in
+                let fileName = url.lastPathComponent
+                guard fileName.lowercased().hasSuffix(".gguf") else { return false }
+                guard let option = GGUFDownloadCatalog.options.first(where: { $0.fileName == fileName }) else {
+                    return true
+                }
+                let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+                return bytes == option.expectedBytes
+            }
             .map(\.lastPathComponent)
-            .filter { $0.lowercased().hasSuffix(".gguf") }
             .sorted()
     }
 }

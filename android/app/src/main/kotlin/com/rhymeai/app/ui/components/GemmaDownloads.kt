@@ -21,8 +21,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 internal const val DOWNLOAD_BUFFER_BYTES = 8 * 1024 * 1024
-internal const val GEMMA_HUGGING_FACE_REVISION = "27492c6696f2f868bbbe3aeafb633009ef932598"
+internal const val GEMMA_HUGGING_FACE_REVISION = "1647aace10f942ba8dca76e9e37d6be22566fef9"
+// SHA-256 of each GGUF's embedded tokenizer.chat_template. Informational: it is recorded in
+// native-contract evidence only. The runtime picks the prompt envelope from the GGUF
+// architecture and turn markers (GGUFPromptFormat.resolve), never from this value.
 internal const val GEMMA4_CHAT_TEMPLATE_SHA256 = "33204f1acb5bd0002713e16a593847f24ceeafe711ed88bda2a352dc996a3373"
+internal const val GEMMA4_E2B_V2_CHAT_TEMPLATE_SHA256 = "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7"
 internal const val GEMMA_DOWNLOAD_CONNECTIONS = 4
 internal const val MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES = 750L * 1024L * 1024L
 private const val DOWNLOAD_PROGRESS_UPDATE_BYTES = 32L * 1024L * 1024L
@@ -59,14 +63,18 @@ internal data class GemmaDownload(
 
 // RhymeAI's own fine-tunes of Gemma 4 (LoRA-trained on the app's exact prompt
 // format; see finetune/SCORECARD.md). Hosted on the project's HF repo.
+// Model versions:
+// - E2B: v2, trained 2026-10-06 on teacher-data-v2 (embeds a revised chat template).
+// - E4B: v1, unchanged; the pinned revision still serves the same E4B bytes.
 internal val GEMMA_DOWNLOADS = listOf(
     GemmaDownload(
         label = "RhymeAI Gemma E2B",
         description = "Tuned for RhymeAI — best default for phones, 3.43 GB.",
         fileName = "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
         url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/$GEMMA_HUGGING_FACE_REVISION/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true",
-        expectedBytes = 3_427_878_784L,
-        sha256 = "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626"
+        expectedBytes = 3_427_880_800L,
+        sha256 = "b250c2f6a91d9f7659f7ac2c90ccc563ca96a84aea4c1e8a3463fafc77d004af",
+        chatTemplateSha256 = GEMMA4_E2B_V2_CHAT_TEMPLATE_SHA256
     ),
     GemmaDownload(
         label = "RhymeAI Gemma E4B",
