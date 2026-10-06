@@ -2,8 +2,10 @@
 """Synthetic training-data generator for the RhymeAI Gemma fine-tune.
 
 Loop: sample a random case (data/sample_cases.py, eval-schema compatible)
--> build the app's EXACT prompt (eval.run_eval.prepare_case / eval.prompts)
--> query a teacher model over HTTP (data/teacher.py)
+-> build the app's EXACT inner prompt (eval.run_eval.prepare_case / eval.prompts)
+-> query a teacher model over HTTP (data/teacher.py; --api completion wraps
+   it in the app's on-device envelope, --envelope gemma4 by default or legacy
+   for a Gemma 1-3n teacher GGUF; --api chat leaves templating to the server)
 -> clean control-marker artifacts from the teacher text
 -> score the CLEANED text with the eval scorers (eval.run_eval.score_case)
 -> keep only completions that fully pass -> append a JSONL record.
@@ -39,7 +41,7 @@ if _FINETUNE_DIR not in sys.path:
     sys.path.insert(0, _FINETUNE_DIR)
 
 from eval import prompts, scoring  # noqa: E402
-from eval.run_eval import prepare_case, score_case  # noqa: E402
+from eval.run_eval import envelope_mismatch, prepare_case, score_case  # noqa: E402
 from data import sample_cases, teacher  # noqa: E402
 
 MAX_ATTEMPTS_PER_SAMPLE = 3  # first draw + up to 2 re-draws
@@ -62,9 +64,13 @@ MARKER_PREFIX_RE = re.compile(
     r"<?/?(?:start_of_turn|end_of_turn)>?\w*)\s*",
     re.IGNORECASE,
 )
+# "<[^>|]+>" leaves Gemma 4's pipe-delimited control tokens (<turn|>,
+# <|channel>, ...) in place even on a line of their own, so the scorer
+# rejects the sample instead of the cleaner hiding a derailment. An echoed
+# <|turn>model opener is already cut by scoring.strip_model_output.
 MARKER_ONLY_RE = re.compile(
     r"^\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|"
-    r"model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>]+>|>+|"
+    r"model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>|]+>|>+|"
     r"[<>/]+|user|model|assistant)\s*$",
     re.IGNORECASE,
 )
@@ -217,7 +223,7 @@ def generate_one(client, case, case_seed):
     case["id"] = case_seed
     prepared = prepare_case(case)
     # zlib.crc32 is stable across processes (unlike hash() on strings).
-    raw = client.generate(prepared["prompt"], seed=zlib.crc32(case_seed.encode("utf-8")))
+    raw = client.generate(prepared["user_prompt"], seed=zlib.crc32(case_seed.encode("utf-8")))
     completion = clean_teacher_output(raw)
     if not completion:
         return None, "empty_output"
@@ -242,7 +248,7 @@ def generate_one(client, case, case_seed):
         "task": case["task"],
         "case_seed": case_seed,
         "case_params": {k: v for k, v in case.items() if k != "id"},
-        "user_prompt": teacher.inner_user_prompt(prepared["prompt"]),
+        "user_prompt": prepared["user_prompt"],
         "completion": completion,
     }
     return record, "accepted"
@@ -257,9 +263,14 @@ def main():
     parser.add_argument("--endpoint", required=True,
                         help="Teacher base URL, e.g. http://127.0.0.1:8080")
     parser.add_argument("--api", choices=["completion", "chat"], default="completion",
-                        help="completion = llama-server /completion with the raw "
-                             "Gemma-templated prompt; chat = OpenAI-compatible "
+                        help="completion = llama-server /completion with the app's "
+                             "raw envelope; chat = OpenAI-compatible "
                              "/v1/chat/completions with the inner user prompt")
+    parser.add_argument("--envelope", choices=sorted(prompts.ENVELOPE_OPTIONS),
+                        default="gemma4",
+                        help="Turn envelope for --api completion: the teacher GGUF's "
+                             "family (default gemma4; legacy for Gemma 1-3n). "
+                             "Ignored for --api chat")
     parser.add_argument("--count", type=int, default=500,
                         help="Number of samples to attempt (default 500)")
     parser.add_argument("--seed", type=int, default=1, help="Run seed (default 1)")
@@ -282,9 +293,15 @@ def main():
     if allowed_tasks - set(TASKS):
         sys.exit("unknown tasks: %s" % ", ".join(sorted(allowed_tasks - set(TASKS))))
 
+    envelope = prompts.ENVELOPE_OPTIONS[args.envelope]
+    if args.api == "completion":
+        mismatch = envelope_mismatch(args.endpoint, envelope)
+        if mismatch:
+            print("WARNING: %s" % mismatch)
     client = teacher.TeacherClient(
         endpoint=args.endpoint,
         api=args.api,
+        envelope=envelope,
         temperature=args.temperature,
         retries=args.retries,
         timeout_s=args.timeout,

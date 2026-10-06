@@ -11,10 +11,15 @@ models) → `export_gguf.sh` (local) → `finetune/eval/run_eval.py`
 
 Key design facts (do not change casually):
 
-- Training text is the app's exact raw Gemma template
-  (`eval/prompts.gemma_instruction_prompt`), NOT the tokenizer's chat
-  template — the app posts raw `<start_of_turn>` prompts to llama.cpp
-  `/completion` with no template, so train == deploy byte-for-byte.
+- Training text starts with the app's exact on-device prompt
+  (`eval/prompts.app_prompt`, the port of `GGUFModelService.gemmaPrompt`),
+  NOT the tokenizer's chat template. The shipped E2B/E4B GGUFs are Gemma 4,
+  so the app sends `<|turn>user\n{prompt}<turn|>\n<|turn>model\n` and
+  llama.cpp adds one `<bos>`; the text has no `<bos>` and `train_lora.py`
+  prepends exactly one (Gemma 4's HF tokenizer adds none itself), then
+  checks row 0. `prepare_dataset.py --envelope legacy` is only for
+  Gemma 1-3n bases; `train_lora.py` refuses a dataset whose markers are not
+  single special tokens of `--base`.
 - LoRA is text-only (`finetune_vision_layers=False`, language layers only).
   This is required for the GGUF export detour that avoids unsloth bug
   #6808 (`Can not map tensor 'audio_tower.layers.0...'` when converting a
@@ -97,7 +102,7 @@ python3 train_lora.py \
 
 Defaults: r=16 / alpha=16, 2 epochs, lr 2e-4 cosine + warmup 3%,
 adamw_8bit, effective batch 16 (8×2), no packing, prompt-masked loss
-(only the completion + `<end_of_turn>` is supervised — the script prints
+(only the completion + `<turn|>` is supervised — the script prints
 the supervised tokens of row 0 at startup; verify they are a completion,
 not the prompt).
 

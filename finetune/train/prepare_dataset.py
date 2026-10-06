@@ -5,22 +5,23 @@ Runs LOCALLY (stdlib only). Takes the Phase 2 output
 (finetune/data/out/train-v1.jsonl, records of
 {"task", "case_params", "user_prompt", "completion", ...}) and emits
 train/val JSONL where each record carries a "text" field holding the FULL
-Gemma-turn-templated training example:
+training example in the app's on-device envelope. For the shipped Gemma 4
+E2B/E4B models (--envelope gemma4, the default) that is
 
-    <start_of_turn>user
-    {user_prompt}
-    <end_of_turn>
-    <start_of_turn>model
-    {completion}<end_of_turn>
+    <|turn>user
+    {user_prompt}<turn|>
+    <|turn>model
+    {completion}<turn|>
 
-The prompt half is produced by `eval.prompts.gemma_instruction_prompt` — the
-same byte-for-byte port of the app's AIService template used by the eval
-harness and the data generator — so the text the LoRA trains on is EXACTLY
-the text the app will feed the model at inference time. (That function ends
-with "<start_of_turn>model" and no trailing newline; the model turn therefore
-starts with the "\n" we insert before the completion, and closes with
-"<end_of_turn>" immediately after the completion, matching the canonical
-Gemma format and the app/llama.cpp stop marker.)
+The prompt half is `eval.prompts.app_prompt`, the byte-for-byte port of
+GGUFModelService.gemmaPrompt, so the text the LoRA trains on starts with
+EXACTLY the text the app tokenizes at inference time. It carries no <bos>:
+llama.cpp adds one in the app, and train_lora.py makes sure training sees
+exactly one (Gemma 4's HF tokenizer adds none itself). The model turn closes
+with the family's end-of-turn token, which the app stops on.
+--envelope legacy keeps the <start_of_turn> form for Gemma 1-3n bases;
+that prompt ends at "<start_of_turn>model", so the completion follows a
+newline there.
 
 Also:
   - shuffles deterministically (--seed),
@@ -56,19 +57,26 @@ _FINETUNE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _FINETUNE_DIR not in sys.path:
     sys.path.insert(0, _FINETUNE_DIR)
 
-from eval.prompts import gemma_instruction_prompt  # noqa: E402  (parity source of truth)
-
-END_OF_TURN = "<end_of_turn>"
-
-# train_lora.py masks the prompt from the loss by string-matching these
-# markers; keep them in sync with eval.prompts.gemma_instruction_prompt.
-INSTRUCTION_PART = "<start_of_turn>user\n"
-RESPONSE_PART = "<start_of_turn>model\n"
+# Records hold the INNER prompt; the envelope is added here, once.
+from eval.prompts import (  # noqa: E402  (parity source of truth)
+    ENVELOPE_OPTIONS, GEMMA4, TURN_MARKERS, app_prompt)
 
 
-def build_text(user_prompt: str, completion: str) -> str:
-    """Full training example: templated prompt + model turn + completion + EOT."""
-    return "%s\n%s%s" % (gemma_instruction_prompt(user_prompt), completion, END_OF_TURN)
+def build_text(user_prompt: str, completion: str, envelope=GEMMA4) -> str:
+    """Full training example: the app's exact prompt, the completion, end of turn."""
+    prompt = app_prompt(user_prompt, envelope)
+    if not prompt.endswith("\n"):
+        prompt += "\n"
+    return prompt + completion + envelope.end_of_turn
+
+
+def masking_markers(envelope=GEMMA4):
+    """(instruction_part, response_part) train_lora.py masks the prompt with:
+    everything through the model-turn line is prompt, the rest is supervised."""
+    response_part = envelope.generation_prefix
+    if not response_part.endswith("\n"):
+        response_part += "\n"
+    return envelope.user_marker, response_part
 
 
 def load_records(path: str):
@@ -85,6 +93,9 @@ def load_records(path: str):
             for key in ("task", "user_prompt", "completion"):
                 if not record.get(key):
                     sys.exit("%s:%d: record missing %r" % (path, line_no, key))
+            if any(marker in record["user_prompt"] for marker in TURN_MARKERS):
+                sys.exit("%s:%d: user_prompt already carries turn markers; "
+                         "records must hold the inner prompt" % (path, line_no))
             records.append(record)
     if not records:
         sys.exit("no records found in %s" % path)
@@ -101,7 +112,11 @@ def percentile(sorted_values, fraction):
 def main():
     parser = argparse.ArgumentParser(
         description="Convert verified (prompt -> completion) records into "
-                    "Gemma-templated SFT JSONL with a train/val split.")
+                    "app-envelope SFT JSONL with a train/val split.")
+    parser.add_argument("--envelope", choices=sorted(ENVELOPE_OPTIONS), default="gemma4",
+                        help="Prompt envelope of the base model family "
+                             "(default gemma4: the shipped E2B/E4B models; "
+                             "legacy: Gemma 1-3n)")
     parser.add_argument("--in", dest="input", default="finetune/data/out/train-v1.jsonl",
                         help="Phase 2 JSONL (default finetune/data/out/train-v1.jsonl)")
     parser.add_argument("--out-dir", default="finetune/train/out",
@@ -118,6 +133,7 @@ def main():
     args = parser.parse_args()
 
     records = load_records(args.input)
+    envelope = ENVELOPE_OPTIONS[args.envelope]
 
     # Build texts, dedup exact (task, text) repeats defensively (generate.py
     # already dedups completions per task, so this normally drops nothing).
@@ -126,7 +142,7 @@ def main():
     over_limit = []
     duplicates = 0
     for record in records:
-        text = build_text(record["user_prompt"], record["completion"])
+        text = build_text(record["user_prompt"], record["completion"], envelope)
         key = (record["task"], text)
         if key in seen:
             duplicates += 1
@@ -182,7 +198,8 @@ def main():
     total = len(train_rows) + len(val_rows)
     print()
     print("=" * 68)
-    print("PREPARED SFT DATASET  (seed %d, val_frac %.2f)" % (args.seed, args.val_frac))
+    print("PREPARED SFT DATASET  (envelope %s, seed %d, val_frac %.2f)" % (
+        envelope.name, args.seed, args.val_frac))
     print("=" * 68)
     header = "%-16s %7s %7s %7s %8s" % ("task", "total", "train", "val", "share")
     print(header)

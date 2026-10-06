@@ -462,7 +462,12 @@ PROMPT_ECHO_RE = re.compile(
     r"sure[, ]|here are|i can(?:not|'t)|as an ai)",
     re.IGNORECASE,
 )
+# Gemma 4 control tokens are pipe-delimited (<|turn>, <turn|>, <|channel>,
+# <channel|>, <|think|>, ...); the app rejects <|turn>/<turn|> the same way
+# (AIService.swift containsLocalControlMarker).
+GEMMA4_CONTROL_TOKEN = r"<\|[a-z_]+\|?>|<[a-z_]+\|>"
 CONTROL_MARKER_RE = re.compile(
+    GEMMA4_CONTROL_TOKEN + r"|"
     r"<?/?(?:start_of_turn|end_of_turn)>?\w*|_?response>|_?model_response>|"
     r"assistant_response>|model_response>",
     re.IGNORECASE,
@@ -489,10 +494,12 @@ def word_count(line):
 def strip_model_output(raw):
     """Light port of stripLocalModelArtifacts: cut control markers, fences."""
     text = raw.strip()
-    # Drop anything up to and including a "model turn" marker the model echoed.
+    # Drop anything up to and including a "model turn" marker the model echoed,
+    # in either envelope (<start_of_turn>model or Gemma 4's <|turn>model). Any
+    # other Gemma 4 control token stays, so CONTROL_MARKER_RE rejects it.
     payload = re.match(
-        r".*(?:<start_of_turn>\s*model|start_of_turn>\s*model|_?model_response>|"
-        r"assistant_response>|model_response>)\s*",
+        r".*(?:<start_of_turn>\s*model|start_of_turn>\s*model|<?\|turn>\s*model|"
+        r"_?model_response>|assistant_response>|model_response>)\s*",
         text, re.IGNORECASE | re.DOTALL,
     )
     if payload:
