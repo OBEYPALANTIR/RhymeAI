@@ -168,10 +168,13 @@ class SuggestionPromptGuidanceTest {
 
     @Test
     fun endWordRuleFollowsAllowedListSize() {
+        val sixWords = listOf("phone", "alone", "known", "own", "show", "go")
         assertEquals("- End each line on a different word.", service.localEndWordRule(null))
-        assertEquals(FEWER_THAN_SIX_RULE, service.localEndWordRule(3))
-        assertEquals(FEWER_THAN_SIX_RULE, service.localEndWordRule(5))
-        assertEquals("- End each line on a different word from the allowed list.", service.localEndWordRule(6))
+        assertEquals(FEWER_THAN_SIX_RULE, service.localEndWordRule(sixWords.take(3)))
+        assertEquals(FEWER_THAN_SIX_RULE, service.localEndWordRule(sixWords.take(5)))
+        assertEquals("- End each line on a different word from the allowed list.", service.localEndWordRule(sixWords))
+        // Repeated (chorus hook) words count once, case-folded.
+        assertEquals(FEWER_THAN_SIX_RULE, service.localEndWordRule(List(6) { "night" } + listOf("Night", "light", "bright")))
 
         fun promptWith(words: List<String>) = localPrompt(
             constraint = AIService.SuggestionRhymeConstraint(target, "home", words, RhymeType.NEAR, dictionary)
@@ -180,9 +183,13 @@ class SuggestionPromptGuidanceTest {
         assertContains(three, "End each line with one of these rhyming words: phone, alone, known (choose the most natural fit).")
         assertTrue(three.endsWith(RULES_HEAD + FEWER_THAN_SIX_RULE + "\n" + RULES_TAIL), three)
         assertFalse(three.contains("different word from the allowed list"))
-        val six = promptWith(listOf("phone", "alone", "known", "own", "show", "go"))
+        val six = promptWith(sixWords)
         assertTrue(six.endsWith(RULES_WITH_LIST), six)
         assertFalse(six.contains("may repeat"))
+        // A later chorus listing its hook word several times still has fewer than six endings.
+        val hook = promptWith(List(6) { "home" } + listOf("phone", "alone"))
+        assertContains(hook, "rhyming words: home, home, home, home, home, home, phone, alone (choose")
+        assertTrue(hook.endsWith(RULES_HEAD + FEWER_THAN_SIX_RULE + "\n" + RULES_TAIL), hook)
     }
 
     private fun fixture(): JsonObject =
@@ -204,7 +211,8 @@ class SuggestionPromptGuidanceTest {
         assertEquals(4000, songs.getValue("oneLongLine").length)
         assertEquals(listOf(14, 4000, 16), songs.getValue("longMiddleLine").split("\n").map { it.length })
         val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
-        assertEquals(20, cases.size)
+        assertEquals(22, cases.size)
+        assertEquals(4000, songs.getValue("emojiLine").length) // 2,000 non-BMP scalars
         for (case in cases) {
             val name = case.getValue("name").jsonPrimitive.content
             val songId = case.getValue("song").jsonPrimitive.content

@@ -317,11 +317,32 @@ def _build_section_directive(ref: Optional[SectionRef], lyrics: str) -> str:
     return ""
 
 
-def local_end_word_rule(allowed_word_count: Optional[int]) -> str:
-    """AIService.localEndWordRule: a list too short for six distinct endings allows repeats."""
-    if allowed_word_count is None:
+def _utf16_len(text: str) -> int:
+    """String length in UTF-16 code units (non-BMP scalars count 2)."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _utf16_suffix(text: str, max_units: int) -> str:
+    """Longest suffix of whole scalars that fits in `max_units` UTF-16 units;
+    matches the platforms' cut, which skips a low surrogate at the cut point."""
+    units = 0
+    start = len(text)
+    while start > 0:
+        size = 2 if ord(text[start - 1]) > 0xFFFF else 1
+        if units + size > max_units:
+            break
+        units += size
+        start -= 1
+    return text[start:]
+
+
+def local_end_word_rule(allowed_words: Optional[Sequence[str]]) -> str:
+    """AIService.localEndWordRule: a list with fewer than six distinct
+    (case-folded) words cannot give six different endings, so repeats are allowed.
+    Repeated chorus end words count once."""
+    if allowed_words is None:
         return "- End each line on a different word."
-    if allowed_word_count >= SUGGESTION_COUNT:
+    if len({w.lower() for w in allowed_words}) >= SUGGESTION_COUNT:
         return "- End each line on a different word from the allowed list."
     return "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
 
@@ -340,10 +361,10 @@ def local_lyric_window(
     budget keeps only the cursor's neighbours before the nearest-line fill, and
     if those are still too long, only the cursor line. A cursor line longer
     than the budget keeps its end (where the next line is inserted) after a
-    marker. Lengths count UTF-16 units on the platforms (a cut never starts on
-    a low surrogate); Python counts code points, which match for BMP text."""
+    marker. Lengths count UTF-16 units, as String.length (Kotlin) and
+    utf16.count (Swift) do, and a cut never splits a surrogate pair."""
     trimmed = lyrics.strip()
-    if len(trimmed) <= budget:
+    if _utf16_len(trimmed) <= budget:
         return trimmed
     lines = lyrics.split("\n")
     last = len(lines) - 1
@@ -351,7 +372,7 @@ def local_lyric_window(
     line_budget = budget - 2 * (len(LOCAL_TRIM_MARKER) + 1)
 
     def cost(i: int) -> int:
-        return len(lines[i]) + 1
+        return _utf16_len(lines[i]) + 1
 
     def blank(i: int) -> bool:
         return not lines[i].strip()
@@ -369,7 +390,7 @@ def local_lyric_window(
         lo, hi = c, c
     cut = None
     if cost(c) > line_budget:
-        cut = lines[c][len(lines[c]) - (line_budget - 1):]
+        cut = _utf16_suffix(lines[c], line_budget - 1)
         used = line_budget
     else:
         used = sum(cost(i) for i in range(lo, hi + 1))
@@ -477,7 +498,7 @@ def build_suggestions_prompt(
     section_directive = _build_section_directive(
         constraint.section_ref if constraint else None, lyrics
     )
-    end_word_rule = local_end_word_rule(len(constraint.candidate_words) if constraint else None)
+    end_word_rule = local_end_word_rule(constraint.candidate_words if constraint else None)
 
     user_prompt = (
         "You are RhymeAI's on-device songwriting assistant.\n"

@@ -122,7 +122,8 @@ struct SuggestionPromptGuidanceTests {
         #expect(fixture.songs["longMiddleLine"]?.components(separatedBy: "\n").map(\.utf16.count) == [14, 4000, 16])
         // iOS only trims whole-song context; with it off the cursor's stanza is sent untrimmed.
         let cases = fixture.cases.filter(\.useWholeSongContext)
-        #expect(cases.count == 10)
+        #expect(cases.count == 11)
+        #expect(fixture.songs["emojiLine"]?.utf16.count == 4000) // 2,000 non-BMP scalars
         for testCase in cases {
             let actual = AIService.localLyricWindow(
                 try #require(fixture.songs[testCase.song]),
@@ -173,10 +174,14 @@ struct SuggestionPromptGuidanceTests {
         "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
 
     @Test func endWordRuleFollowsAllowedListSize() throws {
-        #expect(AIService.localEndWordRule(allowedWordCount: nil) == "- End each line on a different word.")
-        #expect(AIService.localEndWordRule(allowedWordCount: 3) == Self.fewerThanSixRule)
-        #expect(AIService.localEndWordRule(allowedWordCount: 5) == Self.fewerThanSixRule)
-        #expect(AIService.localEndWordRule(allowedWordCount: 6) == "- End each line on a different word from the allowed list.")
+        let sixWords = ["phone", "alone", "known", "own", "show", "go"]
+        #expect(AIService.localEndWordRule(allowedWords: nil) == "- End each line on a different word.")
+        #expect(AIService.localEndWordRule(allowedWords: Array(sixWords.prefix(3))) == Self.fewerThanSixRule)
+        #expect(AIService.localEndWordRule(allowedWords: Array(sixWords.prefix(5))) == Self.fewerThanSixRule)
+        #expect(AIService.localEndWordRule(allowedWords: sixWords) == "- End each line on a different word from the allowed list.")
+        // Repeated (chorus hook) words count once, case-folded.
+        #expect(AIService.localEndWordRule(allowedWords: Array(repeating: "night", count: 6) + ["Night", "light", "bright"])
+            == Self.fewerThanSixRule)
 
         // Built prompts: a short dictionary list relaxes the rule, a long one keeps it.
         let short = try #require(AIService.rhymeConstraintWords(targetRhymeLine: "I hold the silver", rhymeType: .perfect))
@@ -190,6 +195,24 @@ struct SuggestionPromptGuidanceTests {
         let long = try #require(AIService.rhymeConstraintWords(targetRhymeLine: target, rhymeType: .near))
         #expect(long.words.count >= 6)
         #expect(localPrompt(targetLine: target).hasSuffix(Self.rulesWithList))
+
+        // A second chorus prepends every first-chorus end word, repeats included: six
+        // copies of "night" plus a short list still give fewer than six endings.
+        try #require(short.words.count <= 4, "silver list: \(short.words)")
+        let chorusLines = Array(repeating: "We own the night", count: 6)
+        let hook = try #require(AIService.rhymeConstraintWords(
+            targetRhymeLine: "I hold the silver", rhymeType: .perfect,
+            currentSection: .chorus, firstChorusEndWords: AIService.endWords(of: chorusLines)
+        ))
+        #expect(hook.words.count >= 6)
+        #expect(Set(hook.words.map { $0.lowercased() }).count < 6)
+        let hookPrompt = AIService().buildLocalSuggestionPromptForTest(
+            theme: "", lyrics: "I hold the silver", targetRhymeLine: "I hold the silver", rhymeType: .perfect,
+            rhymeScheme: "AABB", currentLetter: "A", currentSection: .chorus, sectionOrdinal: 2,
+            firstChorusLines: chorusLines, useWholeSongContext: true
+        )
+        #expect(hookPrompt.contains("rhyming words: night, night, night, night, night, night, "))
+        #expect(hookPrompt.hasSuffix(Self.rulesHead + Self.fewerThanSixRule + "\n" + Self.rulesTail))
     }
 
     @Test func themeIsSentWithWholeSongContext() {

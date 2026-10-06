@@ -1425,11 +1425,13 @@ $outputRules
 
     /**
      * End-word rule for the on-device Rules list, byte-identical to iOS
-     * `localEndWordRule`: a list too short for six distinct endings allows repeats.
+     * `localEndWordRule`: a list with fewer than six distinct (case-folded) words
+     * allows repeats, so a duplicated word never counts twice.
      */
-    internal fun localEndWordRule(allowedWordCount: Int?): String = when {
-        allowedWordCount == null -> "- End each line on a different word."
-        allowedWordCount >= SUGGESTION_COUNT -> "- End each line on a different word from the allowed list."
+    internal fun localEndWordRule(allowedWords: List<String>?): String = when {
+        allowedWords == null -> "- End each line on a different word."
+        allowedWords.map { it.lowercase() }.toSet().size >= SUGGESTION_COUNT ->
+            "- End each line on a different word from the allowed list."
         else -> "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
     }
 
@@ -1464,7 +1466,7 @@ $outputRules
         val effectiveTheme = if (theme.isNotBlank()) theme.trim() else "Infer from the lyrics."
         val lyricContext = localLyricsContext(lyrics, useWholeSongContext, cursorLine)
         val sectionDirective = buildSectionDirective(constraint?.sectionRef, lyrics)
-        val endWordRule = localEndWordRule(constraint?.candidateWords?.size)
+        val endWordRule = localEndWordRule(constraint?.candidateWords)
         return """
 You are RhymeAI's on-device songwriting assistant.
 

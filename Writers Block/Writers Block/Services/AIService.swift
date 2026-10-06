@@ -811,10 +811,11 @@ struct AIService {
     }
 
     /// End-word rule for the on-device Rules list, byte-identical to Android
-    /// `localEndWordRule`: a list too short for six distinct endings allows repeats.
-    static func localEndWordRule(allowedWordCount: Int?) -> String {
-        guard let allowedWordCount else { return "- End each line on a different word." }
-        return allowedWordCount >= suggestionCount
+    /// `localEndWordRule`: a list with fewer than six distinct (case-folded)
+    /// words allows repeats. A later chorus can list its hook word several times.
+    static func localEndWordRule(allowedWords: [String]?) -> String {
+        guard let allowedWords else { return "- End each line on a different word." }
+        return Set(allowedWords.map { $0.lowercased() }).count >= suggestionCount
             ? "- End each line on a different word from the allowed list."
             : "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
     }
@@ -1144,7 +1145,7 @@ struct AIService {
         if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
             prompt += "\n" + sectionInstanceHint
         }
-        let endWordRule = Self.localEndWordRule(allowedWordCount: constraint?.words.count)
+        let endWordRule = Self.localEndWordRule(allowedWords: constraint?.words)
         prompt += """
 
         \(rhymeHint)
