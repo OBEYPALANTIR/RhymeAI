@@ -76,6 +76,16 @@ struct AIService {
 
     private static let suggestionCount = 6
     private static let localRewriteAttempts = 2
+    /// On-device whole-song context budget, shared with Android
+    /// `localLyricsContext` (see PARITY.md): text up to head + tail characters
+    /// is sent as is; longer songs keep the opening `head` and closing `tail`
+    /// characters cut to whole lines.
+    static let localWholeSongHeadChars = 900
+    static let localWholeSongTailChars = 2200
+    static let localTrimMarker = "[Lyrics trimmed for on-device speed]"
+    /// Next-line intent sentence, byte-identical to Android.
+    static let localSuggestionIntent =
+        "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
     private static let fallbackRephraseWords: [String: [String]] = [
         "believe": ["imagine", "trust", "dream"],
         "birds": ["sparrows", "voices", "wings"],
@@ -134,7 +144,8 @@ struct AIService {
         sectionOrdinal: Int = 1,
         firstChorusLines: [String]? = nil,
         complexity: RhymeComplexity,
-        useWholeSongContext: Bool
+        useWholeSongContext: Bool,
+        cursorLineIndex: Int? = nil
     ) async throws -> [String] {
         if provider == .local {
             let localPrompt = buildLocalPrompt(
@@ -149,7 +160,8 @@ struct AIService {
                 sectionOrdinal: sectionOrdinal,
                 firstChorusLines: firstChorusLines,
                 complexity: complexity,
-                useWholeSongContext: useWholeSongContext
+                useWholeSongContext: useWholeSongContext,
+                cursorLineIndex: cursorLineIndex
             )
             let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
 
@@ -226,7 +238,8 @@ struct AIService {
         sectionOrdinal: Int = 1,
         firstChorusLines: [String]? = nil,
         complexity: RhymeComplexity,
-        useWholeSongContext: Bool
+        useWholeSongContext: Bool,
+        cursorLineIndex: Int? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -244,7 +257,8 @@ struct AIService {
                             sectionOrdinal: sectionOrdinal,
                             firstChorusLines: firstChorusLines,
                             complexity: complexity,
-                            useWholeSongContext: useWholeSongContext
+                            useWholeSongContext: useWholeSongContext,
+                            cursorLineIndex: cursorLineIndex
                         )
                         let tokens: AsyncThrowingStream<String, Error>
                         if Self.shouldUseGemma(), let path = Self.firstGGUFPath() {
@@ -647,9 +661,10 @@ struct AIService {
         complexity: RhymeComplexity,
         useWholeSongContext: Bool
     ) -> String {
-        let effectiveTheme = useWholeSongContext
+        // A written theme is sent in both modes; whole-song context only changes the fallback.
+        let effectiveTheme = !theme.isEmpty ? theme : (useWholeSongContext
             ? "Whole song context enabled; infer the theme from the full lyrics."
-            : (theme.isEmpty ? "No specific theme provided" : theme)
+            : "No specific theme provided")
 
         let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
         let lyricsContext = useWholeSongContext ? lyrics : (targetRhymeLine ?? "")
@@ -744,6 +759,21 @@ struct AIService {
         currentSection: SongSection = .unknown,
         firstChorusEndWords: [String]? = nil
     ) -> String? {
+        rhymeConstraintWords(
+            targetRhymeLine: targetRhymeLine,
+            rhymeType: rhymeType,
+            currentSection: currentSection,
+            firstChorusEndWords: firstChorusEndWords
+        ).map(rhymeConstraintText)
+    }
+
+    /// The target and allowed end words behind `rhymeConstraintBlock`; nil in the same cases.
+    static func rhymeConstraintWords(
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        currentSection: SongSection = .unknown,
+        firstChorusEndWords: [String]? = nil
+    ) -> (target: String, targetWord: String, words: [String])? {
         guard let target = targetRhymeLine,
               !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
@@ -770,10 +800,24 @@ struct AIService {
             }
         }
 
-        return """
-        The new line must rhyme with: "\(target)" (it ends with "\(targetWord)").
-        End each line with one of these rhyming words: \(candidates.joined(separator: ", ")) (choose the most natural fit).
+        return (target, targetWord, candidates)
+    }
+
+    private static func rhymeConstraintText(_ constraint: (target: String, targetWord: String, words: [String])) -> String {
         """
+        The new line must rhyme with: "\(constraint.target)" (it ends with "\(constraint.targetWord)").
+        End each line with one of these rhyming words: \(constraint.words.joined(separator: ", ")) (choose the most natural fit).
+        """
+    }
+
+    /// End-word rule for the on-device Rules list, byte-identical to Android
+    /// `localEndWordRule`: a list with fewer than six distinct (case-folded)
+    /// words allows repeats. A later chorus can list its hook word several times.
+    static func localEndWordRule(allowedWords: [String]?) -> String {
+        guard let allowedWords else { return "- End each line on a different word." }
+        return Set(allowedWords.map { $0.lowercased() }).count >= suggestionCount
+            ? "- End each line on a different word from the allowed list."
+            : "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
     }
 
     /// Verbatim section-instance sentence inserted after the section hint.
@@ -1038,15 +1082,17 @@ struct AIService {
         sectionOrdinal: Int = 1,
         firstChorusLines: [String]? = nil,
         complexity: RhymeComplexity,
-        useWholeSongContext: Bool
+        useWholeSongContext: Bool,
+        cursorLineIndex: Int? = nil
     ) -> String {
         let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
-        let constraintBlock = Self.rhymeConstraintBlock(
+        let constraint = Self.rhymeConstraintWords(
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
             currentSection: currentSection,
             firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) }
         )
+        let constraintBlock = constraint.map(Self.rhymeConstraintText)
         let requestCount = Self.suggestionCount
 
         var rhymeHint: String
@@ -1075,11 +1121,13 @@ struct AIService {
         let songContextInstruction = useWholeSongContext
             ? "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
             : "Use the immediate stanza, rhyme target, and theme first."
-        let effectiveTheme = !useWholeSongContext && !theme.isEmpty ? theme : "Infer from the lyrics."
+        let trimmedTheme = theme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveTheme = trimmedTheme.isEmpty ? "Infer from the lyrics." : trimmedTheme
         let lyricsContext = localLyricsContext(
             lyrics: lyrics,
             stanzaLines: stanzaLines,
-            useWholeSongContext: useWholeSongContext
+            useWholeSongContext: useWholeSongContext,
+            cursorLineIndex: cursorLineIndex
         )
 
         var prompt = """
@@ -1097,9 +1145,11 @@ struct AIService {
         if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
             prompt += "\n" + sectionInstanceHint
         }
+        let endWordRule = Self.localEndWordRule(allowedWords: constraint?.words)
         prompt += """
 
         \(rhymeHint)
+        \(Self.localSuggestionIntent)
         \(songContextInstruction)
         Complexity: \(complexity.label). \(complexity.promptHint)
 
@@ -1112,6 +1162,11 @@ struct AIService {
         - Return exactly \(requestCount) lines.
         - One suggestion per line.
         - Return only candidate lyric lines.
+        - Make the six lines six different directions: a different idea, image or angle in each. Do not write the same thought six ways.
+        \(endWordRule)
+        - Write them as raw material in the writer's own voice: match the length, plainness and capitalisation of the lines around it.
+        - Do not resolve or conclude the song, do not sum it up, and no grand statements.
+        - Stay inside what the song is already about.
         - Do not copy any existing lyric line.
         - Do not repeat the same suggestion.
         - No numbering, bullets, quotes, markdown, labels, or explanation.
@@ -1124,12 +1179,97 @@ struct AIService {
     private func localLyricsContext(
         lyrics: String,
         stanzaLines: [String]?,
-        useWholeSongContext: Bool
+        useWholeSongContext: Bool,
+        cursorLineIndex: Int?
     ) -> String {
-        if useWholeSongContext { return lyrics }
+        if useWholeSongContext {
+            return Self.localLyricWindow(
+                lyrics,
+                cursorLine: cursorLineIndex,
+                budget: Self.localWholeSongHeadChars + Self.localWholeSongTailChars,
+                headBudget: Self.localWholeSongHeadChars
+            )
+        }
+        // The cursor's stanza is kept whole (localPromptRetainsLongStanzaAndWholeSongPolicy).
         let stanza = (stanzaLines ?? []).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return stanza
+    }
+
+    /// Lyrics over `budget` UTF-16 units keep, in order: the cursor's
+    /// blank-line-delimited stanza plus the lines either side of the cursor;
+    /// the opening lines up to `headBudget`; then the lines nearest that
+    /// window, one above then one below, until the budget is spent. Each
+    /// skipped run that holds a lyric becomes one marker line, and room for two
+    /// markers is reserved, so the result never exceeds `budget`. A stanza too
+    /// long for the budget keeps only the cursor's neighbours before the
+    /// nearest-line fill, and if those are still too long, only the cursor
+    /// line. A cursor line longer than the budget keeps its end (where the next
+    /// line is inserted) after a marker; the cut never starts on a low surrogate. `cursorLine` is `NextLinePlacement.cursorLineIndex`;
+    /// nil means the last line. Byte-identical to Android
+    /// `AIService.localLyricWindow` (shared/fixtures/local-lyric-window-v1.json).
+    static func localLyricWindow(_ lyrics: String, cursorLine: Int?, budget: Int, headBudget: Int) -> String {
+        let trimmed = lyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.utf16.count <= budget { return trimmed }
+        let lines = lyrics.components(separatedBy: "\n")
+        let last = lines.count - 1
+        let c = min(max(cursorLine ?? last, 0), last)
+        let lineBudget = budget - 2 * (localTrimMarker.utf16.count + 1)
+        func cost(_ i: Int) -> Int { lines[i].utf16.count + 1 }
+        func blank(_ i: Int) -> Bool { lines[i].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        func cost(_ range: ClosedRange<Int>) -> Int { range.reduce(0) { $0 + cost($1) } }
+
+        let blockStart = stride(from: c - 1, through: 0, by: -1).first(where: blank).map { $0 + 1 } ?? 0
+        let blockEnd = blank(c) ? c : ((c + 1)..<lines.count).first(where: blank).map { $0 - 1 } ?? last
+        var lo = min(blockStart, max(c - 1, 0))
+        var hi = max(blockEnd, min(c + 1, last))
+        if cost(lo...hi) > lineBudget {
+            lo = max(c - 1, 0)
+            hi = min(c + 1, last)
+        }
+        if cost(lo...hi) > lineBudget {
+            lo = c
+            hi = c
+        }
+        var cut: String?
+        var used = cost(lo...hi)
+        if cost(c) > lineBudget {
+            let units = Array(lines[c].utf16)
+            var start = units.count - (lineBudget - 1)
+            if UTF16.isTrailSurrogate(units[start]) { start += 1 }
+            cut = String(decoding: units[start...], as: UTF16.self)
+            used = lineBudget
+        }
+
+        var headCount = 0
+        var headUsed = 0
+        while headCount < lo, headUsed + cost(headCount) <= headBudget, used + cost(headCount) <= lineBudget {
+            headUsed += cost(headCount)
+            used += cost(headCount)
+            headCount += 1
+        }
+
+        while true {
+            var grew = false
+            if lo - 1 >= headCount, used + cost(lo - 1) <= lineBudget {
+                lo -= 1
+                used += cost(lo)
+                grew = true
+            }
+            if hi + 1 <= last, used + cost(hi + 1) <= lineBudget {
+                hi += 1
+                used += cost(hi)
+                grew = true
+            }
+            if !grew { break }
+        }
+
+        func hasLyric(_ from: Int, _ until: Int) -> Bool { (from..<max(from, until)).contains { !blank($0) } }
+        var out = Array(lines[0..<headCount])
+        if hasLyric(headCount, lo) || cut != nil { out.append(localTrimMarker) }
+        out += (lo...hi).map { $0 == c ? (cut ?? lines[$0]) : lines[$0] }
+        if hasLyric(hi + 1, last + 1) { out.append(localTrimMarker) }
+        return out.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @available(iOS 26.0, *)
@@ -1422,7 +1562,8 @@ struct AIService {
         sectionOrdinal: Int,
         firstChorusLines: [String]?,
         complexity: RhymeComplexity = .moderate,
-        useWholeSongContext: Bool
+        useWholeSongContext: Bool,
+        cursorLineIndex: Int? = nil
     ) -> String {
         buildLocalPrompt(
             theme: theme,
@@ -1436,7 +1577,8 @@ struct AIService {
             sectionOrdinal: sectionOrdinal,
             firstChorusLines: firstChorusLines,
             complexity: complexity,
-            useWholeSongContext: useWholeSongContext
+            useWholeSongContext: useWholeSongContext,
+            cursorLineIndex: cursorLineIndex
         )
     }
 
@@ -1453,7 +1595,8 @@ struct AIService {
             sectionOrdinal: input.sectionOrdinal,
             firstChorusLines: input.firstChorusLines,
             complexity: input.complexity,
-            useWholeSongContext: input.useWholeSongContext
+            useWholeSongContext: input.useWholeSongContext,
+            cursorLineIndex: input.cursorLineIndex
         )
     }
 

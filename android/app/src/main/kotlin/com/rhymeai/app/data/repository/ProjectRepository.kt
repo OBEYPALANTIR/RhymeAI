@@ -101,11 +101,14 @@ class ProjectRepository internal constructor(
         private val EDITOR_SYLLABLE_COLORING = booleanPreferencesKey("editor_syllable_coloring")
         private val EDITOR_RHYME_HIGHLIGHT = booleanPreferencesKey("editor_rhyme_highlight")
         private val EDITOR_BEAT_GRID = booleanPreferencesKey("editor_beat_grid")
+
+        /** Whole Song Context is on until the user saves a value (iOS parity). */
+        const val DEFAULT_USE_WHOLE_SONG_CONTEXT = true
     }
 
     // Snapshot of all 6 editor-toggle preferences, with sensible on-first-install defaults.
     data class EditorToggles(
-        val useWholeSongContext: Boolean = false,
+        val useWholeSongContext: Boolean = DEFAULT_USE_WHOLE_SONG_CONTEXT,
         val isStressIpaEnabled: Boolean = false,
         val isHighlightEnabled: Boolean = true,
         val isSyllableColoringEnabled: Boolean = true,
@@ -562,7 +565,7 @@ class ProjectRepository internal constructor(
     /** Flow of editor toggle preferences; emits immediately with current values. */
     val editorTogglesFlow: Flow<EditorToggles> = dataStore.data.map { prefs ->
         EditorToggles(
-            useWholeSongContext = prefs[EDITOR_WHOLE_SONG_CONTEXT] ?: false,
+            useWholeSongContext = prefs[EDITOR_WHOLE_SONG_CONTEXT] ?: DEFAULT_USE_WHOLE_SONG_CONTEXT,
             isStressIpaEnabled = prefs[EDITOR_STRESS_IPA] ?: false,
             isHighlightEnabled = prefs[EDITOR_HIGHLIGHT_RHYMES] ?: true,
             isSyllableColoringEnabled = prefs[EDITOR_SYLLABLE_COLORING] ?: true,

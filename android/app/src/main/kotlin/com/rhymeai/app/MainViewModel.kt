@@ -221,7 +221,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _rhymeComplexity = value
         }
     // Editor toggles — initialized from DataStore in init{}, persisted on every change.
-    var useWholeSongContext by mutableStateOf(false)
+    var useWholeSongContext by mutableStateOf(ProjectRepository.DEFAULT_USE_WHOLE_SONG_CONTEXT)
         private set
 
     fun saveUseWholeSongContext(value: Boolean) {
@@ -995,6 +995,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val requestScheme = activeRhymeScheme
         val requestComplexity = rhymeComplexity
         val sectionRef = if (provider == AIProvider.LOCAL || wholeSong) context.currentSectionRef else null
+        // Lets on-device trimming keep the stanza being written.
+        val cursorLine = if (provider == AIProvider.LOCAL || wholeSong) {
+            NextLinePlacement(lyrics, cursorPosition).cursorLineIndex
+        } else null
         suggestions = emptyList()
         errorMessage = null
         isLoading = true
@@ -1006,7 +1010,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 aiService.streamSuggestions(
                     provider, key, modelId, requestTheme, requestLyrics, context.targetLine,
                     requestRhymeType, requestScheme, context.currentLetter, context.currentSection,
-                    requestComplexity, wholeSong, sectionRef, requestLyrics
+                    requestComplexity, wholeSong, sectionRef, requestLyrics, cursorLine
                 ).collect { line ->
                     if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@collect
                     emittedSuggestion = true

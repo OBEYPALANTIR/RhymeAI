@@ -152,6 +152,8 @@ struct AISuggestionInput {
     let firstChorusLines: [String]?
     let complexity: RhymeComplexity
     let useWholeSongContext: Bool
+    /// Editor line the cursor is on, so on-device trimming keeps the stanza being written.
+    var cursorLineIndex: Int? = nil
 }
 
 final class EditorViewModel: ObservableObject {
@@ -167,7 +169,13 @@ final class EditorViewModel: ObservableObject {
     }
     @Published var theme: String = "" {
         didSet {
-            if theme != oldValue { triggerAutoSave() }
+            guard theme != oldValue else { return }
+            // The theme field stays editable while a request runs, so a theme edit
+            // drops in-flight AI work and its results, as Android onThemeChanged does.
+            cancelEditorAIWork()
+            suggestions = []
+            errorMessage = nil
+            triggerAutoSave()
         }
     }
     @Published var cursorPosition: Int = 0 {
@@ -218,9 +226,9 @@ final class EditorViewModel: ObservableObject {
     }
     @Published var rhymeComplexity: RhymeComplexity = .moderate
     // These six are persisted to UserDefaults so the user's editor preferences
-    // survive app restarts. Defaults match the previous hard-coded in-memory values.
-    // Keys use an "editor." prefix to namespace them away from provider/model keys.
-    @Published var useWholeSongContext: Bool = false
+    // survive app restarts. Keys use an "editor." prefix to namespace them away
+    // from provider/model keys. Whole Song Context defaults on (Android parity).
+    @Published var useWholeSongContext: Bool = true
     @Published var isHighlightEnabled: Bool = true
     @Published var isSyllableColoringEnabled: Bool = true
     @Published var isStressPreviewEnabled: Bool = false
@@ -518,11 +526,14 @@ final class EditorViewModel: ObservableObject {
         }
 
         // Restore editor toggle states. Booleans default false when the key is absent,
-        // which matches the desired default for all except isHighlightEnabled and
-        // isSyllableColoringEnabled — those default true, so we treat a missing key
-        // as "never set" and leave the in-memory default in place rather than reading
-        // the UserDefaults zero-value.
-        useWholeSongContext = defaults.bool(forKey: "editor.useWholeSongContext")
+        // which matches the desired default for all except useWholeSongContext,
+        // isHighlightEnabled and isSyllableColoringEnabled — those default true, so
+        // we treat a missing key as "never set" and leave the in-memory default in
+        // place rather than reading the UserDefaults zero-value. An explicitly saved
+        // false is still respected.
+        if defaults.object(forKey: "editor.useWholeSongContext") != nil {
+            useWholeSongContext = defaults.bool(forKey: "editor.useWholeSongContext")
+        }
         if defaults.object(forKey: "editor.isHighlightEnabled") != nil {
             isHighlightEnabled = defaults.bool(forKey: "editor.isHighlightEnabled")
         }
@@ -765,7 +776,8 @@ final class EditorViewModel: ObservableObject {
             sectionOrdinal: input.sectionOrdinal,
             firstChorusLines: input.firstChorusLines,
             complexity: input.complexity,
-            useWholeSongContext: input.useWholeSongContext
+            useWholeSongContext: input.useWholeSongContext,
+            cursorLineIndex: input.cursorLineIndex
         )
 
         // Compute tier per emitted line using the same filter the streaming
@@ -826,12 +838,20 @@ final class EditorViewModel: ObservableObject {
             sectionOrdinal: context.sectionOrdinal,
             firstChorusLines: context.firstChorusLines,
             complexity: rhymeComplexity,
-            useWholeSongContext: useWholeSongContext
+            useWholeSongContext: useWholeSongContext,
+            cursorLineIndex: NextLinePlacement(
+                lyrics: lyrics,
+                cursorCharacterOffset: Self.characterOffset(forUTF16Offset: cursorPosition, in: lyrics)
+            ).cursorLineIndex
         )
     }
 
     func suggestionInputForTest() -> AISuggestionInput {
         makeSuggestionInput()
+    }
+
+    func suggestionsRequestIDForTest() -> UUID? {
+        suggestionsRequestID
     }
 
     func cancelSuggestions() {

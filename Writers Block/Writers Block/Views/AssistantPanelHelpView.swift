@@ -39,7 +39,7 @@ enum FeatureHelp: String, Identifiable {
     var message: String {
         switch self {
         case .contextTheme:
-            return "Adds a short topic or mood for the assistant when Whole Song Context is off. Use it to steer the next line without sending the full lyric."
+            return "Adds a short topic or mood that steers the next line. It is sent with every suggestion request, together with the full lyric when Whole Song Context is on. Leave it empty and the assistant works from the lyrics alone."
         case .targetLine:
             return "The earlier line the next suggestion has to rhyme with, picked by your rhyme scheme for the line being added. It is empty when the next line starts a new rhyme sound."
         case .rhymeScheme:
@@ -47,7 +47,7 @@ enum FeatureHelp: String, Identifiable {
         case .rhymeDensity:
             return "Controls how tightly the suggestion should rhyme. Perfect is strict, Near gives a little room, and Slant is the most flexible."
         case .complexity:
-            return "Changes how advanced the generated line should be. Higher complexity leans toward richer wording, multisyllable rhymes, and denser phrasing."
+            return "Changes how advanced the suggested lines should be. Simple keeps the language plain with no wordplay, Moderate uses a balanced vocabulary, and Complex asks for clever wordplay and intricate rhymes."
         case .wholeSongContext:
             return "Uses the full current lyric as context so suggestions fit the story, tone, and previous lines. Turning it off uses only the theme and target line."
         case .highlightRhymes:

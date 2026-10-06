@@ -127,9 +127,14 @@ class AIService {
 
     private companion object {
         const val SUGGESTION_COUNT = 6
+        // On-device lyric context budget, shared with iOS (see PARITY.md).
         const val LOCAL_RECENT_CONTEXT_CHARS = 2600
         const val LOCAL_WHOLE_SONG_HEAD_CHARS = 900
         const val LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
+        const val LOCAL_TRIM_MARKER = "[Lyrics trimmed for on-device speed]"
+        /** Next-line intent sentence, byte-identical to iOS `localSuggestionIntent`. */
+        const val LOCAL_SUGGESTION_INTENT =
+            "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
         const val LOCAL_REWRITE_ATTEMPTS = 2
         const val LOCAL_INCOMPLETE_RESPONSE =
             "Local model returned an incomplete response. Try again or use a cloud provider."
@@ -317,10 +322,10 @@ class AIService {
             "Prioritize the target line, rhyme scheme, and provided theme/context."
         }
 
-        val effectiveTheme = if (useWholeSongContext) {
-            "Whole song context enabled; infer the theme from the full lyrics."
-        } else {
-            theme.ifEmpty { "No specific theme provided" }
+        // A written theme is sent in both modes; whole-song context only changes the fallback.
+        val effectiveTheme = theme.ifEmpty {
+            if (useWholeSongContext) "Whole song context enabled; infer the theme from the full lyrics."
+            else "No specific theme provided"
         }
 
         val sectionDirective = buildSectionDirective(providerSection, providerLyrics)
@@ -366,7 +371,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         complexity: RhymeComplexity = RhymeComplexity.MODERATE,
         useWholeSongContext: Boolean = false,
         sectionRef: SectionRef? = null,
-        fullLyrics: String = lyrics
+        fullLyrics: String = lyrics,
+        cursorLine: Int? = null
     ): List<SuggestedLine> {
         if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
@@ -388,7 +394,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 currentSection = currentSection,
                 complexity = complexity,
                 useWholeSongContext = useWholeSongContext,
-                constraint = constraint
+                constraint = constraint,
+                cursorLine = cursorLine
             )
             callLocal(localPrompt, lyrics, constraint)
         } else {
@@ -428,7 +435,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         complexity: RhymeComplexity = RhymeComplexity.MODERATE,
         useWholeSongContext: Boolean = false,
         sectionRef: SectionRef? = null,
-        fullLyrics: String = lyrics
+        fullLyrics: String = lyrics,
+        cursorLine: Int? = null
     ): Flow<SuggestedLine> = flow {
         if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
@@ -455,7 +463,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 currentSection = currentSection,
                 complexity = complexity,
                 useWholeSongContext = useWholeSongContext,
-                constraint = constraint
+                constraint = constraint,
+                cursorLine = cursorLine
             )
             validatedLocalSuggestionStream(service.streamResponse(prompt), lyrics, constraint)
                 .collect { emit(it) }
@@ -1398,7 +1407,8 @@ $outputRules
         currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
         useWholeSongContext: Boolean,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        cursorLine: Int? = null
     ): String = buildLocalSuggestionUserPrompt(
             theme,
             lyrics,
@@ -1409,8 +1419,21 @@ $outputRules
             currentSection,
             complexity,
             useWholeSongContext,
-            constraint
+            constraint,
+            cursorLine
         )
+
+    /**
+     * End-word rule for the on-device Rules list, byte-identical to iOS
+     * `localEndWordRule`: a list with fewer than six distinct (case-folded) words
+     * allows repeats, so a duplicated word never counts twice.
+     */
+    internal fun localEndWordRule(allowedWords: List<String>?): String = when {
+        allowedWords == null -> "- End each line on a different word."
+        allowedWords.map { it.lowercase() }.toSet().size >= SUGGESTION_COUNT ->
+            "- End each line on a different word from the allowed list."
+        else -> "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
+    }
 
     internal fun buildLocalSuggestionUserPrompt(
         theme: String,
@@ -1422,7 +1445,8 @@ $outputRules
         currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
         useWholeSongContext: Boolean,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        cursorLine: Int? = null
     ): String {
         val rhymeHint = if (targetRhymeLine != null) {
             "End every suggestion with a ${rhymeType.displayName.lowercase()} for: \"$targetRhymeLine\"."
@@ -1439,13 +1463,10 @@ $outputRules
         } else {
             "Use the immediate stanza, rhyme target, and theme first."
         }
-        val effectiveTheme = if (theme.isNotBlank() && !useWholeSongContext) {
-            theme.trim()
-        } else {
-            "Infer from the lyrics."
-        }
-        val lyricContext = localLyricsContext(lyrics, useWholeSongContext)
+        val effectiveTheme = if (theme.isNotBlank()) theme.trim() else "Infer from the lyrics."
+        val lyricContext = localLyricsContext(lyrics, useWholeSongContext, cursorLine)
         val sectionDirective = buildSectionDirective(constraint?.sectionRef, lyrics)
+        val endWordRule = localEndWordRule(constraint?.candidateWords)
         return """
 You are RhymeAI's on-device songwriting assistant.
 
@@ -1455,6 +1476,7 @@ Rhyme scheme: "$rhymeScheme"; next line is "$currentLetter".
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
 ${sectionDirective}$rhymeHint$constraintBlock
+$LOCAL_SUGGESTION_INTENT
 $songContextInstruction
 Complexity: ${complexity.label}. ${complexity.promptHint}
 
@@ -1467,6 +1489,11 @@ Rules:
 - Return exactly $requestCount lines.
 - One suggestion per line.
 - Return only candidate lyric lines.
+- Make the six lines six different directions: a different idea, image or angle in each. Do not write the same thought six ways.
+$endWordRule
+- Write them as raw material in the writer's own voice: match the length, plainness and capitalisation of the lines around it.
+- Do not resolve or conclude the song, do not sum it up, and no grand statements.
+- Stay inside what the song is already about.
 - Do not copy any existing lyric line.
 - Do not repeat the same suggestion.
 - No numbering, bullets, quotes, markdown, labels, or explanation.
@@ -1618,18 +1645,90 @@ Rules:
         }.getOrDefault(emptyList())
     }
 
-    private fun localLyricsContext(lyrics: String, useWholeSongContext: Boolean): String {
-        val trimmed = lyrics.trim()
-        if (trimmed.length <= LOCAL_RECENT_CONTEXT_CHARS) return trimmed
-
-        return if (useWholeSongContext) {
-            val head = trimmed.take(LOCAL_WHOLE_SONG_HEAD_CHARS).trimToLineBoundary(preferStart = false)
-            val tail = trimmed.takeLast(LOCAL_WHOLE_SONG_TAIL_CHARS).trimToLineBoundary(preferStart = true)
-            "$head\n\n[Middle lyrics trimmed for on-device speed]\n\n$tail"
+    /**
+     * Keeps long songs inside the on-device context window without dropping the
+     * stanza being written. `cursorLine` is the editor line the cursor is on
+     * (`NextLinePlacement.cursorLineIndex`); null means the last line.
+     */
+    internal fun localLyricsContext(lyrics: String, useWholeSongContext: Boolean, cursorLine: Int? = null): String =
+        if (useWholeSongContext) {
+            localLyricWindow(lyrics, cursorLine, LOCAL_WHOLE_SONG_HEAD_CHARS + LOCAL_WHOLE_SONG_TAIL_CHARS, LOCAL_WHOLE_SONG_HEAD_CHARS)
         } else {
-            "[Earlier lyrics trimmed for on-device speed]\n" +
-                trimmed.takeLast(LOCAL_RECENT_CONTEXT_CHARS).trimToLineBoundary(preferStart = true)
+            localLyricWindow(lyrics, cursorLine, LOCAL_RECENT_CONTEXT_CHARS, 0)
         }
+
+    /**
+     * Lyrics over [budget] characters keep, in order: the cursor's blank-line-delimited
+     * stanza plus the lines either side of the cursor; the opening lines up to
+     * [headBudget]; then the lines nearest that window, one above then one below,
+     * until the budget is spent. Each skipped run that holds a lyric becomes one
+     * marker line, and room for two markers is reserved, so the result never exceeds
+     * [budget]. A stanza too long for the budget keeps only the cursor's neighbours
+     * before the nearest-line fill, and if those are still too long, only the cursor
+     * line. A cursor line longer than the budget keeps its end (where the next line is
+     * inserted) after a marker; the cut never starts on a low surrogate. Byte-identical to iOS `AIService.localLyricWindow`
+     * and `finetune/eval/prompts.py` (shared fixture: shared/fixtures/local-lyric-window-v1.json).
+     */
+    internal fun localLyricWindow(lyrics: String, cursorLine: Int?, budget: Int, headBudget: Int): String {
+        val trimmed = lyrics.trim()
+        if (trimmed.length <= budget) return trimmed
+        val lines = lyrics.split("\n")
+        val last = lines.lastIndex
+        val c = (cursorLine ?: last).coerceIn(0, last)
+        val lineBudget = budget - 2 * (LOCAL_TRIM_MARKER.length + 1)
+        fun cost(i: Int) = lines[i].length + 1
+        fun blank(i: Int) = lines[i].isBlank()
+        fun cost(range: IntRange) = range.sumOf { cost(it) }
+
+        val blockStart = (c - 1 downTo 0).firstOrNull { blank(it) }?.plus(1) ?: 0
+        val blockEnd = if (blank(c)) c else (c + 1..last).firstOrNull { blank(it) }?.minus(1) ?: last
+        var lo = minOf(blockStart, maxOf(c - 1, 0))
+        var hi = maxOf(blockEnd, minOf(c + 1, last))
+        if (cost(lo..hi) > lineBudget) {
+            lo = maxOf(c - 1, 0)
+            hi = minOf(c + 1, last)
+        }
+        if (cost(lo..hi) > lineBudget) {
+            lo = c
+            hi = c
+        }
+        val cut: String? = if (cost(c) > lineBudget) {
+            val line = lines[c]
+            var start = line.length - (lineBudget - 1)
+            if (line[start].isLowSurrogate()) start++
+            line.substring(start)
+        } else null
+        var used = if (cut != null) lineBudget else cost(lo..hi)
+
+        var headCount = 0
+        var headUsed = 0
+        while (headCount < lo && headUsed + cost(headCount) <= headBudget && used + cost(headCount) <= lineBudget) {
+            headUsed += cost(headCount)
+            used += cost(headCount)
+            headCount++
+        }
+
+        while (true) {
+            var grew = false
+            if (lo - 1 >= headCount && used + cost(lo - 1) <= lineBudget) {
+                lo--
+                used += cost(lo)
+                grew = true
+            }
+            if (hi + 1 <= last && used + cost(hi + 1) <= lineBudget) {
+                hi++
+                used += cost(hi)
+                grew = true
+            }
+            if (!grew) break
+        }
+
+        fun hasLyric(from: Int, until: Int) = (from until until).any { !blank(it) }
+        val out = lines.subList(0, headCount).toMutableList()
+        if (hasLyric(headCount, lo) || cut != null) out += LOCAL_TRIM_MARKER
+        out += (lo..hi).map { if (it == c) cut ?: lines[it] else lines[it] }
+        if (hasLyric(hi + 1, last + 1)) out += LOCAL_TRIM_MARKER
+        return out.joinToString("\n").trim()
     }
 
     private fun sanitizeLocalSuggestions(
@@ -1737,15 +1836,4 @@ Rules:
 
     private fun containsMarkupOrControlLeakage(text: String): Boolean =
         markupOrControlLeakagePattern.containsMatchIn(text)
-
-    private fun String.trimToLineBoundary(preferStart: Boolean): String {
-        if (isEmpty()) return this
-        return if (preferStart) {
-            val newline = indexOf('\n')
-            if (newline >= 0 && newline < lastIndex) substring(newline + 1).trim() else trim()
-        } else {
-            val newline = lastIndexOf('\n')
-            if (newline > 0) substring(0, newline).trim() else trim()
-        }
-    }
 }

@@ -33,6 +33,10 @@ SUGGESTION_COUNT = 6
 LOCAL_RECENT_CONTEXT_CHARS = 2600
 LOCAL_WHOLE_SONG_HEAD_CHARS = 900
 LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
+LOCAL_TRIM_MARKER = "[Lyrics trimmed for on-device speed]"
+LOCAL_SUGGESTION_INTENT = (
+    "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
+)
 SYNONYM_LIMIT_DEFAULT = 8  # AIService.getSynonyms(limit: Int = 8)
 
 # ---------------------------------------------------------------------------
@@ -70,15 +74,15 @@ RHYME_TYPES = {
 RHYME_COMPLEXITIES = {
     "SIMPLE": (
         "Simple",
-        "Use simple, everyday vocabulary. Keep the language accessible and straightforward. Aim for clear, easy-to-understand rhymes.",
+        "Use plain, simple, everyday language. No wordplay, puns, or clever twists. Use clear rhymes that are easy to hear.",
     ),
     "MODERATE": (
         "Moderate",
-        "Use a balanced vocabulary with some clever wordplay. The rhymes should be interesting but not overly complex.",
+        "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear rather than clever.",
     ),
     "COMPLEX": (
         "Complex",
-        "Use advanced, rich vocabulary with intricate multi-syllable rhymes, internal rhymes, and sophisticated wordplay. Push the boundaries of lyrical complexity.",
+        "Use advanced, rich vocabulary with clever wordplay and intricate rhymes: multi-syllable rhymes, internal rhymes, and double meanings.",
     ),
 }
 
@@ -313,38 +317,128 @@ def _build_section_directive(ref: Optional[SectionRef], lyrics: str) -> str:
     return ""
 
 
-def _trim_to_line_boundary(text: str, prefer_start: bool) -> str:
-    """String.trimToLineBoundary."""
-    if not text:
-        return text
-    if prefer_start:
-        newline = text.find("\n")
-        if 0 <= newline < len(text) - 1:
-            return text[newline + 1:].strip()
-        return text.strip()
-    newline = text.rfind("\n")
-    if newline > 0:
-        return text[:newline].strip()
-    return text.strip()
+def _utf16_len(text: str) -> int:
+    """String length in UTF-16 code units (non-BMP scalars count 2)."""
+    return len(text.encode("utf-16-le")) // 2
 
 
-def local_lyrics_context(lyrics: str, use_whole_song_context: bool) -> str:
-    """AIService.localLyricsContext."""
+def _utf16_suffix(text: str, max_units: int) -> str:
+    """Longest suffix of whole scalars that fits in `max_units` UTF-16 units;
+    matches the platforms' cut, which skips a low surrogate at the cut point."""
+    units = 0
+    start = len(text)
+    while start > 0:
+        size = 2 if ord(text[start - 1]) > 0xFFFF else 1
+        if units + size > max_units:
+            break
+        units += size
+        start -= 1
+    return text[start:]
+
+
+def local_end_word_rule(allowed_words: Optional[Sequence[str]]) -> str:
+    """AIService.localEndWordRule: a list with fewer than six distinct
+    (case-folded) words cannot give six different endings, so repeats are allowed.
+    Repeated chorus end words count once."""
+    if allowed_words is None:
+        return "- End each line on a different word."
+    if len({w.lower() for w in allowed_words}) >= SUGGESTION_COUNT:
+        return "- End each line on a different word from the allowed list."
+    return "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
+
+
+def local_lyric_window(
+    lyrics: str, cursor_line: Optional[int], budget: int, head_budget: int
+) -> str:
+    """AIService.localLyricWindow (same name and rule in AIService.kt and AIService.swift).
+
+    Lyrics over `budget` characters keep, in order: the cursor's
+    blank-line-delimited stanza plus the lines either side of the cursor; the
+    opening lines up to `head_budget`; then the lines nearest that window,
+    one above then one below, until the budget is spent. Each skipped run
+    that holds a lyric becomes one marker line; room for two markers is
+    reserved, so the result never exceeds `budget`. A stanza too long for the
+    budget keeps only the cursor's neighbours before the nearest-line fill, and
+    if those are still too long, only the cursor line. A cursor line longer
+    than the budget keeps its end (where the next line is inserted) after a
+    marker. Lengths count UTF-16 units, as String.length (Kotlin) and
+    utf16.count (Swift) do, and a cut never splits a surrogate pair."""
     trimmed = lyrics.strip()
-    if len(trimmed) <= LOCAL_RECENT_CONTEXT_CHARS:
+    if _utf16_len(trimmed) <= budget:
         return trimmed
+    lines = lyrics.split("\n")
+    last = len(lines) - 1
+    c = last if cursor_line is None else min(max(cursor_line, 0), last)
+    line_budget = budget - 2 * (len(LOCAL_TRIM_MARKER) + 1)
 
+    def cost(i: int) -> int:
+        return _utf16_len(lines[i]) + 1
+
+    def blank(i: int) -> bool:
+        return not lines[i].strip()
+
+    block_start = next((i + 1 for i in range(c - 1, -1, -1) if blank(i)), 0)
+    if blank(c):
+        block_end = c
+    else:
+        block_end = next((i - 1 for i in range(c + 1, last + 1) if blank(i)), last)
+    lo = min(block_start, max(c - 1, 0))
+    hi = max(block_end, min(c + 1, last))
+    if sum(cost(i) for i in range(lo, hi + 1)) > line_budget:
+        lo, hi = max(c - 1, 0), min(c + 1, last)
+    if sum(cost(i) for i in range(lo, hi + 1)) > line_budget:
+        lo, hi = c, c
+    cut = None
+    if cost(c) > line_budget:
+        cut = _utf16_suffix(lines[c], line_budget - 1)
+        used = line_budget
+    else:
+        used = sum(cost(i) for i in range(lo, hi + 1))
+
+    head_count = 0
+    head_used = 0
+    while head_count < lo and head_used + cost(head_count) <= head_budget and used + cost(head_count) <= line_budget:
+        head_used += cost(head_count)
+        used += cost(head_count)
+        head_count += 1
+
+    while True:
+        grew = False
+        if lo - 1 >= head_count and used + cost(lo - 1) <= line_budget:
+            lo -= 1
+            used += cost(lo)
+            grew = True
+        if hi + 1 <= last and used + cost(hi + 1) <= line_budget:
+            hi += 1
+            used += cost(hi)
+            grew = True
+        if not grew:
+            break
+
+    def has_lyric(a: int, b: int) -> bool:
+        return any(not blank(i) for i in range(a, b))
+
+    out = lines[:head_count]
+    if has_lyric(head_count, lo) or cut is not None:
+        out.append(LOCAL_TRIM_MARKER)
+    out.extend(cut if cut is not None and i == c else lines[i] for i in range(lo, hi + 1))
+    if has_lyric(hi + 1, last + 1):
+        out.append(LOCAL_TRIM_MARKER)
+    return "\n".join(out).strip()
+
+
+def local_lyrics_context(
+    lyrics: str, use_whole_song_context: bool, cursor_line: Optional[int] = None
+) -> str:
+    """AIService.localLyricsContext."""
     if use_whole_song_context:
-        head = _trim_to_line_boundary(
-            trimmed[:LOCAL_WHOLE_SONG_HEAD_CHARS], prefer_start=False
+        return local_lyric_window(
+            lyrics,
+            cursor_line,
+            LOCAL_WHOLE_SONG_HEAD_CHARS + LOCAL_WHOLE_SONG_TAIL_CHARS,
+            LOCAL_WHOLE_SONG_HEAD_CHARS,
         )
-        tail = _trim_to_line_boundary(
-            trimmed[-LOCAL_WHOLE_SONG_TAIL_CHARS:], prefer_start=True
-        )
-        return "%s\n\n[Middle lyrics trimmed for on-device speed]\n\n%s" % (head, tail)
-    return "[Earlier lyrics trimmed for on-device speed]\n" + _trim_to_line_boundary(
-        trimmed[-LOCAL_RECENT_CONTEXT_CHARS:], prefer_start=True
-    )
+    return local_lyric_window(lyrics, cursor_line, LOCAL_RECENT_CONTEXT_CHARS, 0)
 
 
 def gemma_instruction_prompt(user_prompt: str) -> str:
@@ -370,6 +464,7 @@ def build_suggestions_prompt(
     complexity: str = "MODERATE",
     use_whole_song_context: bool = False,
     constraint: Optional[SuggestionRhymeConstraint] = None,
+    cursor_line: Optional[int] = None,
 ) -> str:
     """AIService.buildLocalPrompt, wrapped in the Gemma turn template."""
     rhyme_type_display = RHYME_TYPES[rhyme_type]
@@ -394,15 +489,16 @@ def build_suggestions_prompt(
     else:
         song_context_instruction = "Use the immediate stanza, rhyme target, and theme first."
 
-    if theme.strip() and not use_whole_song_context:
+    if theme.strip():
         effective_theme = theme.strip()
     else:
         effective_theme = "Infer from the lyrics."
 
-    lyric_context = local_lyrics_context(lyrics, use_whole_song_context)
+    lyric_context = local_lyrics_context(lyrics, use_whole_song_context, cursor_line)
     section_directive = _build_section_directive(
         constraint.section_ref if constraint else None, lyrics
     )
+    end_word_rule = local_end_word_rule(constraint.candidate_words if constraint else None)
 
     user_prompt = (
         "You are RhymeAI's on-device songwriting assistant.\n"
@@ -413,6 +509,7 @@ def build_suggestions_prompt(
         "Current song section: %s.\n"
         "%s\n"
         "%s%s%s\n"
+        "%s\n"
         "%s\n"
         "Complexity: %s. %s\n"
         "\n"
@@ -425,6 +522,11 @@ def build_suggestions_prompt(
         "- Return exactly %d lines.\n"
         "- One suggestion per line.\n"
         "- Return only candidate lyric lines.\n"
+        "- Make the six lines six different directions: a different idea, image or angle in each. Do not write the same thought six ways.\n"
+        "%s\n"
+        "- Write them as raw material in the writer's own voice: match the length, plainness and capitalisation of the lines around it.\n"
+        "- Do not resolve or conclude the song, do not sum it up, and no grand statements.\n"
+        "- Stay inside what the song is already about.\n"
         "- Do not copy any existing lyric line.\n"
         "- Do not repeat the same suggestion.\n"
         "- No numbering, bullets, quotes, markdown, labels, or explanation.\n"
@@ -440,11 +542,13 @@ def build_suggestions_prompt(
         section_directive,
         rhyme_hint,
         constraint_block,
+        LOCAL_SUGGESTION_INTENT,
         song_context_instruction,
         complexity_label,
         complexity_hint,
         lyric_context,
         request_count,
+        end_word_rule,
     )
     return gemma_instruction_prompt(user_prompt)
 

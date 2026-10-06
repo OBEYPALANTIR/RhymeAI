@@ -45,7 +45,7 @@ internal enum class FeatureHelp(
 ) {
     CONTEXT_THEME(
         "Context & Theme",
-        "Adds a short topic or mood for the assistant when Whole Song Context is off. Use it to steer the next line without sending the full lyric."
+        "Adds a short topic or mood that steers the next line. It is sent with every suggestion request, together with the full lyric when Whole Song Context is on. Leave it empty and the assistant works from the lyrics alone."
     ),
     TARGET_LINE(
         "Target Line",
@@ -61,7 +61,7 @@ internal enum class FeatureHelp(
     ),
     COMPLEXITY(
         "Complexity",
-        "Changes how advanced the generated line should be. Higher complexity leans toward richer wording, multisyllable rhymes, and denser phrasing."
+        "Changes how advanced the suggested lines should be. Simple keeps the language plain with no wordplay, Moderate uses a balanced vocabulary, and Complex asks for clever wordplay and intricate rhymes."
     ),
     WHOLE_SONG_CONTEXT(
         "Whole Song Context",

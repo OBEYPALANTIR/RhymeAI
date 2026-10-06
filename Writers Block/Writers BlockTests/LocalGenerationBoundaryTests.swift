@@ -6,6 +6,7 @@ import Testing
 struct LocalGenerationBoundaryTests {
     @Test func productionRequestUsesEarlierCursorStanza() {
         let viewModel = EditorViewModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        viewModel.saveUseWholeSongContext(false)
         viewModel.rhymeScheme = .abab
         viewModel.rhymeComplexity = .complex
         viewModel.lyrics = "[Verse 1]\nfirst glow\nsecond sky\nthird show\n\n[Chorus]\nlate refrain"
@@ -26,6 +27,7 @@ struct LocalGenerationBoundaryTests {
 
     @Test func productionRequestKeepsEmptyEarlierStanzaEmpty() {
         let viewModel = EditorViewModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        viewModel.saveUseWholeSongContext(false)
         viewModel.lyrics = "[Verse 1]\n\n[Chorus]\nlate refrain"
         viewModel.cursorPosition = ("[Verse 1]\n" as NSString).length
 
@@ -197,7 +199,8 @@ struct LocalGenerationBoundaryTests {
             #expect(prompt.contains("Rhyme scheme: \"ABAB\""))
             #expect(prompt.contains("Complexity: Complex"))
             #expect(prompt.contains(wholeSong ? "FULL SONG CONTEXT" : "FIRST CONTEXT DETAIL"))
-            #expect(!prompt.contains(wholeSong ? "quiet harbor" : "FULL SONG CONTEXT"))
+            #expect(prompt.contains("Theme: quiet harbor"))
+            if !wholeSong { #expect(!prompt.contains("FULL SONG CONTEXT")) }
         }
     }
 

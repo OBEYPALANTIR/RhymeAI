@@ -133,7 +133,7 @@ class AIServicePromptTest {
             useWholeSongContext = false
         )
         val wholeSongPrompt = service.buildPrompt(
-            theme = "ignored when whole-song context is enabled",
+            theme = "",
             lyrics = "[Verse]\nYellow lights\n\n[Chorus]\nKeep moving",
             targetRhymeLine = null,
             rhymeType = RhymeType.SLANT,
