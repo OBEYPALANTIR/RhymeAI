@@ -96,6 +96,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
@@ -711,7 +712,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
             // Editor
             val scrollState = androidx.compose.runtime.key(viewModel.editorPositionRevision) {
-                rememberScrollState(with(density) { viewModel.editorScrollOffset.dp.roundToPx() })
+                // The saved offset only seeds a new scroll state (keyed by revision). Reading it
+                // observably would recompose the whole editor on every scroll frame, because the
+                // collector below writes it back as the user scrolls.
+                val savedOffset = Snapshot.withoutReadObservation { viewModel.editorScrollOffset }
+                rememberScrollState(with(density) { savedOffset.dp.roundToPx() })
             }
             LaunchedEffect(scrollState, viewModel.editorPositionRevision) {
                 snapshotFlow { scrollState.value }.collectLatest { offset ->

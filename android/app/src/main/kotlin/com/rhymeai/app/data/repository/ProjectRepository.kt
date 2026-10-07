@@ -23,6 +23,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -134,17 +135,23 @@ class ProjectRepository internal constructor(
         json.decodeFromString<List<SavedLocalModel>>(it)
     }
 
-    val projectsFlow: Flow<List<SongProject>> = dataStore.data.map { prefs ->
-        projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
-    }.flowOn(Dispatchers.Default)
+    // Every preference write (editor position, toggles, notebook) re-emits dataStore.data.
+    // Only decode the library when its stored JSON actually changed.
+    val projectsFlow: Flow<List<SongProject>> = dataStore.data
+        .map { prefs -> prefs[PROJECTS_KEY] ?: "[]" }
+        .distinctUntilChanged()
+        .map(projectsStore::decode)
+        .flowOn(Dispatchers.Default)
 
     val currentProjectIdFlow: Flow<String?> = dataStore.data.map { prefs ->
         prefs[CURRENT_PROJECT_ID_KEY]
     }
 
-    val trashedProjectsFlow: Flow<List<TrashedSongProject>> = dataStore.data.map { prefs ->
-        trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
-    }.flowOn(Dispatchers.Default)
+    val trashedProjectsFlow: Flow<List<TrashedSongProject>> = dataStore.data
+        .map { prefs -> prefs[TRASHED_PROJECTS_KEY] ?: "[]" }
+        .distinctUntilChanged()
+        .map(trashedProjectsStore::decode)
+        .flowOn(Dispatchers.Default)
 
     val workspacesFlow: Flow<Map<String, SongWorkspace>> = dataStore.data.map { prefs ->
         workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
