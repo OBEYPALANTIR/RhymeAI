@@ -959,6 +959,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     persistenceError = corruptLibraryMessage(error)
                 }
             }
+            // Trashed recordings have their own expiry clock and live outside the
+            // preferences store; rescan it whenever the recording Trash changes.
+            launch {
+                voiceMemoService.trashChanges.collect { scheduleTrashPurge() }
+            }
         }
     }
 
