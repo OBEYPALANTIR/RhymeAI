@@ -19,8 +19,8 @@ enum GGUFDownloadCatalog {
     // - E2B: v2.1, trained 2026-10-06 on teacher-data-v2 plus the shipped rewrite/synonym
     //   rows. Same file name, byte size and embedded chat template as v2, so only the
     //   SHA-256 (and the verified-artifact marker below) tells the versions apart.
-    // - E4B: v1, unchanged; the pinned revision still serves the same E4B bytes.
-    nonisolated static let huggingFaceRevision = "3550cc8cfe116d1ac13ca95dfe42641c7e01df25"
+    // - E4B: v2.1, trained 2026-10-06 on teacher-data-v2 plus the shipped rewrite/synonym rows.
+    nonisolated static let huggingFaceRevision = "6230860be9eaa0574018b6df8739d532fa054266"
 
     nonisolated static let options: [GGUFDownloadOption] = [
         GGUFDownloadOption(
@@ -42,8 +42,8 @@ enum GGUFDownloadCatalog {
             subtitle: "For devices with at least 10 GB memory",
             size: "5.34 GB",
             fileName: "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
-            expectedBytes: 5_335_290_784,
-            sha256: "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3",
+            expectedBytes: 5_335_292_800,
+            sha256: "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
             url: requiredURL(
                 "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true"
             ),

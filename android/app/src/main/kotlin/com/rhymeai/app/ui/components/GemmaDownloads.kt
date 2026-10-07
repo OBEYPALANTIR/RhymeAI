@@ -21,13 +21,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 internal const val DOWNLOAD_BUFFER_BYTES = 8 * 1024 * 1024
-internal const val GEMMA_HUGGING_FACE_REVISION = "3550cc8cfe116d1ac13ca95dfe42641c7e01df25"
+internal const val GEMMA_HUGGING_FACE_REVISION = "6230860be9eaa0574018b6df8739d532fa054266"
 // SHA-256 of each GGUF's embedded tokenizer.chat_template. Informational: it is recorded in
 // native-contract evidence only. The runtime picks the prompt envelope from the GGUF
 // architecture and turn markers (GGUFPromptFormat.resolve), never from this value.
 internal const val GEMMA4_CHAT_TEMPLATE_SHA256 = "33204f1acb5bd0002713e16a593847f24ceeafe711ed88bda2a352dc996a3373"
-// E2B v2 introduced this template; v2.1 embeds the identical template.
-internal const val GEMMA4_E2B_V2_CHAT_TEMPLATE_SHA256 = "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7"
+// The revised template introduced by the v2 fine-tunes; E2B and E4B v2.1 both embed it.
+internal const val GEMMA4_RHYMEAI_V2_CHAT_TEMPLATE_SHA256 = "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7"
 internal const val GEMMA_DOWNLOAD_CONNECTIONS = 4
 internal const val MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES = 750L * 1024L * 1024L
 private const val DOWNLOAD_PROGRESS_UPDATE_BYTES = 32L * 1024L * 1024L
@@ -70,7 +70,7 @@ internal data class GemmaDownload(
 // - E2B: v2.1, trained 2026-10-06 on teacher-data-v2 plus the shipped rewrite/synonym rows.
 //   Same file name and byte size as v2 (and the same embedded chat template), so only the
 //   SHA-256 tells the versions apart.
-// - E4B: v1, unchanged; the pinned revision still serves the same E4B bytes.
+// - E4B: v2.1, trained 2026-10-06 on teacher-data-v2 plus the shipped rewrite/synonym rows.
 internal val GEMMA_DOWNLOADS = listOf(
     GemmaDownload(
         label = "RhymeAI Gemma E2B",
@@ -79,15 +79,16 @@ internal val GEMMA_DOWNLOADS = listOf(
         url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/$GEMMA_HUGGING_FACE_REVISION/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true",
         expectedBytes = 3_427_880_800L,
         sha256 = "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5",
-        chatTemplateSha256 = GEMMA4_E2B_V2_CHAT_TEMPLATE_SHA256
+        chatTemplateSha256 = GEMMA4_RHYMEAI_V2_CHAT_TEMPLATE_SHA256
     ),
     GemmaDownload(
         label = "RhymeAI Gemma E4B",
         description = "Tuned for RhymeAI — higher quality, slower, 5.34 GB.",
         fileName = "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
         url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/$GEMMA_HUGGING_FACE_REVISION/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true",
-        expectedBytes = 5_335_290_784L,
-        sha256 = "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3"
+        expectedBytes = 5_335_292_800L,
+        sha256 = "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
+        chatTemplateSha256 = GEMMA4_RHYMEAI_V2_CHAT_TEMPLATE_SHA256
     )
 )
 
