@@ -22,6 +22,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -52,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,7 +65,9 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -477,30 +482,70 @@ fun AssistantPanel(
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
-            // Suggestions
-            if (viewModel.suggestions.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+            // Suggestions. While a request streams, ghost cards hold the slots
+            // the lines will fill and each line arrives in place as it lands.
+            val placeholderCount = SuggestionPlaceholderMotion.placeholderCount(
+                suggestionCount = viewModel.suggestions.size,
+                isLoading = viewModel.isLoading
+            )
+            if (viewModel.suggestions.isNotEmpty() || placeholderCount > 0) {
+                // Children carry their own top spacing so a collapsed
+                // placeholder slot leaves no gap behind.
+                Column {
                     Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     Text(
-                        stringResource(R.string.assistant_suggestions_caveat),
+                        if (viewModel.suggestions.isEmpty()) {
+                            stringResource(R.string.assistant_suggestions_writing)
+                        } else {
+                            stringResource(R.string.assistant_suggestions_caveat)
+                        },
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant,
-                        fontStyle = FontStyle.Italic
+                        fontStyle = FontStyle.Italic,
+                        modifier = Modifier
+                            .padding(top = DesignTokens.Spacing.sm)
+                            .semantics { liveRegion = LiveRegionMode.Polite }
                     )
-                    viewModel.suggestions.forEach { suggestedLine ->
-                        SuggestionCard(
-                            suggestion = suggestedLine.text,
-                            rhymeTier = suggestedLine.rhymeTier,
-                            isHook = suggestedLine.isHook,
-                            highlightRhyme = viewModel.isHighlightEnabled,
-                            showProsody = viewModel.isStressPreviewEnabled,
-                            onKeep = { viewModel.keepAlternate(suggestedLine.text) },
-                            isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
-                            onUse = {
-                                viewModel.insertSuggestion(suggestedLine.text)
-                                onSuggestionInserted()
+                    viewModel.suggestions.forEachIndexed { index, suggestedLine ->
+                        key(index, suggestedLine.text) {
+                            SuggestionArrival(animationsEnabled = animationsEnabled) {
+                                SuggestionCard(
+                                    suggestion = suggestedLine.text,
+                                    rhymeTier = suggestedLine.rhymeTier,
+                                    isHook = suggestedLine.isHook,
+                                    highlightRhyme = viewModel.isHighlightEnabled,
+                                    showProsody = viewModel.isStressPreviewEnabled,
+                                    onKeep = { viewModel.keepAlternate(suggestedLine.text) },
+                                    isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
+                                    onUse = {
+                                        viewModel.insertSuggestion(suggestedLine.text)
+                                        onSuggestionInserted()
+                                    },
+                                    modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
+                                )
                             }
-                        )
+                        }
+                    }
+                    repeat(SuggestionPlaceholderMotion.INITIAL_ROWS) { row ->
+                        AnimatedVisibility(
+                            visible = row < placeholderCount,
+                            enter = if (animationsEnabled) {
+                                fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing))
+                            } else {
+                                EnterTransition.None
+                            },
+                            exit = if (animationsEnabled) {
+                                fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
+                                    shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                            } else {
+                                ExitTransition.None
+                            }
+                        ) {
+                            SuggestionPlaceholderCard(
+                                row = row,
+                                modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
+                            )
+                        }
                     }
                 }
             }

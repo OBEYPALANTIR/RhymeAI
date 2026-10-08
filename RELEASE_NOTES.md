@@ -1,5 +1,16 @@
 # Release Notes
 
+## Pending suggestions show where they will land while they are written (iOS and Android)
+
+Tapping Suggest Next Line now shows the Suggestions list straight away. Three
+placeholder cards hold the places the lines will fill, each with a short ink
+line that is written, held, and cleared, and the caption reads "Writing
+lines…". As each line arrives it fades into its place with a small rise, and
+one placeholder stays at the bottom until the model has finished or you tap
+Stop. The panel scrolls to the list as soon as writing starts. With Reduce
+Motion on (iOS) or animations removed (Android) the placeholders keep still
+and lines simply appear.
+
 ## Pending next-line suggestions follow the selected rhyme scheme (iOS and Android)
 
 Suggest Next Line now works out the rhyme for the line it is about to add, not

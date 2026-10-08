@@ -142,6 +142,9 @@ struct AssistantPanelView: View {
             .onChange(of: viewModel.suggestions.isEmpty) { _, isEmpty in
                 if !isEmpty { revealResults(scroll) }
             }
+            .onChange(of: viewModel.isLoading) { _, isLoading in
+                if isLoading { revealResults(scroll) }
+            }
             .onChange(of: viewModel.errorMessage) { _, error in
                 if error != nil { revealResults(scroll) }
             }
@@ -155,6 +158,11 @@ struct AssistantPanelView: View {
     }
 
     private static let resultsAnchor = "assistantResults"
+
+    /// A streamed line fades in with an 8pt rise; opacity only under Reduce Motion.
+    private var suggestionArrival: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: SuggestionInkLineMotion.arrivalRise))
+    }
 
     // MARK: - Suggest Button — turns into Stop while streaming
     private var suggestBar: some View {
@@ -438,13 +446,19 @@ struct AssistantPanelView: View {
             }
 
             // MARK: - Suggestions
-            if !viewModel.suggestions.isEmpty {
+            // While a request streams, ghost cards hold the slots the lines
+            // will fill and each line arrives in place as it lands.
+            let placeholderCount = SuggestionInkLineMotion.placeholderCount(
+                suggestionCount: viewModel.suggestions.count,
+                isLoading: viewModel.isLoading
+            )
+            if !viewModel.suggestions.isEmpty || placeholderCount > 0 {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                     Text("Suggestions")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
 
-                    Text("AI-generated · review before use")
+                    Text(viewModel.suggestions.isEmpty ? "Writing lines…" : "AI-generated · review before use")
                         .font(.caption.italic())
                         .foregroundStyle(.secondary.opacity(0.8))
 
@@ -462,8 +476,19 @@ struct AssistantPanelView: View {
                             onKeep: { viewModel.keepAlternate(suggestion.text) },
                             isKept: viewModel.companion.alternates.contains(where: { $0.text == suggestion.text.trimmingCharacters(in: .whitespacesAndNewlines) })
                         )
+                        .transition(suggestionArrival)
+                    }
+
+                    ForEach(0..<placeholderCount, id: \.self) { row in
+                        SuggestionPlaceholderCardView(row: row)
+                            .transition(.opacity)
                     }
                 }
+                // Arrivals take the state tier; the trailing placeholder
+                // leaves on the dismiss tier when the stream closes. Both are
+                // opacity-only under Reduce Motion, so they stay animated.
+                .animation(RhymeAITokens.Motion.state, value: viewModel.suggestions.count)
+                .animation(RhymeAITokens.Motion.dismiss, value: placeholderCount)
             }
             }
             .id(Self.resultsAnchor)
@@ -540,16 +565,6 @@ struct AssistantPanelView: View {
         .buttonStyle(.rhymePress)
         .contentShape(Rectangle())
         .accessibilityLabel("\(help.title) help")
-    }
-}
-
-private struct SuggestionSkeletonRow: View {
-    var body: some View {
-        RoundedRectangle(cornerRadius: RhymeAITokens.Radius.lg, style: .continuous)
-            .fill(Color.secondary.opacity(0.18))
-            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
-            .opacity(0.6)
-            .accessibilityHidden(true)
     }
 }
 

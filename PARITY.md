@@ -89,6 +89,10 @@ This tracks behavior that must stay aligned between Android and iOS.
   highlight off tints whole words semibold; with rhyme highlight on, syllable
   color moves to the underline.
 
+## Suggestion loading motion
+
+- Placeholders while suggestions stream: both platforms show three ghost suggestion cards before the first line lands and one trailing ghost while the stream is open, none once it closes or is stopped (`SuggestionPlaceholderMotion.placeholderCount` / `SuggestionInkLineMotion.placeholderCount`, unit-verified in `SuggestionPlaceholderMotionTest` and `SuggestionInkLineMotionTests`). The ghost's text bar is written as an ink line on the same timing on both: 680ms draw, 260ms hold, 160ms fade, 260ms rest, rows 260ms apart. Each streamed line arrives with a 260ms fade and an 8pt/8dp rise. The caption reads "Writing lines…" until the first line, then "AI-generated · review before use". iOS Reduce Motion stills the bar and keeps opacity-only arrivals; Android stills the bar and snaps arrivals when the system animator scale is 0. Visual check on device is pending on both platforms.
+
 ## Open parity checks
 
 - Local model live/inference path: Android has current emulator evidence for GGUF load and nonblank generation through `scripts/android-local-model-smoke.sh`; iOS local provider has a simulator/device smoke gate that passes when Apple Foundation Models either return text or surface an on-device availability reason.

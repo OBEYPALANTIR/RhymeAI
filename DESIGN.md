@@ -291,13 +291,18 @@ motion:
   spring-settle: "iOS response 420ms, damping 0.80; Android damping 0.80, low stiffness"
   spring-expressive: "iOS response 400ms, damping 0.76; Android damping 0.76, stiffness 247"
   press-scale: 0.98
+  suggestion-ink-draw: "680ms"
+  suggestion-ink-cycle: "1360ms (draw 680, hold 260, fade 160, rest 260)"
+  suggestion-row-offset: "260ms"
+  suggestion-arrival: "260ms fade with an 8px rise"
   purpose:
     phi-ladder: "iOS fast, standard, and settle tiers use a golden-ratio ladder: 160ms, 260ms, 420ms. Android shares 160ms and 260ms and settles with a spring."
     feedback-dismiss: "160ms for press feedback, save-status changes, and dismissals."
     state-dialog: "260ms for ordinary state changes, segmented selection, assistant panels, sheets, drawers, and rewrite chips."
     drag-settle: "420ms spring for drag release and disclosure settle; the expressive spring drives the mic and UnBlock choreography."
     reduced-motion: "iOS disables token animations and swaps move/scale transitions for opacity under Reduce Motion; Android snaps when the system animator duration scale is 0."
-    avoid: "Avoid decorative hover motion and staggered choreography that does not clarify state or origin."
+    streaming-arrival: "While suggestions stream, placeholder cards write an ink line (680ms draw, 260ms hold, 160ms fade, 260ms rest; rows 260ms apart, top to bottom) and each line arrives in place with a 260ms fade and 8px rise."
+    avoid: "Avoid decorative hover motion and staggered choreography that does not clarify state or origin. The suggestion rows' 260ms offset is the one stagger in the app: it shows the order the lines arrive in."
 effects:
   surface-border-width: 1px
   unblock-scribble-stroke: 1.6px
@@ -404,6 +409,17 @@ components:
     textColor: "{colors.on-surface}"
     borderColor: "{colors.outline-strong}"
     rounded: "{rounded.lg}"
+  suggestion-placeholder-ios:
+    backgroundColor: "{colors.surface}"
+    borderColor: "{colors.outline}"
+    rounded: "{rounded.ios-md}"
+    padding: 24px
+    barColor: "primary ink at 0.08 resting, 0.34 while the stroke draws, 0.16 still under Reduce Motion"
+  suggestion-placeholder-android:
+    backgroundColor: "{colors.surface-container}"
+    borderColor: "{colors.outline-strong}"
+    rounded: "{rounded.lg}"
+    barColor: "on-surface at 0.08 resting, 0.34 while the stroke draws, 0.16 still when animations are off"
   rewrite-chip-bar-ios:
     backgroundColor: "{colors.surface}"
     borderColor: "{colors.outline}"
@@ -687,7 +703,9 @@ Android curves: standard and emphasized easing are both cubic-bezier(0.2, 0, 0, 
 
 Reduced motion is handled in code. On iOS, animations go through `rhymeAnimation` / `withRhymeAnimation` or an explicit Reduce Motion check, all of which disable the animation when Reduce Motion is on; the press style keeps its opacity change but drops the scale. The editor's floating actions, chip bar, and toasts also swap their move and scale transitions for opacity. Other move and scale transitions (drawer toasts, the Trash screen, the cloud-backup disclosure, the assistant sheet) have no opacity fallback and rely on the animation being disabled. On Android, Compose honours the system animator duration scale, and custom drag and slide transitions snap when animations are disabled.
 
-Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
+Suggestion loading is the one place the two tiers combine into a loop. While a next-line request streams, the Suggestions list shows ghost cards in place of the lines to come: three before the first line lands, then one trailing card while the stream is open. Each ghost is the suggestion card at its real paddings (a text bar, a badge ghost, two action ghosts) so an arriving card does not shift the list. The text bar is written like an ink line: it scales from the left over 680ms (the settle tier times φ; iOS ease-in-out, Android standard easing), holds 260ms, fades out over 160ms on the exit curve, rests 260ms, and repeats, a 1,360ms cycle; the three rows start 260ms apart, top to bottom, the order the lines arrive in. Resting bar: primary ink at 8%; stroke: 34%. Each streamed line arrives with a 260ms fade and an 8pt rise (iOS state ease-in-out; Android fade on the standard easing with the standard spring for the rise), and the trailing ghost leaves with a 160ms fade (Android also shrinks it) when the stream closes or is stopped. The caption reads "Writing lines…" until the first line lands, then the usual "AI-generated · review before use"; it is the only part assistive technology reads, the ghosts being hidden. Under Reduce Motion the bar does not draw (a still bar at 16%) and arrivals are opacity-only but still animated; on Android with animations removed the bar is still and arrivals snap. iOS `SuggestionInkLineMotion`, Android `SuggestionPlaceholderMotion`.
+
+Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer; the suggestion rows' offset above is the one stagger in the app.
 
 ## Shapes
 
@@ -727,7 +745,7 @@ Values below are the shipped ones. iOS values are in points, Android values in d
 
 **Assistant panel.** A dense operational surface on the canvas colour. iOS compact: a 44pt drag area with a 52×4pt grabber at 45% opacity, labelled "Dismiss Assistant", then directly beneath it a 44pt title row with "Assistant" at the leading edge, a 44pt close button, and a bottom divider; there is no navigation bar. iOS regular: a 56pt header row with "Assistant" and a 44pt hide button. Scrolling contents in order: Context & Theme, Target Line with a monospaced syllable badge, a collapsible Rhyme Options row (scheme menu, rhyme-density segmented control, complexity slider), model readiness, then any error and Suggestions with an "AI-generated · review before use" note. When the Stress + IPA setting is on, the Target Line card shows the quoted line and keeps the stress pattern and IPA behind a "Show stress pattern" disclosure that is collapsed by default and remembers its state. The one primary button ("Suggest Next Line", or a spinner and "Stop" while generating; 44pt minimum, 12pt radius, action fill) is pinned to the bottom of the panel on the canvas colour under a top divider, in both the compact sheet and the regular-width column; the scroll view ends at the bar, so nothing is hidden behind it, the bar rides above the keyboard, and the panel scrolls to the results when a suggestion or error arrives. Feature labels that have help text carry a 44pt help button labelled "<feature> help". Android has a 64dp handle area and the same named sections (Context & Theme, Target Line, Rhyme Options with Rhyme Scheme, Rhyme Density and Complexity, a local-model readiness line, "Suggest Next Line", and Suggestions with the same note), built from Material sliders and the sliding segmented control; its exact spacing and control sizes were not compared with iOS. On both platforms Whole Song Context is on by default (an unset preference reads as on; a saved off is kept). Context & Theme stays editable in both modes: a written theme is sent with every suggestion request, alongside the full lyric when Whole Song Context is on. The complexity caption reads "Plain language, no wordplay" (Simple), "Balanced vocabulary, natural phrasing" (Moderate, the default) or "Advanced vocabulary, wordplay, intricate rhymes" (Complex).
 
-**Suggestion card.** iOS: surface fill, 1px outline, 12pt radius, 24pt padding; the line in serif body text, a monospaced syllable count badge, an optional tier badge, then "Use line" (semibold) and "Keep for later" / "Kept", each at least 44pt tall; actions stack at accessibility sizes. Android: outlined card, 12dp radius, 48dp minimum height, serif line, tonal "Use" button.
+**Suggestion card.** iOS: surface fill, 1px outline, 12pt radius, 24pt padding; the line in serif body text, a monospaced syllable count badge, an optional tier badge, then "Use line" (semibold) and "Keep for later" / "Kept", each at least 44pt tall; actions stack at accessibility sizes. Android: outlined card, 12dp radius, 48dp minimum height, serif line, tonal "Use" button. While a request streams, the list holds placeholder cards of the same shape whose text bar is written as an ink line (see Motion); the Suggestions heading and a "Writing lines…" caption appear as soon as the request starts.
 
 **Rewrite chip bar.** Appears at the bottom of the editor for a lyric selection (iOS: while text is selected and no rewrite, inspector, assistant sheet, or Focus mode is active; Android: while a rewrite range is pending and no assistant sheet, modal, active rewrite, or Focus mode is in the way). iOS: a 52pt-radius bordered capsule, 8pt padding, at most 360pt wide, holding a "Look up word" magnifier (44×44pt) and caption-weight chips at least 44pt tall. Android: a 22dp-radius bar on the high container colour with 28dp-radius, 48dp-tall chips. The rewrite review bar that follows uses the same capsule on iOS (22pt radius when showing an error or at accessibility sizes) with Retry/Apply at least 72×44pt and a "Regenerate rewrite" icon button.
 
