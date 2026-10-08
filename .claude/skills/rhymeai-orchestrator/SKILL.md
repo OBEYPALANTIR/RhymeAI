@@ -65,9 +65,11 @@ training, scorecards) → Phase 5 first; only an *adopted* model comes back to P
 catalog change.
 
 ### Phase 2: implement  → `rhymeai-implementer`
-First the orchestrator creates the task worktree itself: `git fetch origin`, then `git worktree
-add -b claude/<slug>-<yyyymmdd> .agents/worktrees/<slug> origin/main` (a UI-polish-pass task
-uses `origin/chore/ui-polish-2026-05` as the start point). Then prompt the implementer with: the issue or request, the scope list from Phase 1, the worktree path and branch
+On the first entry for a task, the orchestrator creates the worktree itself: `git fetch origin`,
+then `git worktree add -b claude/<slug>-<yyyymmdd> .agents/worktrees/<slug> origin/main` (a
+UI-polish-pass task uses `origin/chore/ui-polish-2026-05` as the start point). A correction round
+from Phase 3, a PR review fix or a resumed run reuses that existing worktree and branch. Then
+prompt the implementer with: the issue or request, the scope list from Phase 1, the worktree path and branch
 name, and the evidence required (which suites, whether a model A/B is needed). It returns the
 pushed branch and a path-free evidence summary.
 
