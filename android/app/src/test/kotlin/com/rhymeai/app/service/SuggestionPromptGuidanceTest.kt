@@ -4,6 +4,7 @@ import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
 import com.rhymeai.app.util.PronunciationDictionary
+import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.RhymeConstraint
 import com.rhymeai.app.util.WordFrequency
 import java.io.File
@@ -71,8 +72,10 @@ class SuggestionPromptGuidanceTest {
 
     @Test
     fun complexityHintsOnlyAskForWordplayAtComplex() {
+        // Simple and Complex carry the numeric targets measured in the 2026-10-07
+        // complexity experiments; byte-identical on iOS and in finetune/eval/prompts.py.
         assertEquals(
-            "Use plain, simple, everyday language. No wordplay, puns, or clever twists. Use clear rhymes that are easy to hear.",
+            "Each line must be 4 to 7 plain, everyday words. End each line on a one-syllable word. No wordplay.",
             RhymeComplexity.SIMPLE.promptHint
         )
         assertEquals(
@@ -80,10 +83,11 @@ class SuggestionPromptGuidanceTest {
             RhymeComplexity.MODERATE.promptHint
         )
         assertEquals(
-            "Use advanced, rich vocabulary with clever wordplay and intricate rhymes: multi-syllable rhymes, internal rhymes, and double meanings.",
+            "Each line must be 8 to 12 words. End each line on a word of two or more syllables, or put an internal rhyme inside the line. Use vivid, specific, less common words and double meanings.",
             RhymeComplexity.COMPLEX.promptHint
         )
         assertFalse(RhymeComplexity.MODERATE.promptHint.contains("wordplay"))
+        assertFalse(RhymeComplexity.SIMPLE.promptHint.contains("double meanings"))
         assertEquals(listOf(0, 1, 2), RhymeComplexity.entries.map { it.level })
 
         for (level in RhymeComplexity.entries) {
@@ -93,6 +97,43 @@ class SuggestionPromptGuidanceTest {
             )
             assertContains(cloud, "Complexity level: ${level.label}. ${level.promptHint}")
             assertFalse(cloud.contains("some clever wordplay"))
+        }
+    }
+
+    @Test
+    fun complexityLevelReachesTheAllowedEndWordList() {
+        fun words(level: RhymeComplexity) = service.suggestionRhymeConstraint(
+            target, RhymeType.PERFECT, dictionary, complexity = level
+        )!!.candidateWords
+        fun syllables(word: String) = ProsodyAnalyzer.analyzeWord(word, dictionary).syllableCount
+        val moderate = words(RhymeComplexity.MODERATE)
+        val complex = words(RhymeComplexity.COMPLEX)
+        val simple = words(RhymeComplexity.SIMPLE)
+        assertEquals(service.suggestionRhymeConstraint(target, RhymeType.PERFECT, dictionary)!!.candidateWords, moderate)
+        for ((level, expected) in listOf(RhymeComplexity.MODERATE to moderate, RhymeComplexity.COMPLEX to complex, RhymeComplexity.SIMPLE to simple)) {
+            assertEquals(RhymeConstraint.candidateEndWords("home", RhymeType.PERFECT, dictionary = dictionary, complexity = level), expected)
+        }
+        assertTrue(complex.all { syllables(it) >= 2 }, "$complex")
+        assertTrue(simple.all { syllables(it) == 1 }, "$simple")
+        assertTrue(complex != moderate && simple != moderate)
+
+        // Both prompt paths list the level's words. The cloud prompt without whole-song
+        // context rebuilds the constraint itself, so the level must reach that path too.
+        for ((level, expected) in listOf(RhymeComplexity.COMPLEX to complex, RhymeComplexity.SIMPLE to simple)) {
+            val listLine = "End each line with one of these rhyming words: ${expected.joinToString(", ")} (choose the most natural fit)."
+            val constraint = service.suggestionRhymeConstraint(target, RhymeType.PERFECT, dictionary, complexity = level)!!
+            val local = service.buildLocalPrompt(
+                theme = "", lyrics = lyrics, targetRhymeLine = target, rhymeType = RhymeType.PERFECT,
+                rhymeScheme = "AABB", currentLetter = "A", currentSection = SongSection.VERSE,
+                complexity = level, useWholeSongContext = true, constraint = constraint
+            )
+            assertContains(local, listLine)
+            assertContains(local, "\nComplexity: ${level.label}. ${level.promptHint}\n")
+            val moderateConstraint = service.suggestionRhymeConstraint(target, RhymeType.PERFECT, dictionary)!!
+            val cloud = service.buildPrompt(
+                "", lyrics, target, RhymeType.PERFECT, "AABB", "A", SongSection.VERSE, level, false, moderateConstraint
+            )
+            assertContains(cloud, listLine)
         }
     }
 
