@@ -1,0 +1,645 @@
+{
+  "description": "Shared level-aware end-word fixture. For each case, Android RhymeConstraint.candidateEndWords(anchor, rhymeType, complexity = complexity) and finetune/eval/scoring.py candidate_end_words(anchor, rhymeType, complexity=complexity) must return `expected` word for word (limit 12, bundled dictionary and frequency list). MODERATE is the frequency order; COMPLEX puts words of two or more syllables first (stable); SIMPLE keeps one-syllable words only unless fewer than six exist, when the remaining words follow in their original order. Expected values were produced by finetune/eval/complexity_end_words_fixture.py; regenerate them there if the rule changes. iOS asserts the same rule on its own dictionary in RhymeConstraintTests.swift.",
+  "limit": 12,
+  "cases": [
+    {
+      "anchor": "home",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "mixed syllables; Simple and Complex both have full lists",
+      "expected": [
+        "rome",
+        "chrome",
+        "dome",
+        "foam",
+        "comb",
+        "roam",
+        "tome",
+        "gnome",
+        "ohm",
+        "bloem",
+        "blohm",
+        "blome"
+      ]
+    },
+    {
+      "anchor": "home",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "mixed syllables; Simple and Complex both have full lists",
+      "expected": [
+        "rome",
+        "syndrome",
+        "chrome",
+        "dome",
+        "foam",
+        "genome",
+        "jerome",
+        "comb",
+        "chromosome",
+        "roam",
+        "tome",
+        "gnome"
+      ]
+    },
+    {
+      "anchor": "home",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "mixed syllables; Simple and Complex both have full lists",
+      "expected": [
+        "syndrome",
+        "genome",
+        "jerome",
+        "chromosome",
+        "monochrome",
+        "shalom",
+        "honeycomb",
+        "guillaume",
+        "aerodrome",
+        "alamodome",
+        "astrodome",
+        "biome"
+      ]
+    },
+    {
+      "anchor": "night",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "mostly one-syllable rhymes; Complex has to reach past the frequency cut",
+      "expected": [
+        "right",
+        "might",
+        "white",
+        "light",
+        "quite",
+        "fight",
+        "site",
+        "write",
+        "flight",
+        "bright",
+        "tight",
+        "sight"
+      ]
+    },
+    {
+      "anchor": "night",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "mostly one-syllable rhymes; Complex has to reach past the frequency cut",
+      "expected": [
+        "right",
+        "might",
+        "white",
+        "light",
+        "quite",
+        "fight",
+        "site",
+        "website",
+        "tonight",
+        "write",
+        "despite",
+        "flight"
+      ]
+    },
+    {
+      "anchor": "night",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "mostly one-syllable rhymes; Complex has to reach past the frequency cut",
+      "expected": [
+        "website",
+        "tonight",
+        "despite",
+        "alright",
+        "satellite",
+        "midnight",
+        "invite",
+        "copyright",
+        "highlight",
+        "insight",
+        "overnight",
+        "delight"
+      ]
+    },
+    {
+      "anchor": "road",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "the eval's own fixture anchor",
+      "expected": [
+        "code",
+        "showed",
+        "mode",
+        "load",
+        "rode",
+        "node",
+        "owed",
+        "rhode",
+        "slowed",
+        "towed",
+        "toad",
+        "bowed"
+      ]
+    },
+    {
+      "anchor": "road",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "the eval's own fixture anchor",
+      "expected": [
+        "code",
+        "episode",
+        "showed",
+        "download",
+        "mode",
+        "load",
+        "railroad",
+        "upload",
+        "borrowed",
+        "rode",
+        "node",
+        "owed"
+      ]
+    },
+    {
+      "anchor": "road",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "the eval's own fixture anchor",
+      "expected": [
+        "episode",
+        "download",
+        "railroad",
+        "upload",
+        "borrowed",
+        "explode",
+        "overload",
+        "workload",
+        "bestowed",
+        "payload",
+        "reload",
+        "unload"
+      ]
+    },
+    {
+      "anchor": "alone",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "mixed, with two-syllable rhymes near the top of the frequency order",
+      "expected": [
+        "own",
+        "known",
+        "phone",
+        "shown",
+        "stone",
+        "zone",
+        "loan",
+        "grown",
+        "tone",
+        "bone",
+        "thrown",
+        "blown"
+      ]
+    },
+    {
+      "anchor": "alone",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "mixed, with two-syllable rhymes near the top of the frequency order",
+      "expected": [
+        "own",
+        "known",
+        "phone",
+        "shown",
+        "stone",
+        "zone",
+        "loan",
+        "grown",
+        "unknown",
+        "tone",
+        "bone",
+        "iphone"
+      ]
+    },
+    {
+      "anchor": "alone",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "mixed, with two-syllable rhymes near the top of the frequency order",
+      "expected": [
+        "unknown",
+        "iphone",
+        "telephone",
+        "smartphone",
+        "sharon",
+        "hormone",
+        "limestone",
+        "microphone",
+        "milestone",
+        "leone",
+        "simone",
+        "testosterone"
+      ]
+    },
+    {
+      "anchor": "glow",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "open vowel with many short rhymes",
+      "expected": [
+        "know",
+        "go",
+        "show",
+        "though",
+        "oh",
+        "low",
+        "co",
+        "pro",
+        "grow",
+        "slow",
+        "throw",
+        "joe"
+      ]
+    },
+    {
+      "anchor": "glow",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "open vowel with many short rhymes",
+      "expected": [
+        "know",
+        "go",
+        "show",
+        "though",
+        "oh",
+        "ago",
+        "low",
+        "although",
+        "co",
+        "below",
+        "tomorrow",
+        "radio"
+      ]
+    },
+    {
+      "anchor": "glow",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "open vowel with many short rhymes",
+      "expected": [
+        "ago",
+        "although",
+        "below",
+        "tomorrow",
+        "radio",
+        "photo",
+        "chicago",
+        "mexico",
+        "hello",
+        "studio",
+        "solo",
+        "audio"
+      ]
+    },
+    {
+      "anchor": "time",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "mixed",
+      "expected": [
+        "crime",
+        "prime",
+        "climb",
+        "lime",
+        "dime",
+        "rhyme",
+        "slime",
+        "lyme",
+        "chime",
+        "grime",
+        "thyme",
+        "mime"
+      ]
+    },
+    {
+      "anchor": "time",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "mixed",
+      "expected": [
+        "crime",
+        "prime",
+        "lifetime",
+        "climb",
+        "anytime",
+        "sometime",
+        "meantime",
+        "maritime",
+        "overtime",
+        "lime",
+        "enzyme",
+        "longtime"
+      ]
+    },
+    {
+      "anchor": "time",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "mixed",
+      "expected": [
+        "lifetime",
+        "anytime",
+        "sometime",
+        "meantime",
+        "maritime",
+        "overtime",
+        "enzyme",
+        "longtime",
+        "everytime",
+        "daytime",
+        "halftime",
+        "paradigm"
+      ]
+    },
+    {
+      "anchor": "world",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "five one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "curled",
+        "hurled",
+        "swirled",
+        "twirled",
+        "whirled",
+        "underworld",
+        "computerworld",
+        "dreamworld",
+        "eworld",
+        "homeworld",
+        "infoworld",
+        "macworld"
+      ]
+    },
+    {
+      "anchor": "world",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "five one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "underworld",
+        "curled",
+        "hurled",
+        "computerworld",
+        "dreamworld",
+        "eworld",
+        "homeworld",
+        "infoworld",
+        "macworld",
+        "netherworld",
+        "neworld",
+        "real-world"
+      ]
+    },
+    {
+      "anchor": "world",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "five one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "underworld",
+        "computerworld",
+        "dreamworld",
+        "eworld",
+        "homeworld",
+        "infoworld",
+        "macworld",
+        "netherworld",
+        "neworld",
+        "real-world",
+        "sunworld",
+        "transworld"
+      ]
+    },
+    {
+      "anchor": "love",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "four one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "gov",
+        "glove",
+        "dove",
+        "shove",
+        "above",
+        "thereof",
+        "belove",
+        "breedlove",
+        "deneuve",
+        "foxglove",
+        "freelove",
+        "godlove"
+      ]
+    },
+    {
+      "anchor": "love",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "four one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "above",
+        "gov",
+        "thereof",
+        "glove",
+        "dove",
+        "shove",
+        "belove",
+        "breedlove",
+        "deneuve",
+        "foxglove",
+        "freelove",
+        "godlove"
+      ]
+    },
+    {
+      "anchor": "love",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "four one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "above",
+        "thereof",
+        "belove",
+        "breedlove",
+        "deneuve",
+        "foxglove",
+        "freelove",
+        "godlove",
+        "labov",
+        "labove",
+        "manlove",
+        "o'glove"
+      ]
+    },
+    {
+      "anchor": "river",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "every rhyme has two or more syllables: all three lists are identical",
+      "expected": [
+        "deliver",
+        "liver",
+        "giver",
+        "caregiver",
+        "shiver",
+        "sliver",
+        "downriver",
+        "ivar",
+        "mciver",
+        "mcivor",
+        "quiver",
+        "upriver"
+      ]
+    },
+    {
+      "anchor": "river",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "every rhyme has two or more syllables: all three lists are identical",
+      "expected": [
+        "deliver",
+        "liver",
+        "giver",
+        "caregiver",
+        "shiver",
+        "sliver",
+        "downriver",
+        "ivar",
+        "mciver",
+        "mcivor",
+        "quiver",
+        "upriver"
+      ]
+    },
+    {
+      "anchor": "river",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "every rhyme has two or more syllables: all three lists are identical",
+      "expected": [
+        "deliver",
+        "liver",
+        "giver",
+        "caregiver",
+        "shiver",
+        "sliver",
+        "downriver",
+        "ivar",
+        "mciver",
+        "mcivor",
+        "quiver",
+        "upriver"
+      ]
+    },
+    {
+      "anchor": "arrival",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "fewer than twelve rhymes and no one-syllable rhyme at all",
+      "expected": [
+        "survival",
+        "rival",
+        "revival",
+        "archival",
+        "archrival"
+      ]
+    },
+    {
+      "anchor": "arrival",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "fewer than twelve rhymes and no one-syllable rhyme at all",
+      "expected": [
+        "survival",
+        "rival",
+        "revival",
+        "archival",
+        "archrival"
+      ]
+    },
+    {
+      "anchor": "arrival",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "fewer than twelve rhymes and no one-syllable rhyme at all",
+      "expected": [
+        "survival",
+        "rival",
+        "revival",
+        "archival",
+        "archrival"
+      ]
+    },
+    {
+      "anchor": "surrender",
+      "rhymeType": "PERFECT",
+      "complexity": "SIMPLE",
+      "note": "every rhyme has two or more syllables",
+      "expected": [
+        "gender",
+        "defender",
+        "tender",
+        "transgender",
+        "vendor",
+        "render",
+        "offender",
+        "lender",
+        "contender",
+        "slender",
+        "bartender",
+        "blender"
+      ]
+    },
+    {
+      "anchor": "surrender",
+      "rhymeType": "PERFECT",
+      "complexity": "MODERATE",
+      "note": "every rhyme has two or more syllables",
+      "expected": [
+        "gender",
+        "defender",
+        "tender",
+        "transgender",
+        "vendor",
+        "render",
+        "offender",
+        "lender",
+        "contender",
+        "slender",
+        "bartender",
+        "blender"
+      ]
+    },
+    {
+      "anchor": "surrender",
+      "rhymeType": "PERFECT",
+      "complexity": "COMPLEX",
+      "note": "every rhyme has two or more syllables",
+      "expected": [
+        "gender",
+        "defender",
+        "tender",
+        "transgender",
+        "vendor",
+        "render",
+        "offender",
+        "lender",
+        "contender",
+        "slender",
+        "bartender",
+        "blender"
+      ]
+    }
+  ]
+}
