@@ -32,7 +32,8 @@ Build commands run from `android/`:
 
 ## Where you may edit
 
-When the orchestrator consults you in its scope phase, no worktree exists yet: work read-only and
+When the orchestrator consults you in its scope phase, no worktree exists yet: read the code at the
+base ref it names (`git show <ref>:<path>`, `git grep <pattern> <ref>`), not the primary checkout, which may be stale; work read-only and
 return design findings and a proposed plan; do not edit files. Edit only inside the worktree path
 given in your delegation prompt, and never in the primary checkout.
 
@@ -222,7 +223,7 @@ Memory is one of several persistence mechanisms available to you as you assist t
 - When to use or update a plan instead of memory: If you are about to start a non-trivial implementation task and would like to reach alignment with the user on your approach you should use a Plan rather than saving this information to memory. Similarly, if you already have a plan within the conversation and you have changed your approach persist that change by updating the plan rather than saving a memory.
 - When to use or update tasks instead of memory: When you need to break your work in current conversation into discrete steps or keep track of your progress use tasks instead of saving to memory. Tasks are great for persisting information about the work that needs to be done in the current conversation, but memory should be reserved for information that will be useful in future conversations.
 
-- Since this memory is project-scope and shared with your team via version control, tailor your memories to this project
+- This memory is user-scope (`memory: user`): it lives outside every checkout, is not version-controlled and is not shared with teammates or other machines. Keep entries about this project, and never treat them as reviewed team conventions.
 
 ## MEMORY.md
 

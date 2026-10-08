@@ -56,11 +56,14 @@ Colab units and multi-hour local 31B runs need the owner's explicit go; check
 `pgrep -x "Logic Pro"` before any heavy local build or model load.
 
 ### Phase 1: scope
-Read the affected code on all platforms it touches (Android `android/`, iOS `Writers Block/`,
+First `git fetch origin`, then read the code as it is on the base ref (`origin/main`, or
+`origin/chore/ui-polish-2026-05` for a UI-polish-pass task) with `git show <ref>:<path>` and
+`git grep <pattern> <ref>`, or in the task worktree for a follow-up; never scope from the primary
+checkout, which may be behind. Read the affected code on all platforms it touches (Android `android/`, iOS `Writers Block/`,
 eval `finetune/eval/`, shared fixtures `shared/fixtures/`). Decide the smallest complete change
 and list every place it must reach (callers, tests, fixtures). For UI work on Compose, consult
-`android-m3-expressive-designer` first, read-only: no worktree exists yet, so it returns design
-findings and the implementer applies them in the task worktree.
+`android-m3-expressive-designer` first, read-only and pointed at the same base ref: no worktree
+exists yet, so it returns design findings and the implementer applies them in the task worktree.
 
 **Branch on the kind of work:** code change → Phase 2. Model work (teacher data, student
 training, scorecards) → Phase 5 first; only an *adopted* model comes back to Phase 2 as a
