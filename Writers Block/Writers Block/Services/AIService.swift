@@ -334,10 +334,15 @@ struct AIService {
         )
         // Retry once: GGUFModelService draws a fresh random seed per generate call.
         if state.emitted < Self.suggestionCount {
-            state = try await emitLines(
-                from: makeTokens(), into: continuation, filter: filter, rhymeType: rhymeType,
-                excludedKeys: excludedKeys, rejectsLocalArtifacts: true, state: state
-            )
+            do {
+                state = try await emitLines(
+                    from: makeTokens(), into: continuation, filter: filter, rhymeType: rhymeType,
+                    excludedKeys: excludedKeys, rejectsLocalArtifacts: true, state: state
+                )
+            } catch {
+                // A failed optional retry keeps the first pass once it already met the minimum.
+                if error is CancellationError || Task.isCancelled || state.emitted < Self.minimumSuggestionCount { throw error }
+            }
         }
         try Self.requireMinimumLocalSuggestions(survivors: state.emitted, accepted: state.accepted, filter: filter, rhymeType: rhymeType)
     }
@@ -564,8 +569,13 @@ struct AIService {
         // Retry once: each local generate call draws a fresh seed (GGUF) or session (Apple Intelligence).
         if lines.count < Self.suggestionCount {
             try Task.checkCancellation()
-            lines += try rankedLocalSuggestions(try await generate(), lyrics: lyrics, filter: filter, state: &state)
-                .prefix(Self.suggestionCount - lines.count)
+            do {
+                lines += try rankedLocalSuggestions(try await generate(), lyrics: lyrics, filter: filter, state: &state)
+                    .prefix(Self.suggestionCount - lines.count)
+            } catch {
+                // A failed optional retry keeps the first pass once it already met the minimum.
+                if error is CancellationError || Task.isCancelled || lines.count < Self.minimumSuggestionCount { throw error }
+            }
         }
         try Self.requireMinimumLocalSuggestions(survivors: lines.count, accepted: state.accepted, filter: filter, rhymeType: rhymeType)
         return lines
@@ -1642,10 +1652,12 @@ struct AIService {
         )
     }
 
-    /// `retryChunks` feeds the retry pass (an empty response when nil); `retryCalls` reports whether it ran.
+    /// `retryChunks` feeds the retry pass (an empty response when nil); `retryError` makes that pass
+    /// throw after its chunks; `retryCalls` reports whether it ran.
     func validatedLocalSuggestionStreamForTest(
         chunks: [String],
         retryChunks: [String]? = nil,
+        retryError: Error? = nil,
         lyrics: String,
         targetRhymeLine: String? = nil,
         rhymeType: RhymeType = .perfect,
@@ -1660,9 +1672,10 @@ struct AIService {
                         tokens: {
                             calls += 1
                             let chunks = attempts.removeFirst()
+                            let error = calls > 1 ? retryError : nil
                             return AsyncThrowingStream<String, Error> { continuation in
                                 for chunk in chunks { continuation.yield(chunk) }
-                                continuation.finish()
+                                continuation.finish(throwing: error)
                             }
                         },
                         into: continuation,

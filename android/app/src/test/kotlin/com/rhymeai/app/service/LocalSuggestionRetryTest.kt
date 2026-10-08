@@ -3,7 +3,7 @@ package com.rhymeai.app.service
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.util.PronunciationDictionary
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -43,19 +43,20 @@ class LocalSuggestionRetryTest {
         "I wait beneath the rain", "rain", emptyList(), RhymeType.PERFECT, dictionary
     )
 
-    private class Attempts(private val responses: List<String>) {
+    /** A null response makes that attempt throw, like a local generation timeout. */
+    private class Attempts(private val responses: List<String?>) {
         var calls = 0
-        fun next(): String = responses[calls++]
+        fun next(): String = responses[calls++] ?: throw IllegalStateException("generation failed")
     }
 
-    private fun streamed(vararg responses: String): Pair<List<String>, Int> = runBlocking {
+    private fun streamed(vararg responses: String?): Pair<List<String>, Int> = runBlocking {
         val attempts = Attempts(responses.toList())
-        val tokens: () -> Flow<String> = { flowOf(attempts.next()) }
+        val tokens: () -> Flow<String> = { flow { emit(attempts.next()) } }
         val lines = service.validatedLocalSuggestionStream(tokens, "Existing lyric", constraint).toList()
         lines.map { it.text } to attempts.calls
     }
 
-    private fun batched(vararg responses: String): Pair<List<String>, Int> = runBlocking {
+    private fun batched(vararg responses: String?): Pair<List<String>, Int> = runBlocking {
         val attempts = Attempts(responses.toList())
         val lines = service.localSuggestionLines({ attempts.next() }, "Existing lyric", constraint)
         lines to attempts.calls
@@ -109,6 +110,25 @@ class LocalSuggestionRetryTest {
         val none = response(misses)
         for (run in listOf<() -> Unit>({ streamed(none, none) }, { batched(none, none) })) {
             assertFailsWith<AIService.NoMatchingRhymesException> { run() }
+        }
+    }
+
+    @Test
+    fun fourSurvivorsWithFailedRetryAreShown() {
+        val first = response(rhymes.take(4) + misses.take(2))
+        assertEquals(rhymes.take(4), streamed(first, null).first)
+        for (run in listOf(streamed(first, null), batched(first, null))) {
+            assertEquals(rhymes.take(4).toSet(), run.first.toSet())
+            assertEquals(2, run.second)
+        }
+    }
+
+    @Test
+    fun twoSurvivorsWithFailedRetrySurfaceTheRetryError() {
+        val first = response(rhymes.take(2) + misses)
+        for (run in listOf<() -> Unit>({ streamed(first, null) }, { batched(first, null) })) {
+            val error = assertFailsWith<IllegalStateException> { run() }
+            assertEquals("generation failed", error.message)
         }
     }
 }

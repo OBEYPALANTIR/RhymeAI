@@ -17,6 +17,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapNotNull
@@ -743,7 +744,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             .filter(String::isNotEmpty)
             .toSet()
         val state = LineStreamState()
-        suspend fun pass() = emitLinesFromTokens(
+        suspend fun pass(isRetry: Boolean) = emitLinesFromTokens(
             tokens = flow {
                 tokens().collect { chunk ->
                     if (containsMarkupOrControlLeakage(chunk)) {
@@ -752,15 +753,18 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                     }
                     emit(chunk)
                 }
+            }.catch { error ->
+                // A failed optional retry ends the pass once the first already met the minimum.
+                if (error is CancellationException || !isRetry || state.emitted < MIN_SUGGESTIONS) throw error
             },
             constraint = constraint,
             excludedKeys = existingKeys,
             onDecision = onDecision,
             localPass = state
         )
-        pass()
+        pass(isRetry = false)
         // Retry once: LocalModelService samples with seed -1, a fresh llama.cpp seed per call.
-        if (state.emitted < SUGGESTION_COUNT) pass()
+        if (state.emitted < SUGGESTION_COUNT) pass(isRetry = true)
         requireMinimumLocalSuggestions(state.emitted, state.accepted, constraint?.lineFilter)
     }
 
@@ -1559,8 +1563,16 @@ $endWordRule
         var lines = validateLocalSuggestionResponse(generate(), lyrics, constraint, state = state)
         // Retry once: LocalModelService samples with seed -1, a fresh llama.cpp seed per call.
         if (lines.size < SUGGESTION_COUNT) {
-            lines = lines + validateLocalSuggestionResponse(generate(), lyrics, constraint, state = state)
-                .take(SUGGESTION_COUNT - lines.size)
+            val retry = try {
+                validateLocalSuggestionResponse(generate(), lyrics, constraint, state = state)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // A failed optional retry keeps the first pass once it already met the minimum.
+                if (lines.size < MIN_SUGGESTIONS) throw error
+                emptyList()
+            }
+            lines = lines + retry.take(SUGGESTION_COUNT - lines.size)
         }
         requireMinimumLocalSuggestions(lines.size, state.accepted, constraint?.lineFilter)
         return lines
