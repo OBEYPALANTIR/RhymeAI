@@ -8,8 +8,8 @@ them when the list rule changes:
 
     cd finetune && python3 -m eval.complexity_end_words_fixture
 
-Anchors are PERFECT-type only: the eval's Near/Slant pools are a different,
-older rule than the apps' and never matched them, so their lists are not pinned here.
+Every anchor is pinned for all three relations (Perfect, Near, Slant): the Near
+and Slant pools are the apps' exclusive `rhymeRelation` pools in songwriter order.
 The Android test (`ComplexityEndWordListTest`) and `test_complexity_end_words.py`
 both read the file.
 """
@@ -29,6 +29,7 @@ from eval import scoring  # noqa: E402
 FIXTURE_PATH = os.path.join(scoring.REPO_ROOT, "shared", "fixtures", "complexity-end-words-v1.json")
 LIMIT = 12
 COMPLEXITIES = ("SIMPLE", "MODERATE", "COMPLEX")
+RHYME_TYPES = ("PERFECT", "NEAR", "SLANT")
 # anchor -> why it is here
 ANCHORS = {
     "home": "mixed syllables; Simple and Complex both have full lists",
@@ -49,7 +50,8 @@ DESCRIPTION = (
     "RhymeConstraint.candidateEndWords(anchor, rhymeType, complexity = complexity) and "
     "finetune/eval/scoring.py candidate_end_words(anchor, rhymeType, complexity=complexity) "
     "must return `expected` word for word (limit 12, bundled dictionary and frequency list). "
-    "MODERATE is the frequency order; COMPLEX puts words of two or more syllables first "
+    "PERFECT is the exact and multisyllabic pools; NEAR and SLANT are the exclusive "
+    "rhymeRelation pools in songwriter order. MODERATE is the frequency order; COMPLEX puts words of two or more syllables first "
     "(stable); SIMPLE keeps one-syllable words only unless fewer than six exist, when the "
     "remaining words follow in their original order. Expected values were produced by "
     "finetune/eval/complexity_end_words_fixture.py; regenerate them there if the rule changes. "
@@ -60,14 +62,15 @@ DESCRIPTION = (
 def build_cases():
     cases = []
     for anchor, note in ANCHORS.items():
-        for complexity in COMPLEXITIES:
-            cases.append({
-                "anchor": anchor,
-                "rhymeType": "PERFECT",
-                "complexity": complexity,
-                "note": note,
-                "expected": scoring.candidate_end_words(anchor, "PERFECT", limit=LIMIT, complexity=complexity),
-            })
+        for rhyme_type in RHYME_TYPES:
+            for complexity in COMPLEXITIES:
+                cases.append({
+                    "anchor": anchor,
+                    "rhymeType": rhyme_type,
+                    "complexity": complexity,
+                    "note": note,
+                    "expected": scoring.candidate_end_words(anchor, rhyme_type, limit=LIMIT, complexity=complexity),
+                })
     return cases
 
 

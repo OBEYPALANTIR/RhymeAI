@@ -16,9 +16,9 @@ import kotlin.test.assertTrue
  * The complexity level's view of the allowed end-word list
  * (`RhymeConstraint.levelEndWords`): two-or-more-syllable rhymes first at
  * Complex, one-syllable rhymes only at Simple (with the under-six fallback),
- * and Moderate untouched. The shared fixture pins the exact lists the eval's
- * `scoring.candidate_end_words` builds for the same anchors; iOS asserts the
- * same rule in `RhymeConstraintTests.swift`.
+ * and Moderate untouched. The shared fixture pins the exact Perfect, Near and
+ * Slant lists the eval's `scoring.candidate_end_words` builds for the same
+ * anchors at every level; iOS asserts the same rule in `RhymeConstraintTests.swift`.
  */
 class ComplexityEndWordListTest {
     // Perfect rhymes of "road". No frequency list, so the order is the
@@ -107,7 +107,8 @@ class ComplexityEndWordListTest {
         val fixture = Json.parseToJsonElement(repoFile("shared/fixtures/complexity-end-words-v1.json").readText()).jsonObject
         val limit = fixture.getValue("limit").jsonPrimitive.int
         val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
-        assertEquals(33, cases.size)
+        assertEquals(99, cases.size)
+        assertEquals(RhymeType.entries.toSet(), cases.map { RhymeType.valueOf(it.getValue("rhymeType").jsonPrimitive.content) }.toSet())
         for (case in cases) {
             val anchor = case.getValue("anchor").jsonPrimitive.content
             val type = RhymeType.valueOf(case.getValue("rhymeType").jsonPrimitive.content)
