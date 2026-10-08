@@ -115,6 +115,104 @@ struct SuggestionPromptGuidanceTests {
         }
     }
 
+    @Test func localPromptAsksForIdeasNotAFinishedVerse() {
+        let prompt = localPrompt(targetLine: target)
+        print("NEAR_CASE_PROMPT_BEGIN\n\(prompt)\nNEAR_CASE_PROMPT_END")
+
+        #expect(prompt.contains("\nThe writer is stuck on the next line and wants ideas to pick from, not a finished verse.\n"))
+        #expect(prompt.contains("End each line with one of these rhyming words: "))
+        #expect(prompt.hasSuffix(Self.rulesWithList))
+        // Parser-facing count and format rules are unchanged.
+        #expect(prompt.contains("Task: write exactly 6 next-line options for the song."))
+    }
+
+    @Test func localPromptWithoutWordListAsksForDifferentEndWords() {
+        let noTarget = localPrompt(targetLine: nil)
+        #expect(noTarget.hasSuffix(Self.rulesWithoutList))
+        #expect(!noTarget.contains("allowed list"))
+    }
+
+    private struct WindowFixture: Decodable {
+        struct Case: Decodable {
+            let name: String
+            let song: String
+            let cursorLine: Int?
+            let useWholeSongContext: Bool
+            let expected: String
+        }
+        let songs: [String: String]
+        let cases: [Case]
+    }
+
+    private final class BundleToken {}
+
+    /// Bundled copy of shared/fixtures/local-lyric-window-v1.json (the simulator
+    /// cannot read the repo). Android `SuggestionPromptGuidanceTest` checks the
+    /// two copies are byte-identical and runs the same cases.
+    private func windowFixture() throws -> WindowFixture {
+        let url = try #require(Bundle(for: BundleToken.self)
+            .url(forResource: "local-lyric-window-v1", withExtension: "json"))
+        return try JSONDecoder().decode(WindowFixture.self, from: Data(contentsOf: url))
+    }
+
+    @Test func localContextMatchesSharedCursorWindowFixture() throws {
+        let fixture = try windowFixture()
+        let song = try #require(fixture.songs["main"])
+        let lines = song.components(separatedBy: "\n")
+        #expect(lines.count == 300)
+        #expect(fixture.songs["oneLongLine"]?.utf16.count == 4000)
+        #expect(fixture.songs["longMiddleLine"]?.components(separatedBy: "\n").map(\.utf16.count) == [14, 4000, 16])
+        // iOS only trims whole-song context; with it off the cursor's stanza is sent untrimmed.
+        let cases = fixture.cases.filter(\.useWholeSongContext)
+        #expect(cases.count == 11)
+        #expect(fixture.songs["emojiLine"]?.utf16.count == 4000) // 2,000 non-BMP scalars
+        for testCase in cases {
+            let actual = AIService.localLyricWindow(
+                try #require(fixture.songs[testCase.song]),
+                cursorLine: testCase.cursorLine,
+                budget: AIService.localWholeSongHeadChars + AIService.localWholeSongTailChars,
+                headBudget: AIService.localWholeSongHeadChars
+            )
+            #expect(actual == testCase.expected, "\(testCase.name)")
+            #expect(actual.utf16.count <= 3100, "\(testCase.name)")
+            guard testCase.song == "main" else { continue }
+            let c = testCase.cursorLine ?? lines.count - 1
+            let start = (0..<c).last(where: { lines[$0].trimmingCharacters(in: .whitespaces).isEmpty }).map { $0 + 1 } ?? 0
+            let stanza = lines[start...c].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            #expect(actual.contains(stanza), "\(testCase.name)")
+        }
+        #expect(AIService.localLyricWindow("  a\nb \n", cursorLine: nil, budget: 3100, headBudget: 900) == "a\nb")
+
+        // Production path: the editor cursor reaches the built prompt.
+        let middle = try #require(fixture.cases.first { $0.name == "middle_lyric_whole" })
+        let cursorLine = try #require(middle.cursorLine)
+        let viewModel = EditorViewModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        viewModel.lyrics = song
+        viewModel.cursorPosition = lines[0...cursorLine].reduce(0) { $0 + $1.utf16.count + 1 } - 1
+        let input = viewModel.suggestionInputForTest()
+        #expect(input.useWholeSongContext)
+        #expect(input.cursorLineIndex == cursorLine)
+        let prompt = AIService().buildLocalSuggestionPromptForTest(input: input)
+        #expect(prompt.contains("\"\"\"\n" + middle.expected + "\n\"\"\""))
+    }
+
+    @Test func everyWindowStaysWithinBudget() throws {
+        let fixture = try windowFixture()
+        for (id, song) in fixture.songs {
+            let lineCount = song.components(separatedBy: "\n").count
+            for cursor in (0..<lineCount).map(Optional.some) + [nil] {
+                let window = AIService.localLyricWindow(
+                    song,
+                    cursorLine: cursor,
+                    budget: AIService.localWholeSongHeadChars + AIService.localWholeSongTailChars,
+                    headBudget: AIService.localWholeSongHeadChars
+                )
+                #expect(window.utf16.count <= 3100, "\(id) cursor=\(String(describing: cursor))")
+            }
+        }
+    }
+
+
     /// Chorus consistency wins over the level: first-chorus end words stay at the
     /// front of the allowed list at Simple and Complex, unfiltered by the level,
     /// and the rest of the list follows the level rule (levelEndWords is not
