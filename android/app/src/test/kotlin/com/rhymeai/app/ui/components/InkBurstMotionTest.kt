@@ -22,7 +22,8 @@ class InkBurstMotionTest {
         val end = InkBurstMotion.particles(1f).map { hypot(it.x, it.y) }
         assertTrue(early.zip(late).all { (a, b) -> b > a }, "dots keep moving outward")
         assertTrue(early.average() > 0.3f, "a quarter in, the dots are already well on their way")
-        assertTrue(end.all { it <= 1.2f }, "no dot flies past the reach plus its drop")
+        assertTrue(end.all { it <= 1.0001f }, "no dot flies past the reach, drop included")
+        assertTrue(InkBurstMotion.particles(0.9f).all { hypot(it.x, it.y) <= 1.0001f })
     }
 
     @Test

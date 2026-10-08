@@ -24,7 +24,8 @@ struct InkBurstMotionTests {
         let end = InkBurstMotion.particles(progress: 1).map(distance)
         #expect(zip(early, late).allSatisfy { $1 > $0 })
         #expect(early.reduce(0, +) / CGFloat(early.count) > 0.3)
-        #expect(end.allSatisfy { $0 <= 1.2 })
+        #expect(end.allSatisfy { $0 <= 1.0001 })
+        #expect(InkBurstMotion.particles(progress: 0.9).allSatisfy { distance($0) <= 1.0001 })
     }
 
     @Test

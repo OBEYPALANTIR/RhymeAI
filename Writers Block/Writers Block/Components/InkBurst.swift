@@ -50,12 +50,15 @@ enum InkBurstMotion {
             let speed = 0.72 + 0.28 * Double((index * 5) % 3) / 2
             let distance = travel * speed
             let drop = 0.18 * p * p
-            return Particle(
-                x: CGFloat(cos(angle) * distance),
-                y: CGFloat(sin(angle) * distance + drop),
-                radius: radius,
-                alpha: alpha
-            )
+            var x = cos(angle) * distance
+            var y = sin(angle) * distance + drop
+            // The drop must not carry a dot past the reach.
+            let length = hypot(x, y)
+            if length > 1 {
+                x /= length
+                y /= length
+            }
+            return Particle(x: CGFloat(x), y: CGFloat(y), radius: radius, alpha: alpha)
         }
     }
 

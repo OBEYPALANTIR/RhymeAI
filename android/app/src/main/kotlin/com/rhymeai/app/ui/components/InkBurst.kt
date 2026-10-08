@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.pow
 import kotlin.math.sin
 
@@ -60,12 +61,15 @@ object InkBurstMotion {
             val speed = 0.72f + 0.28f * ((index * 5) % 3) / 2f
             val distance = travel * speed
             val drop = 0.18f * p * p
-            Particle(
-                x = cos(angle) * distance,
-                y = sin(angle) * distance + drop,
-                radiusDp = radius,
-                alpha = alpha
-            )
+            var x = cos(angle) * distance
+            var y = sin(angle) * distance + drop
+            // The drop must not carry a dot past the reach.
+            val length = hypot(x, y)
+            if (length > 1f) {
+                x /= length
+                y /= length
+            }
+            Particle(x = x, y = y, radiusDp = radius, alpha = alpha)
         }
     }
 
