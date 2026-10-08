@@ -239,14 +239,16 @@ def suggestion_rhyme_constraint(
     rhyme_type: str,
     section_ref: Optional[SectionRef] = None,
     chorus_end_words: Sequence[str] = (),
+    complexity: str = "MODERATE",
 ) -> Optional[SuggestionRhymeConstraint]:
-    """AIService.suggestionRhymeConstraint."""
+    """AIService.suggestionRhymeConstraint. `complexity` (RhymeComplexity name)
+    shapes the allowed end-word list: see scoring.level_end_words."""
     if target_rhyme_line is None or not target_rhyme_line.strip():
         return None
     target_word = scoring.line_end_word(target_rhyme_line)
     if not target_word:
         return None
-    candidates = scoring.candidate_end_words(target_word, rhyme_type)
+    candidates = scoring.candidate_end_words(target_word, rhyme_type, complexity=complexity)
     if not candidates:
         return None
 
@@ -780,7 +782,8 @@ def _self_test():
     section_ref = next(r for r in refs if r.type == "VERSE" and r.ordinal == 2)
     chorus_ends = first_chorus_end_words(lyrics)
     constraint = suggestion_rhyme_constraint(
-        target_line, "PERFECT", section_ref=section_ref, chorus_end_words=chorus_ends
+        target_line, "PERFECT", section_ref=section_ref, chorus_end_words=chorus_ends,
+        complexity="MODERATE",
     )
 
     print("=" * 72)

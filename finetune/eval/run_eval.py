@@ -90,6 +90,7 @@ def prepare_case(case):
             case["rhyme_type"],
             section_ref=section_ref,
             chorus_end_words=chorus_ends,
+            complexity=case["complexity"],
         )
         prepared["constraint"] = constraint
         prepared["user_prompt"] = prompts.build_suggestions_prompt(

@@ -196,17 +196,22 @@ class AIService {
     // LLMs rhyme unreliably because tokens hide phonetics. When the dictionary
     // knows the target end word, we pin suggestions to verified rhyme words and
     // ask for double the lines so the phonetic filter has material to rank.
+    // The complexity level shapes the allowed list (RhymeConstraint.levelEndWords):
+    // two-or-more-syllable rhymes first at COMPLEX, one-syllable rhymes at SIMPLE.
     internal fun suggestionRhymeConstraint(
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         dictionary: PronunciationDictionary = PronunciationDictionary.shared,
         sectionRef: SectionRef? = null,
-        chorusEndWords: Set<String> = emptySet()
+        chorusEndWords: Set<String> = emptySet(),
+        complexity: RhymeComplexity = RhymeComplexity.MODERATE
     ): SuggestionRhymeConstraint? {
         if (targetRhymeLine.isNullOrBlank()) return null
         val targetWord = RhymeConstraint.lineEndWord(targetRhymeLine)
         if (targetWord.isEmpty()) return null
-        var candidates = RhymeConstraint.candidateEndWords(targetWord, rhymeType, dictionary = dictionary)
+        var candidates = RhymeConstraint.candidateEndWords(
+            targetWord, rhymeType, dictionary = dictionary, complexity = complexity
+        )
         if (candidates.isEmpty()) return null
 
         val type = sectionRef?.type ?: SongSection.UNKNOWN
@@ -307,7 +312,7 @@ class AIService {
         val providerLyrics = if (useWholeSongContext) lyrics else targetRhymeLine.orEmpty()
         val providerSection = sectionRef.takeIf { useWholeSongContext }
         val providerConstraint = if (useWholeSongContext) constraint else constraint?.let {
-            suggestionRhymeConstraint(targetRhymeLine, rhymeType, it.dictionary)
+            suggestionRhymeConstraint(targetRhymeLine, rhymeType, it.dictionary, complexity = complexity)
         }
         val rhymeInstruction = if (targetRhymeLine != null) {
             "Crucially, the new line MUST end with a **${rhymeType.displayName}** to this specific line: \"$targetRhymeLine\"."
@@ -381,7 +386,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         val includeSong = provider == AIProvider.LOCAL || useWholeSongContext
         val chorusEnds = if (includeSong) firstChorusEndWords(fullLyrics) else emptySet()
         val constraint = suggestionRhymeConstraint(
-            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds
+            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds,
+            complexity = complexity
         )
         return if (provider == AIProvider.LOCAL) {
             val localPrompt = buildLocalPrompt(
@@ -445,7 +451,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         val includeSong = provider == AIProvider.LOCAL || useWholeSongContext
         val chorusEnds = if (includeSong) firstChorusEndWords(fullLyrics) else emptySet()
         val constraint = suggestionRhymeConstraint(
-            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds
+            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds,
+            complexity = complexity
         )
         if (provider == AIProvider.LOCAL) {
             val service = localModelService
