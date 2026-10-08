@@ -12,7 +12,7 @@ preferred tool is unavailable, fall back to the alternative. Reviewed on the dat
 | evidence-host | secret GitHub gist (path-free summary, owner's OK each time) | PR comment with the same text | active | 2026-10-08 |
 | android-unit-tests | `./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin` with the Android Studio Preview JBR as `JAVA_HOME` | none | active | 2026-10-08 |
 | android-device | emulator `RhymeAI_UX_Phone_20260910_AndroidAgent` (serve-avd MCP, ARTEMIS for UI flows) | none — never create or erase devices | active | 2026-10-08 |
-| ios-tests | `xcodebuild test -only-testing "Writers BlockTests"` on simulator `FA565D4C-561C-432C-BBC6-1EB55406CEDA` (iPad, iOS 26.5) | `A1619FBB-66A0-4B54-93BE-DC9787866101` (iPhone 18 Pro, iOS 27) | active | 2026-10-08 |
+| ios-tests | `scripts/verify.sh` iOS stage, i.e. `xcodebuild test -project "Writers Block/Writers Block.xcodeproj" -scheme "Writers Block" -destination "platform=iOS Simulator,id=FA565D4C-561C-432C-BBC6-1EB55406CEDA" -parallel-testing-enabled NO -only-testing:"Writers BlockTests"` (iPad, iOS 26.5), run from the repo root | same command with `id=A1619FBB-66A0-4B54-93BE-DC9787866101` (iPhone 18 Pro, iOS 27) | active | 2026-10-08 |
 | eval-tests | `python3 -B -m unittest discover -s finetune/eval -p 'test_*.py'` | none | active | 2026-10-08 |
 | local-inference | `/opt/homebrew/bin/llama-server` (b9950) with the gemma4 envelope | `~/src/llama.cpp` build | active | 2026-10-08 |
 | student-model | shipped GGUFs under `/Volumes/Untitled/models/rhymeai/students-v21-20261006/` | Hugging Face `Shayde182/rhymeai-gemma-4-gguf` at the catalog revision | active | 2026-10-08 |
