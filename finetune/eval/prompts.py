@@ -76,7 +76,7 @@ RHYME_TYPES = {
 RHYME_COMPLEXITIES = {
     "SIMPLE": (
         "Simple",
-        "Use plain, simple, everyday language. No wordplay, puns, or clever twists. Use clear rhymes that are easy to hear.",
+        "Each line must be 4 to 7 plain, everyday words. End each line on a one-syllable word. No wordplay.",
     ),
     "MODERATE": (
         "Moderate",
@@ -84,7 +84,7 @@ RHYME_COMPLEXITIES = {
     ),
     "COMPLEX": (
         "Complex",
-        "Use advanced, rich vocabulary with clever wordplay and intricate rhymes: multi-syllable rhymes, internal rhymes, and double meanings.",
+        "Each line must be 8 to 12 words. End each line on a word of two or more syllables, or put an internal rhyme inside the line. Use vivid, specific, less common words and double meanings.",
     ),
 }
 

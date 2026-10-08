@@ -54,10 +54,13 @@ struct SuggestionPromptGuidanceTests {
     }
 
     @Test func complexityHintsOnlyAskForWordplayAtComplex() {
-        #expect(RhymeComplexity.simple.promptHint == "Use plain, simple, everyday language. No wordplay, puns, or clever twists. Use clear rhymes that are easy to hear.")
+        // Simple and Complex carry the numeric targets measured in the 2026-10-07
+        // complexity experiments; byte-identical on Android and in finetune/eval/prompts.py.
+        #expect(RhymeComplexity.simple.promptHint == "Each line must be 4 to 7 plain, everyday words. End each line on a one-syllable word. No wordplay.")
         #expect(RhymeComplexity.moderate.promptHint == "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear rather than clever.")
-        #expect(RhymeComplexity.complex.promptHint == "Use advanced, rich vocabulary with clever wordplay and intricate rhymes: multi-syllable rhymes, internal rhymes, and double meanings.")
+        #expect(RhymeComplexity.complex.promptHint == "Each line must be 8 to 12 words. End each line on a word of two or more syllables, or put an internal rhyme inside the line. Use vivid, specific, less common words and double meanings.")
         #expect(!RhymeComplexity.moderate.promptHint.contains("wordplay"))
+        #expect(!RhymeComplexity.simple.promptHint.contains("double meanings"))
         #expect(RhymeComplexity.allCases.map(\.rawValue) == [0, 1, 2])
 
         for level in RhymeComplexity.allCases {
@@ -70,6 +73,45 @@ struct SuggestionPromptGuidanceTests {
             )
             #expect(cloud.contains("Complexity level: \(level.label). \(level.promptHint)"))
             #expect(!cloud.contains("some clever wordplay"))
+        }
+    }
+
+    /// The level shapes the allowed end-word list (`RhymeConstraint.levelEndWords`)
+    /// and both prompt paths carry that list.
+    @Test func complexityLevelReachesTheAllowedEndWordList() throws {
+        let moderate = try #require(AIService.rhymeConstraintWords(targetRhymeLine: target, rhymeType: .perfect))
+        let complex = try #require(AIService.rhymeConstraintWords(
+            targetRhymeLine: target, rhymeType: .perfect, complexity: .complex
+        ))
+        let simple = try #require(AIService.rhymeConstraintWords(
+            targetRhymeLine: target, rhymeType: .perfect, complexity: .simple
+        ))
+        #expect(moderate.words == RhymeConstraint.candidateEndWords(targetWord: "home", rhymeType: .perfect))
+        #expect(moderate.words == AIService.rhymeConstraintWords(
+            targetRhymeLine: target, rhymeType: .perfect, complexity: .moderate
+        )?.words)
+        #expect(complex.words == RhymeConstraint.candidateEndWords(targetWord: "home", rhymeType: .perfect, complexity: .complex))
+        #expect(simple.words == RhymeConstraint.candidateEndWords(targetWord: "home", rhymeType: .perfect, complexity: .simple))
+        #expect(complex.words.allSatisfy { SyllableCounter.count($0) >= 2 }, "\(complex.words)")
+        #expect(simple.words.allSatisfy { SyllableCounter.count($0) == 1 }, "\(simple.words)")
+        #expect(complex.words != moderate.words)
+        #expect(simple.words != moderate.words)
+
+        for (level, words) in [(RhymeComplexity.complex, complex.words), (RhymeComplexity.simple, simple.words)] {
+            let listLine = "End each line with one of these rhyming words: \(words.joined(separator: ", ")) (choose the most natural fit)."
+            let local = AIService().buildLocalSuggestionPromptForTest(
+                theme: "", lyrics: lyrics, stanzaLines: ["[Verse]", target], targetRhymeLine: target,
+                rhymeType: .perfect, rhymeScheme: "AABB", currentLetter: "A", currentSection: .verse,
+                sectionOrdinal: 1, firstChorusLines: nil, complexity: level, useWholeSongContext: true
+            )
+            #expect(local.contains(listLine), "local \(level.label)")
+            #expect(local.contains("\nComplexity: \(level.label). \(level.promptHint)\n"))
+            let cloud = AIService().buildPrompt(
+                theme: "", lyrics: lyrics, targetRhymeLine: target, rhymeType: .perfect,
+                rhymeScheme: "AABB", currentLetter: "A", currentSection: .verse,
+                complexity: level, useWholeSongContext: false
+            )
+            #expect(cloud.contains(listLine), "cloud \(level.label)")
         }
     }
 
