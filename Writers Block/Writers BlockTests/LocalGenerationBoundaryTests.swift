@@ -112,12 +112,13 @@ struct LocalGenerationBoundaryTests {
         "The fog rolls in across the bay"
     ]
 
-    private func streamed(_ first: [String], retry: [String]? = nil) async throws -> (lines: [String], calls: Int) {
+    private func streamed(_ first: [String], retry: [String]? = nil, retryError: Error? = nil) async throws -> (lines: [String], calls: Int) {
         var lines: [String] = []
         var calls = 0
         for try await line in AIService().validatedLocalSuggestionStreamForTest(
             chunks: [first.joined(separator: "\n") + "\n"],
             retryChunks: retry.map { [$0.joined(separator: "\n") + "\n"] },
+            retryError: retryError,
             lyrics: "Existing lyric",
             targetRhymeLine: Self.target,
             retryCalls: { calls = $0 }
@@ -127,12 +128,13 @@ struct LocalGenerationBoundaryTests {
         return (lines, calls)
     }
 
-    private func batched(_ first: [String], retry: [String]? = nil) async throws -> (lines: [String], calls: Int) {
+    private func batched(_ first: [String], retry: [String]? = nil, retryError: Error? = nil) async throws -> (lines: [String], calls: Int) {
         var attempts = [first, retry ?? []]
         var calls = 0
         let lines = try await AIService().localSuggestionLines(
             generate: {
                 calls += 1
+                if calls > 1, let retryError { throw retryError }
                 return attempts.removeFirst().joined(separator: "\n")
             },
             lyrics: "Existing lyric",
@@ -164,6 +166,30 @@ struct LocalGenerationBoundaryTests {
         for run in [try await streamed(first, retry: first), try await batched(first, retry: first)] {
             #expect(run.lines == Array(Self.rhymes.prefix(4)))
             #expect(run.calls == 2)
+        }
+    }
+
+    @Test func localFourSurvivorsWithFailedRetryAreShown() async throws {
+        let first = Array(Self.rhymes.prefix(4)) + Self.misses.prefix(2)
+        let timeout = URLError(.timedOut)
+        for run in [try await streamed(first, retryError: timeout), try await batched(first, retryError: timeout)] {
+            #expect(run.lines == Array(Self.rhymes.prefix(4)))
+            #expect(run.calls == 2)
+        }
+    }
+
+    @Test func localTwoSurvivorsWithFailedRetrySurfaceTheRetryError() async {
+        let two = Array(Self.rhymes.prefix(2)) + Self.misses
+        let timeout = URLError(.timedOut)
+        for run in [{ try await self.streamed(two, retryError: timeout) }, { try await self.batched(two, retryError: timeout) }] {
+            do {
+                _ = try await run()
+                Issue.record("Expected the retry's error")
+            } catch let error as URLError {
+                #expect(error.code == .timedOut)
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
         }
     }
 
