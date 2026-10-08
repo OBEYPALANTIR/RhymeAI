@@ -47,7 +47,8 @@ This skill runs for *every* prompt. Triage before doing anything else:
 - Nothing → initial run; go to Phase 1.
 
 **Standing gates** (apply before any phase): never edit the primary checkout; worktrees under
-`.agents/worktrees/<slug>/` from fresh `origin/main`; no attribution lines in commits or PRs; no
+`.agents/worktrees/<slug>/` from fresh `origin/main` (a UI-polish-pass task starts from fresh
+`origin/chore/ui-polish-2026-05` and targets that branch, per `rhymeai-pr-evidence`); no attribution lines in commits or PRs; no
 secrets in code, logs, evidence or chat; the owner's private songs are test material only;
 Colab units and multi-hour local 31B runs need the owner's explicit go; check
 `pgrep -x "Logic Pro"` before any heavy local build or model load.

@@ -8,8 +8,11 @@ description: "How a RhymeAI change gets from a worktree to main: branch and comm
 ## Branch and commits
 
 - Work in `.agents/worktrees/<slug>/` on `claude/<slug>-<yyyymmdd>` from fresh `origin/main`.
-  Exception: a task in the AGENTS.md UI polish pass works in a worktree of that pass's branch
-  (`chore/ui-polish-2026-05`) and uses its `feat(ui)`/`fix(ui)` commit scopes.
+  Exception: a task in the AGENTS.md UI polish pass cuts its branch from fresh
+  `origin/chore/ui-polish-2026-05` instead, opens its PR against that branch
+  (`gh pr create --base chore/ui-polish-2026-05`), so the merge and `--delete-branch` touch only
+  the task branch, and uses the pass's Conventional Commit scopes (`feat(ui)`, `fix(ui)`,
+  `refactor(ui)`, `chore(ui)`, `test(ui)`, `style(ui)`).
   Never switch, pull or edit the primary checkout.
 - Commit explicit paths in logical pieces; messages describe the resulting behaviour and the
   measured effect. No attribution lines, no model names.
