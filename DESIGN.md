@@ -404,6 +404,14 @@ components:
     textColor: "{colors.on-surface}"
     borderColor: "{colors.outline-strong}"
     rounded: "{rounded.lg}"
+  suggestion-skeleton:
+    slots: 3
+    barColor: "{colors.surface-container-highest}"
+    blockColor: "{colors.surface-container-high}"
+    barHeight: 12px
+    breath: "opacity 0.55 → 1.0, 1300ms ease-in-out, mirrored; holds at 0.75 under reduced motion"
+    arrival: "cross-fade 260ms state tier in place; size settles on the standard spring (Android) or the state animation (iOS)"
+    collapse: "160ms dismiss tier for a slot still empty when generation stops"
   rewrite-chip-bar-ios:
     backgroundColor: "{colors.surface}"
     borderColor: "{colors.outline}"
@@ -689,6 +697,8 @@ Reduced motion is handled in code. On iOS, animations go through `rhymeAnimation
 
 Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
 
+Loading states that wait on a stream (the Assistant's suggestions) reserve their slots up front and let each real arrival cross-fade into place on the state tier; a slow opacity breath on the placeholders stands in for a spinner, and holds still under reduced motion. See "Suggestions as they load" under Components.
+
 ## Shapes
 
 The shape language is soft but not bubbly. iOS rounded rectangles use the continuous corner style, with two exceptions noted under Known inconsistencies. Radii differ by platform, and the same token name does not mean the same value:
@@ -728,6 +738,8 @@ Values below are the shipped ones. iOS values are in points, Android values in d
 **Assistant panel.** A dense operational surface on the canvas colour. iOS compact: a 44pt drag area with a 52×4pt grabber at 45% opacity, labelled "Dismiss Assistant", then directly beneath it a 44pt title row with "Assistant" at the leading edge, a 44pt close button, and a bottom divider; there is no navigation bar. iOS regular: a 56pt header row with "Assistant" and a 44pt hide button. Scrolling contents in order: Context & Theme, Target Line with a monospaced syllable badge, a collapsible Rhyme Options row (scheme menu, rhyme-density segmented control, complexity slider), model readiness, then any error and Suggestions with an "AI-generated · review before use" note. When the Stress + IPA setting is on, the Target Line card shows the quoted line and keeps the stress pattern and IPA behind a "Show stress pattern" disclosure that is collapsed by default and remembers its state. The one primary button ("Suggest Next Line", or a spinner and "Stop" while generating; 44pt minimum, 12pt radius, action fill) is pinned to the bottom of the panel on the canvas colour under a top divider, in both the compact sheet and the regular-width column; the scroll view ends at the bar, so nothing is hidden behind it, the bar rides above the keyboard, and the panel scrolls to the results when a suggestion or error arrives. Feature labels that have help text carry a 44pt help button labelled "<feature> help". Android has a 64dp handle area and the same named sections (Context & Theme, Target Line, Rhyme Options with Rhyme Scheme, Rhyme Density and Complexity, a local-model readiness line, "Suggest Next Line", and Suggestions with the same note), built from Material sliders and the sliding segmented control; its exact spacing and control sizes were not compared with iOS. On both platforms Whole Song Context is on by default (an unset preference reads as on; a saved off is kept). Context & Theme stays editable in both modes: a written theme is sent with every suggestion request, alongside the full lyric when Whole Song Context is on. The complexity caption reads "Plain language, no wordplay" (Simple), "Balanced vocabulary, natural phrasing" (Moderate, the default) or "Advanced vocabulary, wordplay, intricate rhymes" (Complex).
 
 **Suggestion card.** iOS: surface fill, 1px outline, 12pt radius, 24pt padding; the line in serif body text, a monospaced syllable count badge, an optional tier badge, then "Use line" (semibold) and "Keep for later" / "Kept", each at least 44pt tall; actions stack at accessibility sizes. Android: outlined card, 12dp radius, 48dp minimum height, serif line, tonal "Use" button.
+
+**Suggestions as they load.** Pressing Suggest Next Line opens three slots under the Suggestions header at once, each drawn as a skeleton card: the card's own surface, outline, radius and padding, with two text bars (12 high, at roughly 78/46, 64/38 and 72/52 percent of the text column so the three read as different lines) where the serif line will go, a 28×22 badge block, and a 92×32 action block. The header gains a "Writing…" caption that assistive technology hears as "Writing suggestions"; the skeletons themselves are hidden from it. Skeletons breathe between 55% and full opacity on a 1.3s ease-in-out loop, and hold at 75% under Reduce Motion or when Android animations are off; there is no shimmer sweep, because the loop only has to say "still writing" and the palette has no gradient. Lines stream in one at a time and each takes the next slot: the skeleton cross-fades into the card in place on the 260ms state tier, and the slot's height settles on the standard spring on Android and the state animation on iOS. Lines four to six append below with the same fade. When generation stops, any slot still empty collapses on the 160ms dismiss tier, so a two-line answer leaves no ghosts. This is not staggered choreography: every arrival is a real event, and the motion tells the writer which slot just filled. Reference boards: the "Suggestions Loading Motion" canvas in Claude Design.
 
 **Rewrite chip bar.** Appears at the bottom of the editor for a lyric selection (iOS: while text is selected and no rewrite, inspector, assistant sheet, or Focus mode is active; Android: while a rewrite range is pending and no assistant sheet, modal, active rewrite, or Focus mode is in the way). iOS: a 52pt-radius bordered capsule, 8pt padding, at most 360pt wide, holding a "Look up word" magnifier (44×44pt) and caption-weight chips at least 44pt tall. Android: a 22dp-radius bar on the high container colour with 28dp-radius, 48dp-tall chips. The rewrite review bar that follows uses the same capsule on iOS (22pt radius when showing an error or at accessibility sizes) with Retry/Apply at least 72×44pt and a "Regenerate rewrite" icon button.
 

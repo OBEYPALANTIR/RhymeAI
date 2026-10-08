@@ -52,6 +52,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,7 +63,9 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -477,30 +480,63 @@ fun AssistantPanel(
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
-            // Suggestions
-            if (viewModel.suggestions.isNotEmpty()) {
+            // Suggestions. Slots open as skeleton cards the moment a request
+            // starts; each one cross-fades into its card as that line streams
+            // in, and any slot still empty when generation stops collapses.
+            val isWriting = viewModel.isLoading
+            val slotCount = SuggestionPlaceholders.slotCount(isWriting, viewModel.suggestions.size)
+            if (slotCount > 0) {
                 Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                    Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                    ) {
+                        Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                        if (isWriting) {
+                            val writingLabel = stringResource(R.string.assistant_suggestions_writing_a11y)
+                            Text(
+                                stringResource(R.string.assistant_suggestions_writing),
+                                fontSize = 12.sp,
+                                color = subtleColor,
+                                modifier = Modifier
+                                    .testTag("suggestionsWriting")
+                                    .semantics {
+                                        liveRegion = LiveRegionMode.Polite
+                                        contentDescription = writingLabel
+                                    }
+                            )
+                        }
+                    }
                     Text(
                         stringResource(R.string.assistant_suggestions_caveat),
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic
                     )
-                    viewModel.suggestions.forEach { suggestedLine ->
-                        SuggestionCard(
-                            suggestion = suggestedLine.text,
-                            rhymeTier = suggestedLine.rhymeTier,
-                            isHook = suggestedLine.isHook,
-                            highlightRhyme = viewModel.isHighlightEnabled,
-                            showProsody = viewModel.isStressPreviewEnabled,
-                            onKeep = { viewModel.keepAlternate(suggestedLine.text) },
-                            isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
-                            onUse = {
-                                viewModel.insertSuggestion(suggestedLine.text)
-                                onSuggestionInserted()
+                    // Keep at least the reserved slots in the tree so an empty
+                    // one can play its collapse instead of vanishing.
+                    for (slot in 0 until maxOf(slotCount, SuggestionPlaceholders.VISIBLE_SLOTS)) {
+                        key(slot) {
+                            SuggestionSlot(
+                                line = viewModel.suggestions.getOrNull(slot),
+                                pending = isWriting && slot < SuggestionPlaceholders.VISIBLE_SLOTS,
+                                skeletonVariant = slot
+                            ) { suggestedLine ->
+                                SuggestionCard(
+                                    suggestion = suggestedLine.text,
+                                    rhymeTier = suggestedLine.rhymeTier,
+                                    isHook = suggestedLine.isHook,
+                                    highlightRhyme = viewModel.isHighlightEnabled,
+                                    showProsody = viewModel.isStressPreviewEnabled,
+                                    onKeep = { viewModel.keepAlternate(suggestedLine.text) },
+                                    isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
+                                    onUse = {
+                                        viewModel.insertSuggestion(suggestedLine.text)
+                                        onSuggestionInserted()
+                                    }
+                                )
                             }
-                        )
+                        }
                     }
                 }
             }

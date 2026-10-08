@@ -438,11 +438,28 @@ struct AssistantPanelView: View {
             }
 
             // MARK: - Suggestions
-            if !viewModel.suggestions.isEmpty {
+            // Slots open as skeleton rows the moment a request starts; each one
+            // cross-fades into its card as that line streams in, and any slot
+            // still empty when generation stops fades away.
+            let arrived = viewModel.suggestions.count
+            let placeholderCount = SuggestionPlaceholders.count(isLoading: viewModel.isLoading, arrived: arrived)
+            if arrived > 0 || placeholderCount > 0 {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                    Text("Suggestions")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Spacing.xs) {
+                        Text("Suggestions")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+
+                        if viewModel.isLoading {
+                            Text("Writing…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary.opacity(0.8))
+                                .accessibilityLabel("Writing suggestions")
+                                .accessibilityAddTraits(.updatesFrequently)
+                                .accessibilityIdentifier("suggestionsWriting")
+                                .transition(.opacity)
+                        }
+                    }
 
                     Text("AI-generated · review before use")
                         .font(.caption.italic())
@@ -462,8 +479,18 @@ struct AssistantPanelView: View {
                             onKeep: { viewModel.keepAlternate(suggestion.text) },
                             isKept: viewModel.companion.alternates.contains(where: { $0.text == suggestion.text.trimmingCharacters(in: .whitespacesAndNewlines) })
                         )
+                        .transition(.opacity)
+                    }
+
+                    // Identified by slot so a skeleton stays put while the
+                    // slots above it fill, and only the one being filled fades.
+                    ForEach(arrived..<(arrived + placeholderCount), id: \.self) { slot in
+                        SuggestionSkeletonRow(variant: slot)
+                            .transition(.opacity)
                     }
                 }
+                .rhymeAnimation(RhymeAITokens.Motion.state, value: arrived)
+                .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.isLoading)
             }
             }
             .id(Self.resultsAnchor)
@@ -543,13 +570,55 @@ struct AssistantPanelView: View {
     }
 }
 
+/// The shape of a `SuggestionCardView` with nothing written in it yet: the
+/// same surface, radius and padding, two text bars where the serif line will
+/// go, a badge block and an action block. It breathes between 55% and full
+/// opacity on a 1.3s ease-in-out loop; under Reduce Motion it holds at 75%.
+/// Hidden from VoiceOver, which hears "Writing suggestions" from the header.
 private struct SuggestionSkeletonRow: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var variant: Int = 0
+    @State private var breathing = false
+
     var body: some View {
-        RoundedRectangle(cornerRadius: RhymeAITokens.Radius.lg, style: .continuous)
-            .fill(Color.secondary.opacity(0.18))
-            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
-            .opacity(0.6)
-            .accessibilityHidden(true)
+        let widths = SuggestionSkeletonMotion.lineWidths(for: variant)
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+            HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    bar(fraction: widths.first)
+                    bar(fraction: widths.second)
+                }
+                .padding(.top, RhymeAITokens.Spacing.xxs)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.xs, style: .continuous)
+                    .fill(appearance.palette.raisedSurface)
+                    .frame(width: 28, height: 22)
+            }
+
+            RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
+                .fill(appearance.palette.raisedSurface)
+                .frame(width: 92, height: 32)
+        }
+        .padding(RhymeAITokens.Spacing.lg)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, fallbackOpacity: 0.06)
+        .opacity(reduceMotion ? SuggestionSkeletonMotion.staticOpacity : (breathing ? 1 : SuggestionSkeletonMotion.minimumOpacity))
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(SuggestionSkeletonMotion.breath) { breathing = true }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func bar(fraction: CGFloat) -> some View {
+        GeometryReader { proxy in
+            RoundedRectangle(cornerRadius: RhymeAITokens.Radius.xs, style: .continuous)
+                .fill(appearance.palette.selectionTint)
+                .frame(width: proxy.size.width * fraction, height: 12)
+        }
+        .frame(height: 12)
     }
 }
 
