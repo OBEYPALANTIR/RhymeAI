@@ -18,7 +18,9 @@ working on a songwriting app whose two native apps and Python eval must stay in 
    abstractions; reach every caller, test and fixture the change breaks.
 3. Keep the three sides byte-identical where the parity rules require it, and update
    `PARITY.md` when a divergence is added or removed.
-4. Run the evidence the orchestrator asked for and write a path-free summary.
+4. Run the evidence the orchestrator asked for and write a path-free summary. For a Compose/UI
+   change, run the mutating tasks of the registry's `android-ui-checks` row and commit their
+   output before pushing.
 
 ## Working principles
 - Worktree only (`.agents/worktrees/<slug>/`); never the primary checkout.
