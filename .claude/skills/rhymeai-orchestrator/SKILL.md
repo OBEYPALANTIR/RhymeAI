@@ -99,13 +99,16 @@ text; at most two rounds before escalating to the owner.
 Follow `rhymeai-pr-evidence`: build the evidence summary from the implementer's `EVIDENCE.md`
 plus the verifier's verdict and suite counts (the iOS stage and the non-mutating UI checks come
 only from the verifier), ask the owner's OK for the gist, open the PR with the "Run evidence"
-section, hand it to the registry's `pr-watch` tool, wait for CI plus the external reviewers, fix
-findings on the same branch, re-request Codex, then rebase-merge pinned to the verified head once
-CI is green and an independent verdict exists. When Phase 0 selected or created an issue, record
-the merge on it (`gh issue comment <n> --body "Merged in <merge sha>"`) and run `gh issue close
-<n>` if it is still open (the PR's `Fixes #<n>` closes it only when the PR merges into the default
-branch); skip this step when there is no issue. Finish with the worktree and branch cleanup in
-`rhymeai-pr-evidence`.
+section, hand it to the registry's `pr-watch` tool, and wait for CI plus the external reviewers.
+Every fix pushed after that (a review finding or red CI) goes back through Phase 2 (the
+implementer, same worktree) and Phase 3 (the verifier re-runs every check the fix can affect, its
+iOS stage and UI checks included); then the PR gets a follow-up comment with the re-run counts and
+Codex is re-requested. Rebase-merge, pinned to the head commit (`--match-head-commit`), only once
+the verifier's latest round ran on that commit, CI is green on it and an independent verdict covers
+it. When Phase 0 selected or created an issue, record the merge on it (`gh issue comment <n>
+--body "Merged in <merge sha>"`) and run `gh issue close <n>` if it is still open (the PR's
+`Fixes #<n>` closes it only when the PR merges into the default branch); skip this step when there
+is no issue. Finish with the worktree and branch cleanup in `rhymeai-pr-evidence`.
 
 ### Phase 5: models  → `rhymeai-model-trainer`  (entered from Phase 1 for model work)
 Teacher-data runs follow `rhymeai-teacher-data`; student runs follow `rhymeai-colab-student`.
@@ -125,7 +128,7 @@ issue (`Fixes #<n>` in the PR body).
 | Situation | Strategy |
 |-----------|----------|
 | Agent fails or stalls | retry once with the failure text; then do the step in the orchestrator and note it |
-| CI red | read the failing job, fix on the branch; never merge red, never `--admin` |
+| CI red | read the failing job, fix it on the branch through Phases 2–3; never merge red, never `--admin` |
 | Reviewer finding disputed | reply with evidence on the thread; do not dismiss |
 | Hook blocks a PR (missing run evidence) | add the evidence section with the gist raw URL; do not bypass |
 | Logic Pro open / memory below floor | defer heavy local work, continue inspection |

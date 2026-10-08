@@ -46,12 +46,14 @@ numbers), `## Run evidence` (gist raw URL), `## Not covered` (honest gaps). Link
 - Open with `gh pr create --body-file`, then hand the PR to the registry's `pr-watch` tool (with
   the app binding, do not poll checks yourself).
 - Codex reviews on open; CodeRabbit and Copilot may too. Treat each finding as probably right:
-  read the code path it names, fix on the same branch, reply on the thread with the commit, post
-  a follow-up comment with the re-run counts, and request a re-review with `@codex review`.
-- Merge only when every CI check that ran on the final commit is green (path filters can leave a
-  PR with no checks; then the local suites in `## Validation` are the gate) and an independent
-  non-author verdict exists on that commit (Codex's 👍 or "no major issues", or a
-  `code-reviewer` run posted to the PR).
+  read the code path it names, fix on the same branch, have the verifier re-run every check the
+  fix can affect (it owns the iOS stage and the non-mutating UI checks), reply on the thread with
+  the commit, post a follow-up comment with the re-run counts, and request a re-review with
+  `@codex review`.
+- Merge only when the verifier's latest round ran on the final commit, every CI check that ran on
+  it is green (path filters can leave a PR with no checks; then the local suites in
+  `## Validation` are the gate) and an independent non-author verdict exists on that commit
+  (Codex's 👍 or "no major issues", or a `code-reviewer` run posted to the PR).
 - `gh pr merge <n> --rebase --match-head-commit <sha>`, with `<sha>` the final commit those
   verdicts cover, so a later push cannot land unreviewed (no `--delete-branch`: the branch is
   still checked out in the worktree, so gh would skip the local delete). Then delete the
