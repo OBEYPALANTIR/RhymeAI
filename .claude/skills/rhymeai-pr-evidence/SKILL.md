@@ -8,6 +8,8 @@ description: "How a RhymeAI change gets from a worktree to main: branch and comm
 ## Branch and commits
 
 - Work in `.agents/worktrees/<slug>/` on `claude/<slug>-<yyyymmdd>` from fresh `origin/main`.
+  Exception: a task in the AGENTS.md UI polish pass works in a worktree of that pass's branch
+  (`chore/ui-polish-2026-05`) and uses its `feat(ui)`/`fix(ui)` commit scopes.
   Never switch, pull or edit the primary checkout.
 - Commit explicit paths in logical pieces; messages describe the resulting behaviour and the
   measured effect. No attribution lines, no model names.
@@ -22,7 +24,10 @@ The hook refuses a PR body without proof the change was *run*. What satisfies it
    (`https://gist.githubusercontent.com/<owner>/<id>/raw`) and the headline counts.
 3. The suites that apply: Android unit (+ androidTest compile), iOS `Writers BlockTests` on the
    authorized simulator, eval unit tests; an instrumented run on the authorized emulator when a
-   runtime behaviour changed; an E2B before/after through `prompts.py` when a prompt changed.
+   runtime behaviour changed; an E2B before/after through `prompts.py` when a prompt changed;
+   for a Compose/UI change, the registry's `android-ui-checks` list.
+4. When visual behaviour changes, before/after screenshots from the authorized emulator or
+   simulator, attached to the PR (owner's OK; never committed to the repo, per `CLAUDE.md`).
 
 PR body shape: `## Behavior` (what and why, in words), `## Validation` (suites with counts, A/B
 numbers), `## Run evidence` (gist raw URL), `## Not covered` (honest gaps). Link the issue with
@@ -38,7 +43,7 @@ numbers), `## Run evidence` (gist raw URL), `## Not covered` (honest gaps). Link
 - Merge only when CI is green on the final commit and an independent non-author verdict exists
   (a Codex "no major issues" on that commit, or a `code-reviewer` run posted to the PR).
 - `gh pr merge <n> --rebase --delete-branch`, then remove the worktree without `--force`
-  (delete untracked evidence files first). Close the issue with the merge sha.
+  (delete untracked evidence files first). Record the merge sha on the issue with `gh issue comment` (`Fixes #<n>` already closed it).
 
 ## Test builds for the owner
 
