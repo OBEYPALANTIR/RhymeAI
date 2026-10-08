@@ -55,6 +55,108 @@ struct RhymeConstraintTests {
         }
     }
 
+    // Perfect rhymes of "road" with multisyllabic entries, for the level rule.
+    // Twelve entries, so the shared rhyme index cannot mistake it for
+    // `relationDictionary` (the index is keyed by word count).
+    private let levelDictionary = PronunciationDictionary.fromLines([
+        "road\tR OW1 D",
+        "explode\tIH0 K S P L OW1 D",
+        "glowed\tG L OW1 D",
+        "overload\tOW2 V ER0 L OW1 D",
+        "showed\tSH OW1 D",
+        "bestowed\tB IH0 S T OW1 D",
+        "rode\tR OW1 D",
+        "code\tK OW1 D",
+        "load\tL OW1 D",
+        "owed\tOW1 D",
+        "towed\tT OW1 D",
+        "episode\tEH1 P AH0 S OW2 D"
+    ])
+    private let levelOrder = [
+        "explode", "glowed", "overload", "showed", "bestowed", "rode", "code", "load", "owed", "towed", "episode"
+    ]
+
+    @Test func levelEndWordsKeepModerateAsTheGivenOrder() {
+        #expect(RhymeConstraint.levelEndWords(levelOrder, complexity: .moderate, limit: 12, dictionary: levelDictionary) == levelOrder)
+        #expect(RhymeConstraint.levelEndWords(levelOrder, complexity: .moderate, limit: 3, dictionary: levelDictionary) == ["explode", "glowed", "overload"])
+        // The default level is Moderate: the list the prompt sent before the level-aware rule.
+        let order = RhymeConstraint.candidateEndWords(targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary)
+        #expect(order == RhymeConstraint.candidateEndWords(targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary, complexity: .moderate))
+        #expect(Set(order) == Set(levelOrder))
+    }
+
+    @Test func levelEndWordsPutTwoOrMoreSyllableWordsFirstAtComplex() {
+        #expect(
+            RhymeConstraint.levelEndWords(levelOrder, complexity: .complex, limit: 12, dictionary: levelDictionary)
+                == ["explode", "overload", "bestowed", "episode", "glowed", "showed", "rode", "code", "load", "owed", "towed"]
+        )
+        #expect(
+            RhymeConstraint.levelEndWords(levelOrder, complexity: .complex, limit: 5, dictionary: levelDictionary)
+                == ["explode", "overload", "bestowed", "episode", "glowed"]
+        )
+        // Through candidateEndWords the groups keep whatever order the index gave them.
+        let complex = RhymeConstraint.candidateEndWords(
+            targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary, complexity: .complex
+        )
+        let moderate = RhymeConstraint.candidateEndWords(targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary)
+        #expect(complex.prefix(4).allSatisfy { ProsodyAnalyzer.analyzeWord($0, dictionary: levelDictionary).syllableCount >= 2 })
+        #expect(Array(complex.prefix(4)) == moderate.filter { ProsodyAnalyzer.analyzeWord($0, dictionary: levelDictionary).syllableCount >= 2 })
+        #expect(Array(complex.dropFirst(4)) == moderate.filter { ProsodyAnalyzer.analyzeWord($0, dictionary: levelDictionary).syllableCount == 1 })
+    }
+
+    @Test func levelEndWordsKeepOneSyllableWordsOnlyAtSimple() {
+        #expect(
+            RhymeConstraint.levelEndWords(levelOrder, complexity: .simple, limit: 12, dictionary: levelDictionary)
+                == ["glowed", "showed", "rode", "code", "load", "owed", "towed"]
+        )
+        let simple = RhymeConstraint.candidateEndWords(
+            targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary, complexity: .simple
+        )
+        #expect(Set(simple) == ["glowed", "showed", "rode", "code", "load", "owed", "towed"])
+    }
+
+    @Test func levelEndWordsFallBackToTheRemainingWordsBelowSixAtSimple() {
+        let ordered = ["explode", "glowed", "overload", "showed", "bestowed"]
+        #expect(
+            RhymeConstraint.levelEndWords(ordered, complexity: .simple, limit: 12, dictionary: levelDictionary)
+                == ["glowed", "showed", "explode", "overload", "bestowed"]
+        )
+        #expect(
+            RhymeConstraint.levelEndWords(ordered, complexity: .simple, limit: 3, dictionary: levelDictionary)
+                == ["glowed", "showed", "explode"]
+        )
+        #expect(RhymeConstraint.simpleMinMonosyllables == 6)
+    }
+
+    /// The bundled dictionary follows the same rule the shared eval fixture
+    /// (shared/fixtures/complexity-end-words-v1.json) pins for Android.
+    @Test func bundledListsFollowTheLevelRule() {
+        func list(_ anchor: String, _ complexity: RhymeComplexity) -> [String] {
+            RhymeConstraint.candidateEndWords(targetWord: anchor, rhymeType: .perfect, complexity: complexity)
+        }
+        for anchor in ["home", "night", "road", "alone", "glow", "time"] {
+            let moderate = list(anchor, .moderate)
+            let complex = list(anchor, .complex)
+            let simple = list(anchor, .simple)
+            #expect(complex.count == 12 && simple.count == 12, "\(anchor)")
+            #expect(complex.allSatisfy { SyllableCounter.count($0) >= 2 }, "\(anchor) complex \(complex)")
+            #expect(simple.allSatisfy { SyllableCounter.count($0) == 1 }, "\(anchor) simple \(simple)")
+            #expect(moderate.filter { SyllableCounter.count($0) >= 2 } == complex.filter { moderate.contains($0) }, "\(anchor)")
+            #expect(moderate.filter { SyllableCounter.count($0) == 1 } == simple.filter { moderate.contains($0) }, "\(anchor)")
+        }
+        for anchor in ["world", "love"] {
+            let simple = list(anchor, .simple)
+            let mono = simple.filter { SyllableCounter.count($0) == 1 }
+            #expect((1...5).contains(mono.count), "\(anchor) \(simple)")
+            #expect(Array(simple.prefix(mono.count)) == mono, "\(anchor)")
+            #expect(simple.count == 12, "\(anchor)")
+        }
+        let arrival = list("arrival", .moderate)
+        #expect((1...5).contains(arrival.count), "\(arrival)")
+        #expect(list("arrival", .simple) == arrival)
+        #expect(list("arrival", .complex) == arrival)
+    }
+
     @Test func candidateEndWordsReturnEmptyForUnknownWords() {
         #expect(RhymeConstraint.candidateEndWords(targetWord: "zzzqxv", rhymeType: .perfect).isEmpty)
         #expect(RhymeConstraint.candidateEndWords(targetWord: "zzzqxv", rhymeType: .slant).isEmpty)

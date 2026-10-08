@@ -1,0 +1,196 @@
+"""Level-aware allowed end-word lists and the numeric Simple/Complex hints.
+
+The list rule (scoring.level_end_words) and the hint strings
+(prompts.RHYME_COMPLEXITIES) mirror Android RhymeConstraint.levelEndWords /
+RhymeComplexity.promptHint and iOS RhymeConstraint.levelEndWords /
+RhymeComplexity.promptHint; the shared fixture pins the Android parity.
+
+Run: python3 -B -m unittest discover -s finetune/eval -p 'test_*.py'
+"""
+
+import copy
+import json
+import os
+import sys
+import unittest
+
+FINETUNE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if FINETUNE not in sys.path:
+    sys.path.insert(0, FINETUNE)
+
+from eval import cases, complexity_end_words_fixture, prompts, run_eval, scoring  # noqa: E402
+
+SIMPLE_HINT = (
+    "Each line must be 4 to 7 plain, everyday words. End each line on a one-syllable word. "
+    "No wordplay."
+)
+COMPLEX_HINT = (
+    "Each line must be 8 to 12 words. End each line on a word of two or more syllables, or put "
+    "an internal rhyme inside the line. Use vivid, specific, less common words and double meanings."
+)
+MODERATE_HINT = (
+    "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear "
+    "rather than clever."
+)
+
+# Perfect rhymes of "road": frequency order is the dictionary (insertion) order
+# because none of these words are in the frequency list. "episode" (EH1 P AH0 S
+# OW2 D) comes from the multisyllabic pool, after every exact match.
+SMALL_DICTIONARY = scoring.PronunciationDictionary({
+    "road": [["R", "OW1", "D"]],
+    "explode": [["IH0", "K", "S", "P", "L", "OW1", "D"]],
+    "glowed": [["G", "L", "OW1", "D"]],
+    "overload": [["OW2", "V", "ER0", "L", "OW1", "D"]],
+    "showed": [["SH", "OW1", "D"]],
+    "bestowed": [["B", "IH0", "S", "T", "OW1", "D"]],
+    "rode": [["R", "OW1", "D"]],
+    "code": [["K", "OW1", "D"]],
+    "load": [["L", "OW1", "D"]],
+    "owed": [["OW1", "D"]],
+    "towed": [["T", "OW1", "D"]],
+    "episode": [["EH1", "P", "AH0", "S", "OW2", "D"]],
+})
+EMPTY_FREQUENCY = scoring.WordFrequency({})
+
+
+def small_list(complexity, limit=12):
+    matches = scoring.find_rhymes("road", dictionary=SMALL_DICTIONARY, word_frequency=EMPTY_FREQUENCY)
+    ordered = [w for w in matches.perfect + matches.multi if w != "road"]
+    return scoring.level_end_words(ordered, complexity, limit, dictionary=SMALL_DICTIONARY)
+
+
+class LevelEndWordsTests(unittest.TestCase):
+    def test_moderate_is_the_frequency_order(self):
+        self.assertEqual(
+            ["explode", "glowed", "overload", "showed", "bestowed", "rode", "code", "load", "owed", "towed", "episode"],
+            small_list("MODERATE"),
+        )
+
+    def test_complex_puts_two_or_more_syllables_first_stably(self):
+        self.assertEqual(
+            ["explode", "overload", "bestowed", "episode", "glowed", "showed", "rode", "code", "load", "owed", "towed"],
+            small_list("COMPLEX"),
+        )
+        self.assertEqual(["explode", "overload", "bestowed", "episode"], small_list("COMPLEX", limit=4))
+        self.assertEqual(["explode", "overload", "bestowed", "episode", "glowed"], small_list("COMPLEX", limit=5))
+
+    def test_simple_keeps_one_syllable_words_only(self):
+        self.assertEqual(
+            ["glowed", "showed", "rode", "code", "load", "owed", "towed"], small_list("SIMPLE")
+        )
+
+    def test_simple_falls_back_to_the_remaining_words_below_six(self):
+        ordered = ["explode", "glowed", "overload", "showed", "bestowed"]
+        self.assertEqual(
+            ["glowed", "showed", "explode", "overload", "bestowed"],
+            scoring.level_end_words(ordered, "SIMPLE", 12, dictionary=SMALL_DICTIONARY),
+        )
+        self.assertEqual(
+            ["glowed", "showed", "explode"],
+            scoring.level_end_words(ordered, "SIMPLE", 3, dictionary=SMALL_DICTIONARY),
+        )
+        self.assertEqual(6, scoring.SIMPLE_MIN_MONOSYLLABLES)
+
+    def test_unknown_level_is_rejected(self):
+        with self.assertRaises(ValueError):
+            scoring.level_end_words(["glowed"], "EXTREME", 12, dictionary=SMALL_DICTIONARY)
+
+    def test_candidate_end_words_default_is_moderate(self):
+        self.assertEqual(
+            scoring.candidate_end_words("home", "PERFECT"),
+            scoring.candidate_end_words("home", "PERFECT", complexity="MODERATE"),
+        )
+
+
+class SharedFixtureTests(unittest.TestCase):
+    def test_fixture_matches_the_builder(self):
+        with open(complexity_end_words_fixture.FIXTURE_PATH, encoding="utf-8") as handle:
+            fixture = json.load(handle)
+        self.assertEqual(complexity_end_words_fixture.build_fixture(), fixture)
+        self.assertEqual(33, len(fixture["cases"]))
+        for case in fixture["cases"]:
+            self.assertEqual(
+                case["expected"],
+                scoring.candidate_end_words(
+                    case["anchor"], case["rhymeType"], limit=fixture["limit"], complexity=case["complexity"]
+                ),
+                case,
+            )
+
+    def test_fixture_covers_every_rule_branch(self):
+        fixture = complexity_end_words_fixture.build_fixture()
+        by_key = {(c["anchor"], c["complexity"]): c["expected"] for c in fixture["cases"]}
+        syllables = scoring.syllable_count_word
+        # Complex: every anchor with 2+-syllable rhymes lists them first.
+        for anchor in ("home", "night", "road", "alone", "glow", "time"):
+            words = by_key[(anchor, "COMPLEX")]
+            self.assertTrue(all(syllables(w) >= 2 for w in words), (anchor, words))
+            self.assertEqual(
+                [w for w in by_key[(anchor, "MODERATE")] if syllables(w) >= 2],
+                [w for w in words if w in by_key[(anchor, "MODERATE")]],
+                "Complex keeps the frequency order within the 2+-syllable group",
+            )
+            self.assertTrue(all(syllables(w) == 1 for w in by_key[(anchor, "SIMPLE")]), anchor)
+        # Simple fallback: fewer than six one-syllable rhymes, then the rest in order.
+        for anchor in ("world", "love"):
+            words = by_key[(anchor, "SIMPLE")]
+            mono = [w for w in words if syllables(w) == 1]
+            self.assertTrue(0 < len(mono) < 6, (anchor, words))
+            self.assertEqual(mono, words[: len(mono)])
+            self.assertEqual(12, len(words))
+        # All-multisyllable anchors: identical lists at every level.
+        for anchor in ("river", "arrival", "surrender"):
+            self.assertEqual(by_key[(anchor, "MODERATE")], by_key[(anchor, "SIMPLE")], anchor)
+            self.assertEqual(by_key[(anchor, "MODERATE")], by_key[(anchor, "COMPLEX")], anchor)
+        self.assertLess(len(by_key[("arrival", "SIMPLE")]), 6)
+
+
+class HintAndPromptTests(unittest.TestCase):
+    def test_hints_are_the_tested_wording(self):
+        self.assertEqual(("Simple", SIMPLE_HINT), prompts.RHYME_COMPLEXITIES["SIMPLE"])
+        self.assertEqual(("Moderate", MODERATE_HINT), prompts.RHYME_COMPLEXITIES["MODERATE"])
+        self.assertEqual(("Complex", COMPLEX_HINT), prompts.RHYME_COMPLEXITIES["COMPLEX"])
+
+    def _suggestion_case(self):
+        return next(
+            c for c in cases.CASES
+            if c["task"] == "suggestions" and c["target_rhyme_line"] and c["rhyme_type"] == "PERFECT"
+        )
+
+    def test_level_reaches_the_prompt_line_and_the_list(self):
+        for level, hint in (("SIMPLE", SIMPLE_HINT), ("MODERATE", MODERATE_HINT), ("COMPLEX", COMPLEX_HINT)):
+            case = copy.deepcopy(self._suggestion_case())
+            case["complexity"] = level
+            prepared = run_eval.prepare_case(case)
+            prompt = prepared["user_prompt"]
+            label = prompts.RHYME_COMPLEXITIES[level][0]
+            self.assertIn("\nComplexity: %s. %s\n" % (label, hint), prompt)
+            constraint = prepared["constraint"]
+            self.assertIsNotNone(constraint)
+            expected = scoring.candidate_end_words(constraint.target_word, "PERFECT", complexity=level)
+            self.assertEqual(expected, list(constraint.candidate_words))
+            self.assertIn(
+                "End each line with one of these rhyming words: %s (choose the most natural fit)."
+                % ", ".join(expected),
+                prompt,
+            )
+
+    def test_levels_build_different_lists_for_a_mixed_anchor(self):
+        constraints = {
+            level: prompts.suggestion_rhyme_constraint("I keep the porch light on at home", "PERFECT", complexity=level)
+            for level in ("SIMPLE", "MODERATE", "COMPLEX")
+        }
+        words = {level: list(c.candidate_words) for level, c in constraints.items()}
+        self.assertNotEqual(words["SIMPLE"], words["MODERATE"])
+        self.assertNotEqual(words["COMPLEX"], words["MODERATE"])
+        self.assertTrue(all(scoring.syllable_count_word(w) >= 2 for w in words["COMPLEX"]))
+        self.assertTrue(all(scoring.syllable_count_word(w) == 1 for w in words["SIMPLE"]))
+        self.assertEqual(
+            words["MODERATE"],
+            list(prompts.suggestion_rhyme_constraint("I keep the porch light on at home", "PERFECT").candidate_words),
+            "the default level is Moderate",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
