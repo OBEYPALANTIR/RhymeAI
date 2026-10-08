@@ -77,3 +77,4 @@ xcrun simctl list devices
 | 2026-10-08 | iOS test command in the registry now carries project, scheme and destination; `.agents/worktrees/` ignored in the shared gitignore | `references/tools.md`, `.gitignore` | Codex review of PR 92, second pass |
 | 2026-10-08 | Workers declare their skills in frontmatter so they load at spawn; designer memory exclusions narrowed to generic code | `agents/*` | Codex review of PR 92, third pass |
 | 2026-10-08 | iOS tests registered as the guarded `scripts/verify.sh` stage; issue closure made conditional on an issue existing | `references/tools.md`, `skills/rhymeai-orchestrator` | Codex review of PR 92, fourth pass |
+| 2026-10-08 | iOS fallback no longer skips the simulator guards; evidence host has no hook-bypassing fallback; designer memory moved to user scope so it survives worktree removal | `references/tools.md`, `agents/android-m3-expressive-designer.md` | Codex review of PR 92, fifth pass |
