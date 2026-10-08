@@ -19,21 +19,106 @@ enum SuggestionPlaceholders {
     }
 }
 
-/// Motion for the skeleton rows. The breath is a slow opacity loop, not a
-/// shimmer sweep: the design reserves gradients and glow, and the loop only
-/// has to say "still writing". Android uses the same numbers.
-enum SuggestionSkeletonMotion {
-    static let minimumOpacity: Double = 0.55
-    static let staticOpacity: Double = 0.75
-    static let breathDuration: TimeInterval = 1.3
-    static let breath: Animation = .easeInOut(duration: breathDuration).repeatForever(autoreverses: true)
+/// The pencil that scribbles a skeleton row's two lines while the real line is
+/// being written. One loop writes the first (longer) line, then the second,
+/// holds for a beat, and starts over on a clean card. The wave is the UnBlock
+/// underline's zigzag, tiled along the line. Mirrors `ScribbleMotion` on
+/// Android; the numbers are shared and unit-tested on both platforms.
+enum SuggestionScribbleMotion {
+    /// Time to write both lines, start to finish.
+    static let writeDuration: TimeInterval = 1.3
 
-    /// Bar widths, as fractions of the card's text column, so three stacked
+    /// Pause with both lines drawn before the card is wiped and written again.
+    static let holdDuration: TimeInterval = 0.35
+    static let period: TimeInterval = writeDuration + holdDuration
+
+    /// Share of the writing time the first line takes: its share of the two lines' length.
+    static let firstLineShare: Double = 0.63
+
+    /// Under Reduce Motion the card holds this frame: first line written, second half way.
+    static let staticLines: (first: Double, second: Double) = (1, 0.6)
+
+    /// One wave of the UnBlock scribble in unit space: the same five points as
+    /// `EditorViewConstants.Scribble` in EditorView.swift, which is private there.
+    static let wave: [CGPoint] = [
+        CGPoint(x: 0, y: 0.55),
+        CGPoint(x: 0.18, y: 0.25),
+        CGPoint(x: 0.42, y: 0.78),
+        CGPoint(x: 0.68, y: 0.28),
+        CGPoint(x: 1, y: 0.58),
+    ]
+    static let waveWidth: CGFloat = 34
+    static let lineHeight: CGFloat = 10
+    static let strokeWidth: CGFloat = 1.6
+    static let pencilSize: CGFloat = 14
+
+    /// Line lengths, as fractions of the card's text column, so three stacked
     /// skeletons read as three different lines rather than one repeated block.
     static let lineWidthCycle: [(first: CGFloat, second: CGFloat)] = [(0.78, 0.46), (0.64, 0.38), (0.72, 0.52)]
 
     static func lineWidths(for slot: Int) -> (first: CGFloat, second: CGFloat) {
         let count = lineWidthCycle.count
         return lineWidthCycle[((slot % count) + count) % count]
+    }
+
+    /// How much of each line is drawn `elapsed` seconds into the loop, each in 0...1.
+    static func lines(elapsed: TimeInterval) -> (first: Double, second: Double) {
+        let wrapped = elapsed - period * (elapsed / period).rounded(.down)
+        let phase = wrapped / writeDuration
+        let first = min(max(phase / firstLineShare, 0), 1)
+        let second = min(max((phase - firstLineShare) / (1 - firstLineShare), 0), 1)
+        return (first, second)
+    }
+}
+
+/// The UnBlock wave tiled across a rect, as a strokeable shape. `trim(from:to:)`
+/// draws it pencil-first; `point(at:in:)` says where the pencil is.
+struct ScribbleLineShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let points = Self.points(in: rect)
+        guard let start = points.first else { return path }
+        path.move(to: start)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        return path
+    }
+
+    /// The polyline, in `rect`'s coordinates.
+    static func points(in rect: CGRect) -> [CGPoint] {
+        let cycles = max(Int(rect.width / SuggestionScribbleMotion.waveWidth), 1)
+        let cycleWidth = rect.width / CGFloat(cycles)
+        var points: [CGPoint] = []
+        for cycle in 0..<cycles {
+            for (index, unit) in SuggestionScribbleMotion.wave.enumerated() {
+                // Each wave continues from the previous wave's end point.
+                if cycle > 0 && index == 0 { continue }
+                points.append(CGPoint(
+                    x: rect.minX + (CGFloat(cycle) + unit.x) * cycleWidth,
+                    y: rect.minY + unit.y * rect.height
+                ))
+            }
+        }
+        return points
+    }
+
+    /// The point `progress` (0...1) of the way along the polyline by length.
+    static func point(at progress: Double, in rect: CGRect) -> CGPoint {
+        let points = points(in: rect)
+        guard points.count > 1 else { return points.first ?? CGPoint(x: rect.minX, y: rect.midY) }
+        let lengths = zip(points, points.dropFirst()).map { hypot($1.x - $0.x, $1.y - $0.y) }
+        let total = lengths.reduce(0, +)
+        var remaining = total * CGFloat(min(max(progress, 0), 1))
+        for (index, length) in lengths.enumerated() {
+            if remaining <= length || index == lengths.count - 1 {
+                let fraction = length > 0 ? min(remaining / length, 1) : 0
+                let from = points[index]
+                let to = points[index + 1]
+                return CGPoint(x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction)
+            }
+            remaining -= length
+        }
+        return points[points.count - 1]
     }
 }
