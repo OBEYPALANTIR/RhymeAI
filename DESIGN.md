@@ -698,7 +698,7 @@ Reduced motion is handled in code. On iOS, animations go through `rhymeAnimation
 
 Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
 
-Loading states that wait on a stream (the Assistant's suggestions) reserve their slots up front and let each real arrival cross-fade into place on the state tier; the placeholder lines scribbling themselves in stand in for a spinner, and holds one frame under reduced motion. See "Suggestions as they load" under Components. The one celebratory exception is the 480ms ink burst when writing finishes ("Ink burst" under Components).
+Loading states that wait on a stream (the Assistant's suggestions) reserve their slots up front and let each real arrival cross-fade into place on the state tier; the placeholder lines scribbling themselves in stand in for a spinner, and hold one frame under reduced motion. See "Suggestions as they load" under Components. The one celebratory exception is the 480ms ink burst when writing finishes ("Ink burst" under Components).
 
 ## Shapes
 

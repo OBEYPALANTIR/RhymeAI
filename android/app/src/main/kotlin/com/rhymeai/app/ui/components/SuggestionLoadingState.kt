@@ -260,19 +260,31 @@ private fun ScribbleLine(widthFraction: Float, progress: Float) {
             .fillMaxWidth(widthFraction)
             .height(ScribbleMotion.lineHeight)
     ) {
-        val cycles = (size.width / ScribbleMotion.waveWidth.toPx()).toInt().coerceAtLeast(1)
-        val cycleWidth = size.width / cycles
+        // Waves keep their 34dp period whatever the line's width; the last one
+        // is cut at the edge, interpolating the segment it was on.
+        val waveWidth = ScribbleMotion.waveWidth.toPx()
         path.reset()
-        for (cycle in 0 until cycles) {
-            ScribbleMotion.wave.forEachIndexed { index, (unitX, unitY) ->
-                val x = (cycle + unitX) * cycleWidth
-                val y = unitY * size.height
-                when {
-                    cycle == 0 && index == 0 -> path.moveTo(x, y)
-                    index == 0 -> Unit // each wave continues from the previous wave's end point
-                    else -> path.lineTo(x, y)
+        path.moveTo(0f, ScribbleMotion.wave.first().second * size.height)
+        var previousX = 0f
+        var previousY = ScribbleMotion.wave.first().second * size.height
+        var cycle = 0
+        var clipped = false
+        while (!clipped) {
+            for ((index, point) in ScribbleMotion.wave.withIndex()) {
+                if (index == 0) continue // each wave continues from the previous wave's end point
+                val x = (cycle + point.first) * waveWidth
+                val y = point.second * size.height
+                if (x >= size.width) {
+                    val fraction = if (x > previousX) (size.width - previousX) / (x - previousX) else 0f
+                    path.lineTo(size.width, previousY + (y - previousY) * fraction)
+                    clipped = true
+                    break
                 }
+                path.lineTo(x, y)
+                previousX = x
+                previousY = y
             }
+            cycle++
         }
         measure.setPath(path, false)
         val drawn = measure.length * progress.coerceIn(0f, 1f)

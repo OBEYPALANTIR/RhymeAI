@@ -84,22 +84,30 @@ struct ScribbleLineShape: Shape {
         return path
     }
 
-    /// The polyline, in `rect`'s coordinates.
+    /// The polyline, in `rect`'s coordinates. Waves keep their 34-point period
+    /// whatever the rect's width; the last one is cut at the edge, interpolating
+    /// the segment it was on.
     static func points(in rect: CGRect) -> [CGPoint] {
-        let cycles = max(Int(rect.width / SuggestionScribbleMotion.waveWidth), 1)
-        let cycleWidth = rect.width / CGFloat(cycles)
-        var points: [CGPoint] = []
-        for cycle in 0..<cycles {
-            for (index, unit) in SuggestionScribbleMotion.wave.enumerated() {
-                // Each wave continues from the previous wave's end point.
-                if cycle > 0 && index == 0 { continue }
-                points.append(CGPoint(
-                    x: rect.minX + (CGFloat(cycle) + unit.x) * cycleWidth,
-                    y: rect.minY + unit.y * rect.height
-                ))
+        let waveWidth = SuggestionScribbleMotion.waveWidth
+        let wave = SuggestionScribbleMotion.wave
+        guard let first = wave.first, rect.width > 0 else { return [] }
+        var points = [CGPoint(x: rect.minX, y: rect.minY + first.y * rect.height)]
+        var cycle = 0
+        while true {
+            // Each wave continues from the previous wave's end point.
+            for unit in wave.dropFirst() {
+                let x = rect.minX + (CGFloat(cycle) + unit.x) * waveWidth
+                let y = rect.minY + unit.y * rect.height
+                if x >= rect.maxX {
+                    let previous = points[points.count - 1]
+                    let fraction = x > previous.x ? (rect.maxX - previous.x) / (x - previous.x) : 0
+                    points.append(CGPoint(x: rect.maxX, y: previous.y + (y - previous.y) * fraction))
+                    return points
+                }
+                points.append(CGPoint(x: x, y: y))
             }
+            cycle += 1
         }
-        return points
     }
 
     /// The point `progress` (0...1) of the way along the polyline by length.

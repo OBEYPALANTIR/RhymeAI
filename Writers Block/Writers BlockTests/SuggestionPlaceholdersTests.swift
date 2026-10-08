@@ -101,6 +101,12 @@ struct SuggestionScribbleMotionTests {
         #expect(points.last?.x == 210)
         #expect(points.allSatisfy { $0.y >= 0 && $0.y <= 10 })
 
+        // A 60-point line is one 34-point wave plus a clipped partial, never one stretched wave.
+        let short = ScribbleLineShape.points(in: CGRect(x: 0, y: 0, width: 60, height: 10))
+        #expect(short.count > SuggestionScribbleMotion.wave.count)
+        #expect(short[1].x == 0.18 * 34)
+        #expect(short.last?.x == 60)
+
         let start = ScribbleLineShape.point(at: 0, in: rect)
         let middle = ScribbleLineShape.point(at: 0.5, in: rect)
         let end = ScribbleLineShape.point(at: 1, in: rect)
