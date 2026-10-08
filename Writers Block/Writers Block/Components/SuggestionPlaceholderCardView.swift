@@ -67,13 +67,20 @@ enum SuggestionInkLineMotion {
 }
 
 /// A ghost of `SuggestionCardView` that holds the slot a streamed line will
-/// fill. Hidden from VoiceOver; the "Writing lines…" caption above the list
-/// is what gets announced.
+/// fill. It mirrors the card's rows (one serif line, the stress-and-IPA
+/// preview when that is on, the action row, stacked at accessibility sizes
+/// as the card's `ViewThatFits` does) so the list moves as little as
+/// possible when the card lands; a line that wraps still grows the card.
+/// Hidden from VoiceOver; the "Writing lines…" caption above the list is
+/// what gets announced.
 struct SuggestionPlaceholderCardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let row: Int
+    /// Mirrors `SuggestionCardView.showProsody`: reserves the stress-and-IPA rows.
+    var showProsody: Bool = false
 
     @State private var start = Date()
 
@@ -81,19 +88,42 @@ struct SuggestionPlaceholderCardView: View {
         let ink = appearance.palette.primaryInk
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
-                textBar(ink: ink)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    textBar(ink: ink)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if showProsody {
+                        // SuggestionProsodyPreviewView: two caption monospace lines.
+                        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.hairline) {
+                            ghost(width: 72, height: 8, radius: 4, color: ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
+                                .frame(height: 16, alignment: .leading)
+                            ghost(width: 120, height: 8, radius: 4, color: ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
+                                .frame(height: 16, alignment: .leading)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 // Syllable badge ghost.
                 ghost(width: 26, height: 22, radius: RhymeAITokens.Radius.xs, color: ink.opacity(SuggestionInkLineMotion.ghostOpacity))
             }
 
-            // Action row ghosts: "Use line" and "Keep for later".
-            HStack(spacing: RhymeAITokens.Spacing.md) {
-                ghost(width: 92, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostOpacity))
-                ghost(width: 112, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
+            // Action row ghosts: "Use line" and "Keep for later". The card's
+            // ViewThatFits stacks the real buttons at accessibility sizes.
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    ghost(width: 92, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostOpacity))
+                        .frame(minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
+                    ghost(width: 112, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
+                        .frame(minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
+                }
+            } else {
+                HStack(spacing: RhymeAITokens.Spacing.md) {
+                    ghost(width: 92, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostOpacity))
+                    ghost(width: 112, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
+                }
+                .frame(minHeight: RhymeAITokens.Touch.minimum)
             }
-            .frame(minHeight: RhymeAITokens.Touch.minimum)
         }
         .padding(RhymeAITokens.Spacing.lg)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, fallbackOpacity: 0.06)
@@ -138,7 +168,7 @@ struct SuggestionPlaceholderCardView: View {
 #Preview {
     VStack(spacing: RhymeAITokens.Spacing.xs) {
         SuggestionPlaceholderCardView(row: 0)
-        SuggestionPlaceholderCardView(row: 1)
+        SuggestionPlaceholderCardView(row: 1, showProsody: true)
         SuggestionPlaceholderCardView(row: 2)
     }
     .padding()

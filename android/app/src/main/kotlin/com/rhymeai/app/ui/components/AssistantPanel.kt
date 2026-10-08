@@ -543,7 +543,8 @@ fun AssistantPanel(
                         ) {
                             SuggestionPlaceholderCard(
                                 row = row,
-                                modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
+                                modifier = Modifier.padding(top = DesignTokens.Spacing.sm),
+                                showProsody = viewModel.isStressPreviewEnabled
                             )
                         }
                     }

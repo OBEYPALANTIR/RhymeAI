@@ -480,7 +480,7 @@ struct AssistantPanelView: View {
                     }
 
                     ForEach(0..<placeholderCount, id: \.self) { row in
-                        SuggestionPlaceholderCardView(row: row)
+                        SuggestionPlaceholderCardView(row: row, showProsody: viewModel.isStressPreviewEnabled)
                             .transition(.opacity)
                     }
                 }

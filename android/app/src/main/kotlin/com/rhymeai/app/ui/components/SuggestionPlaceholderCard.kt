@@ -17,6 +17,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -119,13 +120,18 @@ object SuggestionPlaceholderMotion {
 
 /**
  * A ghost of [SuggestionCard] that holds the slot a streamed line will fill.
- * Hidden from accessibility services; the "Writing lines…" caption above the
- * list is what TalkBack announces.
+ * It mirrors the card's rows (one serif line, the stress-and-IPA preview when
+ * that is on, the action row) so the list moves as little as possible when
+ * the card lands; a line that wraps, or actions that wrap at large font
+ * scales, still grow the card. Hidden from accessibility services; the
+ * "Writing lines…" caption above the list is what TalkBack announces.
  */
 @Composable
 fun SuggestionPlaceholderCard(
     row: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Mirrors [SuggestionCard]'s `showProsody`: reserves the stress-and-IPA rows. */
+    showProsody: Boolean = false
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val ink = colorScheme.onSurface
@@ -151,19 +157,35 @@ fun SuggestionPlaceholderCard(
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
         ) {
-            // Mirrors the 20sp line box of the serif suggestion text.
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(20.dp),
-                contentAlignment = Alignment.CenterStart
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
             ) {
-                InkLine(
-                    row = row,
-                    ink = ink,
-                    animationsEnabled = animationsEnabled,
-                    modifier = Modifier.fillMaxWidth(SuggestionPlaceholderMotion.textBarFraction(row))
-                )
+                // Mirrors the 20sp line box of the serif suggestion text.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(20.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    InkLine(
+                        row = row,
+                        ink = ink,
+                        animationsEnabled = animationsEnabled,
+                        modifier = Modifier.fillMaxWidth(SuggestionPlaceholderMotion.textBarFraction(row))
+                    )
+                }
+                if (showProsody) {
+                    // ProsodyPreview: two 16sp monospace lines, 2dp apart.
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Box(Modifier.height(16.dp), contentAlignment = Alignment.CenterStart) {
+                            Ghost(width = 72.dp, height = 8.dp, radius = 4.dp, color = ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_SOFT_ALPHA))
+                        }
+                        Box(Modifier.height(16.dp), contentAlignment = Alignment.CenterStart) {
+                            Ghost(width = 120.dp, height = 8.dp, radius = 4.dp, color = ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_SOFT_ALPHA))
+                        }
+                    }
+                }
             }
             // Syllable badge ghost.
             Ghost(width = 26.dp, height = 22.dp, radius = DesignTokens.Radius.xs, color = ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_ALPHA))
