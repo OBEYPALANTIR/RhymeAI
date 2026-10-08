@@ -156,14 +156,13 @@ def score_case(prepared, output_text):
         }
         constraint = prepared.get("constraint")
         if constraint is not None:
-            matches = scoring.find_rhymes(constraint.target_word)
             per_line = []
             for line in fmt["lines"]:
                 end = scoring.line_end_word(line)
                 if end and end in constraint.candidate_words:
                     tier = "candidate"
-                elif scoring.rhyme_tier(line, matches) > 0:
-                    tier = "rhymes"
+                elif scoring.rhyme_relation(end, constraint.target_word) == constraint.rhyme_type:
+                    tier = "rhymes"  # the on-device filter admits only the requested relation
                 else:
                     tier = "miss"
                 per_line.append({"line": line, "end_word": end, "tier": tier})

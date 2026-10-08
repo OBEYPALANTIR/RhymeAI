@@ -116,7 +116,8 @@ class SharedFixtureTests(unittest.TestCase):
         with open(complexity_end_words_fixture.FIXTURE_PATH, encoding="utf-8") as handle:
             fixture = json.load(handle)
         self.assertEqual(complexity_end_words_fixture.build_fixture(), fixture)
-        self.assertEqual(33, len(fixture["cases"]))
+        self.assertEqual(99, len(fixture["cases"]))
+        self.assertEqual({"PERFECT", "NEAR", "SLANT"}, {c["rhymeType"] for c in fixture["cases"]})
         for case in fixture["cases"]:
             self.assertEqual(
                 case["expected"],
@@ -128,7 +129,7 @@ class SharedFixtureTests(unittest.TestCase):
 
     def test_fixture_covers_every_rule_branch(self):
         fixture = complexity_end_words_fixture.build_fixture()
-        by_key = {(c["anchor"], c["complexity"]): c["expected"] for c in fixture["cases"]}
+        by_key = {(c["anchor"], c["complexity"]): c["expected"] for c in fixture["cases"] if c["rhymeType"] == "PERFECT"}
         syllables = scoring.syllable_count_word
         # Complex: every anchor with 2+-syllable rhymes lists them first.
         for anchor in ("home", "night", "road", "alone", "glow", "time"):
@@ -265,9 +266,9 @@ class HintAndPromptTests(unittest.TestCase):
         self.assertNotIn("road", constraint.candidate_words)
 
     def test_hook_promotion_verifies_the_requested_relation(self):
-        """A perfect-rhyme hook is not promoted into a Near prompt (Android checks
-        rhymeRelation == rhymeType); a near hook is; Slant promotes nothing because
-        the eval cannot classify slant."""
+        """A perfect-rhyme hook is not promoted into a Near or Slant prompt (Android
+        checks rhymeRelation == rhymeType); a near hook is promoted into Near and a
+        slant hook into Slant."""
         lyrics = (
             "[Chorus]\nI'm breaking through the code\n\n"
             "[Chorus]\nYellow lights on a midnight road"
@@ -283,14 +284,58 @@ class HintAndPromptTests(unittest.TestCase):
             target, "NEAR", section_ref=second, chorus_end_words=["code", near_hook], complexity="MODERATE"
         )
         plain_near = list(prompts.suggestion_rhyme_constraint(target, "NEAR", complexity="MODERATE").candidate_words)
-        # Only the near hook is promoted; "code" keeps whatever place the Near list gives it.
+        # Only the near hook is promoted; "code" is a perfect rhyme and never in a Near list.
         self.assertEqual([near_hook] + [w for w in plain_near if w != near_hook][:scoring.CANDIDATE_LIMIT - 1],
                          list(near.candidate_words))
+        self.assertNotIn("code", near.candidate_words)
+        slant_pool = scoring.find_rhymes("road").slant
+        self.assertTrue(slant_pool)
+        slant_hook = slant_pool[-1]
+        self.assertEqual("SLANT", scoring.rhyme_relation(slant_hook, "road"))
         slant = prompts.suggestion_rhyme_constraint(
-            target, "SLANT", section_ref=second, chorus_end_words=["code", near_hook], complexity="MODERATE"
+            target, "SLANT", section_ref=second, chorus_end_words=["code", near_hook, slant_hook],
+            complexity="MODERATE",
         )
-        plain = prompts.suggestion_rhyme_constraint(target, "SLANT", complexity="MODERATE")
-        self.assertEqual(list(plain.candidate_words), list(slant.candidate_words))
+        plain_slant = list(prompts.suggestion_rhyme_constraint(target, "SLANT", complexity="MODERATE").candidate_words)
+        self.assertEqual([slant_hook] + [w for w in plain_slant if w != slant_hook][:scoring.CANDIDATE_LIMIT - 1],
+                         list(slant.candidate_words))
+        self.assertNotIn("code", slant.candidate_words)
+        self.assertNotIn(near_hook, slant.candidate_words)
+
+    def test_relation_pools_are_exclusive_and_tiered_like_the_apps(self):
+        """scoring.find_rhymes / rhyme_relation / rhyme_tier port ProsodyAnalyzer.
+        The Android NearSlantCandidateListTest anchors: Near is a close coda edit
+        or shifted stress on the same vowel, Slant is consonance or assonance."""
+        for anchor in ("chair", "would", "night", "home", "river", "alone", "stone", "rain"):
+            matches = scoring.find_rhymes(anchor)
+            perfect = set(matches.perfect) | set(matches.multi)
+            self.assertTrue(matches.near and matches.slant, anchor)
+            self.assertTrue(perfect.isdisjoint(matches.near) and perfect.isdisjoint(matches.slant), anchor)
+            self.assertTrue(set(matches.near).isdisjoint(matches.slant), anchor)
+            for word in matches.near:
+                self.assertEqual("NEAR", scoring.rhyme_relation(word, anchor), (anchor, word))
+            for word in matches.slant:
+                self.assertEqual("SLANT", scoring.rhyme_relation(word, anchor), (anchor, word))
+            for rhyme_type in ("NEAR", "SLANT"):
+                for level in ("SIMPLE", "MODERATE", "COMPLEX"):
+                    words = scoring.candidate_end_words(anchor, rhyme_type, complexity=level)
+                    self.assertTrue(words, (anchor, rhyme_type, level))
+                    self.assertTrue(all(scoring.rhyme_relation(w, anchor) == rhyme_type for w in words),
+                                    (anchor, rhyme_type, level, words))
+        # Examples from the apps' tailRelation doc comment.
+        self.assertEqual("NEAR", scoring.rhyme_relation("ride", "night"))
+        self.assertEqual("NEAR", scoring.rhyme_relation("phone", "home"))
+        self.assertEqual("NEAR", scoring.rhyme_relation("caring", "chair"))
+        self.assertEqual("SLANT", scoring.rhyme_relation("door", "chair"))
+        self.assertEqual("SLANT", scoring.rhyme_relation("time", "night"))
+        self.assertEqual("PERFECT", scoring.rhyme_relation("light", "night"))
+        self.assertIsNone(scoring.rhyme_relation("night", "night"))
+        self.assertIsNone(scoring.rhyme_relation("banana", "night"))
+        self.assertEqual(2, scoring.rhyme_tier("Out in the light", "night"))
+        self.assertEqual(1, scoring.rhyme_tier("Along for the ride", "night"))
+        self.assertEqual(3, scoring.rhyme_tier("Running out of time", "night"))
+        self.assertEqual(0, scoring.rhyme_tier("Peel a banana", "night"))
+        self.assertEqual(0, scoring.rhyme_tier("", "night"))
 
     def test_levels_build_different_lists_for_a_mixed_anchor(self):
         constraints = {
