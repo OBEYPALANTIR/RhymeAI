@@ -66,8 +66,11 @@ xcrun simctl list devices
 
 **Entry point — applies to every prompt in this repo:** You MUST invoke the `rhymeai-orchestrator` skill *before* responding to any request — new work, a follow-up, a re-run, a question, or a change to a previous result. It is the single entry point; do not craft a response outside it. The orchestrator decides what happens next: it answers trivial or out-of-RhymeAI requests directly and runs the agents only when the work warrants it.
 
+**Delegated agents are exempt from the gate:** when you are running as one of the harness's workers (`rhymeai-implementer`, `rhymeai-verifier`, `rhymeai-model-trainer`, `android-m3-expressive-designer`, or any agent the orchestrator spawned with a delegation prompt), do not invoke `rhymeai-orchestrator`; do the delegated task and return your report. The gate applies to the session's top-level conversation only.
+
 **Change history:**
 | Date | Change | Target | Reason |
 |------|--------|--------|--------|
 | 2026-10-08 | Initial setup: orchestrator, 3 agents, 4 skills, tools registry; 74 off-domain skills archived locally | All | harness review found no entry point and no skill for the real workflows |
 | 2026-10-08 | Tool discovery: registered kotlin-lsp, swift-lsp, gguf-py, colab-mcp, inspect-ai by role; secret gists kept as evidence host | `skills/rhymeai-orchestrator/references/tools.md` | owner accepted each candidate; language servers and Colab MCP installed at user scope |
+| 2026-10-08 | Delegated agents exempted from the entry-point gate; model work routed to the trainer before implementation; designer agent memory path made checkout-relative | `CLAUDE.md`, `skills/rhymeai-orchestrator`, `agents/*` | Codex review of PR 92: recursive orchestration, wrong phase order, checkout-specific path |

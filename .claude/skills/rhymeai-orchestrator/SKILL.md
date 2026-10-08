@@ -24,6 +24,9 @@ agents talking mid-task, and the reviewer loop is external (GitHub reviewers).
 | rhymeai-model-trainer | general-purpose | teacher data, Colab students, scorecards, catalog | rhymeai-teacher-data, rhymeai-colab-student | package / GGUF + scorecard report |
 | android-m3-expressive-designer | custom | Material 3 Expressive review of Compose UI | — | design findings or UI diff |
 
+Workers are spawned with a delegation prompt and never invoke this skill themselves (the
+`CLAUDE.md` gate exempts them); the orchestrator is the only caller.
+
 The `code-reviewer` user-level agent is the review fallback (role `reviewer`, see
 `references/tools.md`) when no external reviewer posts.
 
@@ -55,6 +58,10 @@ eval `finetune/eval/`, shared fixtures `shared/fixtures/`). Decide the smallest 
 and list every place it must reach (callers, tests, fixtures). For UI work on Compose, consult
 `android-m3-expressive-designer` first.
 
+**Branch on the kind of work:** code change → Phase 2. Model work (teacher data, student
+training, scorecards) → Phase 5 first; only an *adopted* model comes back to Phase 2 as a
+catalog change.
+
 ### Phase 2: implement  → `rhymeai-implementer`
 Prompt it with: the issue or request, the scope list from Phase 1, the worktree path and branch
 name, and the evidence required (which suites, whether a model A/B is needed). It returns the
@@ -72,9 +79,11 @@ Follow `rhymeai-pr-evidence`: ask the owner's OK for the evidence gist, open the
 same branch, re-request Codex, rebase-merge on green with an independent verdict, close the
 issue (`gh issue close <n> --comment "<merge sha>"`), remove the worktree.
 
-### Phase 5: models  → `rhymeai-model-trainer`  (only for model work)
+### Phase 5: models  → `rhymeai-model-trainer`  (entered from Phase 1 for model work)
 Teacher-data runs follow `rhymeai-teacher-data`; student runs follow `rhymeai-colab-student`.
-A shipped model change ends as a catalog PR through Phases 2–4.
+The trainer reports before any step that spends Colab units or hours of local 31B time, and
+the orchestrator gets the owner's go. If the scorecard says adopt, the model's catalog change
+then goes through Phases 2–4 like any code change; if not, the write-up is kept and the run ends.
 
 ## Tracker coordination
 GitHub Issues owns work state. Phase 0 reads it (`gh issue list --state open`, `gh issue view
