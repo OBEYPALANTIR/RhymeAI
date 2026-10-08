@@ -217,11 +217,19 @@ class AIService {
         val type = sectionRef?.type ?: SongSection.UNKNOWN
         val ordinal = sectionRef?.ordinal ?: 1
 
-        // Chorus repeat (2nd+): promote first-chorus end-words to the front of candidates.
+        // Chorus repeat (2nd+): first-chorus end words that stand in the requested
+        // rhyme relation to the target go first. The relation is verified directly
+        // (the same check RhymeLineFilter applies to returned lines), not by
+        // membership in the level's 12-word cut or the index's capped pools, so a
+        // hook the Complex or Simple ordering pushed past the limit is still
+        // promoted; the merged list is then cut back to the limit. Hooks are not
+        // filtered through the level: chorus consistency wins (the Simple hint says
+        // "Prefer one-syllable end words" for this reason).
         if (type == SongSection.CHORUS && ordinal >= 2 && chorusEndWords.isNotEmpty()) {
-            val promoted = chorusEndWords.filter { it != targetWord && it in candidates }
-            val rest = candidates.filter { it !in promoted }
-            candidates = promoted + rest
+            val promoted = chorusEndWords.filter {
+                it != targetWord && ProsodyAnalyzer.rhymeRelation(it, targetWord, dictionary) == rhymeType
+            }
+            candidates = (promoted + candidates.filter { it !in promoted }).take(RhymeConstraint.CANDIDATE_LIMIT)
         }
 
         // Verse and bridge: exclude the chorus's end-words unless that would empty the list.

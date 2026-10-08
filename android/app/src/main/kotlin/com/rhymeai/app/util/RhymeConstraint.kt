@@ -12,6 +12,9 @@ import kotlin.math.abs
 object RhymeConstraint {
     private val wordPattern = LyricTokenizer.wordPattern
 
+    /** Words the prompt lists as allowed endings. */
+    const val CANDIDATE_LIMIT = 12
+
     /** A Simple list keeps only one-syllable words unless fewer than this many
      *  exist, in which case the remaining words follow in their original order
      *  (some anchors, "arrival" for one, have no one-syllable rhyme at all). */
@@ -28,10 +31,22 @@ object RhymeConstraint {
     fun candidateEndWords(
         targetWord: String,
         rhymeType: RhymeType,
-        limit: Int = 12,
+        limit: Int = CANDIDATE_LIMIT,
         dictionary: PronunciationDictionary = PronunciationDictionary.shared,
         wordFrequency: WordFrequency = WordFrequency.shared,
         complexity: RhymeComplexity = RhymeComplexity.MODERATE
+    ): List<String> = levelEndWords(
+        orderedCandidates(targetWord, rhymeType, dictionary, wordFrequency), complexity, limit, dictionary
+    )
+
+    /** Every word in the requested relation to [targetWord], ranked and deduplicated,
+     *  before any level ordering or limit: the words a suggestion may end on. Mirrors
+     *  iOS `orderedCandidates` and the eval's `scoring.ordered_candidates`. */
+    fun orderedCandidates(
+        targetWord: String,
+        rhymeType: RhymeType,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared,
+        wordFrequency: WordFrequency = WordFrequency.shared
     ): List<String> {
         val matches = ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary, wordFrequency = wordFrequency)
         if (matches.isEmpty) return emptyList()
@@ -50,7 +65,7 @@ object RhymeConstraint {
                 if (word != normalizedTarget) ordered += word
             }
         }
-        return levelEndWords(ordered.toList(), complexity, limit, dictionary)
+        return ordered.toList()
     }
 
     /** The complexity level's view of a relation's ranked candidates, cut to
