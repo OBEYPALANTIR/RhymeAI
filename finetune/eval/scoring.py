@@ -4,7 +4,7 @@
 Ports of the Android sources (do not let these drift):
   - android/.../util/ProsodyAnalyzer.kt   (normalizeWord, rhymeKeys, findRhymes,
                                             syllable counting, PronunciationDictionary)
-  - android/.../util/RhymeConstraint.kt   (lineEndWord, candidateEndWords, rhymeTier)
+  - android/.../util/RhymeConstraint.kt   (lineEndWord, candidateEndWords, levelEndWords, rhymeTier)
   - android/.../util/WordFrequency.kt     (frequency-rank re-sort of rhyme pools)
   - android/.../util/SyllableCounter.kt   (dictionary-first with heuristic fallback)
   - android/.../service/AIService.kt      (output-cleaning regexes used as validators)
@@ -345,8 +345,17 @@ def line_end_word(line):
     return normalize_word(matches[-1])
 
 
-def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None):
-    """RhymeConstraint.candidateEndWords. rhyme_type: 'PERFECT'|'NEAR'|'SLANT'."""
+# RhymeConstraint.SIMPLE_MIN_MONOSYLLABLES: a Simple list keeps only
+# one-syllable words unless fewer than this many exist, in which case the
+# remaining words follow in their original order (some anchors, "arrival"
+# for one, have no one-syllable rhyme at all).
+SIMPLE_MIN_MONOSYLLABLES = 6
+
+
+def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None,
+                        complexity="MODERATE"):
+    """RhymeConstraint.candidateEndWords. rhyme_type: 'PERFECT'|'NEAR'|'SLANT';
+    complexity: 'SIMPLE'|'MODERATE'|'COMPLEX' (RhymeComplexity name)."""
     dictionary = dictionary or shared_dictionary()
     matches = find_rhymes(target_word, dictionary=dictionary)
     if matches.is_empty:
@@ -363,7 +372,34 @@ def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None):
             if word != normalized_target and word not in seen:
                 seen.add(word)
                 ordered.append(word)
-    return ordered[:limit]
+    return level_end_words(ordered, complexity, limit, dictionary=dictionary)
+
+
+def level_end_words(ordered, complexity, limit, dictionary=None):
+    """RhymeConstraint.levelEndWords: the complexity level's view of a
+    relation's ranked candidates, cut to `limit`.
+
+    COMPLEX: words of two or more syllables first, then the rest; each group
+    keeps its frequency order (a stable partition). SIMPLE: one-syllable words
+    only, unless fewer than SIMPLE_MIN_MONOSYLLABLES exist, when the remaining
+    words follow in their original order. MODERATE: unchanged.
+    Syllables come from syllable_count_word, the same dictionary-first count
+    the apps' ProsodyAnalyzer uses.
+    """
+    if complexity == "MODERATE":
+        return list(ordered[:limit])
+    syllables = {w: syllable_count_word(w, dictionary=dictionary) for w in ordered}
+    if complexity == "COMPLEX":
+        multi = [w for w in ordered if syllables[w] >= 2]
+        rest = [w for w in ordered if syllables[w] < 2]
+        return (multi + rest)[:limit]
+    if complexity == "SIMPLE":
+        mono = [w for w in ordered if syllables[w] == 1]
+        if len(mono) >= SIMPLE_MIN_MONOSYLLABLES:
+            return mono[:limit]
+        rest = [w for w in ordered if syllables[w] != 1]
+        return (mono + rest)[:limit]
+    raise ValueError("unknown complexity %r" % (complexity,))
 
 
 def rhyme_tier(line, matches):

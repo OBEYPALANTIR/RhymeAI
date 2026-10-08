@@ -672,7 +672,8 @@ struct AIService {
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
             currentSection: currentSection,
-            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) }
+            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) },
+            complexity: complexity
         )
         // Over-generate 2x when ending words are constrained so the rhyme
         // filter can discard misses and still deliver a full set.
@@ -753,17 +754,21 @@ struct AIService {
     ///
     /// When `firstChorusEndWords` is non-nil the candidates are prepended with
     /// those words (chorus repeat) or have them removed (verse/bridge exclusion).
+    /// `complexity` shapes the allowed list (`RhymeConstraint.levelEndWords`):
+    /// two-or-more-syllable rhymes first at `.complex`, one-syllable rhymes at `.simple`.
     static func rhymeConstraintBlock(
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         currentSection: SongSection = .unknown,
-        firstChorusEndWords: [String]? = nil
+        firstChorusEndWords: [String]? = nil,
+        complexity: RhymeComplexity = .moderate
     ) -> String? {
         rhymeConstraintWords(
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
             currentSection: currentSection,
-            firstChorusEndWords: firstChorusEndWords
+            firstChorusEndWords: firstChorusEndWords,
+            complexity: complexity
         ).map(rhymeConstraintText)
     }
 
@@ -772,7 +777,8 @@ struct AIService {
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         currentSection: SongSection = .unknown,
-        firstChorusEndWords: [String]? = nil
+        firstChorusEndWords: [String]? = nil,
+        complexity: RhymeComplexity = .moderate
     ) -> (target: String, targetWord: String, words: [String])? {
         guard let target = targetRhymeLine,
               !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -780,7 +786,9 @@ struct AIService {
         }
         let targetWord = RhymeConstraint.lineEndWord(target)
         guard !targetWord.isEmpty else { return nil }
-        var candidates = RhymeConstraint.candidateEndWords(targetWord: targetWord, rhymeType: rhymeType)
+        var candidates = RhymeConstraint.candidateEndWords(
+            targetWord: targetWord, rhymeType: rhymeType, complexity: complexity
+        )
         guard !candidates.isEmpty else { return nil }
 
         // Chorus 2nd+: prepend first-chorus end words so they rank highest.
@@ -1090,7 +1098,8 @@ struct AIService {
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
             currentSection: currentSection,
-            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) }
+            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) },
+            complexity: complexity
         )
         let constraintBlock = constraint.map(Self.rhymeConstraintText)
         let requestCount = Self.suggestionCount

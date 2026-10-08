@@ -1,5 +1,6 @@
 package com.rhymeai.app.util
 
+import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import kotlin.math.abs
 
@@ -11,17 +12,26 @@ import kotlin.math.abs
 object RhymeConstraint {
     private val wordPattern = LyricTokenizer.wordPattern
 
+    /** A Simple list keeps only one-syllable words unless fewer than this many
+     *  exist, in which case the remaining words follow in their original order
+     *  (some anchors, "arrival" for one, have no one-syllable rhyme at all). */
+    const val SIMPLE_MIN_MONOSYLLABLES = 6
+
     fun lineEndWord(line: String): String {
         val lastWord = wordPattern.findAll(line).lastOrNull()?.value ?: return ""
         return ProsodyAnalyzer.normalizeWord(lastWord)
     }
 
+    /** Allowed ending words for a target word, best rhymes first; empty when
+     *  the dictionary doesn't know the word. [complexity] shapes the list the
+     *  prompt sends (see [levelEndWords]); MODERATE is the frequency order. */
     fun candidateEndWords(
         targetWord: String,
         rhymeType: RhymeType,
         limit: Int = 12,
         dictionary: PronunciationDictionary = PronunciationDictionary.shared,
-        wordFrequency: WordFrequency = WordFrequency.shared
+        wordFrequency: WordFrequency = WordFrequency.shared,
+        complexity: RhymeComplexity = RhymeComplexity.MODERATE
     ): List<String> {
         val matches = ProsodyAnalyzer.findRhymes(targetWord, dictionary = dictionary, wordFrequency = wordFrequency)
         if (matches.isEmpty) return emptyList()
@@ -40,7 +50,36 @@ object RhymeConstraint {
                 if (word != normalizedTarget) ordered += word
             }
         }
-        return ordered.take(limit)
+        return levelEndWords(ordered.toList(), complexity, limit, dictionary)
+    }
+
+    /** The complexity level's view of a relation's ranked candidates, cut to
+     *  [limit]. COMPLEX puts words of two or more syllables first, then the
+     *  rest, each group keeping its frequency order (a stable partition).
+     *  SIMPLE keeps one-syllable words only, unless fewer than
+     *  [SIMPLE_MIN_MONOSYLLABLES] exist, when the remaining words follow in
+     *  their original order. MODERATE is unchanged. Syllables come from
+     *  [ProsodyAnalyzer.analyzeWord] with the same dictionary, so iOS and the
+     *  eval's `scoring.level_end_words` build identical lists. */
+    fun levelEndWords(
+        ordered: List<String>,
+        complexity: RhymeComplexity,
+        limit: Int,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+    ): List<String> {
+        if (complexity == RhymeComplexity.MODERATE) return ordered.take(limit)
+        val syllables = ordered.associateWith { ProsodyAnalyzer.analyzeWord(it, dictionary).syllableCount }
+        return when (complexity) {
+            RhymeComplexity.COMPLEX -> {
+                val (multi, rest) = ordered.partition { syllables.getValue(it) >= 2 }
+                (multi + rest).take(limit)
+            }
+            RhymeComplexity.SIMPLE -> {
+                val (mono, rest) = ordered.partition { syllables.getValue(it) == 1 }
+                if (mono.size >= SIMPLE_MIN_MONOSYLLABLES) mono.take(limit) else (mono + rest).take(limit)
+            }
+            RhymeComplexity.MODERATE -> ordered.take(limit)
+        }
     }
 
     /** 3 = slant rhyme, 2 = perfect/multi rhyme, 1 = near rhyme, 0 = miss.

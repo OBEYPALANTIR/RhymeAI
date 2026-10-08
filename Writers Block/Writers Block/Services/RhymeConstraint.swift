@@ -28,14 +28,58 @@ nonisolated enum RhymeConstraint {
     ///
     /// Each requested relation has its own exclusive pool. Words within that
     /// pool are ranked by English frequency so common words surface first.
+    /// `complexity` shapes the list the prompt sends (see `levelEndWords`);
+    /// `.moderate` is the plain frequency order.
     static func candidateEndWords(
         targetWord: String,
         rhymeType: RhymeType,
         limit: Int = 12,
-        dictionary: PronunciationDictionary = .shared
+        dictionary: PronunciationDictionary = .shared,
+        complexity: RhymeComplexity = .moderate
     ) -> [String] {
         let matches = RhymeIndex.shared.find(word: targetWord, dictionary: dictionary)
-        return Array(orderedCandidates(matches, rhymeType: rhymeType, excluding: targetWord).prefix(limit))
+        let ordered = orderedCandidates(matches, rhymeType: rhymeType, excluding: targetWord)
+        return levelEndWords(ordered, complexity: complexity, limit: limit, dictionary: dictionary)
+    }
+
+    /// A Simple list keeps only one-syllable words unless fewer than this many
+    /// exist, in which case the remaining words follow in their original order
+    /// (some anchors, "arrival" for one, have no one-syllable rhyme at all).
+    static let simpleMinMonosyllables = 6
+
+    /// The complexity level's view of a relation's ranked candidates, cut to
+    /// `limit`. `.complex` puts words of two or more syllables first, then the
+    /// rest, each group keeping its frequency order (a stable partition).
+    /// `.simple` keeps one-syllable words only, unless fewer than
+    /// `simpleMinMonosyllables` exist, when the remaining words follow in
+    /// their original order. `.moderate` is unchanged. Syllables come from
+    /// `ProsodyAnalyzer.analyzeWord` with the same dictionary, so Android
+    /// (`RhymeConstraint.levelEndWords`) and the eval's
+    /// `scoring.level_end_words` build identical lists.
+    static func levelEndWords(
+        _ ordered: [String],
+        complexity: RhymeComplexity,
+        limit: Int,
+        dictionary: PronunciationDictionary = .shared
+    ) -> [String] {
+        guard complexity != .moderate else { return Array(ordered.prefix(limit)) }
+        let syllables = Dictionary(
+            ordered.map { ($0, ProsodyAnalyzer.analyzeWord($0, dictionary: dictionary).syllableCount) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        switch complexity {
+        case .complex:
+            let multi = ordered.filter { syllables[$0, default: 0] >= 2 }
+            let rest = ordered.filter { syllables[$0, default: 0] < 2 }
+            return Array((multi + rest).prefix(limit))
+        case .simple:
+            let mono = ordered.filter { syllables[$0, default: 0] == 1 }
+            if mono.count >= simpleMinMonosyllables { return Array(mono.prefix(limit)) }
+            let rest = ordered.filter { syllables[$0, default: 0] != 1 }
+            return Array((mono + rest).prefix(limit))
+        case .moderate:
+            return Array(ordered.prefix(limit))
+        }
     }
 
     /// 3 = slant rhyme, 2 = perfect/multi rhyme, 1 = near rhyme, 0 = miss.
