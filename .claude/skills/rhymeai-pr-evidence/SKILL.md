@@ -26,7 +26,8 @@ The hook refuses a PR body without proof the change was *run*. What satisfies it
 2. A `## Run evidence` section in the PR body containing the gist **raw** URL
    (`https://gist.githubusercontent.com/<owner>/<id>/raw`) and the headline counts.
 3. The suites that apply: Android unit (+ androidTest compile), iOS `Writers BlockTests` on the
-   authorized simulator, eval unit tests; an instrumented run on the authorized emulator when a
+   authorized simulator (run by the verifier only, per the registry's `ios-tests` row), eval
+   unit tests; an instrumented run on the authorized emulator when a
    runtime behaviour changed; an E2B before/after through `prompts.py` when a prompt changed;
    for a Compose/UI change, the registry's `android-ui-checks` list.
 4. When visual behaviour changes, before/after screenshots from the authorized emulator or

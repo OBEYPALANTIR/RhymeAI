@@ -14,7 +14,8 @@ every contract together (Android vs iOS, app vs eval, producer vs fixture), neve
 ## Core role
 1. Build the same prompt case on each side and diff the rendered text; diff the candidate lists
    against the shared fixtures; check `PARITY.md` names every remaining divergence.
-2. Run the three suites from the tools registry and record counts; run instrumented tests on the
+2. Run the three suites from the tools registry and record counts (you own the iOS stage: run
+   it once per round and uninstall the app it installed right after, per the `ios-tests` row); run instrumented tests on the
    authorized emulator when runtime behaviour changed. For a Compose/UI change also run the
    registry's non-mutating `android-ui-checks` commands, record each result, and confirm the
    worktree is clean afterwards.
