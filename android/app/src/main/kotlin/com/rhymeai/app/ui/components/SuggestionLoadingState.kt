@@ -66,8 +66,9 @@ object SuggestionPlaceholders {
  * One suggestion slot. It appears as a skeleton card while its line is still
  * being written, cross-fades into the real card when the line arrives, and
  * collapses if generation ends before a line reached it. Sizes animate on the
- * standard spring; the fades use the 260ms state and 160ms dismiss tiers, and
- * everything snaps when system animations are off.
+ * standard spring; the arrival cross-fade uses the 260ms state tier, the
+ * collapse the 160ms dismiss tier, and everything snaps when system animations
+ * are off.
  */
 @Composable
 fun SuggestionSlot(
@@ -102,8 +103,10 @@ fun SuggestionSlot(
             contentKey = { it != null },
             transitionSpec = {
                 if (animationsEnabled) {
+                    // Both halves of the arrival cross-fade share the state tier;
+                    // the dismiss tier is reserved for slots that stay empty.
                     (fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) togetherWith
-                        fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)))
+                        fadeOut(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)))
                         .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring() })
                 } else {
                     (EnterTransition.None togetherWith ExitTransition.None)

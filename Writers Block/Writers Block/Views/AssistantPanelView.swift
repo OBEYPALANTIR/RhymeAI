@@ -491,7 +491,9 @@ struct AssistantPanelView: View {
                     }
                 }
                 .rhymeAnimation(RhymeAITokens.Motion.state, value: arrived)
-                .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.isLoading)
+                // Writing starts on the state tier; when it stops, any slot
+                // still empty leaves on the dismiss tier.
+                .rhymeAnimation(viewModel.isLoading ? RhymeAITokens.Motion.state : RhymeAITokens.Motion.dismiss, value: viewModel.isLoading)
                 .transition(.opacity)
             }
             }
