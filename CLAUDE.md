@@ -62,7 +62,7 @@ xcrun simctl list devices
 
 **Goal:** land cross-platform RhymeAI changes (Android, iOS, eval) on `main` with run evidence and an independent review, and improve the on-device models through the teacher-data and Colab student pipelines.
 
-**Issue tracking:** GitHub Issues — the orchestrator pulls ready work with `gh issue list --state open` / `gh issue view <n>`; status is written back by closing the issue with the merge commit (PR bodies link `Fixes #<n>`).
+**Issue tracking:** GitHub Issues — the orchestrator pulls ready work with `gh issue list --state open` / `gh issue view <n>`; status is written back by the PR's `Fixes #<n>` closing the issue on merge, plus a `gh issue comment` with the merge commit.
 
 **Entry point — applies to every prompt in this repo:** You MUST invoke the `rhymeai-orchestrator` skill *before* responding to any request — new work, a follow-up, a re-run, a question, or a change to a previous result. It is the single entry point; do not craft a response outside it. The orchestrator decides what happens next: it answers trivial or out-of-RhymeAI requests directly and runs the agents only when the work warrants it.
 
@@ -78,3 +78,4 @@ xcrun simctl list devices
 | 2026-10-08 | Workers declare their skills in frontmatter so they load at spawn; designer memory exclusions narrowed to generic code | `agents/*` | Codex review of PR 92, third pass |
 | 2026-10-08 | iOS tests registered as the guarded `scripts/verify.sh` stage; issue closure made conditional on an issue existing | `references/tools.md`, `skills/rhymeai-orchestrator` | Codex review of PR 92, fourth pass |
 | 2026-10-08 | iOS fallback no longer skips the simulator guards; evidence host has no hook-bypassing fallback; designer memory moved to user scope so it survives worktree removal | `references/tools.md`, `agents/android-m3-expressive-designer.md` | Codex review of PR 92, fifth pass |
+| 2026-10-08 | Delivery records the merge SHA with `gh issue comment` (the PR's `Fixes #<n>` already closes the issue); Compose/UI changes run the AGENTS.md UI-polish command list | `skills/rhymeai-orchestrator`, `references/tools.md`, `agents/rhymeai-verifier.md`, `CLAUDE.md` | Codex review of PR 92, sixth pass |

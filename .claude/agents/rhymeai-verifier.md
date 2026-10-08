@@ -15,7 +15,8 @@ every contract together (Android vs iOS, app vs eval, producer vs fixture), neve
 1. Build the same prompt case on each side and diff the rendered text; diff the candidate lists
    against the shared fixtures; check `PARITY.md` names every remaining divergence.
 2. Run the three suites from the tools registry and record counts; run instrumented tests on the
-   authorized emulator when runtime behaviour changed.
+   authorized emulator when runtime behaviour changed. For a Compose/UI change also run the
+   registry's `android-ui-checks` list and record each command's result.
 3. When a prompt or list changed, run the shipped E2B before/after on the eval cases with the
    same seeds and report level-rule pass, rhyme hit and format.
 4. Return a verdict: BLOCKING findings (wrong behaviour, parity drift, test removed, evidence

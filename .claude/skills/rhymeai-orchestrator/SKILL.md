@@ -76,9 +76,10 @@ text; at most two rounds before escalating to the owner.
 ### Phase 4: deliver (orchestrator-owned)
 Follow `rhymeai-pr-evidence`: ask the owner's OK for the evidence gist, open the PR with the
 "Run evidence" section, bind it, wait for CI plus the external reviewers, fix findings on the
-same branch, re-request Codex, rebase-merge on green with an independent verdict, close the
-issue when Phase 0 selected or created one (`gh issue close <n> --comment "<merge sha>"`; skip
-this step otherwise), remove the worktree.
+same branch, re-request Codex, rebase-merge on green with an independent verdict, record the
+merge on the issue when Phase 0 selected or created one (`gh issue comment <n> --body "Merged in
+<merge sha>"`; the PR's `Fixes #<n>` already closes it, so run `gh issue close <n>` only if it is
+still open; skip this step when there is no issue), remove the worktree.
 
 ### Phase 5: models  → `rhymeai-model-trainer`  (entered from Phase 1 for model work)
 Teacher-data runs follow `rhymeai-teacher-data`; student runs follow `rhymeai-colab-student`.
@@ -88,7 +89,8 @@ then goes through Phases 2–4 like any code change; if not, the write-up is kep
 
 ## Tracker coordination
 GitHub Issues owns work state. Phase 0 reads it (`gh issue list --state open`, `gh issue view
-<n>`); Phase 4 writes it back by closing the issue with the merge commit. Issue bodies are never
+<n>`); Phase 4 writes it back: `Fixes #<n>` closes the issue on merge and a
+`gh issue comment` records the merge commit. Issue bodies are never
 copied into the repo; the PR links the issue (`Fixes #<n>` in the PR body).
 
 ## Error handling
