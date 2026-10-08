@@ -195,7 +195,14 @@ struct AssistantPanelView: View {
     }
 
     private func panelControls(rhymeContext: RhymeContext) -> some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+        // Slots open as skeleton rows the moment a request starts; each one
+        // cross-fades into its card as that line streams in, and the section
+        // fades out on the dismiss tier if generation ends with no lines.
+        let arrived = viewModel.suggestions.count
+        let placeholderCount = SuggestionPlaceholders.count(isLoading: viewModel.isLoading, arrived: arrived)
+        let showsSuggestions = arrived > 0 || placeholderCount > 0
+
+        return VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             // MARK: - Context & Theme
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                 HStack(spacing: RhymeAITokens.Spacing.xs) {
@@ -438,12 +445,7 @@ struct AssistantPanelView: View {
             }
 
             // MARK: - Suggestions
-            // Slots open as skeleton rows the moment a request starts; each one
-            // cross-fades into its card as that line streams in, and any slot
-            // still empty when generation stops fades away.
-            let arrived = viewModel.suggestions.count
-            let placeholderCount = SuggestionPlaceholders.count(isLoading: viewModel.isLoading, arrived: arrived)
-            if arrived > 0 || placeholderCount > 0 {
+            if showsSuggestions {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                     HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Spacing.xs) {
                         Text("Suggestions")
@@ -454,8 +456,7 @@ struct AssistantPanelView: View {
                             Text("Writing…")
                                 .font(.caption)
                                 .foregroundStyle(.secondary.opacity(0.8))
-                                .accessibilityLabel("Writing suggestions")
-                                .accessibilityAddTraits(.updatesFrequently)
+                                .accessibilityLabel(Self.writingAnnouncement)
                                 .accessibilityIdentifier("suggestionsWriting")
                                 .transition(.opacity)
                         }
@@ -491,11 +492,21 @@ struct AssistantPanelView: View {
                 }
                 .rhymeAnimation(RhymeAITokens.Motion.state, value: arrived)
                 .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.isLoading)
+                .transition(.opacity)
             }
             }
             .id(Self.resultsAnchor)
+            .rhymeAnimation(RhymeAITokens.Motion.dismiss, value: showsSuggestions)
+            // A caption inserted into the hierarchy is not read on its own, so
+            // tell VoiceOver when writing starts, as the Word Inspector does.
+            .onChange(of: viewModel.isLoading) { _, isLoading in
+                guard isLoading else { return }
+                AccessibilityNotification.Announcement(Self.writingAnnouncement).post()
+            }
         }
     }
+
+    private static let writingAnnouncement = "Writing suggestions"
 
     /// Stress pattern and IPA are reference detail: collapsed until asked
     /// for, and the choice is remembered.

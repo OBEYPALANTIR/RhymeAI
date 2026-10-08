@@ -134,17 +134,23 @@ fun SuggestionSkeletonCard(
     val colorScheme = MaterialTheme.colorScheme
     val animationsEnabled = LocalAnimationsEnabled.current
     val (firstLine, secondLine) = skeletonLineWidths[Math.floorMod(variant, skeletonLineWidths.size)]
-    val breathing = rememberInfiniteTransition(label = "suggestionSkeleton")
-    val animatedAlpha by breathing.animateFloat(
-        initialValue = SKELETON_MIN_ALPHA,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(SKELETON_BREATH_MILLIS, easing = DesignTokens.Motion.standardEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "alpha"
-    )
-    val alpha = if (animationsEnabled) animatedAlpha else SKELETON_STATIC_ALPHA
+    // The loop exists only while animations are on; with them off the card
+    // holds a static alpha and schedules nothing.
+    val alpha = if (animationsEnabled) {
+        val breathing = rememberInfiniteTransition(label = "suggestionSkeleton")
+        val animatedAlpha by breathing.animateFloat(
+            initialValue = SKELETON_MIN_ALPHA,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(SKELETON_BREATH_MILLIS, easing = DesignTokens.Motion.standardEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "alpha"
+        )
+        animatedAlpha
+    } else {
+        SKELETON_STATIC_ALPHA
+    }
 
     OutlinedCard(
         modifier = modifier

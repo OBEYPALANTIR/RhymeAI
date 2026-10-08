@@ -22,6 +22,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -485,7 +487,24 @@ fun AssistantPanel(
             // in, and any slot still empty when generation stops collapses.
             val isWriting = viewModel.isLoading
             val slotCount = SuggestionPlaceholders.slotCount(isWriting, viewModel.suggestions.size)
-            if (slotCount > 0) {
+            // AnimatedVisibility keeps the section composed through its exit, so
+            // a request that ends with no lines still plays the 160ms collapse
+            // instead of vanishing with its slots.
+            AnimatedVisibility(
+                visible = slotCount > 0,
+                enter = if (animationsEnabled) {
+                    fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) +
+                        expandVertically(DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
+                } else {
+                    EnterTransition.None
+                },
+                exit = if (animationsEnabled) {
+                    fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
+                        shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                } else {
+                    ExitTransition.None
+                }
+            ) {
                 Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
