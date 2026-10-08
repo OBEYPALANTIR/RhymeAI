@@ -185,7 +185,7 @@ class LocalSyntheticCaptureInstrumentedTest {
         val parserChunks = postBoundaryEmitted.toList()
         val replayError = runCatching {
             ai.validatedLocalSuggestionStream(
-                flowOf(*parserChunks.map(Chunk::text).toTypedArray()), fixture.lyrics, constraint,
+                { flowOf(*parserChunks.map(Chunk::text).toTypedArray()) }, fixture.lyrics, constraint,
                 onDecision = { decisions += it }
             ).collect { replayDisplayed += it }
         }.exceptionOrNull()
