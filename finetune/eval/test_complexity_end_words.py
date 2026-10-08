@@ -264,6 +264,34 @@ class HintAndPromptTests(unittest.TestCase):
         self.assertNotIn("spark", constraint.candidate_words)
         self.assertNotIn("road", constraint.candidate_words)
 
+    def test_hook_promotion_verifies_the_requested_relation(self):
+        """A perfect-rhyme hook is not promoted into a Near prompt (Android checks
+        rhymeRelation == rhymeType); a near hook is; Slant promotes nothing because
+        the eval cannot classify slant."""
+        lyrics = (
+            "[Chorus]\nI'm breaking through the code\n\n"
+            "[Chorus]\nYellow lights on a midnight road"
+        )
+        refs = prompts.parse_section_map(lyrics)
+        second = next(r for r in refs if r.type == "CHORUS" and r.ordinal == 2)
+        target = "Yellow lights on a midnight road"
+        near_pool = scoring.find_rhymes("road").near
+        self.assertTrue(near_pool)
+        near_hook = near_pool[0]
+        self.assertFalse(scoring.is_perfect_rhyme(near_hook, "road"))
+        near = prompts.suggestion_rhyme_constraint(
+            target, "NEAR", section_ref=second, chorus_end_words=["code", near_hook], complexity="MODERATE"
+        )
+        plain_near = list(prompts.suggestion_rhyme_constraint(target, "NEAR", complexity="MODERATE").candidate_words)
+        # Only the near hook is promoted; "code" keeps whatever place the Near list gives it.
+        self.assertEqual([near_hook] + [w for w in plain_near if w != near_hook][:scoring.CANDIDATE_LIMIT - 1],
+                         list(near.candidate_words))
+        slant = prompts.suggestion_rhyme_constraint(
+            target, "SLANT", section_ref=second, chorus_end_words=["code", near_hook], complexity="MODERATE"
+        )
+        plain = prompts.suggestion_rhyme_constraint(target, "SLANT", complexity="MODERATE")
+        self.assertEqual(list(plain.candidate_words), list(slant.candidate_words))
+
     def test_levels_build_different_lists_for_a_mixed_anchor(self):
         constraints = {
             level: prompts.suggestion_rhyme_constraint("I keep the porch light on at home", "PERFECT", complexity=level)
