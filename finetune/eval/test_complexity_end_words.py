@@ -94,6 +94,16 @@ class LevelEndWordsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scoring.level_end_words(["glowed"], "EXTREME", 12, dictionary=SMALL_DICTIONARY)
 
+    def test_ordered_candidates_is_the_pool_before_the_level_cut(self):
+        ordered = scoring.ordered_candidates("road", "PERFECT", dictionary=SMALL_DICTIONARY)
+        self.assertEqual(11, len(ordered))
+        self.assertNotIn("road", ordered)
+        self.assertEqual(
+            scoring.level_end_words(ordered, "COMPLEX", 4, dictionary=SMALL_DICTIONARY),
+            scoring.candidate_end_words("road", "PERFECT", limit=4, dictionary=SMALL_DICTIONARY, complexity="COMPLEX"),
+        )
+        self.assertEqual(12, scoring.CANDIDATE_LIMIT)
+
     def test_candidate_end_words_default_is_moderate(self):
         self.assertEqual(
             scoring.candidate_end_words("home", "PERFECT"),
@@ -221,6 +231,38 @@ class HintAndPromptTests(unittest.TestCase):
                 self.assertTrue(all(n >= 2 for n in syllables), words)
             elif level == "SIMPLE":
                 self.assertTrue(all(n == 1 for n in syllables), words)
+
+    def test_repeated_chorus_hook_is_promoted_at_every_level(self):
+        lyrics = (
+            "[Chorus]\nI'm breaking through the code\nNo one knows the way I rode\n\n"
+            "[Chorus]\nYellow lights on a midnight road"
+        )
+        refs = prompts.parse_section_map(lyrics)
+        second = next(r for r in refs if r.type == "CHORUS" and r.ordinal == 2)
+        hooks = prompts.first_chorus_end_words(lyrics)
+        self.assertEqual(["code", "rode"], hooks)
+        target = "Yellow lights on a midnight road"
+        self.assertTrue(all(scoring.is_perfect_rhyme(w, "road") for w in hooks))
+        # Complex pushes the one-syllable hooks past the 12-word cut; they must still lead.
+        self.assertNotIn("code", scoring.candidate_end_words("road", "PERFECT", complexity="COMPLEX"))
+        for level in ("SIMPLE", "MODERATE", "COMPLEX"):
+            constraint = prompts.suggestion_rhyme_constraint(
+                target, "PERFECT", section_ref=second, chorus_end_words=hooks, complexity=level
+            )
+            words = list(constraint.candidate_words)
+            self.assertEqual(["code", "rode"], words[:2], level)
+            self.assertEqual(scoring.CANDIDATE_LIMIT, len(words), level)
+            self.assertEqual(len(set(words)), len(words), level)
+            level_list = scoring.candidate_end_words("road", "PERFECT", complexity=level)
+            self.assertEqual([w for w in level_list if w not in hooks][:10], words[2:], level)
+        # A first-chorus word that does not rhyme with the target, or is the target
+        # itself, is not promoted.
+        constraint = prompts.suggestion_rhyme_constraint(
+            target, "PERFECT", section_ref=second, chorus_end_words=["spark", "road", "code"], complexity="COMPLEX"
+        )
+        self.assertEqual("code", constraint.candidate_words[0])
+        self.assertNotIn("spark", constraint.candidate_words)
+        self.assertNotIn("road", constraint.candidate_words)
 
     def test_levels_build_different_lists_for_a_mixed_anchor(self):
         constraints = {

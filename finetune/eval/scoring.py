@@ -345,6 +345,9 @@ def line_end_word(line):
     return normalize_word(matches[-1])
 
 
+# RhymeConstraint.CANDIDATE_LIMIT: words the prompt lists as allowed endings.
+CANDIDATE_LIMIT = 12
+
 # RhymeConstraint.SIMPLE_MIN_MONOSYLLABLES: a Simple list keeps only
 # one-syllable words unless fewer than this many exist, in which case the
 # remaining words follow in their original order (some anchors, "arrival"
@@ -352,10 +355,18 @@ def line_end_word(line):
 SIMPLE_MIN_MONOSYLLABLES = 6
 
 
-def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None,
+def candidate_end_words(target_word, rhyme_type, limit=CANDIDATE_LIMIT, dictionary=None,
                         complexity="MODERATE"):
     """RhymeConstraint.candidateEndWords. rhyme_type: 'PERFECT'|'NEAR'|'SLANT';
     complexity: 'SIMPLE'|'MODERATE'|'COMPLEX' (RhymeComplexity name)."""
+    dictionary = dictionary or shared_dictionary()
+    ordered = ordered_candidates(target_word, rhyme_type, dictionary=dictionary)
+    return level_end_words(ordered, complexity, limit, dictionary=dictionary)
+
+
+def ordered_candidates(target_word, rhyme_type, dictionary=None):
+    """RhymeConstraint.orderedCandidates: every word in the requested relation to
+    the target, ranked and deduplicated, before any level ordering or limit."""
     dictionary = dictionary or shared_dictionary()
     matches = find_rhymes(target_word, dictionary=dictionary)
     if matches.is_empty:
@@ -372,7 +383,7 @@ def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None,
             if word != normalized_target and word not in seen:
                 seen.add(word)
                 ordered.append(word)
-    return level_end_words(ordered, complexity, limit, dictionary=dictionary)
+    return ordered
 
 
 def level_end_words(ordered, complexity, limit, dictionary=None):

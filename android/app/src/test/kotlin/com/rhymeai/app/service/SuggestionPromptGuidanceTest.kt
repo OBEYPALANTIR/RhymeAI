@@ -204,6 +204,38 @@ class SuggestionPromptGuidanceTest {
         }
     }
 
+    /** A first-chorus end word that rhymes with the target leads the list at every
+     *  level, even when the level ordering pushed it past the 12-word cut. */
+    @Test
+    fun repeatedChorusHookIsPromotedAtEveryLevel() {
+        val song = "[Chorus]\nI'm breaking through the code\nNo one knows the way I rode\n\n[Chorus]\nYellow lights on a midnight road"
+        val second = com.rhymeai.app.util.SectionMap.parse(song).allSections.first { it.type == SongSection.CHORUS && it.ordinal == 2 }
+        val hooks = service.firstChorusEndWords(song, dictionary)
+        assertEquals(setOf("code", "rode"), hooks)
+        val targetLine = "Yellow lights on a midnight road"
+        assertTrue(hooks.all { ProsodyAnalyzer.rhymeRelation(it, "road", dictionary) == RhymeType.PERFECT })
+        // Complex pushes the one-syllable hooks past the cut; they must still lead.
+        assertFalse("code" in RhymeConstraint.candidateEndWords("road", RhymeType.PERFECT, dictionary = dictionary, complexity = RhymeComplexity.COMPLEX))
+        for (level in RhymeComplexity.entries) {
+            val words = service.suggestionRhymeConstraint(
+                targetLine, RhymeType.PERFECT, dictionary, sectionRef = second, chorusEndWords = hooks, complexity = level
+            )!!.candidateWords
+            assertEquals(listOf("code", "rode"), words.take(2), level.name)
+            assertEquals(RhymeConstraint.CANDIDATE_LIMIT, words.size, level.name)
+            assertEquals(words.size, words.toSet().size, level.name)
+            val levelList = RhymeConstraint.candidateEndWords("road", RhymeType.PERFECT, dictionary = dictionary, complexity = level)
+            assertEquals(levelList.filter { it !in hooks }.take(10), words.drop(2), level.name)
+        }
+        // A first-chorus word that does not rhyme with the target, or the target itself, is not promoted.
+        val words = service.suggestionRhymeConstraint(
+            targetLine, RhymeType.PERFECT, dictionary, sectionRef = second,
+            chorusEndWords = linkedSetOf("spark", "road", "code"), complexity = RhymeComplexity.COMPLEX
+        )!!.candidateWords
+        assertEquals("code", words.first())
+        assertFalse("spark" in words)
+        assertFalse("road" in words)
+    }
+
     @Test
     fun localPromptAsksForIdeasNotAFinishedVerse() {
         val prompt = localPrompt(constraint = nearConstraint())

@@ -115,6 +115,43 @@ struct SuggestionPromptGuidanceTests {
         }
     }
 
+    /// Chorus consistency wins over the level: first-chorus end words stay at the
+    /// front of the allowed list at Simple and Complex, unfiltered by the level,
+    /// and the rest of the list follows the level rule (levelEndWords is not
+    /// reapplied after the merge).
+    @Test func chorusHookWordsStayInFrontAtEveryLevel() throws {
+        let targetLine = "Yellow lights on a midnight road"
+        for (level, hooks) in [
+            (RhymeComplexity.simple, ["code", "explode"]),
+            (RhymeComplexity.complex, ["code", "explode"]),
+            (RhymeComplexity.moderate, ["code"])
+        ] {
+            let constraint = try #require(AIService.rhymeConstraintWords(
+                targetRhymeLine: targetLine, rhymeType: .perfect, currentSection: .chorus,
+                firstChorusEndWords: hooks, complexity: level
+            ))
+            #expect(Array(constraint.words.prefix(hooks.count)) == hooks, "\(level.label) \(constraint.words)")
+            let rest = Array(constraint.words.dropFirst(hooks.count))
+            let levelList = RhymeConstraint.candidateEndWords(targetWord: "road", rhymeType: .perfect, complexity: level)
+            #expect(rest == levelList.filter { !hooks.contains($0) }, "\(level.label) \(rest)")
+            #expect(!rest.contains { hooks.contains($0) })
+            switch level {
+            case .simple:
+                #expect(rest.allSatisfy { SyllableCounter.count($0) == 1 }, "\(rest)")
+            case .complex:
+                #expect(rest.allSatisfy { SyllableCounter.count($0) >= 2 }, "\(rest)")
+                #expect(!levelList.contains("code"), "the Complex cut drops the one-syllable hook, the prepend keeps it")
+            case .moderate:
+                break
+            }
+            let block = try #require(AIService.rhymeConstraintBlock(
+                targetRhymeLine: targetLine, rhymeType: .perfect, currentSection: .chorus,
+                firstChorusEndWords: hooks, complexity: level
+            ))
+            #expect(block.contains("rhyming words: \(constraint.words.joined(separator: ", ")) (choose"))
+        }
+    }
+
     private static let fewerThanSixRule =
         "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
 

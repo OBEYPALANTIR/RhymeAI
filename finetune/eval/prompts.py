@@ -199,9 +199,16 @@ class SuggestionRhymeConstraint:
 _HEADER_LINE = re.compile(r"^\s*\[.+]\s*$")
 
 
+def _is_header_line(line: str) -> bool:
+    """SectionMap.headerTitle(line) != null: a bracketed or bare section header."""
+    trimmed = line.strip()
+    return bool(_BRACKETED_HEADER.match(line) or (trimmed and _BARE_HEADER.fullmatch(trimmed)))
+
+
 def first_chorus_end_words(lyrics: str) -> List[str]:
     """AIService.firstChorusEndWords — normalized end-words of the first CHORUS
-    section's lines, in document order (Kotlin builds a LinkedHashSet)."""
+    section's lyric lines (its header skipped, as SectionMap.headerTitle does on
+    Android), in document order (Kotlin builds a LinkedHashSet)."""
     refs = parse_section_map(lyrics)
     first_chorus = next((r for r in refs if r.type == "CHORUS"), None)
     if first_chorus is None:
@@ -209,7 +216,7 @@ def first_chorus_end_words(lyrics: str) -> List[str]:
     lines = lyrics.split("\n")
     seen = []
     for idx in first_chorus.line_range:
-        if idx >= len(lines):
+        if idx >= len(lines) or _is_header_line(lines[idx]):
             continue
         end = scoring.line_end_word(lines[idx])
         if end and end not in seen:
@@ -232,6 +239,15 @@ def first_chorus_lines(lyrics: str) -> List[str]:
         if line.strip() and not _HEADER_LINE.match(line):
             result.append(line)
     return result
+
+
+def _rhyme_compatible(word: str, target_word: str, rhyme_type: str) -> bool:
+    """ProsodyAnalyzer.rhymeRelation(word, target) == rhymeType, as far as the
+    eval can verify it: a shared last-stressed-vowel tail for Perfect; for Near
+    and Slant, membership in the relation's full (uncut) pool."""
+    if rhyme_type == "PERFECT":
+        return scoring.is_perfect_rhyme(word, target_word)
+    return word in scoring.ordered_candidates(target_word, rhyme_type)
 
 
 def suggestion_rhyme_constraint(
@@ -257,11 +273,19 @@ def suggestion_rhyme_constraint(
     chorus_list = list(chorus_end_words)
     chorus_set = set(chorus_list)
 
-    # Chorus repeat (2nd+): promote first-chorus end-words to the front.
+    # Chorus repeat (2nd+): first-chorus end words in the requested rhyme relation
+    # to the target go first. The relation is verified directly (Android checks
+    # ProsodyAnalyzer.rhymeRelation; here is_perfect_rhyme for Perfect, and the
+    # relation's full pool for Near/Slant), not by membership in the level's
+    # 12-word cut, so a hook the level ordering pushed past the limit is still
+    # promoted; the merged list is cut back to the limit. Hooks are not filtered
+    # through the level (chorus consistency wins).
     if section_type == "CHORUS" and ordinal >= 2 and chorus_list:
-        promoted = [w for w in chorus_list if w != target_word and w in candidates]
-        rest = [w for w in candidates if w not in promoted]
-        candidates = promoted + rest
+        promoted = [
+            w for w in chorus_list
+            if w != target_word and _rhyme_compatible(w, target_word, rhyme_type)
+        ]
+        candidates = (promoted + [w for w in candidates if w not in promoted])[: scoring.CANDIDATE_LIMIT]
 
     # Verse and bridge: exclude the chorus's end-words unless that empties it.
     if section_type in ("VERSE", "BRIDGE") and chorus_list:

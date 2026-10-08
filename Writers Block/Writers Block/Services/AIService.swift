@@ -792,6 +792,12 @@ struct AIService {
         guard !candidates.isEmpty else { return nil }
 
         // Chorus 2nd+: prepend first-chorus end words so they rank highest.
+        // Hooks are not filtered through the complexity level and levelEndWords is
+        // not reapplied after the merge: chorus consistency wins over the level (a
+        // hook must stay allowed, which is why the Simple hint only prefers
+        // one-syllable endings), and reapplying the Complex partition would demote a
+        // one-syllable hook. Android promotes only rhyme-compatible hooks; this
+        // unconditional prepend is the pre-existing iOS behaviour.
         // Verse/Bridge: exclude first-chorus end words to diversify rhyme sounds.
         if let chorusWords = firstChorusEndWords, !chorusWords.isEmpty {
             switch currentSection {
