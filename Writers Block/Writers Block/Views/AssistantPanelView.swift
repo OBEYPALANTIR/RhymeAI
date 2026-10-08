@@ -532,10 +532,12 @@ struct AssistantPanelView: View {
                 } else if wasLoading, !stopRequested, !viewModel.suggestions.isEmpty, viewModel.errorMessage == nil, !reduceMotion {
                     // Writing finished with something to show: the spinner
                     // bursts into ink, the panel's one celebratory beat.
-                    inkBurstStart = .now
+                    let start = Date.now
+                    inkBurstStart = start
                     Task { @MainActor in
                         try? await Task.sleep(for: .seconds(InkBurstMotion.duration))
-                        inkBurstStart = nil
+                        // A newer burst may have started meanwhile; only clear this one.
+                        if inkBurstStart == start { inkBurstStart = nil }
                     }
                 }
             }
