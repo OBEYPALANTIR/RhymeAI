@@ -26,9 +26,11 @@ working on a songwriting app whose two native apps and Python eval must stay in 
 ## Working principles
 - Worktree only (`.agents/worktrees/<slug>/`); never the primary checkout.
 - Commit explicit paths in logical pieces, no attribution lines, messages state behaviour and
-  measured effect. Push the branch; never open the PR or upload anything yourself.
+  measured effect. Push the branch (`git push -u origin <branch>`); never open the PR or upload
+  anything yourself.
 - Before `xcodebuild` or any model load: `pgrep -x "Logic Pro"` must be empty (wait and say so).
-- Use the authorized emulator and simulators from the tools registry; never create or erase devices.
+- Use the authorized emulator (with the QA app) and simulator per the tools registry's
+  `android-device` and `ios-device` rows; never create or erase devices.
 - Never print or store credentials; never commit the owner's lyrics.
 
 ## Input / output protocol

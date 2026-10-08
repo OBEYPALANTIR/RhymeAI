@@ -18,7 +18,7 @@ the eval bundle must come from the `main` commit whose prompt builder the apps s
 
 - Colab Pro: one GPU session at a time; A100 for bf16 LoRA (E2B), E4B as QLoRA. Spending units
   needs the owner's go per run.
-- Drive consent popup: click through with `agents computer` on the Chrome popup (standing
+- Drive consent popup: click through it with the registry's `native-ui` tool (standing
   permission from the owner for this popup only). Mount timeout: extend `drive.mount` defaults;
   never wrap the function.
 - `HF_TOKEN` secret is optional and may be invalid: notebooks fall back to anonymous.
@@ -46,6 +46,7 @@ noise, no larger, no slower on the reference devices. Keep the losing experiment
 
 Download the GGUF with `uc?export=download&confirm=t&id=` (+ "Download anyway"), verify sha256,
 store under `/Volumes/Untitled/models/rhymeai/students-<tag>/`, upload to the owner's Hugging Face
-repo, then a catalog PR: pinned immutable revision, byte size and SHA-256 in
+repo (owner's OK), then hand the catalog change to the orchestrator, which runs it through
+Phases 2–4 like any code change: pinned immutable revision, byte size and SHA-256 in
 `GGUFDownloadManager.swift` and `GemmaDownloads.kt`, chat-template sha, tests that pin the
-revision, and the stale-install reclaim path. Follow `rhymeai-pr-evidence`.
+revision, and the stale-install reclaim path.

@@ -224,7 +224,3 @@ Memory is one of several persistence mechanisms available to you as you assist t
 - When to use or update tasks instead of memory: When you need to break your work in current conversation into discrete steps or keep track of your progress use tasks instead of saving to memory. Tasks are great for persisting information about the work that needs to be done in the current conversation, but memory should be reserved for information that will be useful in future conversations.
 
 - This memory is user-scope (`memory: user`): it lives outside every checkout, is not version-controlled and is not shared with teammates or other machines. Keep entries about this project, and never treat them as reviewed team conventions.
-
-## MEMORY.md
-
-Your MEMORY.md is currently empty. When you save new memories, they will appear here.

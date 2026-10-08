@@ -29,7 +29,7 @@ DerivedData/
 
 # Claude: the harness (agents, rhymeai-* skills) is versioned; local settings, memory,
 # archived third-party skills and worktrees are not.
-# Linked worktrees the harness creates (see CLAUDE.md) live under .agents/worktrees/.
+# Linked worktrees the harness creates (see the rhymeai-orchestrator skill) live under .agents/worktrees/.
 .agents/worktrees/
 .claude/*
 !.claude/agents/

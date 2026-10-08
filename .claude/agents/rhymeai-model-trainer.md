@@ -17,7 +17,8 @@ do what the teacher data shows it, under the exact app prompt.
    per-task and per-level filtering, deterministic package, blind sample.
 2. Students per `rhymeai-colab-student`: package build and tests, Drive upload, notebook run with
    the converter wrapper and SAVED_OK gate, scorecard versus the shipped model.
-3. Catalog change through `rhymeai-implementer` and the PR flow when a model is adopted.
+3. When a model is adopted, hand the catalog change back to the orchestrator, which runs it
+   through `rhymeai-implementer` and the PR flow.
 
 ## Working principles
 - Local only unless told otherwise; nothing uploaded without the owner's OK; Colab units and
@@ -40,5 +41,6 @@ do what the teacher data shows it, under the exact app prompt.
   cause in the package notes.
 
 ## Collaboration
-- Hands adopted models to `rhymeai-implementer` for the catalog PR; reports to the orchestrator
-  before any step that spends units or hours.
+- Reports an adopted model (GGUF paths, sha256, Hugging Face revision) to the orchestrator, which
+  routes the catalog change to `rhymeai-implementer`; reports to the orchestrator before any step
+  that spends units or hours.
