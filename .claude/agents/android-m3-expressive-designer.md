@@ -30,6 +30,12 @@ Build commands run from `android/`:
 - `./gradlew :app:assembleDebug` — full build
 - `./gradlew :app:lintDebug` — lint
 
+## Where you may edit
+
+When the orchestrator consults you in its scope phase, no worktree exists yet: work read-only and
+return design findings and a proposed plan; do not edit files. Edit only inside the worktree path
+given in your delegation prompt, and never in the primary checkout.
+
 ## Your Operating Procedure
 
 1. **Read before writing.** Scan the relevant Compose files, the project's theme (`ui/theme/`), and any existing motion or shape tokens. Note the current MaterialTheme setup, color scheme source (dynamic vs static), and typography.

@@ -10,7 +10,7 @@ description: "How a RhymeAI change gets from a worktree to main: branch and comm
 - Work in `.agents/worktrees/<slug>/` on `claude/<slug>-<yyyymmdd>` from fresh `origin/main`.
   Exception: a task in the AGENTS.md UI polish pass cuts its branch from fresh
   `origin/chore/ui-polish-2026-05` instead, opens its PR against that branch
-  (`gh pr create --base chore/ui-polish-2026-05`), so the merge and `--delete-branch` touch only
+  (`gh pr create --base chore/ui-polish-2026-05`), so the merge and branch cleanup touch only
   the task branch, and uses the pass's Conventional Commit scopes (`feat(ui)`, `fix(ui)`,
   `refactor(ui)`, `chore(ui)`, `test(ui)`, `style(ui)`).
   Never switch, pull or edit the primary checkout.
@@ -45,8 +45,11 @@ numbers), `## Run evidence` (gist raw URL), `## Not covered` (honest gaps). Link
   a follow-up comment with the re-run counts, and request a re-review with `@codex review`.
 - Merge only when CI is green on the final commit and an independent non-author verdict exists
   (a Codex "no major issues" on that commit, or a `code-reviewer` run posted to the PR).
-- `gh pr merge <n> --rebase --delete-branch`, then remove the worktree without `--force`
-  (delete untracked evidence files first). Record the merge sha on the issue with `gh issue comment` (`Fixes #<n>` already closed it).
+- `gh pr merge <n> --rebase` (no `--delete-branch`: the branch is still checked out in the
+  worktree, so gh would skip the local delete). Then delete the untracked evidence files, `git
+  worktree remove .agents/worktrees/<slug>` without `--force`, `git branch -D <branch>` (a
+  rebase-merge leaves it looking unmerged), and `git push origin --delete <branch>` if the
+  remote branch still exists. Record the merge sha on the issue with `gh issue comment` (`Fixes #<n>` already closed it).
 
 ## Test builds for the owner
 

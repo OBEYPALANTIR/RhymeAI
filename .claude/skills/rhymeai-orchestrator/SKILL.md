@@ -57,7 +57,8 @@ Colab units and multi-hour local 31B runs need the owner's explicit go; check
 Read the affected code on all platforms it touches (Android `android/`, iOS `Writers Block/`,
 eval `finetune/eval/`, shared fixtures `shared/fixtures/`). Decide the smallest complete change
 and list every place it must reach (callers, tests, fixtures). For UI work on Compose, consult
-`android-m3-expressive-designer` first.
+`android-m3-expressive-designer` first, read-only: no worktree exists yet, so it returns design
+findings and the implementer applies them in the task worktree.
 
 **Branch on the kind of work:** code change → Phase 2. Model work (teacher data, student
 training, scorecards) → Phase 5 first; only an *adopted* model comes back to Phase 2 as a
