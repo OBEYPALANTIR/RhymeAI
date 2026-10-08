@@ -57,12 +57,14 @@ enum RhymeComplexity: Int, CaseIterable, Codable {
     /// Simple and Complex carry numeric, checkable targets (words per line and
     /// the end word's syllables) that pair with the level-aware allowed
     /// end-word list (`RhymeConstraint.levelEndWords`); only Complex asks for
-    /// wordplay. Byte-identical to Android `RhymeComplexity.promptHint` and
-    /// finetune/eval/prompts.py.
+    /// wordplay. Simple only prefers one-syllable endings: its list falls back
+    /// to longer words when an anchor has fewer than six one-syllable rhymes,
+    /// and chorus hook words are never filtered by the level. Byte-identical to
+    /// Android `RhymeComplexity.promptHint` and finetune/eval/prompts.py.
     var promptHint: String {
         switch self {
         case .simple:
-            return "Each line must be 4 to 7 plain, everyday words. End each line on a one-syllable word. No wordplay."
+            return "Each line must be 4 to 7 plain, everyday words. Prefer one-syllable end words. No wordplay."
         case .moderate:
             return "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear rather than clever."
         case .complex:

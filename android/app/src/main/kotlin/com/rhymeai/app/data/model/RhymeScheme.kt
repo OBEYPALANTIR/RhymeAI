@@ -17,10 +17,13 @@ enum class RhymeType(val displayName: String) {
 enum class RhymeComplexity(val level: Int, val label: String, val description: String, val promptHint: String) {
     // Simple and Complex carry numeric, checkable targets (words per line and the
     // end word's syllables) that pair with the level-aware allowed end-word list
-    // (RhymeConstraint.levelEndWords); only COMPLEX asks for wordplay. promptHint is
-    // byte-identical to iOS RhymeComplexity.promptHint and finetune/eval/prompts.py.
+    // (RhymeConstraint.levelEndWords); only COMPLEX asks for wordplay. Simple only
+    // prefers one-syllable endings: its list falls back to longer words when an anchor
+    // has fewer than six one-syllable rhymes, and chorus hook words are never
+    // filtered by the level. promptHint is byte-identical to iOS
+    // RhymeComplexity.promptHint and finetune/eval/prompts.py.
     SIMPLE(0, "Simple", "Plain language, no wordplay",
-        "Each line must be 4 to 7 plain, everyday words. End each line on a one-syllable word. No wordplay."),
+        "Each line must be 4 to 7 plain, everyday words. Prefer one-syllable end words. No wordplay."),
     MODERATE(1, "Moderate", "Balanced vocabulary, natural phrasing",
         "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear rather than clever."),
     COMPLEX(2, "Complex", "Advanced vocabulary, wordplay, intricate rhymes",
