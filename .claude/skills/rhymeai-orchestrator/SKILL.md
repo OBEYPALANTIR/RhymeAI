@@ -77,7 +77,8 @@ text; at most two rounds before escalating to the owner.
 Follow `rhymeai-pr-evidence`: ask the owner's OK for the evidence gist, open the PR with the
 "Run evidence" section, bind it, wait for CI plus the external reviewers, fix findings on the
 same branch, re-request Codex, rebase-merge on green with an independent verdict, close the
-issue (`gh issue close <n> --comment "<merge sha>"`), remove the worktree.
+issue when Phase 0 selected or created one (`gh issue close <n> --comment "<merge sha>"`; skip
+this step otherwise), remove the worktree.
 
 ### Phase 5: models  → `rhymeai-model-trainer`  (entered from Phase 1 for model work)
 Teacher-data runs follow `rhymeai-teacher-data`; student runs follow `rhymeai-colab-student`.
