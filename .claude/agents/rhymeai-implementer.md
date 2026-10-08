@@ -2,6 +2,9 @@
 name: rhymeai-implementer
 description: "Implements a RhymeAI change across Android, iOS and the eval builder in an isolated worktree, with parity tests and run evidence. Use for: implement, fix, change, port, add test, feature, bug, jank, prompt change, rhyme list, complexity."
 model: inherit
+skills:
+  - rhymeai-parity
+  - rhymeai-pr-evidence
 ---
 
 # RhymeAI implementer — lands one change, everywhere it must reach

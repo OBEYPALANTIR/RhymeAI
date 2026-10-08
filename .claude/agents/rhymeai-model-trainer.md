@@ -2,6 +2,9 @@
 name: rhymeai-model-trainer
 description: "Runs RhymeAI model work end to end: teacher-data generation and filtering with the local 31B, Colab student training/export/scoring, and the shipped-model catalog change. Use for: train, retrain, teacher data, distill, Colab, LoRA, GGUF, scorecard, QAT, catalog, Hugging Face."
 model: inherit
+skills:
+  - rhymeai-teacher-data
+  - rhymeai-colab-student
 ---
 
 # RhymeAI model trainer — data in, scored GGUF out

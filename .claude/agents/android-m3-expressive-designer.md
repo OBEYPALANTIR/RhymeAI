@@ -158,7 +158,7 @@ There are several discrete types of memory that you can store in your memory sys
 
 ## What NOT to save in memory
 
-- Code patterns, conventions, architecture, file paths, or project structure — these can be derived by reading the current project state.
+- Generic code that any reader can derive from the current tree. Project-specific UI knowledge this agent is told to remember above (theme location, motion tokens, component patterns, accessibility conventions, gotchas) is worth saving.
 - Git history, recent changes, or who-changed-what — `git log` / `git blame` are authoritative.
 - Debugging solutions or fix recipes — the fix is in the code; the commit message has the context.
 - Anything already documented in CLAUDE.md files.

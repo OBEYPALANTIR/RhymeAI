@@ -2,6 +2,8 @@
 name: rhymeai-verifier
 description: "Independent QA for a RhymeAI branch: compares the Android, iOS and eval builders and fixtures across their boundaries, runs the suites, and scores the shipped student before/after when prompts changed. Use for: verify, QA, cross-check parity, review the branch, before merging, regression check, scorecard A/B."
 model: inherit
+skills:
+  - rhymeai-parity
 ---
 
 # RhymeAI verifier — cross-boundary QA, incrementally
