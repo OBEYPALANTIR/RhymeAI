@@ -8,6 +8,9 @@ struct AssistantPanelView: View {
     @State private var showModelSetup = false
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
+    @State private var stopRequested = false
+    @State private var inkBurstStart: Date?
+    @State private var spinnerCenter: CGPoint = .zero
     @AppStorage("assistant.targetLineStressExpanded") private var stressDetailExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
@@ -160,8 +163,10 @@ struct AssistantPanelView: View {
     private var suggestBar: some View {
         Button {
             if viewModel.isLoading {
+                stopRequested = true
                 viewModel.cancelSuggestions()
             } else {
+                stopRequested = false
                 viewModel.getSuggestions()
             }
         } label: {
@@ -170,6 +175,10 @@ struct AssistantPanelView: View {
                 if viewModel.isLoading {
                     ProgressView()
                         .tint(appearance.palette.onAction)
+                        .background(GeometryReader { proxy in
+                            let frame = proxy.frame(in: .named(Self.suggestBarSpace))
+                            Color.clear.preference(key: SpinnerCenterPreferenceKey.self, value: CGPoint(x: frame.midX, y: frame.midY))
+                        })
                     Text("Stop")
                 } else {
                     Image(systemName: "sparkles")
@@ -186,6 +195,20 @@ struct AssistantPanelView: View {
         }
         .disabled(suggestionDisabled)
         .buttonStyle(.rhymePress)
+        .coordinateSpace(name: Self.suggestBarSpace)
+        .onPreferenceChange(SpinnerCenterPreferenceKey.self) { center in
+            if let center { spinnerCenter = center }
+        }
+        .overlay {
+            // The ink may fly past the button, so its canvas is one reach
+            // larger on every side and the origin shifts to match.
+            InkBurstView(
+                startedAt: inkBurstStart,
+                origin: CGPoint(x: spinnerCenter.x + InkBurstMotion.reach, y: spinnerCenter.y + InkBurstMotion.reach),
+                ink: appearance.palette.primaryInk
+            )
+            .padding(-InkBurstMotion.reach)
+        }
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm + bottomInset)
@@ -193,6 +216,8 @@ struct AssistantPanelView: View {
         .overlay(Divider(), alignment: .top)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: bottomInset)
     }
+
+    private static let suggestBarSpace = "assistantSuggestBar"
 
     private func panelControls(rhymeContext: RhymeContext) -> some View {
         // Slots open as skeleton rows the moment a request starts; each one
@@ -501,9 +526,18 @@ struct AssistantPanelView: View {
             .rhymeAnimation(RhymeAITokens.Motion.dismiss, value: showsSuggestions)
             // A caption inserted into the hierarchy is not read on its own, so
             // tell VoiceOver when writing starts, as the Word Inspector does.
-            .onChange(of: viewModel.isLoading) { _, isLoading in
-                guard isLoading else { return }
-                AccessibilityNotification.Announcement(Self.writingAnnouncement).post()
+            .onChange(of: viewModel.isLoading) { wasLoading, isLoading in
+                if isLoading {
+                    AccessibilityNotification.Announcement(Self.writingAnnouncement).post()
+                } else if wasLoading, !stopRequested, !viewModel.suggestions.isEmpty, viewModel.errorMessage == nil, !reduceMotion {
+                    // Writing finished with something to show: the spinner
+                    // bursts into ink, the panel's one celebratory beat.
+                    inkBurstStart = .now
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(InkBurstMotion.duration))
+                        inkBurstStart = nil
+                    }
+                }
             }
         }
     }

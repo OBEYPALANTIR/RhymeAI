@@ -53,15 +53,21 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
@@ -654,46 +660,85 @@ fun AssistantPanel(
         val setupModel = !viewModel.isLoading &&
             viewModel.selectedProvider == com.rhymeai.app.service.AIProvider.LOCAL &&
             !viewModel.localReady
-        Button(
-            onClick = {
-                when {
-                    setupModel -> onModelSetup()
-                    viewModel.isLoading -> viewModel.cancelSuggestions()
-                    else -> viewModel.getSuggestions()
+        // When writing ends with at least one line, the spinner bursts into
+        // ink: the panel's one celebratory beat. Stop and errors do not burst.
+        var spinnerCenter by remember { mutableStateOf<Offset?>(null) }
+        var barCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+        var stopRequested by remember { mutableStateOf(false) }
+        var inkBurst by remember { mutableIntStateOf(0) }
+        LaunchedEffect(Unit) {
+            var wasLoading = viewModel.isLoading
+            snapshotFlow { viewModel.isLoading }.collect { loading ->
+                if (wasLoading && !loading && !stopRequested && viewModel.suggestions.isNotEmpty() && viewModel.errorMessage == null) {
+                    inkBurst++
                 }
-            },
-            enabled = setupModel || viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
+                wasLoading = loading
+            }
+        }
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.sm)
-                .height(DesignTokens.Touch.minTarget)
-                .testTag("assistantPrimaryAction"),
-            shape = RoundedCornerShape(DesignTokens.Radius.lg),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colorScheme.primary,
-                contentColor = colorScheme.onPrimary,
-                disabledContainerColor = colorScheme.surfaceVariant,
-                disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-            )
+                .onGloballyPositioned { barCoordinates = it }
         ) {
-            if (viewModel.isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
-                    color = colorScheme.onPrimary,
-                    strokeWidth = 2.dp
-                )
-                Spacer(Modifier.width(8.dp))
-            } else if (!setupModel) {
-                Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-            }
-            Text(
-                when {
-                    setupModel -> stringResource(R.string.assistant_set_up_model)
-                    viewModel.isLoading -> stringResource(R.string.assistant_stop)
-                    else -> stringResource(R.string.assistant_suggest_next_line)
+            Button(
+                onClick = {
+                    when {
+                        setupModel -> onModelSetup()
+                        viewModel.isLoading -> {
+                            stopRequested = true
+                            viewModel.cancelSuggestions()
+                        }
+                        else -> {
+                            stopRequested = false
+                            viewModel.getSuggestions()
+                        }
+                    }
                 },
-                fontWeight = FontWeight.Medium
+                enabled = setupModel || viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.sm)
+                    .height(DesignTokens.Touch.minTarget)
+                    .testTag("assistantPrimaryAction"),
+                shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary,
+                    disabledContainerColor = colorScheme.surfaceVariant,
+                    disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                if (viewModel.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(DesignTokens.Indicator.spinnerMd)
+                            .onGloballyPositioned { spinner ->
+                                barCoordinates?.let { bar ->
+                                    spinnerCenter = bar.localPositionOf(spinner, Offset(spinner.size.width / 2f, spinner.size.height / 2f))
+                                }
+                            },
+                        color = colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(8.dp))
+                } else if (!setupModel) {
+                    Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    when {
+                        setupModel -> stringResource(R.string.assistant_set_up_model)
+                        viewModel.isLoading -> stringResource(R.string.assistant_stop)
+                        else -> stringResource(R.string.assistant_suggest_next_line)
+                    },
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            InkBurst(
+                trigger = inkBurst,
+                origin = spinnerCenter,
+                color = colorScheme.onSurface,
+                modifier = Modifier.matchParentSize()
             )
         }
     }
