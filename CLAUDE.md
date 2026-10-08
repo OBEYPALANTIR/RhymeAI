@@ -70,3 +70,4 @@ xcrun simctl list devices
 | Date | Change | Target | Reason |
 |------|--------|--------|--------|
 | 2026-10-08 | Initial setup: orchestrator, 3 agents, 4 skills, tools registry; 74 off-domain skills archived locally | All | harness review found no entry point and no skill for the real workflows |
+| 2026-10-08 | Tool discovery: registered kotlin-lsp, swift-lsp, gguf-py, colab-mcp, inspect-ai by role; secret gists kept as evidence host | `skills/rhymeai-orchestrator/references/tools.md` | owner accepted each candidate; language servers and Colab MCP installed at user scope |

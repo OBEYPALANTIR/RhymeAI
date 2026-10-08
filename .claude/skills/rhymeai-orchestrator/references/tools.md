@@ -21,3 +21,8 @@ preferred tool is unavailable, fall back to the alternative. Reviewed on the dat
 | model-host | Hugging Face CLI (owner's account) | none | active | 2026-10-08 |
 | browser-automation | Claude in Chrome (Colab, Drive, HF web) | built-in browser pane | active | 2026-10-08 |
 | native-ui | computer-use MCP (Google consent popups, native dialogs) | ask the owner to click | active | 2026-10-08 |
+| language-server-kotlin | `kotlin-lsp-anthropics` plugin (JetBrains kotlin-lsp; AGP support experimental) | `rg` + reading the file | active (installed 2026-10-08, user scope) | 2026-10-08 |
+| language-server-swift | `swift-lsp-anthropics` plugin (sourcekit-lsp from Xcode) | `rg` + reading the file | active (installed 2026-10-08, user scope) | 2026-10-08 |
+| gguf-inspect | gguf-py CLIs (`gguf-dump`, `gguf-hash`, `gguf_new_metadata.py`; PyPI `gguf`, also in the llama.cpp source checkout); `llama-tokenize` for tokenizer parity | the notebook's `gguf_layout` reader | active | 2026-10-08 |
+| colab-runner | `colab-mcp` (Google's official Colab MCP, user-scope stdio via `uvx`; needs a one-time OAuth grant; A100 runtime selection unverified) | Claude in Chrome driving the Colab web UI | accepted, unverified | 2026-10-08 |
+| eval-tracking | `inspect-ai` (local `.eval` logs + `inspect view`, against llama-server's OpenAI-compatible endpoint); install into a venv on first use | scorecard JSON files compared by `eval_student.py --compare` | accepted, not installed | 2026-10-08 |
