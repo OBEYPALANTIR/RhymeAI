@@ -193,6 +193,27 @@ struct LocalGenerationBoundaryTests {
         }
     }
 
+    private static let overproducedMisses = [
+        "Quiet lanterns drift across the bay",
+        "Old ropes curl beside the door",
+        "The sailors laugh into the night",
+        "A bell rings out along the shore",
+        "Gray clouds roll over every roof",
+        "The nets hang heavy on the pier",
+        "My coat still smells of salt and smoke",
+        "The lighthouse blinks its steady eye",
+        "We count the boats along the dock",
+        "The gulls fight over scraps of bread"
+    ]
+
+    @Test func localRetryGetsItsOwnRawLineBudget() async throws {
+        // The first pass spends the whole 12-line budget on two rhymes and ten misses.
+        let first = Array(Self.rhymes.prefix(2)) + Self.overproducedMisses
+        let run = try await streamed(first, retry: Array(Self.rhymes[2...]))
+        #expect(run.lines == Self.rhymes)
+        #expect(run.calls == 2)
+    }
+
     @Test func localTwoSurvivorsAfterRetryStillFail() async {
         let two = Array(Self.rhymes.prefix(2)) + Self.misses
         for run in [{ try await self.streamed(two, retry: two) }, { try await self.batched(two, retry: two) }] {

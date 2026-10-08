@@ -677,9 +677,11 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         // the requested relation, as they arrive (iOS `emitLines`).
         val filter = constraint?.lineFilter
         val acceptLimit = if (filter != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        // The budget is per generation; a retry pass gets a fresh one.
+        var passAccepted = 0
 
         suspend fun flushLine(rawLine: String): Boolean {
-            if (state.accepted >= acceptLimit || state.emitted >= SUGGESTION_COUNT) return false
+            if (passAccepted >= acceptLimit || state.emitted >= SUGGESTION_COUNT) return false
             val cleaned = cleanLocalSuggestionLine(rawLine)
             val key = cleaned?.let(::normalizeSuggestionKey).orEmpty()
             val rejection = when {
@@ -694,6 +696,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             }
             checkNotNull(cleaned)
             state.accepted++
+            passAccepted++
             onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "accepted"))
 
             val tier = filter?.tier(cleaned) ?: 0
@@ -710,7 +713,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
 
         tokens.collect { chunk ->
             buffer.append(chunk)
-            while (state.accepted < acceptLimit && state.emitted < SUGGESTION_COUNT) {
+            while (passAccepted < acceptLimit && state.emitted < SUGGESTION_COUNT) {
                 val newlineIdx = buffer.indexOf('\n')
                 if (newlineIdx < 0) break
                 val rawLine = buffer.substring(0, newlineIdx)
