@@ -584,9 +584,9 @@ struct AssistantPanelView: View {
 }
 
 /// The shape of a `SuggestionCardView` with nothing written in it yet: the
-/// same surface, radius and padding, a pencil scribbling two lines where the
-/// serif line will go, a badge block and an action block. Under Reduce Motion
-/// the pencil rests part way along the second line. Hidden from VoiceOver,
+/// same surface, radius and padding, two lines scribbling themselves in where
+/// the serif line will go, a badge block and an action block. Under Reduce
+/// Motion the first line is drawn and the second stops part way. Hidden from VoiceOver,
 /// which hears "Writing suggestions" from the header.
 private struct SuggestionSkeletonRow: View {
     @Environment(\.appAppearanceStyle) private var appearance
@@ -604,9 +604,8 @@ private struct SuggestionSkeletonRow: View {
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
                 HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
                     VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                        // The pencil sits on whichever line is being written.
-                        scribble(fraction: widths.first, progress: lines.first, showsPencil: lines.first < 1)
-                        scribble(fraction: widths.second, progress: lines.second, showsPencil: lines.first >= 1 && lines.second < 1)
+                        scribble(fraction: widths.first, progress: lines.first)
+                        scribble(fraction: widths.second, progress: lines.second)
                     }
                     .padding(.top, RhymeAITokens.Spacing.xxs)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -627,30 +626,13 @@ private struct SuggestionSkeletonRow: View {
     }
 
     /// One line of the scribble: the UnBlock wave tiled across `fraction` of the
-    /// text column, drawn from the left up to `progress`, with the pencil glyph
-    /// resting on the tip while `showsPencil` is true.
-    private func scribble(fraction: CGFloat, progress: Double, showsPencil: Bool) -> some View {
+    /// text column, drawn from the left up to `progress`.
+    private func scribble(fraction: CGFloat, progress: Double) -> some View {
         GeometryReader { proxy in
-            let rect = CGRect(x: 0, y: 0, width: proxy.size.width * fraction, height: SuggestionScribbleMotion.lineHeight)
-            let ink = appearance.palette.outlineStrong
-            ZStack(alignment: .topLeading) {
-                ScribbleLineShape()
-                    .trim(from: 0, to: progress)
-                    .stroke(ink, style: StrokeStyle(lineWidth: SuggestionScribbleMotion.strokeWidth, lineCap: .round, lineJoin: .round))
-                    .frame(width: rect.width, height: rect.height)
-
-                if showsPencil {
-                    // The glyph's point is its bottom-left corner; rest it on the tip.
-                    let tip = ScribbleLineShape.point(at: progress, in: rect)
-                    let glyph = SuggestionScribbleMotion.pencilSize
-                    Image(systemName: "pencil")
-                        .resizable()
-                        .scaledToFit()
-                        .foregroundStyle(ink)
-                        .frame(width: glyph, height: glyph)
-                        .position(x: tip.x + glyph / 2, y: tip.y - glyph / 2)
-                }
-            }
+            ScribbleLineShape()
+                .trim(from: 0, to: progress)
+                .stroke(appearance.palette.outlineStrong, style: StrokeStyle(lineWidth: SuggestionScribbleMotion.strokeWidth, lineCap: .round, lineJoin: .round))
+                .frame(width: proxy.size.width * fraction, height: SuggestionScribbleMotion.lineHeight)
         }
         .frame(height: SuggestionScribbleMotion.lineHeight)
     }

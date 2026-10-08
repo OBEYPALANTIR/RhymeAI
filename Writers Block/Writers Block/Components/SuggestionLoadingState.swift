@@ -19,9 +19,9 @@ enum SuggestionPlaceholders {
     }
 }
 
-/// The pencil that scribbles a skeleton row's two lines while the real line is
-/// being written. One loop writes the first (longer) line, then the second,
-/// holds for a beat, and starts over on a clean card. The wave is the UnBlock
+/// The scribble that draws a skeleton row's two lines in, as if by a pencil,
+/// while the real line is being written. One loop writes the first (longer)
+/// line, then the second, holds for a beat, and starts over on a clean card. The wave is the UnBlock
 /// underline's zigzag, tiled along the line. Mirrors `ScribbleMotion` on
 /// Android; the numbers are shared and unit-tested on both platforms.
 enum SuggestionScribbleMotion {
@@ -35,7 +35,7 @@ enum SuggestionScribbleMotion {
     /// Share of the writing time the first line takes: its share of the two lines' length.
     static let firstLineShare: Double = 0.63
 
-    /// Under Reduce Motion the card holds this frame: first line written, second half way.
+    /// Under Reduce Motion the card holds this frame: first line drawn, second part way.
     static let staticLines: (first: Double, second: Double) = (1, 0.6)
 
     /// One wave of the UnBlock scribble in unit space: the same five points as
@@ -50,7 +50,6 @@ enum SuggestionScribbleMotion {
     static let waveWidth: CGFloat = 34
     static let lineHeight: CGFloat = 10
     static let strokeWidth: CGFloat = 1.6
-    static let pencilSize: CGFloat = 14
 
     /// Line lengths, as fractions of the card's text column, so three stacked
     /// skeletons read as three different lines rather than one repeated block.
@@ -72,7 +71,7 @@ enum SuggestionScribbleMotion {
 }
 
 /// The UnBlock wave tiled across a rect, as a strokeable shape. `trim(from:to:)`
-/// draws it pencil-first; `point(at:in:)` says where the pencil is.
+/// draws it in from the left; `point(at:in:)` says where the drawn end is.
 struct ScribbleLineShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()

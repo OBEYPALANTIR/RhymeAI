@@ -31,8 +31,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
@@ -41,15 +39,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.translate
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import com.rhymeai.app.SuggestedLine
@@ -75,10 +69,10 @@ object SuggestionPlaceholders {
 }
 
 /**
- * The pencil that scribbles a skeleton card's two lines while the real line is
- * being written. One loop writes the first (longer) line, then the second,
- * holds for a beat, and starts over on a clean card. The wave is the UnBlock
- * underline's zigzag, tiled along the line. Mirrors `SuggestionScribbleMotion`
+ * The scribble that draws a skeleton card's two lines in, as if by a pencil,
+ * while the real line is being written. One loop writes the first (longer)
+ * line, then the second, holds for a beat, and starts over on a clean card.
+ * The wave is the UnBlock underline's zigzag, tiled along the line. Mirrors `SuggestionScribbleMotion`
  * on iOS; the numbers are shared and unit-tested on both platforms.
  */
 object ScribbleMotion {
@@ -92,7 +86,7 @@ object ScribbleMotion {
     /** Share of the writing time the first line takes: its share of the two lines' length. */
     const val FIRST_LINE_SHARE = 0.63f
 
-    /** With animations off the card holds this frame: first line written, second half way. */
+    /** With animations off the card holds this frame: first line drawn, second part way. */
     val STATIC_LINES = 1f to 0.6f
 
     /** One wave of the UnBlock scribble in unit space, from `UnBlockWordmark`. */
@@ -100,7 +94,6 @@ object ScribbleMotion {
     val waveWidth = 34.dp
     val lineHeight = 10.dp
     val strokeWidth = 1.6.dp
-    val pencilSize = 14.dp
 
     /** How much of each line is drawn [elapsedMillis] into the loop, each in 0..1. */
     fun lines(elapsedMillis: Long): Pair<Float, Float> {
@@ -173,9 +166,9 @@ private val skeletonLineWidths = listOf(0.78f to 0.46f, 0.64f to 0.38f, 0.72f to
 
 /**
  * The shape of a [SuggestionCard] with nothing written in it yet: the same
- * outline, radius and padding, a pencil scribbling two lines where the serif
- * line will go, a badge block and a button block. With animations off the
- * pencil rests part way along the second line. Hidden from accessibility
+ * outline, radius and padding, two lines scribbling themselves in where the
+ * serif line will go, a badge block and a button block. With animations off
+ * the first line is drawn and the second stops part way. Hidden from accessibility
  * services, which hear "Writing…" from the section header instead.
  */
 @Composable
@@ -233,9 +226,8 @@ fun SuggestionSkeletonCard(
                         .padding(top = DesignTokens.Spacing.xs),
                     verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
                 ) {
-                    // The pencil sits on whichever line is being written.
-                    ScribbleLine(widthFraction = firstLine, progress = lines.first, showPencil = lines.first < 1f)
-                    ScribbleLine(widthFraction = secondLine, progress = lines.second, showPencil = lines.first >= 1f && lines.second < 1f)
+                    ScribbleLine(widthFraction = firstLine, progress = lines.first)
+                    ScribbleLine(widthFraction = secondLine, progress = lines.second)
                 }
                 Box(
                     Modifier
@@ -254,13 +246,11 @@ fun SuggestionSkeletonCard(
 
 /**
  * One line of the scribble: the UnBlock wave tiled across [widthFraction] of
- * the text column, drawn from the left up to [progress], with the pencil glyph
- * resting on the tip while [showPencil] is true.
+ * the text column, drawn from the left up to [progress].
  */
 @Composable
-private fun ScribbleLine(widthFraction: Float, progress: Float, showPencil: Boolean) {
+private fun ScribbleLine(widthFraction: Float, progress: Float) {
     val ink = MaterialTheme.colorScheme.outline
-    val pencil = rememberVectorPainter(Icons.Default.Edit)
     val path = remember { Path() }
     val segment = remember { Path() }
     val measure = remember { PathMeasure() }
@@ -294,15 +284,5 @@ private fun ScribbleLine(widthFraction: Float, progress: Float, showPencil: Bool
             color = ink,
             style = Stroke(width = ScribbleMotion.strokeWidth.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
-        if (showPencil) {
-            // The glyph's point is its bottom-left corner; rest it on the tip.
-            val tip = measure.getPosition(drawn)
-            val glyph = ScribbleMotion.pencilSize.toPx()
-            translate(left = tip.x, top = tip.y - glyph) {
-                with(pencil) {
-                    draw(size = Size(glyph, glyph), colorFilter = ColorFilter.tint(ink))
-                }
-            }
-        }
     }
 }

@@ -37,7 +37,7 @@ class ScribbleMotionTest {
     }
 
     @Test
-    fun `the static frame shows a pencil part way along the second line`() {
+    fun `the static frame has the first line drawn and the second part way`() {
         val (first, second) = ScribbleMotion.STATIC_LINES
         assertEquals(1f, first)
         assertTrue(second in 0.1f..0.9f)

@@ -87,14 +87,14 @@ struct SuggestionScribbleMotionTests {
     }
 
     @Test
-    func reducedMotionHoldsAPencilPartWayAlongTheSecondLine() {
+    func reducedMotionHoldsTheFirstLineDrawnAndTheSecondPartWay() {
         #expect(SuggestionScribbleMotion.staticLines.first == 1)
         #expect(SuggestionScribbleMotion.staticLines.second > 0.1)
         #expect(SuggestionScribbleMotion.staticLines.second < 0.9)
     }
 
     @Test
-    func theScribbleSpansItsRectAndThePencilFollowsItsLength() {
+    func theScribbleSpansItsRectAndItsDrawnEndFollowsItsLength() {
         let rect = CGRect(x: 0, y: 0, width: 210, height: 10)
         let points = ScribbleLineShape.points(in: rect)
         #expect(points.first?.x == 0)
