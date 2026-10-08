@@ -41,7 +41,9 @@ This skill runs for *every* prompt. Triage before doing anything else:
 
 **Context check**: is there prior work for this request?
 - An open PR or a branch under `.agents/worktrees/` for the same topic → follow-up: reuse that
-  worktree and branch, resume at the phase that needs redoing.
+  worktree and branch, resume at the phase that needs redoing. If the PR exists but its worktree
+  does not (fresh clone, interrupted cleanup), recreate it from the PR head first: `git fetch
+  origin <branch>`, then `git worktree add .agents/worktrees/<slug> <branch>`.
 - A GitHub issue for it (`gh issue list --state open`) → work it; otherwise create one only for
   substantive multi-step work (`gh issue create`), never for a one-line fix.
 - Nothing → initial run; go to Phase 1.
