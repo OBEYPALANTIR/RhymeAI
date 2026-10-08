@@ -27,8 +27,13 @@ Writers Block/Secrets.xcconfig
 **/*.xcworkspace/xcuserdata/
 DerivedData/
 
-# Claude
-.claude/
+# Claude: the harness (agents, rhymeai-* skills) is versioned; local settings, memory,
+# archived third-party skills and worktrees are not.
+.claude/*
+!.claude/agents/
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/rhymeai-*/
 
 # AgenTeam
 .agenteam/events/

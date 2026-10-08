@@ -57,3 +57,16 @@ xcrun simctl list devices
 - Keep API keys out of source. Android stores runtime keys through `SecureKeyStore`/EncryptedSharedPreferences; iOS stores runtime keys in Keychain. `android/local.properties` is local SDK configuration only.
 - Check `DESIGN.md` before UI changes.
 - Do not commit screenshots, simulator captures, APKs, or files under `artifacts/`.
+
+## Harness: RhymeAI
+
+**Goal:** land cross-platform RhymeAI changes (Android, iOS, eval) on `main` with run evidence and an independent review, and improve the on-device models through the teacher-data and Colab student pipelines.
+
+**Issue tracking:** GitHub Issues — the orchestrator pulls ready work with `gh issue list --state open` / `gh issue view <n>`; status is written back by closing the issue with the merge commit (PR bodies link `Fixes #<n>`).
+
+**Entry point — applies to every prompt in this repo:** You MUST invoke the `rhymeai-orchestrator` skill *before* responding to any request — new work, a follow-up, a re-run, a question, or a change to a previous result. It is the single entry point; do not craft a response outside it. The orchestrator decides what happens next: it answers trivial or out-of-RhymeAI requests directly and runs the agents only when the work warrants it.
+
+**Change history:**
+| Date | Change | Target | Reason |
+|------|--------|--------|--------|
+| 2026-10-08 | Initial setup: orchestrator, 3 agents, 4 skills, tools registry; 74 off-domain skills archived locally | All | harness review found no entry point and no skill for the real workflows |
