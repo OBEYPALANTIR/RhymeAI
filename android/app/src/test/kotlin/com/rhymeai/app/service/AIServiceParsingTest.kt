@@ -84,18 +84,23 @@ class AIServiceParsingTest {
     }
 
     @Test
-    fun localSuggestionBoundaryRequiresSixDistinctCompleteLines() = runBlocking {
+    fun localSuggestionBoundaryRequiresThreeDistinctCompleteLines() = runBlocking {
         val service = AIService()
         val valid = (1..6).joinToString("\n") { "Original lyric option $it" }
 
         assertEquals(
             (1..6).map { "Original lyric option $it" },
-            service.validatedLocalSuggestionStream(flowOf(valid), lyrics = "Existing lyric").toList().map { it.text }
+            service.validatedLocalSuggestionStream({ flowOf(valid) }, lyrics = "Existing lyric").toList().map { it.text }
+        )
+        assertEquals(
+            listOf("One", "Two", "Five"),
+            service.validatedLocalSuggestionStream({ flowOf("One\nTwo\nTwo\nExisting lyric\nFive") }, lyrics = "Existing lyric")
+                .toList().map { it.text }
         )
 
         val error = assertFailsWith<RuntimeException> {
             service.validatedLocalSuggestionStream(
-                flowOf("One\nTwo\nTwo\nExisting lyric\nFive"),
+                { flowOf("One\nTwo\nTwo\nExisting lyric") },
                 lyrics = "Existing lyric"
             ).toList()
         }
@@ -105,7 +110,7 @@ class AIServiceParsingTest {
     @Test
     fun localSuggestionBoundaryStreamsOnlyCompleteValidatedLines() = runBlocking {
         val lines = AIService().validatedLocalSuggestionStream(
-            flowOf("First line\nSecond", " line\nThird line\nFourth line\nFifth line\nSixth line"),
+            { flowOf("First line\nSecond", " line\nThird line\nFourth line\nFifth line\nSixth line") },
             lyrics = ""
         ).toList().map { it.text }
 
@@ -119,7 +124,7 @@ class AIServiceParsingTest {
     fun localSuggestionBoundaryRejectsMarkupBeforeCleanup() = runBlocking {
         val error = assertFailsWith<RuntimeException> {
             AIService().validatedLocalSuggestionStream(
-                flowOf("<start_of_turn>model\nOne\nTwo\nThree\nFour\nFive\nSix"),
+                { flowOf("<start_of_turn>model\nOne\nTwo\nThree\nFour\nFive\nSix") },
                 lyrics = ""
             ).toList()
         }
