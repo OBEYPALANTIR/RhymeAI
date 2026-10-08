@@ -76,7 +76,7 @@ RHYME_TYPES = {
 RHYME_COMPLEXITIES = {
     "SIMPLE": (
         "Simple",
-        "Each line must be 4 to 7 plain, everyday words. End each line on a one-syllable word. No wordplay.",
+        "Each line must be 4 to 7 plain, everyday words. Prefer one-syllable end words. No wordplay.",
     ),
     "MODERATE": (
         "Moderate",

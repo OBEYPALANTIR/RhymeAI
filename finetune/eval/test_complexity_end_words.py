@@ -21,8 +21,7 @@ if FINETUNE not in sys.path:
 from eval import cases, complexity_end_words_fixture, prompts, run_eval, scoring  # noqa: E402
 
 SIMPLE_HINT = (
-    "Each line must be 4 to 7 plain, everyday words. End each line on a one-syllable word. "
-    "No wordplay."
+    "Each line must be 4 to 7 plain, everyday words. Prefer one-syllable end words. No wordplay."
 )
 COMPLEX_HINT = (
     "Each line must be 8 to 12 words. End each line on a word of two or more syllables, or put "
@@ -174,6 +173,54 @@ class HintAndPromptTests(unittest.TestCase):
                 % ", ".join(expected),
                 prompt,
             )
+
+    def _prompt_for(self, anchor, level, chorus=None):
+        target = "Everything we said about %s" % anchor
+        lyrics = "[Verse]\n" + target
+        constraint = prompts.suggestion_rhyme_constraint(target, "PERFECT", complexity=level)
+        self.assertIsNotNone(constraint, anchor)
+        prompt = prompts.build_suggestions_prompt(
+            theme="", lyrics=lyrics, target_rhyme_line=target, rhyme_type="PERFECT", rhyme_scheme="AABB",
+            current_letter="A", current_section="VERSE", complexity=level, use_whole_song_context=True,
+            constraint=constraint,
+        )
+        return list(constraint.candidate_words), prompt
+
+    def test_simple_fallback_prompts_never_contradict_their_list(self):
+        """Anchors whose Simple list must carry longer words: the hint only prefers
+        one-syllable endings and the end-word rule matches the list size."""
+        label, hint = prompts.RHYME_COMPLEXITIES["SIMPLE"]
+        for anchor, expect_mono in (("arrival", 0), ("river", 0), ("love", 4), ("world", 5)):
+            words, prompt = self._prompt_for(anchor, "SIMPLE")
+            self.assertEqual(expect_mono, sum(1 for w in words if scoring.syllable_count_word(w) == 1), (anchor, words))
+            self.assertTrue(any(scoring.syllable_count_word(w) >= 2 for w in words), anchor)
+            self.assertIn("\nComplexity: %s. %s\n" % (label, hint), prompt)
+            self.assertNotIn("one-syllable word.", prompt)
+            self.assertIn(
+                "End each line with one of these rhyming words: %s (choose the most natural fit)." % ", ".join(words),
+                prompt,
+            )
+            self.assertIn(prompts.local_end_word_rule(words), prompt)
+            if anchor == "arrival":
+                self.assertLess(len(words), 6)
+                self.assertIn("The allowed list has fewer than six words, so end words may repeat", prompt)
+            else:
+                self.assertGreaterEqual(len(words), 6)
+                self.assertIn("- End each line on a different word from the allowed list.", prompt)
+
+    def test_road_prompt_is_consistent_at_every_level(self):
+        for level in ("SIMPLE", "MODERATE", "COMPLEX"):
+            words, prompt = self._prompt_for("road", level)
+            label, hint = prompts.RHYME_COMPLEXITIES[level]
+            self.assertEqual(12, len(words), level)
+            self.assertIn("\nComplexity: %s. %s\n" % (label, hint), prompt)
+            self.assertIn("- End each line on a different word from the allowed list.", prompt)
+            self.assertIn(", ".join(words) + " (choose the most natural fit).", prompt)
+            syllables = [scoring.syllable_count_word(w) for w in words]
+            if level == "COMPLEX":
+                self.assertTrue(all(n >= 2 for n in syllables), words)
+            elif level == "SIMPLE":
+                self.assertTrue(all(n == 1 for n in syllables), words)
 
     def test_levels_build_different_lists_for_a_mixed_anchor(self):
         constraints = {

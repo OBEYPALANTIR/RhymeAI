@@ -75,7 +75,7 @@ class SuggestionPromptGuidanceTest {
         // Simple and Complex carry the numeric targets measured in the 2026-10-07
         // complexity experiments; byte-identical on iOS and in finetune/eval/prompts.py.
         assertEquals(
-            "Each line must be 4 to 7 plain, everyday words. End each line on a one-syllable word. No wordplay.",
+            "Each line must be 4 to 7 plain, everyday words. Prefer one-syllable end words. No wordplay.",
             RhymeComplexity.SIMPLE.promptHint
         )
         assertEquals(
@@ -134,6 +134,73 @@ class SuggestionPromptGuidanceTest {
                 "", lyrics, target, RhymeType.PERFECT, "AABB", "A", SongSection.VERSE, level, false, moderateConstraint
             )
             assertContains(cloud, listLine)
+        }
+    }
+
+    private fun promptAndWords(
+        anchor: String,
+        level: RhymeComplexity,
+        cloud: Boolean = false
+    ): Pair<String, List<String>> {
+        val targetLine = "Everything we said about $anchor"
+        val song = "[Verse]\n$targetLine"
+        val words = RhymeConstraint.candidateEndWords(
+            anchor, RhymeType.PERFECT, dictionary = dictionary, wordFrequency = frequency, complexity = level
+        )
+        val constraint = AIService.SuggestionRhymeConstraint(targetLine, anchor, words, RhymeType.PERFECT, dictionary)
+        val prompt = if (cloud) {
+            service.buildPrompt("", song, targetLine, RhymeType.PERFECT, "AABB", "A", SongSection.VERSE, level, true, constraint)
+        } else {
+            service.buildLocalPrompt(
+                theme = "", lyrics = song, targetRhymeLine = targetLine, rhymeType = RhymeType.PERFECT,
+                rhymeScheme = "AABB", currentLetter = "A", currentSection = SongSection.VERSE,
+                complexity = level, useWholeSongContext = true, constraint = constraint
+            )
+        }
+        return prompt to words
+    }
+
+    private fun syllables(word: String) = ProsodyAnalyzer.analyzeWord(word, dictionary).syllableCount
+
+    /** Anchors whose Simple list must carry longer words: the hint only prefers
+     *  one-syllable endings and the end-word rule matches the list size, so no rule
+     *  in the complete prompt contradicts the list. */
+    @Test
+    fun simpleFallbackListsNeverContradictThePrompt() {
+        val level = RhymeComplexity.SIMPLE
+        for ((anchor, expectMono) in listOf("arrival" to 0, "river" to 0, "love" to 4, "world" to 5)) {
+            for (cloud in listOf(false, true)) {
+                val (prompt, words) = promptAndWords(anchor, level, cloud)
+                assertEquals(expectMono, words.count { syllables(it) == 1 }, "$anchor $words")
+                assertTrue(words.any { syllables(it) >= 2 }, anchor)
+                assertContains(prompt, "Complexity${if (cloud) " level" else ""}: ${level.label}. ${level.promptHint}")
+                assertFalse(prompt.contains("one-syllable word."), prompt)
+                assertContains(prompt, "End each line with one of these rhyming words: ${words.joinToString(", ")} (choose the most natural fit).")
+                if (cloud) continue
+                if (anchor == "arrival") {
+                    assertTrue(words.size < 6, "$words")
+                    assertContains(prompt, "The allowed list has fewer than six words, so end words may repeat")
+                } else {
+                    assertTrue(words.size >= 6, "$words")
+                    assertContains(prompt, "- End each line on a different word from the allowed list.")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun roadPromptIsConsistentAtEveryLevel() {
+        for (level in RhymeComplexity.entries) {
+            val (prompt, words) = promptAndWords("road", level)
+            assertEquals(12, words.size, level.name)
+            assertContains(prompt, "\nComplexity: ${level.label}. ${level.promptHint}\n")
+            assertContains(prompt, "- End each line on a different word from the allowed list.")
+            assertContains(prompt, words.joinToString(", ") + " (choose the most natural fit).")
+            when (level) {
+                RhymeComplexity.COMPLEX -> assertTrue(words.all { syllables(it) >= 2 }, "$words")
+                RhymeComplexity.SIMPLE -> assertTrue(words.all { syllables(it) == 1 }, "$words")
+                RhymeComplexity.MODERATE -> Unit
+            }
         }
     }
 
