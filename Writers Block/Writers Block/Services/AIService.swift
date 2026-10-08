@@ -370,11 +370,13 @@ struct AIService {
         var buffer = ""
         var state = state
         let rawLimit = filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
+        // The raw-line budget is per generation; a retry pass gets a fresh one.
+        var passAccepted = 0
 
         streamLoop: for try await chunk in tokens {
             try Task.checkCancellation()
             buffer += chunk
-            while state.accepted < rawLimit, let newlineIdx = buffer.firstIndex(of: "\n") {
+            while passAccepted < rawLimit, let newlineIdx = buffer.firstIndex(of: "\n") {
                 let rawLine = String(buffer[..<newlineIdx])
                 buffer = String(buffer[buffer.index(after: newlineIdx)...])
                 if rejectsLocalArtifacts, SynonymSanitizer.containsMarkupOrControl(rawLine) {
@@ -386,17 +388,18 @@ struct AIService {
                       !excludedKeys.contains(key),
                       state.seen.insert(key).inserted else { continue }
                 state.accepted += 1
+                passAccepted += 1
                 if filter?.tier(of: cleaned) != 0, state.emitted < Self.suggestionCount {
                     continuation.yield(cleaned)
                     state.emitted += 1
                 }
                 if state.emitted >= Self.suggestionCount { break streamLoop }
             }
-            if state.accepted >= rawLimit { break }
+            if passAccepted >= rawLimit { break }
         }
         try Task.checkCancellation()
 
-        if state.emitted < Self.suggestionCount && state.accepted < rawLimit {
+        if state.emitted < Self.suggestionCount && passAccepted < rawLimit {
             let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
             if rejectsLocalArtifacts, SynonymSanitizer.containsMarkupOrControl(remaining) {
                 throw AIServiceError.decodingError

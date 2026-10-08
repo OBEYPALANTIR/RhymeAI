@@ -131,4 +131,27 @@ class LocalSuggestionRetryTest {
             assertEquals("generation failed", error.message)
         }
     }
+
+    @Test
+    fun retryGetsItsOwnRawLineBudget() {
+        // The first pass spends the whole 12-line budget on two rhymes and ten misses.
+        val first = response(rhymes.take(2) + overproducedMisses)
+        val retry = response(rhymes.subList(2, 6))
+        val run = streamed(first, retry)
+        assertEquals(rhymes.take(6), run.first)
+        assertEquals(2, run.second)
+    }
+
+    private val overproducedMisses = listOf(
+        "Quiet lanterns drift across the bay",
+        "Old ropes curl beside the door",
+        "The sailors laugh into the night",
+        "A bell rings out along the shore",
+        "Gray clouds roll over every roof",
+        "The nets hang heavy on the pier",
+        "My coat still smells of salt and smoke",
+        "The lighthouse blinks its steady eye",
+        "We count the boats along the dock",
+        "The gulls fight over scraps of bread"
+    )
 }
