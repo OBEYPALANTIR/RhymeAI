@@ -210,6 +210,10 @@ final class EditorViewModel: ObservableObject {
     @Published var suggestions: [SuggestedLine] = []
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    /// Counts suggestion requests that ran to the end of their stream with at
+    /// least one line. Stop, Settings changes, errors and empty answers do not
+    /// bump it; the Assistant's ink burst listens to it.
+    @Published private(set) var completedSuggestionRequests = 0
 
     // MARK: - Rhyme Settings
 
@@ -809,7 +813,10 @@ final class EditorViewModel: ObservableObject {
                     let isHookRepeat = !firstChorusEndWordSet.isEmpty && firstChorusEndWordSet.contains(endWord)
                     self.suggestions.append(SuggestedLine(text: text, tier: tier, isHookRepeat: isHookRepeat))
                 }
-                if !emittedSuggestion, !Task.isCancelled, self.suggestionsRequestID == requestID {
+                guard !Task.isCancelled, self.suggestionsRequestID == requestID else { return }
+                if emittedSuggestion {
+                    self.completedSuggestionRequests += 1
+                } else {
                     self.errorMessage = "AI did not return suggestions. Try again."
                 }
             } catch is CancellationError {

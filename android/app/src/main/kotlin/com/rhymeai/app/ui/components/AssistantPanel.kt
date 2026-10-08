@@ -53,14 +53,11 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -660,21 +657,12 @@ fun AssistantPanel(
         val setupModel = !viewModel.isLoading &&
             viewModel.selectedProvider == com.rhymeai.app.service.AIProvider.LOCAL &&
             !viewModel.localReady
-        // When writing ends with at least one line, the spinner bursts into
-        // ink: the panel's one celebratory beat. Stop and errors do not burst.
+        // When a request runs to the end of its stream with at least one line,
+        // the spinner bursts into ink: the panel's one celebratory beat. The
+        // view model counts those completions, so Stop, Settings changes and
+        // errors never burst.
         var spinnerCenter by remember { mutableStateOf<Offset?>(null) }
         var barCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-        var stopRequested by remember { mutableStateOf(false) }
-        var inkBurst by remember { mutableIntStateOf(0) }
-        LaunchedEffect(Unit) {
-            var wasLoading = viewModel.isLoading
-            snapshotFlow { viewModel.isLoading }.collect { loading ->
-                if (wasLoading && !loading && !stopRequested && viewModel.suggestions.isNotEmpty() && viewModel.errorMessage == null) {
-                    inkBurst++
-                }
-                wasLoading = loading
-            }
-        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -684,14 +672,8 @@ fun AssistantPanel(
                 onClick = {
                     when {
                         setupModel -> onModelSetup()
-                        viewModel.isLoading -> {
-                            stopRequested = true
-                            viewModel.cancelSuggestions()
-                        }
-                        else -> {
-                            stopRequested = false
-                            viewModel.getSuggestions()
-                        }
+                        viewModel.isLoading -> viewModel.cancelSuggestions()
+                        else -> viewModel.getSuggestions()
                     }
                 },
                 enabled = setupModel || viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
@@ -735,7 +717,7 @@ fun AssistantPanel(
                 )
             }
             InkBurst(
-                trigger = inkBurst,
+                trigger = viewModel.completedSuggestionRequests,
                 origin = spinnerCenter,
                 color = colorScheme.onSurface,
                 modifier = Modifier.matchParentSize()

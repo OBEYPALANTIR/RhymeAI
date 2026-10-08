@@ -8,7 +8,6 @@ struct AssistantPanelView: View {
     @State private var showModelSetup = false
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
-    @State private var stopRequested = false
     @State private var inkBurstStart: Date?
     @State private var spinnerCenter: CGPoint = .zero
     @AppStorage("assistant.targetLineStressExpanded") private var stressDetailExpanded = false
@@ -163,10 +162,8 @@ struct AssistantPanelView: View {
     private var suggestBar: some View {
         Button {
             if viewModel.isLoading {
-                stopRequested = true
                 viewModel.cancelSuggestions()
             } else {
-                stopRequested = false
                 viewModel.getSuggestions()
             }
         } label: {
@@ -526,19 +523,23 @@ struct AssistantPanelView: View {
             .rhymeAnimation(RhymeAITokens.Motion.dismiss, value: showsSuggestions)
             // A caption inserted into the hierarchy is not read on its own, so
             // tell VoiceOver when writing starts, as the Word Inspector does.
-            .onChange(of: viewModel.isLoading) { wasLoading, isLoading in
-                if isLoading {
-                    AccessibilityNotification.Announcement(Self.writingAnnouncement).post()
-                } else if wasLoading, !stopRequested, !viewModel.suggestions.isEmpty, viewModel.errorMessage == nil, !reduceMotion {
-                    // Writing finished with something to show: the spinner
-                    // bursts into ink, the panel's one celebratory beat.
-                    let start = Date.now
-                    inkBurstStart = start
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(InkBurstMotion.duration))
-                        // A newer burst may have started meanwhile; only clear this one.
-                        if inkBurstStart == start { inkBurstStart = nil }
-                    }
+            .onChange(of: viewModel.isLoading) { _, isLoading in
+                guard isLoading else { return }
+                AccessibilityNotification.Announcement(Self.writingAnnouncement).post()
+            }
+            // The view model counts requests that ran to the end of their stream
+            // with at least one line, so Stop, Settings changes and errors never
+            // burst, and kept partial lines stay where they are.
+            .onChange(of: viewModel.completedSuggestionRequests) { _, _ in
+                guard !reduceMotion else { return }
+                // Writing finished with something to show: the spinner bursts
+                // into ink, the panel's one celebratory beat.
+                let start = Date.now
+                inkBurstStart = start
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(InkBurstMotion.duration))
+                    // A newer burst may have started meanwhile; only clear this one.
+                    if inkBurstStart == start { inkBurstStart = nil }
                 }
             }
         }
