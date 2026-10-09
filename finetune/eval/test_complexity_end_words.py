@@ -292,6 +292,24 @@ class HintAndPromptTests(unittest.TestCase):
         plain = prompts.suggestion_rhyme_constraint(target, "SLANT", complexity="MODERATE")
         self.assertEqual(list(plain.candidate_words), list(slant.candidate_words))
 
+    def test_hook_promotion_checks_the_whole_near_pool(self):
+        """A near hook ranked past find_rhymes' default 30-word cap is still
+        promoted, as Android's direct rhymeRelation check would promote it."""
+        lyrics = (
+            "[Chorus]\nI'm breaking through the code\n\n"
+            "[Chorus]\nYellow lights on a midnight road"
+        )
+        refs = prompts.parse_section_map(lyrics)
+        second = next(r for r in refs if r.type == "CHORUS" and r.ordinal == 2)
+        target = "Yellow lights on a midnight road"
+        capped = scoring.find_rhymes("road").near
+        full = scoring.find_rhymes("road", near_limit=None).near
+        late_hook = next(w for w in full if w not in capped)
+        constraint = prompts.suggestion_rhyme_constraint(
+            target, "NEAR", section_ref=second, chorus_end_words=[late_hook], complexity="MODERATE"
+        )
+        self.assertEqual(late_hook, constraint.candidate_words[0])
+
     def test_levels_build_different_lists_for_a_mixed_anchor(self):
         constraints = {
             level: prompts.suggestion_rhyme_constraint("I keep the porch light on at home", "PERFECT", complexity=level)

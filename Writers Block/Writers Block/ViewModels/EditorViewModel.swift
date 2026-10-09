@@ -1492,6 +1492,7 @@ final class EditorViewModel: ObservableObject {
             try saveModelContext(context)
             for projectId in deletedProjects {
                 _ = RecordingFiles.deleteMemosFolder(for: projectId)
+                do { try companionStore.remove(projectId) } catch { companionError = "Could not remove this song’s local notebook." }
             }
             for deletion in deletions {
                 guard let fileName = deletion.fileName, !deletedProjects.contains(deletion.projectId) else { continue }
