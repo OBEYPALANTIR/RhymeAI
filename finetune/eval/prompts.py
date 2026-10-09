@@ -245,15 +245,13 @@ def _rhyme_compatible(word: str, target_word: str, rhyme_type: str) -> bool:
     """ProsodyAnalyzer.rhymeRelation(word, target) == rhymeType, as far as the
     eval can verify it. Perfect: a shared last-stressed-vowel tail. Near: the
     exclusive near pool (find_rhymes already removes perfect/multi words from
-    it), so a perfect hook is not promoted into a Near prompt. The pool is
-    uncapped, because Android classifies the pair directly rather than looking
-    it up in a top-30 list. Slant: the eval has no slant classifier (its Slant
-    lists still use the older merged pools), so nothing is promoted rather than
-    promoting a different relation."""
+    it), so a perfect hook is not promoted into a Near prompt. Slant: the eval
+    has no slant classifier (its Slant lists still use the older merged pools),
+    so nothing is promoted rather than promoting a different relation."""
     if rhyme_type == "PERFECT":
         return scoring.is_perfect_rhyme(word, target_word)
     if rhyme_type == "NEAR":
-        matches = scoring.find_rhymes(target_word, near_limit=None)
+        matches = scoring.find_rhymes(target_word)
         return not matches.is_empty and word in matches.near
     return False
 
