@@ -647,7 +647,7 @@ struct LyricsTextView: UIViewRepresentable {
         func updateRewriteHighlight(_ textView: UITextView, highlight: LyricsRewriteHighlight?) {
             guard let rewriteHighlightView else { return }
             guard let highlight, highlight.range.length > 0 else {
-                rewriteHighlightView.configure(rects: [], isLoading: false, isError: false)
+                rewriteHighlightView.configure(rects: [], isLoading: false, colors: nil)
                 return
             }
 
@@ -657,8 +657,7 @@ struct LyricsTextView: UIViewRepresentable {
                 rewriteHighlightView.configure(
                     rects: rects,
                     isLoading: highlight.isLoading,
-                    isError: highlight.isError,
-                    insertionColor: highlight.isInsertion ? UIColor(self.parent.appearance.palette.primaryInk) : nil
+                    colors: RewriteHighlightColors.forHighlight(highlight, palette: self.parent.appearance.palette)
                 )
             }
         }
@@ -810,51 +809,70 @@ struct LyricsTextView: UIViewRepresentable {
     }
 }
 
+/// Colours for the pending-rewrite and insertion highlight, taken from the
+/// appearance palette so the editor stays monochrome while a rewrite is in
+/// flight. The overlay sits above the text, so the fill stays translucent.
+struct RewriteHighlightColors: Equatable {
+    static let pendingFillOpacity: CGFloat = 0.45
+    static let pendingStrokeOpacity: CGFloat = 0.90
+    static let errorFillOpacity: CGFloat = 0.20
+    static let errorStrokeOpacity: CGFloat = 0.60
+    static let insertionFillOpacity: CGFloat = 0.12
+    static let insertionStrokeOpacity: CGFloat = 0.45
+
+    let fill: UIColor
+    let stroke: UIColor
+
+    /// A selection waiting for, or receiving, a rewrite: the editor's own
+    /// selection tint with a strong-outline border. Nothing moves.
+    static func pending(palette: AppAppearancePalette) -> RewriteHighlightColors {
+        RewriteHighlightColors(
+            fill: UIColor(palette.selectionTint).withAlphaComponent(pendingFillOpacity),
+            stroke: UIColor(palette.outlineStrong).withAlphaComponent(pendingStrokeOpacity)
+        )
+    }
+
+    static func error(palette: AppAppearancePalette) -> RewriteHighlightColors {
+        RewriteHighlightColors(
+            fill: UIColor(palette.error).withAlphaComponent(errorFillOpacity),
+            stroke: UIColor(palette.error).withAlphaComponent(errorStrokeOpacity)
+        )
+    }
+
+    static func insertion(palette: AppAppearancePalette) -> RewriteHighlightColors {
+        RewriteHighlightColors(
+            fill: UIColor(palette.primaryInk).withAlphaComponent(insertionFillOpacity),
+            stroke: UIColor(palette.primaryInk).withAlphaComponent(insertionStrokeOpacity)
+        )
+    }
+
+    static func forHighlight(_ highlight: LyricsRewriteHighlight, palette: AppAppearancePalette) -> RewriteHighlightColors {
+        if highlight.isInsertion { return insertion(palette: palette) }
+        if highlight.isError { return error(palette: palette) }
+        return pending(palette: palette)
+    }
+}
+
+/// Draws the rewrite and insertion highlight: a rounded tint and a 1pt border
+/// around the affected glyph rects. It is static by design; the rewrite bar
+/// at the bottom of the editor carries the loading state.
 final class RewriteHighlightOverlayView: UIView {
-    private var rects: [CGRect] = []
-    private var isLoading = false
-    private var isError = false
-    private var insertionColor: UIColor?
-    private var scanProgress: CGFloat = 0
-    private var displayLink: CADisplayLink?
+    private(set) var rects: [CGRect] = []
+    private(set) var isLoading = false
+    private(set) var colors: RewriteHighlightColors?
 
-    var isRippleAnimating: Bool { displayLink != nil }
-
-    override func didMoveToSuperview() {
-        super.didMoveToSuperview()
-        if superview == nil { stopScan() }
-    }
-
-    deinit {
-        displayLink?.invalidate()
-    }
-
-    func configure(rects: [CGRect], isLoading: Bool, isError: Bool, insertionColor: UIColor? = nil) {
+    func configure(rects: [CGRect], isLoading: Bool, colors: RewriteHighlightColors?) {
         self.rects = rects
         self.isLoading = isLoading
-        self.isError = isError
-        self.insertionColor = insertionColor
-
-        if isLoading && !rects.isEmpty && !UIAccessibility.isReduceMotionEnabled {
-            startScan()
-        } else {
-            stopScan()
-        }
+        self.colors = colors
         setNeedsDisplay()
     }
 
     override func draw(_ rect: CGRect) {
-        guard let context = UIGraphicsGetCurrentContext(), !rects.isEmpty else { return }
+        guard let context = UIGraphicsGetCurrentContext(), let colors, !rects.isEmpty else { return }
 
-        let fillColor = insertionColor?.withAlphaComponent(0.12) ?? (isError
-            ? UIColor.systemRed.withAlphaComponent(0.20)
-            : UIColor.systemIndigo.withAlphaComponent(0.22))
-        let strokeColor = insertionColor?.withAlphaComponent(0.45) ?? (isError
-            ? UIColor.systemRed.withAlphaComponent(0.60)
-            : UIColor.systemTeal.withAlphaComponent(0.70))
-
-        context.setFillColor(fillColor.cgColor)
-        context.setStrokeColor(strokeColor.cgColor)
+        context.setFillColor(colors.fill.cgColor)
+        context.setStrokeColor(colors.stroke.cgColor)
         context.setLineWidth(1.0)
 
         for highlightRect in rects {
@@ -862,54 +880,6 @@ final class RewriteHighlightOverlayView: UIView {
             context.addPath(path.cgPath)
             context.drawPath(using: .fillStroke)
         }
-
-        guard isLoading, !UIAccessibility.isReduceMotionEnabled else { return }
-
-        for highlightRect in rects {
-            let bandWidth = max(highlightRect.width * 0.45, 24)
-            let travel = highlightRect.width + bandWidth * 2
-            let centerX = highlightRect.minX - bandWidth + travel * scanProgress
-            context.saveGState()
-            UIBezierPath(roundedRect: highlightRect, cornerRadius: RhymeAITokens.Radius.xs).addClip()
-            let colors = [
-                UIColor.systemIndigo.withAlphaComponent(0).cgColor,
-                UIColor.systemIndigo.withAlphaComponent(0.6).cgColor,
-                UIColor.systemIndigo.withAlphaComponent(0).cgColor
-            ] as CFArray
-            let locations: [CGFloat] = [0, 0.5, 1]
-            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
-                context.drawLinearGradient(
-                    gradient,
-                    start: CGPoint(x: centerX - bandWidth, y: highlightRect.midY),
-                    end: CGPoint(x: centerX + bandWidth, y: highlightRect.midY),
-                    options: []
-                )
-            }
-            context.restoreGState()
-        }
-    }
-
-    private func startScan() {
-        guard displayLink == nil else { return }
-        let link = CADisplayLink(target: self, selector: #selector(stepScan))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-    }
-
-    private func stopScan() {
-        displayLink?.invalidate()
-        displayLink = nil
-        scanProgress = 0
-    }
-
-    @objc private func stepScan() {
-        guard !UIAccessibility.isReduceMotionEnabled else { stopScan(); return }
-        let frameDuration = displayLink?.duration ?? (1.0 / 60.0)
-        scanProgress += CGFloat((frameDuration > 0 ? frameDuration : 1.0 / 60.0) / 1.2)
-        if scanProgress > 1 {
-            scanProgress = 0
-        }
-        setNeedsDisplay()
     }
 }
 
