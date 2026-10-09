@@ -90,6 +90,10 @@ This tracks behavior that must stay aligned between Android and iOS.
   highlight off tints whole words semibold; with rhyme highlight on, syllable
   color moves to the underline.
 
+## Rewrite highlight
+
+- Pending-rewrite highlight: both platforms tint the selected lyric with the appearance's selection colour and a 1px strong-outline border while a rewrite (Harder Rhyme, Punch Up, and the rest) is pending or in flight, with no motion on the text; a failed rewrite uses the error colour. iOS previously used system indigo and teal with a 1.2s gradient sweep on a display link, Android the primary and success colours. iOS unit-verified in `RewriteRippleMotionTests` (palette colours per appearance, no layer animation while loading). Visual check on device pending on both.
+
 ## Open parity checks
 
 - Local model live/inference path: Android has current emulator evidence for GGUF load and nonblank generation through `scripts/android-local-model-smoke.sh`; iOS local provider has a simulator/device smoke gate that passes when Apple Foundation Models either return text or surface an on-device availability reason.

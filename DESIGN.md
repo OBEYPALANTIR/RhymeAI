@@ -417,6 +417,10 @@ components:
   rewrite-chip-android:
     rounded: "{rounded.pill}"
     height: 48px
+  rewrite-highlight:
+    backgroundColor: "{colors.selection}"
+    borderColor: "{colors.outline-strong}"
+    rounded: "{rounded.xs}"
   word-inspector-chip-ios:
     textColor: "{colors.on-surface}"
     borderColor: "{colors.outline}"
@@ -729,7 +733,7 @@ Values below are the shipped ones. iOS values are in points, Android values in d
 
 **Suggestion card.** iOS: surface fill, 1px outline, 12pt radius, 24pt padding; the line in serif body text, a monospaced syllable count badge, an optional tier badge, then "Use line" (semibold) and "Keep for later" / "Kept", each at least 44pt tall; actions stack at accessibility sizes. Android: outlined card, 12dp radius, 48dp minimum height, serif line, tonal "Use" button.
 
-**Rewrite chip bar.** Appears at the bottom of the editor for a lyric selection (iOS: while text is selected and no rewrite, inspector, assistant sheet, or Focus mode is active; Android: while a rewrite range is pending and no assistant sheet, modal, active rewrite, or Focus mode is in the way). iOS: a 52pt-radius bordered capsule, 8pt padding, at most 360pt wide, holding a "Look up word" magnifier (44×44pt) and caption-weight chips at least 44pt tall. Android: a 22dp-radius bar on the high container colour with 28dp-radius, 48dp-tall chips. The rewrite review bar that follows uses the same capsule on iOS (22pt radius when showing an error or at accessibility sizes) with Retry/Apply at least 72×44pt and a "Regenerate rewrite" icon button.
+**Rewrite chip bar.** Appears at the bottom of the editor for a lyric selection (iOS: while text is selected and no rewrite, inspector, assistant sheet, or Focus mode is active; Android: while a rewrite range is pending and no assistant sheet, modal, active rewrite, or Focus mode is in the way). iOS: a 52pt-radius bordered capsule, 8pt padding, at most 360pt wide, holding a "Look up word" magnifier (44×44pt) and caption-weight chips at least 44pt tall. Android: a 22dp-radius bar on the high container colour with 28dp-radius, 48dp-tall chips. The rewrite review bar that follows uses the same capsule on iOS (22pt radius when showing an error or at accessibility sizes) with Retry/Apply at least 72×44pt and a "Regenerate rewrite" icon button. While a rewrite is pending or in flight, the selected lyric keeps a still highlight on both platforms: the appearance's selection colour with a 1px strong-outline border at the 6pt radius, the same tint the editor uses for an ordinary selection. Nothing on the text moves; the rewrite bar carries the loading state. A failed rewrite swaps both to the error colour, and an inserted suggestion line uses primary ink at 12% with a 45% border. iOS draws this overlay above the text, so its fill is the selection colour at 45%; Android draws it behind the text at full strength.
 
 **Word Inspector.** iOS: a native sheet with 20pt padding: a "Word inspector" header with a 44pt Close button, the headword in bold serif large title, IPA in monospaced footnote, syllable count, then rhyme and synonym groups as wrapping chips. Each chip is a button labelled with its word (callout text, 12×6pt padding, 52pt radius, 1px outline; hint "Replaces the selected word") whose hit area is at least 44×44pt around the unchanged drawn chip; a long press copies the word and flashes the outline in the success colour, and the same copy is offered as an accessibility action. Empty and error states are caption text, with errors in the error colour. Android: bordered card with a serif headword and monospace IPA; pronunciation and syllable count appear as soon as the dictionary read returns, and the rhyme groups are replaced by a small progress indicator with "Finding rhymes…" until the rhyme search finishes (the first search of a session builds the rhyme index and takes several seconds), so an empty-result message always means a finished search.
 
@@ -766,7 +770,7 @@ These describe the current code. They are not rules to copy.
 - Android has no save-failed state in the top bar and no persistent assistant side panel on large screens.
 - Lyric size and bottom rest differ: 16pt and 200pt on iOS, 17sp and 300dp on Android.
 - The iOS lyric editor's Ink and Paper rhyme colours come from a second array whose amber, green, orange, cyan, yellow, and lime entries differ from `AppAppearance` and from Android; the iOS assistant help sheet has a third copy.
-- iOS uses system hues outside the palettes: system indigo on the two cloud-sharing consent switches (deliberate, for Graphite contrast); system indigo, teal, and red for the pending-rewrite highlight and shimmer in the editor; and system indigo, green, and orange for the suggestion tier badge. Android draws the rewrite highlight and tier badge from the colour scheme.
+- iOS uses system hues outside the palettes: system indigo on the two cloud-sharing consent switches (deliberate, for Graphite contrast); and system indigo, green, and orange for the suggestion tier badge. Android draws the tier badge from the colour scheme.
 - The mic button is an action fill on iOS and an outlined high-container surface on Android. The recording timer is monospaced on iOS only.
 - Welcome differs by platform: two sentences of copy and tiled icons on a raised surface on iOS; one line of copy, bare icons on `surfaceContainerLow`, and an extra "Continue" card on Android.
 - Two iOS views use non-continuous rounded rectangles: `RhymeSchemeDisplayView` and the beat-grid preview.
