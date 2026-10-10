@@ -190,6 +190,14 @@ format-pass rate and rhyme-compliance tiers per task are the headline
 numbers. Ship only if the tuned model beats baseline on format-pass without
 regressing rhyme misses.
 
+## Base-model bake-off (Qwen3.5-4B) — retired
+
+The July 2026 Qwen3.5-4B bake-off lost the naturalness A/B to tuned E4B
+(see `finetune/SCORECARD.md`), so its `--template qwen` plumbing and its
+export detour (`merge_qwen_lora.py`, `graft_mtp.py`) were dropped when the
+v3 pipeline was ported onto the Gemma 4 envelope. Both are in commit
+`3e54522` if the memory/license case is revisited.
+
 ## Cost estimate
 
 Worst-case on-demand math, both models:

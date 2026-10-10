@@ -61,6 +61,9 @@ MIN_SYNONYMS = 3  # reject degenerate 1-2 word synonym lists
 MARKER_PREFIX_RE = re.compile(
     r"^\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|"
     r"model_response>|assistant:|model:|user:|"
+    # Bare underscore-led marker with no ">" (e.g. "_response", "_output") —
+    # the v1/v2 E2B stray-prefix regression traced back to these surviving.
+    r"_(?:response|output|model_response)\b|"
     r"<?/?(?:start_of_turn|end_of_turn)>?\w*)\s*",
     re.IGNORECASE,
 )
@@ -70,14 +73,23 @@ MARKER_PREFIX_RE = re.compile(
 # <|turn>model opener is already cut by scoring.strip_model_output.
 MARKER_ONLY_RE = re.compile(
     r"^\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|"
-    r"model_response>|<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>|]+>|>+|"
+    r"model_response>|_(?:response|output|model_response)\b|"
+    r"<?/?(?:start_of_turn|end_of_turn)>?\w*|<[^>|]+>|>+|"
     r"[<>/]+|user|model|assistant)\s*$",
     re.IGNORECASE,
 )
 
+# Gemma 4 thinking channel. The 12B/26B/31B teachers open their answer with a
+# "<|channel>thought\n...<channel|>" block (empty when thinking is off; E2B/E4B
+# don't emit one), so that leading block is cut. Any other channel tag stays
+# for the scorer to reject: the v3 seed3 pollution was EXTRA bare "<channel|>"
+# closers inside the answer (75 lines shipped with them), and a sample carrying
+# those is a derailment, not text to clean.
+LEADING_THOUGHT_CHANNEL_RE = re.compile(r"\A\s*<\|channel>.*?<channel\|>\s*", re.DOTALL)
+
 
 def clean_teacher_output(raw: str) -> str:
-    text = scoring.strip_model_output(raw)
+    text = scoring.strip_model_output(LEADING_THOUGHT_CHANNEL_RE.sub("", raw, count=1))
     cleaned_lines = []
     for line in text.split("\n"):
         if MARKER_ONLY_RE.match(line):
