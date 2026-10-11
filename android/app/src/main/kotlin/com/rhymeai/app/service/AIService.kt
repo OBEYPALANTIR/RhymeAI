@@ -17,7 +17,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -752,24 +751,31 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             .toSet()
         val state = LineStreamState()
         // retryFloor = the first pass's count, snapshotted before the retry mutates state.
-        suspend fun pass(retryFloor: Int?) = emitLinesFromTokens(
-            tokens = flow {
-                tokens().collect { chunk ->
-                    if (containsMarkupOrControlLeakage(chunk)) {
-                        onDecision?.invoke(LocalSuggestionDecision(chunk, null, "markup_or_control"))
-                        throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
-                    }
-                    emit(chunk)
-                }
-            }.catch { error ->
-                // A failed optional retry ends the pass once the first already met the minimum.
-                if (error is CancellationException || retryFloor == null || retryFloor < MIN_SUGGESTIONS) throw error
-            },
-            constraint = constraint,
-            excludedKeys = existingKeys,
-            onDecision = onDecision,
-            localPass = state
-        )
+        suspend fun pass(retryFloor: Int?) {
+            try {
+                emitLinesFromTokens(
+                    tokens = flow {
+                        tokens().collect { chunk ->
+                            if (containsMarkupOrControlLeakage(chunk)) {
+                                onDecision?.invoke(LocalSuggestionDecision(chunk, null, "markup_or_control"))
+                                throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
+                            }
+                            emit(chunk)
+                        }
+                    },
+                    constraint = constraint,
+                    excludedKeys = existingKeys,
+                    onDecision = onDecision,
+                    localPass = state
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // A failed optional retry ends the pass once the first already met the minimum;
+                // its unterminated tail is dropped, as iOS skips the flush on a throw.
+                if (retryFloor == null || retryFloor < MIN_SUGGESTIONS) throw error
+            }
+        }
         pass(retryFloor = null)
         // Retry once: LocalModelService samples with seed -1, a fresh llama.cpp seed per call.
         if (state.emitted < SUGGESTION_COUNT) pass(retryFloor = state.emitted)
