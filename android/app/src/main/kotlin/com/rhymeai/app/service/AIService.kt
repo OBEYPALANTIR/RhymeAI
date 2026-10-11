@@ -747,7 +747,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             .filter(String::isNotEmpty)
             .toSet()
         val state = LineStreamState()
-        suspend fun pass(isRetry: Boolean) = emitLinesFromTokens(
+        // retryFloor = the first pass's count, snapshotted before the retry mutates state.
+        suspend fun pass(retryFloor: Int?) = emitLinesFromTokens(
             tokens = flow {
                 tokens().collect { chunk ->
                     if (containsMarkupOrControlLeakage(chunk)) {
@@ -758,16 +759,16 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 }
             }.catch { error ->
                 // A failed optional retry ends the pass once the first already met the minimum.
-                if (error is CancellationException || !isRetry || state.emitted < MIN_SUGGESTIONS) throw error
+                if (error is CancellationException || retryFloor == null || retryFloor < MIN_SUGGESTIONS) throw error
             },
             constraint = constraint,
             excludedKeys = existingKeys,
             onDecision = onDecision,
             localPass = state
         )
-        pass(isRetry = false)
+        pass(retryFloor = null)
         // Retry once: LocalModelService samples with seed -1, a fresh llama.cpp seed per call.
-        if (state.emitted < SUGGESTION_COUNT) pass(isRetry = true)
+        if (state.emitted < SUGGESTION_COUNT) pass(retryFloor = state.emitted)
         requireMinimumLocalSuggestions(state.emitted, state.accepted, constraint?.lineFilter)
     }
 
