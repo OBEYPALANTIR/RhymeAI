@@ -124,6 +124,19 @@ class LocalSuggestionRetryTest {
     }
 
     @Test
+    fun fourSurvivorsWithRetryThatFailsMidLineDropTheRetryTail() = runBlocking {
+        val attempts = Attempts(listOf(response(rhymes.take(4) + misses.take(2)), rhymes[4]))
+        val tokens: () -> Flow<String> = {
+            flow {
+                emit(attempts.next())
+                if (attempts.calls == 2) throw IllegalStateException("generation failed")
+            }
+        }
+        val lines = service.validatedLocalSuggestionStream(tokens, "Existing lyric", constraint).toList()
+        assertEquals(rhymes.take(4), lines.map { it.text })
+    }
+
+    @Test
     fun sixSurvivorsStopReadingTheModelBeforeALaterProducerFailure() = runBlocking {
         val tokens: () -> Flow<String> = {
             flow {
