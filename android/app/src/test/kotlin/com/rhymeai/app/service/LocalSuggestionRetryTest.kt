@@ -183,6 +183,15 @@ class LocalSuggestionRetryTest {
         assertEquals(2, run.second)
     }
 
+    @Test
+    fun batchPassCapsAtTwelveCandidatesBeforeRanking() {
+        // Rhymes past the 12-candidate budget are not ranked; the retry supplies them.
+        val first = response(misses + overproducedMisses + rhymes)
+        val run = batched(first, response(rhymes))
+        assertEquals(rhymes.take(6).toSet(), run.first.toSet())
+        assertEquals(2, run.second)
+    }
+
     private val overproducedMisses = listOf(
         "Quiet lanterns drift across the bay",
         "Old ropes curl beside the door",

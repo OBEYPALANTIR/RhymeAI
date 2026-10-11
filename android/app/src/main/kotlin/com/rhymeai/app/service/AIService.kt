@@ -1605,9 +1605,11 @@ $endWordRule
             throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
         }
         val rawResults = parseJsonArray(response, Int.MAX_VALUE).ifEmpty { response.lines() }
-        val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, onDecision, state.seen)
+        // Same per-generation raw budget as the streaming path (iOS `rankedLocalSuggestions`).
+        val limit = if (constraint?.lineFilter != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, onDecision, state.seen, limit)
         state.accepted += sanitized.size
-        return constraint?.lineFilter?.rank(sanitized, SUGGESTION_COUNT) ?: sanitized.take(SUGGESTION_COUNT)
+        return constraint?.lineFilter?.rank(sanitized, SUGGESTION_COUNT) ?: sanitized
     }
 
     private val listPrefixPattern = Regex("^\\s*(?:[-*]\\s+|\\d+[.)\\-:]\\s*)")
@@ -1795,27 +1797,29 @@ $endWordRule
         candidates: List<String>,
         lyrics: String,
         onDecision: ((LocalSuggestionDecision) -> Unit)? = null,
-        seen: MutableSet<String> = mutableSetOf()
+        seen: MutableSet<String> = mutableSetOf(),
+        limit: Int = Int.MAX_VALUE
     ): List<String> {
         val existingLines = lyrics.lines()
             .map { normalizeSuggestionKey(it) }
             .filter { it.isNotEmpty() }
             .toSet()
 
-        return candidates
-            .flatMap { it.lines() }
-            .mapNotNull { rawLine ->
-                val cleaned = cleanLocalSuggestionLine(rawLine)
-                val key = cleaned?.let(::normalizeSuggestionKey).orEmpty()
-                val disposition = when {
-                    cleaned == null || key.isEmpty() -> "format"
-                    key in existingLines -> "existing_lyric"
-                    !seen.add(key) -> "duplicate"
-                    else -> "accepted"
-                }
-                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, disposition))
-                cleaned.takeIf { disposition == "accepted" }
+        val accepted = mutableListOf<String>()
+        for (rawLine in candidates.flatMap { it.lines() }) {
+            if (accepted.size >= limit) break
+            val cleaned = cleanLocalSuggestionLine(rawLine)
+            val key = cleaned?.let(::normalizeSuggestionKey).orEmpty()
+            val disposition = when {
+                cleaned == null || key.isEmpty() -> "format"
+                key in existingLines -> "existing_lyric"
+                !seen.add(key) -> "duplicate"
+                else -> "accepted"
             }
+            onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, disposition))
+            if (disposition == "accepted") accepted += checkNotNull(cleaned)
+        }
+        return accepted
     }
 
     private fun cleanLocalSuggestionLine(line: String): String? {
