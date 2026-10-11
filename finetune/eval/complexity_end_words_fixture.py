@@ -51,11 +51,11 @@ DESCRIPTION = (
     "finetune/eval/scoring.py candidate_end_words(anchor, rhymeType, complexity=complexity) "
     "must return `expected` word for word (limit 12, bundled dictionary and frequency list). "
     "PERFECT is the exact and multisyllabic pools; NEAR and SLANT are the exclusive "
-    "rhymeRelation pools in songwriter order. MODERATE is the frequency order; COMPLEX puts words of two or more syllables first "
+    "rhymeRelation pools in songwriter order. MODERATE keeps the relation's ranked order; COMPLEX puts words of two or more syllables first "
     "(stable); SIMPLE keeps one-syllable words only unless fewer than six exist, when the "
     "remaining words follow in their original order. Expected values were produced by "
     "finetune/eval/complexity_end_words_fixture.py; regenerate them there if the rule changes. "
-    "iOS asserts the same rule on its own dictionary in RhymeConstraintTests.swift."
+    "iOS asserts the Perfect level rule on its own dictionary in RhymeConstraintTests.swift."
 )
 
 
