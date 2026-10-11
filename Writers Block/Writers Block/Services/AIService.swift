@@ -596,17 +596,20 @@ struct AIService {
         }
         let excludedKeys = existingSuggestionKeys(in: lyrics)
         var seen = state.seen
-        let suggestions = raw.components(separatedBy: .newlines).compactMap { line -> String? in
-            guard let cleaned = validatedLocalSuggestionLine(line) else { return nil }
+        // Same per-generation raw budget as the streaming path (`emitLines` rawLimit).
+        let rawLimit = filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
+        var suggestions: [String] = []
+        for line in raw.components(separatedBy: .newlines) where suggestions.count < rawLimit {
+            guard let cleaned = validatedLocalSuggestionLine(line) else { continue }
             let key = normalizeSuggestionKey(cleaned)
             guard !key.isEmpty,
                   !excludedKeys.contains(key),
-                  seen.insert(key).inserted else { return nil }
-            return cleaned
+                  seen.insert(key).inserted else { continue }
+            suggestions.append(cleaned)
         }
         state.seen = seen
         state.accepted += suggestions.count
-        guard let filter else { return Array(suggestions.prefix(Self.suggestionCount)) }
+        guard let filter else { return suggestions }
         return filter.rank(suggestions, want: Self.suggestionCount)
     }
 

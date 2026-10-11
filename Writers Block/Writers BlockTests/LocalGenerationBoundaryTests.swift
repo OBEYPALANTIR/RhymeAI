@@ -206,6 +206,14 @@ struct LocalGenerationBoundaryTests {
         "The gulls fight over scraps of bread"
     ]
 
+    @Test func localBatchPassCapsAtTwelveCandidatesBeforeRanking() async throws {
+        // Rhymes past the 12-candidate budget are not ranked; the retry supplies them.
+        let first = Self.misses + Self.overproducedMisses + Self.rhymes
+        let run = try await batched(first, retry: Self.rhymes)
+        #expect(run.lines == Self.rhymes)
+        #expect(run.calls == 2)
+    }
+
     @Test func localRetryGetsItsOwnRawLineBudget() async throws {
         // The first pass spends the whole 12-line budget on two rhymes and ten misses.
         let first = Array(Self.rhymes.prefix(2)) + Self.overproducedMisses
