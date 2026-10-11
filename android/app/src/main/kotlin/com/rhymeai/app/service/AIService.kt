@@ -18,9 +18,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
@@ -711,7 +713,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             return true
         }
 
-        tokens.collect { chunk ->
+        // Stop consuming the model once a cap is reached, as iOS `emitLines` breaks its loop.
+        tokens.transformWhile<String, Unit> { chunk ->
             buffer.append(chunk)
             while (passAccepted < acceptLimit && state.emitted < SUGGESTION_COUNT) {
                 val newlineIdx = buffer.indexOf('\n')
@@ -720,7 +723,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 buffer.delete(0, newlineIdx + 1)
                 flushLine(rawLine)
             }
-        }
+            passAccepted < acceptLimit && state.emitted < SUGGESTION_COUNT
+        }.collect()
         if (buffer.isNotBlank()) {
             flushLine(buffer.toString())
         }
