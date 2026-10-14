@@ -74,9 +74,9 @@ has no verdict. DEV results cannot authorize model adoption.
 | Gate | Required evidence and decision |
 |---|---|
 | G1 | Frozen, newly authored benchmark with zero overlapping 8-gram lines in the specified training pools; exact Kotlin prompt-byte parity for every prompt. |
-| G2 | Zero candidate suggestion errors. 95% CI bounds of candidate minus incumbent: six-line display lower bound ≥ −1 pp; suggestion retry upper bound ≤ +7.5 pp; passage rewrite, single-word rewrite and synonym pass lower bounds ≥ −5 pp each. |
+| G2 | Zero candidate suggestion errors. 95% CI bounds of candidate minus incumbent: six-line display lower bound ≥ −1 pp; suggestion retry upper bound ≤ +6.5 pp; passage rewrite ≥ −8.5 pp, single-word rewrite ≥ −3.5 pp, synonyms ≥ −1 pp (lower bounds). |
 | G3 | Independent blind lyric-craft judge on 150 distinct suggestion/passage prompts per seed; two orders, inconsistent judgments tied. Candidate wins overall: the song-cluster bootstrap 95% CI of net preference (win rate minus loss rate) lies entirely above zero. No suggestion level or rhyme-type stratum may have its net-preference CI entirely below zero. |
-| G4 | cxlib level-rule pass rate among Android-shown suggestion lines: delta CI lower bound ≥ −3 pp. Secondary evidence only: it cannot rescue G3 because the levels training data was graded by cxlib. |
+| G4 | cxlib level-rule pass rate among Android-shown suggestion lines: delta CI lower bound ≥ −5.5 pp. Secondary evidence only: it cannot rescue G3 because the levels training data was graded by cxlib. |
 | G5 | Template repetition: delta CI upper bound ≤ +0.25 pp. Lower repetition is better. |
 | G6 | Every seed (7000, 7001, 7002) agrees in direction: positive net preference, and G2/G4/G5 point estimates within the margins above. One seed's CIs are too wide to bound, so G6 checks agreement while the pooled gates carry the uncertainty. |
 | G7 - manual | Physical Pixel: model loads; first validated suggestion within 10 s warm / 30 s cold; Stop works. Recorded, not run here. |
@@ -89,16 +89,36 @@ and missing evidence cannot pass.
 
 ### Calibration (2026-10-14)
 
-The first version used zero or near-zero margins (rewrites −2 pp, cxlib 0,
+The first version used near-zero margins (rewrites −2 pp, cxlib 0,
 repetition 0, retry +5 pp, and every G2-G5 CI on every seed). The
 disjoint-seed null control (shipped v2.1 against itself, seeds 8000-8002 vs
 7000-7002) failed G2, G4, G5 and G6 under that version: passage lower bound
-−2.78 pp, cxlib −0.61 pp, repetition upper bound +0.08 pp, retry upper bound
-+4.90 pp, and per-seed retry up to +10 pp. A model exactly as good as the
-incumbent could not pass. The margins above were set from that null run
-alone, before any round-2 frozen evaluation, as round values above the null's
-worst bound. Re-scoring every saved run: the null passes G2, G4, G5 and G6 and
-still fails G3. Levels, E2B-v4 and E4B-v4 still fail G2 and G3.
+−2.78 pp, cxlib −0.61 pp, repetition upper bound +0.08 pp, per-seed retry
+bounds up to +10 pp. A model exactly as good as the incumbent could not pass.
+
+Rule, fixed before any round-2 frozen evaluation and using only the null
+run: **margin = 2 × the null's pooled 95% CI half-width, rounded up to 0.5 pp
+(0.05 pp for repetition), with a 1 pp floor.** If the true difference is zero,
+the CI's adverse bound averages minus one half-width, so twice the half-width
+lets an equal model clear each check about 97.5% of the time. A single null
+run is one estimate of that width; a benchmark revision should re-measure it.
+
+| Check | Null pooled 95% CI (pp) | Half-width | Margin |
+|---|---|---:|---:|
+| Six-line display | [0, 0] | 0 | −1 pp (floor) |
+| Suggestion retry | [−1.46, +4.90] | 3.18 | +6.5 pp |
+| Passage rewrite pass | [−2.78, +5.56] | 4.17 | −8.5 pp |
+| Word rewrite pass | [−1.67, +1.67] | 1.67 | −3.5 pp |
+| Synonym pass | [0, 0] | 0 | −1 pp (floor) |
+| cxlib level pass | [−0.61, +4.74] | 2.67 | −5.5 pp |
+| Template repetition | [−0.15, +0.08] | 0.115 | +0.25 pp |
+
+The margins show what this 40-song benchmark can resolve. With 60 passage
+prompts, it cannot rule out a passage regression under about 8 pp. Only a
+benchmark with more passage prompts can tighten that, not a smaller margin.
+Re-scoring every saved run: the disjoint null now fails only G3; the
+identical-seed null fails G3 and G6; levels, E2B-v4 and E4B-v4 still fail G2,
+G3 and G6.
 
 ## Frozen benchmark and contamination audit
 

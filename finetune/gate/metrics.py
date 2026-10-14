@@ -57,9 +57,11 @@ def preference(rows):
     return result
 
 
-# Non-inferiority margins, set from the disjoint-seed null (shipped v2.1 against itself) so an
-# equal model passes; see GATE.md "Calibration". bound=False checks point estimates (G6 per seed).
-FULL_SIX_MARGIN, RETRY_MARGIN, REWRITE_MARGIN, LEVEL_MARGIN, REPETITION_MARGIN = .01, .075, .05, .03, .0025
+# Non-inferiority margins: 2 x the disjoint-seed null's pooled 95% CI half-width (shipped v2.1 against
+# itself), rounded up to 0.5 pp (0.05 pp for repetition), floor 1 pp, so an equal model clears each
+# check about 97.5% of the time. See GATE.md "Calibration". bound=False checks point estimates (G6).
+FULL_SIX_MARGIN, RETRY_MARGIN, LEVEL_MARGIN, REPETITION_MARGIN = .01, .065, .055, .0025
+REWRITE_MARGINS = {"rewrite_passage": .085, "rewrite_word": .035, "synonyms": .01}
 
 
 def _lower(metric, bound):
@@ -75,8 +77,7 @@ def yield_pass(metrics, candidate_errors, bound=True):
     return (all(m is not None for m in required) and candidate_errors == 0
             and _lower(metrics["full_six"], bound) >= -FULL_SIX_MARGIN - 1e-12
             and _upper(metrics["retry"], bound) <= RETRY_MARGIN + 1e-12
-            and all(_lower(metrics[k], bound) >= -REWRITE_MARGIN - 1e-12
-                    for k in ("rewrite_passage", "rewrite_word", "synonyms")))
+            and all(_lower(metrics[k], bound) >= -margin - 1e-12 for k, margin in REWRITE_MARGINS.items()))
 
 
 def preference_pass(groups, distinct_prompts):

@@ -88,6 +88,12 @@ def summarize(rows, judgments):
             "suggestion_categories": {role: dict(Counter(r[role]["category"] for r in suggestions)) for role in errors}}
 
 
+def gate_verdict(g1, scopes, dev=False):
+    """Pooled G2-G5 decide; G6 needs every seed's point estimates to agree. DEV never passes."""
+    gates = {"G1": g1, **scopes["pooled"]["gates"], "G6": all(all(scopes[str(s)]["consistent"].values()) for s in SEEDS)}
+    return gates, "DEV" if dev else ("PASS" if all(gates.values()) else "FAIL")
+
+
 def metric_text(metric):
     if metric is None:
         return "undefined (no denominator)"
@@ -139,8 +145,7 @@ def report(out):
           and sha256(out / "inputs.json") == manifest["inputs_sha256"]
           and sha256(out / "prompts.json") == (manifest["prompts_sha256"] if dev else frozen["prompts_sha256"])
           and all(text_hash(p["prompt"]) == p["prompt_sha256"] for p in prompt_rows))
-    gates = {"G1": g1, **scopes["pooled"]["gates"], "G6": all(all(scopes[str(s)]["consistent"].values()) for s in SEEDS)}
-    verdict = "DEV" if dev else ("PASS" if all(gates.values()) else "FAIL")
+    gates, verdict = gate_verdict(g1, scopes, dev)
     judge = json.loads((out / "judge-provenance.json").read_text())
     lines = ["# DEV EVALUATION - not an adoption verdict" if dev else f"# Frozen model gate: {verdict}", "",
              "Candidate / incumbent; all differences are candidate minus incumbent.", "",
