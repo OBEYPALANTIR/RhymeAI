@@ -143,7 +143,8 @@ def report(out):
                   "G3 is mandatory; cxlib cannot rescue a preference failure. G6 requires G2-G5 independently on every seed.", "",
                   f"Pairing slots and actual first-pass sampler seeds: {seed_pairings}. Retries add 10000 to the corresponding arm's seed.", "",
                   f"G1: {manifest['songs']} {'DEV' if dev else 'new original'} drafts; {counts['suggestions']} suggestions, {counts['rewrite_passage']} passage rewrites, {counts['rewrite_word']} word rewrites, {counts['synonyms']} synonym requests.",
-                  f"Kotlin prompt-byte parity: {len(parity)}/{manifest['prompts'] if dev else 480}. Overlapping 8-gram lines: {overlap['overlapping_lines']} across {len(overlap['files'])} files; v4 present: {overlap['v4_present']}.",
+                  f"Kotlin prompt-byte parity: {len(parity)}/{manifest['prompts'] if dev else 480}. Overlapping 8-gram lines: {overlap['overlapping_lines']} across {len(overlap['files'])} files"
+                  + (f" in {len(overlap['pools'])} training pools." if "pools" in overlap else f"; v4 present: {overlap['v4_present']} (pre-glob audit)."),
                   "See benchmark.json, parity.jsonl, inputs.json, prompts.json and overlap-final.json for hashes and inventory.", "",
                   "95% paired percentile intervals use 20,000 bootstrap resamples of whole songs (seed 20261014), retaining all tasks, prompts, lines and sampler seeds inside each song cluster.",
                   "A [0, 0] null interval contains zero; equality supplies no evidence of a strict improvement.", ""])
