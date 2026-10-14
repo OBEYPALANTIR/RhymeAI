@@ -7,6 +7,7 @@ from unittest.mock import patch
 from .build import sha256, text_hash, write_json, write_jsonl
 from .generate import SAMPLER, generate, source_binding
 from .judge import JUDGE_MODEL, JUDGE_PROMPT, codex_batch
+from .run_gate import main
 
 
 def capture_fixture(out):
@@ -72,6 +73,37 @@ class CaptureBindingTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "binding"):
                 codex_batch(out, pairs, False, "batch")
             self.assertFalse((out / "batch.binding.json").exists())
+
+
+class RerunVerdictTest(unittest.TestCase):
+    def test_failed_real_freeze_removes_previous_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            write_json(out / "summary.json", {"verdict": "PASS", "gates": {f"G{i}": True for i in range(1, 7)}})
+            (out / "report.md").write_text("# Frozen model gate: PASS\n")
+            write_json(out / "inputs.json", [])
+            write_json(out / "prompts.json", [])
+            with patch("sys.argv", ["run_gate.py", "--candidate", str(out / "unused.gguf"), "--out", str(out)]):
+                with self.assertRaisesRegex(ValueError, "Frozen inputs changed"):
+                    main()
+            self.assertFalse((out / "summary.json").exists())
+            self.assertNotIn("PASS", (out / "report.md").read_text())
+            self.assertFalse(json.loads((out / "status.json").read_text())["complete"])
+
+    def test_previous_verdict_is_invalidated_before_first_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            write_json(out / "summary.json", {"verdict": "PASS"})
+            (out / "report.md").write_text("PASS")
+            def interrupted_freeze(target):
+                self.assertFalse((target / "summary.json").exists())
+                self.assertFalse((target / "report.md").exists())
+                raise KeyboardInterrupt()
+            with patch("sys.argv", ["run_gate.py", "--candidate", "unused.gguf", "--out", str(out)]):
+                with patch("gate.run_gate.freeze", side_effect=interrupted_freeze):
+                    with self.assertRaises(KeyboardInterrupt):
+                        main()
+            self.assertFalse((out / "summary.json").exists())
 
 
 if __name__ == "__main__":

@@ -125,8 +125,6 @@ def report(out):
     gates = {"G1": g1, **scopes["pooled"]["gates"], "G6": all(all(scopes[str(s)]["gates"].values()) for s in SEEDS)}
     verdict = "PASS" if all(gates.values()) else "FAIL"
     judge = json.loads((out / "judge-provenance.json").read_text())
-    write_json(out / "summary.json", {"verdict": verdict, "gates": gates, "scopes": scopes, "judge": judge,
-                                      "seed_pairings": seed_pairings})
     lines = [f"# Frozen model gate: {verdict}", "", "Candidate / incumbent; all differences are candidate minus incumbent.", "",
              "| Gate | Verdict |", "|---|---|"]
     lines.extend(f"| {gate} | {'PASS' if passed else 'FAIL'} |" for gate, passed in gates.items())
@@ -155,4 +153,6 @@ def report(out):
         binding = bindings[role]
         lines.extend(["", f"{role}: `{binding['model_path']}`", f"SHA-256: `{binding['model_sha256']}`."])
     (out / "report.md").write_text("\n".join(lines) + "\n")
+    write_json(out / "summary.json", {"verdict": verdict, "gates": gates, "scopes": scopes, "judge": judge,
+                                      "seed_pairings": seed_pairings})
     return verdict

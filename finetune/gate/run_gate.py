@@ -34,6 +34,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     with (out / "run.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for name in ("summary.json", "report.md"):
+            (out / name).unlink(missing_ok=True)
         phase = "freeze"
         try:
             write_json(out / "status.json", {"phase": phase, "complete": False})
@@ -61,6 +63,7 @@ def main():
             write_json(out / "status.json", {"phase": "complete", "complete": True, "verdict": verdict})
             print(f"{verdict}: {out / 'report.md'}", flush=True)
         except Exception as error:
+            (out / "summary.json").unlink(missing_ok=True)
             write_json(out / "status.json", {"phase": phase, "complete": False, "error": str(error)})
             (out / "report.md").write_text(f"# Gate incomplete\n\nRunner failed during {phase}: {error}\n\n"
                                            + "\n".join(f"- G{i}: FAIL (incomplete evidence)" for i in range(1, 7))
