@@ -14,7 +14,11 @@ from .build import HERE, REPO, read_jsonl, sha256, text_hash, write_json
 from eval.prompts import GEMMA4, app_prompt
 
 INCUMBENT = Path("/Volumes/Untitled/models/rhymeai/students-v21-20261006/E2B/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf")
-INCUMBENT_SHA256 = "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5"
+# The app catalog's shipped GGUFs (GemmaDownloads.kt): v2.1 E2B and v2.1 E4B.
+SHIPPED_INCUMBENT_SHA256 = {
+    "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5",
+    "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
+}
 SAMPLER = {"temperature": .7, "top_k": 40, "top_p": .95, "min_p": .05, "typical_p": 1.,
            "repeat_last_n": 64, "repeat_penalty": 1., "frequency_penalty": 0., "presence_penalty": 0.,
            "dry_multiplier": 0., "xtc_probability": 0., "xtc_threshold": .1, "mirostat": 0,
@@ -94,8 +98,8 @@ def generate(out, model, path, seed_offset=0):
     binding = {"model_path": str(path), "model_sha256": sha256(path), "model_bytes": path.stat().st_size,
                "prompts_sha256": sha256(out / "prompts.json"), "sampler": SAMPLER, "source": source_binding(),
                "sampler_seed_offset": seed_offset}
-    if model == "incumbent" and binding["model_sha256"] != INCUMBENT_SHA256:
-        raise ValueError("Incumbent must be the shipped v2.1 E2B hash (path overrides do not change this gate)")
+    if model == "incumbent" and binding["model_sha256"] not in SHIPPED_INCUMBENT_SHA256:
+        raise ValueError("Incumbent must be a shipped catalog GGUF (v2.1 E2B or E4B)")
     target = out / f"binding-{model}.json"
     if target.exists() and json.loads(target.read_text()) != binding:
         raise ValueError("Refusing to mix runs with different source, sampler, prompts or model")
