@@ -75,6 +75,40 @@ class CaptureBindingTest(unittest.TestCase):
             self.assertFalse((out / "batch.binding.json").exists())
 
 
+class JudgeCompletionTest(unittest.TestCase):
+    def test_cached_result_requires_zero_exit_and_successful_terminal_event(self):
+        cases = [
+            (None, [{"type": "turn.completed"}]),
+            (1, [{"type": "turn.completed"}]),
+            (0, []),
+            (0, [{"type": "turn.failed", "error": {"message": "failed"}}]),
+            (0, [{"type": "turn.completed"}, {"type": "turn.failed"}]),
+        ]
+        for exit_code, events in cases:
+            with self.subTest(exit_code=exit_code, events=events), tempfile.TemporaryDirectory() as directory:
+                out = Path(directory)
+                pairs, binding = judge_fixture(out)
+                write_json(out / "batch.binding.json", binding)
+                if exit_code is None:
+                    (out / "batch.exit.json").unlink()
+                else:
+                    write_json(out / "batch.exit.json", {"returncode": exit_code})
+                write_jsonl(out / "batch.events.jsonl", events)
+                with self.assertRaisesRegex(RuntimeError, "complet"):
+                    codex_batch(out, pairs, False, "batch")
+
+    def test_recoverable_error_followed_by_success_remains_reusable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            pairs, binding = judge_fixture(out)
+            write_json(out / "batch.binding.json", binding)
+            write_jsonl(out / "batch.events.jsonl", [{"type": "error", "message": "retrying"},
+                                                       {"type": "turn.completed", "usage": {"input_tokens": 10}}])
+            result, usage = codex_batch(out, pairs, False, "batch")
+            self.assertEqual(result[0]["winner"], "L")
+            self.assertEqual(usage, [{"input_tokens": 10}])
+
+
 class RerunVerdictTest(unittest.TestCase):
     def test_failed_real_freeze_removes_previous_pass(self):
         with tempfile.TemporaryDirectory() as directory:

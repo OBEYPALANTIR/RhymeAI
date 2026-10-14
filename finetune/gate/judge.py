@@ -107,6 +107,7 @@ def codex_batch(directory, pairs, swapped, name):
     prompt_path = directory / f"{name}.prompt.txt"
     result_path = directory / f"{name}.result.json"
     events_path = directory / f"{name}.events.jsonl"
+    exit_path = directory / f"{name}.exit.json"
     binding = {"model": JUDGE_MODEL, "reasoning_effort": "low", "prompt_sha256": text_hash(prompt),
                "subscription_auth": True, "incremental_api_cost_usd": 0.0}
     binding_path = directory / f"{name}.binding.json"
@@ -129,12 +130,20 @@ def codex_batch(directory, pairs, swapped, name):
                    "-C", str(directory), "-m", JUDGE_MODEL, "-c", 'model_reasoning_effort="low"',
                    "--json", "--output-schema", str(schema), "--output-last-message", str(result_path), "-"]
         write_json(directory / f"{name}.command.json", command)
+        write_json(exit_path, {"returncode": None})
         with events_path.open("w") as events, (directory / f"{name}.stderr.log").open("w") as errors:
             proc = subprocess.run(command, input=prompt, text=True, stdout=events, stderr=errors, timeout=600)
+        write_json(exit_path, {"returncode": proc.returncode})
         after = account_usage()
         write_json(directory / f"{name}.billing.json", {"before": before, "after": after})
         if proc.returncode:
             raise RuntimeError(f"Independent judge failed; see {events_path} and {directory / (name + '.stderr.log')}")
+    if not exit_path.exists() or json.loads(exit_path.read_text()).get("returncode") != 0:
+        raise RuntimeError(f"Judge batch has no recorded successful completion: {exit_path}")
+    events = read_jsonl(events_path)
+    terminal = [e.get("type") for e in events if e.get("type") in ("turn.completed", "turn.failed", "error")]
+    if not terminal or terminal[-1] != "turn.completed":
+        raise RuntimeError(f"Judge batch has no successful terminal completion: {events_path}")
     billing = json.loads((directory / f"{name}.billing.json").read_text())
     if (billing["before"]["account_fingerprint"] != billing["after"]["account_fingerprint"]
             or billing["before"]["credits"] != billing["after"]["credits"]):
@@ -144,7 +153,6 @@ def codex_batch(directory, pairs, swapped, name):
         raise ValueError("Judge did not cover exactly the blinded batch")
     if any(r["winner"] not in ("L", "R", "tie") for r in result):
         raise ValueError("Invalid judge verdict")
-    events = read_jsonl(events_path)
     if any(e.get("item", {}).get("type") in ("command_execution", "mcp_tool_call", "web_search") for e in events):
         raise ValueError("Judge used tools; blinding is not certified")
     usage = [e.get("usage", {}) for e in events if e.get("type") == "turn.completed"]
