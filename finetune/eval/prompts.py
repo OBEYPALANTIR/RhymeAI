@@ -61,7 +61,7 @@ SONG_SECTIONS = {
     ),
     "UNKNOWN": (
         "Unmarked section",
-        "Section direction: no verse, chorus, or bridge header was detected. Fit the immediate stanza and surrounding lyric context.",
+        "Section direction: follow any explicit section label that is provided; otherwise fit the immediate stanza and surrounding lyric context.",
     ),
 }
 
@@ -196,9 +196,6 @@ class SuggestionRhymeConstraint:
     chorus_end_words_ordered: tuple = ()
 
 
-_HEADER_LINE = re.compile(r"^\s*\[.+]\s*$")
-
-
 def _is_header_line(line: str) -> bool:
     """SectionMap.headerTitle(line) != null: a bracketed or bare section header."""
     trimmed = line.strip()
@@ -236,24 +233,16 @@ def first_chorus_lines(lyrics: str) -> List[str]:
         if idx >= len(lines):
             continue
         line = lines[idx]
-        if line.strip() and not _HEADER_LINE.match(line):
+        if line.strip() and not _is_header_line(line):
             result.append(line)
     return result
 
 
 def _rhyme_compatible(word: str, target_word: str, rhyme_type: str) -> bool:
-    """ProsodyAnalyzer.rhymeRelation(word, target) == rhymeType, as far as the
-    eval can verify it. Perfect: a shared last-stressed-vowel tail. Near: the
-    exclusive near pool (find_rhymes already removes perfect/multi words from
-    it), so a perfect hook is not promoted into a Near prompt. Slant: the eval
-    has no slant classifier (its Slant lists still use the older merged pools),
-    so nothing is promoted rather than promoting a different relation."""
-    if rhyme_type == "PERFECT":
-        return scoring.is_perfect_rhyme(word, target_word)
-    if rhyme_type == "NEAR":
-        matches = scoring.find_rhymes(target_word)
-        return not matches.is_empty and word in matches.near
-    return False
+    """ProsodyAnalyzer.rhymeRelation(word, target) == rhymeType: the hook is
+    promoted only into a prompt for its own relation, so a perfect hook never
+    leads a Near or Slant list."""
+    return scoring.rhyme_relation(word, target_word) == rhyme_type
 
 
 def suggestion_rhyme_constraint(
@@ -280,9 +269,8 @@ def suggestion_rhyme_constraint(
     chorus_set = set(chorus_list)
 
     # Chorus repeat (2nd+): first-chorus end words in the requested rhyme relation
-    # to the target go first. The relation is verified directly (Android checks
-    # ProsodyAnalyzer.rhymeRelation; here is_perfect_rhyme for Perfect, and the
-    # relation's full pool for Near/Slant), not by membership in the level's
+    # to the target go first. The relation is verified directly
+    # (ProsodyAnalyzer.rhymeRelation on both apps and here), not by membership in the level's
     # 12-word cut, so a hook the level ordering pushed past the limit is still
     # promoted; the merged list is cut back to the limit. Hooks are not filtered
     # through the level (chorus consistency wins).
@@ -719,11 +707,13 @@ def build_rewrite_prompt(
             "- No quotes, no markdown, no labels, no commentary."
         ) % (selection, rejected_rule)
     else:
+        line_count = len(re.split(r"\r\n|\r|\n", selection))
         output_rules = (
             "- Output the rewritten passage only.\n"
+            "- Return exactly %d %s.\n"
             "- Preserve line breaks if the selection has multiple lines.\n"
             "- No quotes, no markdown, no labels, no commentary."
-        )
+        ) % (line_count, "line" if line_count == 1 else "lines")
 
     if selected_line is not None:
         selected_line_block = 'Line containing the selected word:\n"""\n%s\n"""\n' % selected_line

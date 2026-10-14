@@ -110,7 +110,6 @@ def salvage_suggestions(text: str, case: dict, constraint) -> str | None:
         for l in case["lyrics"].split("\n")
         if scoring.normalize_suggestion_key(l)
     }
-    matches = scoring.find_rhymes(constraint.target_word) if constraint else None
     picked, seen = [], set()
     for line in lines:
         if scoring._line_violations(line):
@@ -121,8 +120,9 @@ def salvage_suggestions(text: str, case: dict, constraint) -> str | None:
         if constraint is not None:
             end = scoring.line_end_word(line)
             in_candidates = bool(end) and end in constraint.candidate_words
-            if not in_candidates and scoring.rhyme_tier(line, matches) == 0:
-                continue  # miss
+            if not in_candidates and (not end or scoring.rhyme_relation(
+                    end, constraint.target_word) != constraint.rhyme_type):
+                continue  # miss: off-list and not the requested relation
         seen.add(key)
         picked.append(line)
         if len(picked) == prompts.SUGGESTION_COUNT:
