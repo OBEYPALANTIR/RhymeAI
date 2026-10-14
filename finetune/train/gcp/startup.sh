@@ -40,7 +40,7 @@ cd /content
 # TRL 1.15 requires Python >=3.11; keep training packages separate from gcloud's Python.
 /usr/bin/python3.12 -m venv /content/venv
 PYTHON=/content/venv/bin/python
-"$PYTHON" -c 'import sys; assert sys.version_info[:2] == (3, 12); print(sys.version)'
+"$PYTHON" -c 'import pathlib,sys,sysconfig; assert sys.version_info[:2] == (3, 12); assert (pathlib.Path(sysconfig.get_path("include")) / "Python.h").is_file(); print(sys.version, "development headers present")'
 export HF_HOME=/content/hf-cache
 export PIP_CACHE_DIR=/content/pip-cache
 export TOKENIZERS_PARALLELISM=false
