@@ -2,11 +2,12 @@ import json
 import shutil
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
 from . import build
-from .build import DEV_VERSION, FROZEN_VERSION, SEEDS, freeze, make_inputs, prepare_dev, read_jsonl, sha256, text_hash, write_json, write_jsonl
+from .build import DEV_VERSION, FROZEN_VERSION, SEEDS, freeze, make_inputs, make_dev_inputs, prepare_dev, read_jsonl, sha256, text_hash, write_json, write_jsonl
 from .generate import SAMPLER
 from .judge import judged_counts, make_pairs, selected_prompts
 from .report import report
@@ -65,6 +66,53 @@ class DevEvaluationTest(unittest.TestCase):
         write_json(self.root / "2026-10-07/rhymeai-teacher-data-v3/train.json", {"text": dev_songs()[0]["lines"][0]})
         with self.assertRaisesRegex(ValueError, "DEV contamination"):
             prepare_dev(self.root / "training-overlap", self.source)
+
+    def test_expanded_dev_preserves_original_rows_and_covers_distinct_words(self):
+        songs = dev_songs()
+        original = make_inputs(songs)
+        expanded = make_dev_inputs(songs, expanded_words=True)
+        self.assertEqual(expanded[:len(original)], original)
+        self.assertEqual(make_dev_inputs(songs), original)
+        self.assertEqual(Counter(r["task"] for r in expanded),
+                         {"suggestions": 16, "rewrite_passage": 6, "rewrite_word": 30, "synonyms": 12})
+        self.assertEqual(len({r["id"] for r in expanded}), len(expanded))
+        for song in songs:
+            words = [r for r in expanded if r["song_id"] == song["id"] and r["task"] == "rewrite_word"]
+            self.assertEqual(sorted(Counter(r["inputs"]["selection"].lower() for r in words).values()), [3] * 5)
+            self.assertEqual(Counter(r["inputs"]["action"] for r in words),
+                             {"REPHRASE": 5, "PUNCH_UP": 5, "HARDER_RHYME": 5})
+            for row in words:
+                inputs = row["inputs"]
+                offset = inputs["selection_start"] * 2
+                selected = inputs["lyrics"].encode("utf-16-le")[offset:offset + len(inputs["selection"].encode("utf-16-le"))]
+                self.assertEqual(selected.decode("utf-16-le"), inputs["selection"])
+            synonyms = [r["inputs"] for r in expanded if r["song_id"] == song["id"] and r["task"] == "synonyms"]
+            self.assertEqual(len({r["word"].lower() for r in synonyms}), 6)
+            self.assertTrue(all(r["word"] in r["line_context"] for r in synonyms))
+        out = self.root / "expanded"
+        self.assertTrue(prepare_dev(out, self.source, expanded_words=True)["expanded_words"])
+        with self.assertRaisesRegex(ValueError, "DEV inputs changed"):
+            prepare_dev(out, self.source)
+
+    def test_expanded_dev_does_not_invent_words_in_short_repeated_lyrics(self):
+        songs = [dict(dev_songs()[0], lines=["The wheel wheel"] * 4)]
+        rows = make_dev_inputs(songs, expanded_words=True)
+        self.assertEqual(rows, make_inputs(songs))
+
+    def test_expanded_option_rejects_frozen_mode_before_writing(self):
+        out = self.root / "not-created"
+        with patch("sys.argv", ["run_gate.py", "--dev-expanded-words", "--candidate", "unused.gguf", "--out", str(out)]):
+            with self.assertRaises(SystemExit) as error:
+                main()
+        self.assertEqual(error.exception.code, 2)
+        self.assertFalse(out.exists())
+
+    def test_frozen_input_bytes_remain_pinned_after_expanded_dev(self):
+        make_dev_inputs(dev_songs(), expanded_words=True)
+        manifest = freeze(self.root / "unchanged-frozen")
+        frozen = json.loads((build.HERE / "frozen.json").read_text())
+        for key in ("inputs_sha256", "songs_sha256", "prompts", "task_counts"):
+            self.assertEqual(manifest[key], frozen[key])
 
     def test_frozen_mode_still_enforces_frozen_json(self):
         gate = self.root / "gate-source"
