@@ -68,6 +68,11 @@ class PackageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run.external_output("/tmp/gcp-models")
 
+    def test_collection_rechecks_external_storage_before_cloud_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ValueError):
+                run.collect("gs://unused", "storage-check", Path(directory), Path(directory))
+
 
 if __name__ == "__main__":
     unittest.main()

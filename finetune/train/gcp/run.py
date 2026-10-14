@@ -120,6 +120,8 @@ def event(evidence, kind, **values):
 
 
 def collect(bucket, run_id, output, evidence):
+    # Training can outlive a drive connection; recheck before any model download.
+    output = external_output(output)
     prefix = f"{bucket}/runs/{run_id}"
     for name in ("worker.log", "phases.json", "status.json", "shutdown.json"):
         result = gcloud("storage", "cp", prefix + "/" + name, evidence / name, check=False)

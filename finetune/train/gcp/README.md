@@ -107,6 +107,9 @@ reserves $0.01 for their small GCS transfers and operations. Startup
 traps success and failure, uploads logs/status, and requests its own deletion.
 The controller also cleans up this run's resources in `finally`. The platform
 deadline continues to apply if the Mac disconnects or the guest fails.
+If the guest's delete request fails, it leaves the platform deadline active;
+it does not halt the VM, because stopping clears the scheduled termination
+timestamp. See [Google's runtime-limit behavior](https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime).
 
 The controller downloads only products listed in the remote `SAVED_OK`, checks
 every SHA-256, and writes `download-verification.json` after full destination

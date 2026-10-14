@@ -19,8 +19,7 @@ finish() {
     fi
     echo "SELF_DELETE $NAME $ZONE exit=$result"
     timeout 60 gcloud compute instances delete "$NAME" --zone="$ZONE" --project="$PROJECT" --quiet
-    # The API hard deadline remains active even if upload or self-deletion fails.
-    shutdown -h now
+    # Do not halt on delete failure: stopping clears Compute Engine's deletion deadline.
 }
 trap finish EXIT
 trap 'exit 143' TERM
