@@ -710,11 +710,13 @@ def build_rewrite_prompt(
             "- No quotes, no markdown, no labels, no commentary."
         ) % (selection, rejected_rule)
     else:
+        line_count = len(re.split(r"\r\n|\r|\n", selection))
         output_rules = (
             "- Output the rewritten passage only.\n"
+            "- Return exactly %d %s.\n"
             "- Preserve line breaks if the selection has multiple lines.\n"
             "- No quotes, no markdown, no labels, no commentary."
-        )
+        ) % (line_count, "line" if line_count == 1 else "lines")
 
     if selected_line is not None:
         selected_line_block = 'Line containing the selected word:\n"""\n%s\n"""\n' % selected_line
