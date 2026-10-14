@@ -13,13 +13,13 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from gate.build import REPO, SEEDS, audit_overlap, freeze, read_jsonl, write_json
-from gate.generate import INCUMBENT, freeze_prompts, generate
+from gate.generate import freeze_prompts, generate, select_incumbent
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True, type=Path)
-    parser.add_argument("--incumbent", default=INCUMBENT, type=Path)
+    parser.add_argument("--incumbent", type=Path, help="Shipped GGUF override; must match the candidate's structural size")
     parser.add_argument("--candidate-seed-offset", type=int, default=0,
                         help="Null noise control: shift candidate seeds; default keeps paired same-seed comparison")
     parser.add_argument("--out", required=True, type=Path)
@@ -40,8 +40,10 @@ def main():
         try:
             write_json(out / "status.json", {"phase": phase, "complete": False})
             freeze(out)
+            phase = "model-size"
+            incumbent = select_incumbent(args.candidate, args.incumbent)
             freeze_prompts(out)
-            for role, path in (("candidate", args.candidate), ("incumbent", args.incumbent)):
+            for role, path in (("candidate", args.candidate), ("incumbent", incumbent)):
                 phase = f"generate-{role}"
                 print(phase, flush=True)
                 write_json(out / "status.json", {"phase": phase, "complete": False})

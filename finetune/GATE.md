@@ -17,7 +17,7 @@ writes an incomplete report. Repeating the command resumes only captures whose
 model, prompt, sampler, and Android source bindings match. It never trains,
 downloads a model, changes a catalog, modifies app behavior, or merges a PR.
 
-Requirements: Python 3.11+ with the existing NumPy installation, llama.cpp's
+Requirements: Python 3.11+ with NumPy and llama.cpp's `gguf` Python package, llama.cpp's
 `llama-server` on PATH, the repository's offline Gradle dependencies, JDK 17+
 and Android SDK, the training-pool directories below, and `codex` with an
 existing ChatGPT login. `JAVA_HOME` and `ANDROID_HOME` are honored; this Mac's
@@ -30,12 +30,15 @@ other workers' servers untouched and terminates only its own server.
 
 All G1-G6 must pass against the shipped catalog GGUF of the same size, both v2.1 Q4_K_M:
 
-| Size | Default path (pass `--incumbent` for E4B) | SHA-256 |
+| Size | Default path (selected from candidate GGUF metadata) | SHA-256 |
 |---|---|---|
-| E2B (default) | `/Volumes/Untitled/models/rhymeai/students-v21-20261006/E2B/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf` | `4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5` |
+| E2B | `/Volumes/Untitled/models/rhymeai/students-v21-20261006/E2B/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf` | `4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5` |
 | E4B | `/Volumes/Untitled/models/rhymeai/students-v21-20261006/E4B/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf` | `6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944` |
 
 The runner refuses any incumbent whose bytes are not one of these shipped files.
+Before Gradle or inference, it checks `general.architecture`, `gemma4.block_count`
+and `gemma4.embedding_length`: E2B is 35/1536 and E4B is 42/2560. Filenames are
+ignored; a mismatched `--incumbent` or unsupported metadata shape is rejected.
 
 | Gate | Required evidence and decision |
 |---|---|

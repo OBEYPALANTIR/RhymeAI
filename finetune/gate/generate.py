@@ -14,6 +14,8 @@ from .build import HERE, REPO, read_jsonl, sha256, text_hash, write_json
 from eval.prompts import GEMMA4, app_prompt
 
 INCUMBENT = Path("/Volumes/Untitled/models/rhymeai/students-v21-20261006/E2B/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf")
+INCUMBENTS = {"E2B": INCUMBENT,
+              "E4B": INCUMBENT.parent.parent / "E4B/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf"}
 # The app catalog's shipped GGUFs (GemmaDownloads.kt): v2.1 E2B and v2.1 E4B.
 SHIPPED_INCUMBENT_SHA256 = {
     "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5",
@@ -24,6 +26,25 @@ SAMPLER = {"temperature": .7, "top_k": 40, "top_p": .95, "min_p": .05, "typical_
            "dry_multiplier": 0., "xtc_probability": 0., "xtc_threshold": .1, "mirostat": 0,
            "n_predict": -1, "ignore_eos": False, "stop": ["<turn|>"],
            "samplers": ["penalties", "dry", "top_n_sigma", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"]}
+
+
+def model_size(path):
+    from gguf import GGUFReader
+    reader = GGUFReader(path)
+    keys = ("general.architecture", "gemma4.block_count", "gemma4.embedding_length")
+    shape = tuple(reader.get_field(k).contents() if reader.get_field(k) else None for k in keys)
+    sizes = {("gemma4", 35, 1536): "E2B", ("gemma4", 42, 2560): "E4B"}
+    if shape not in sizes:
+        raise ValueError(f"Unsupported GGUF size/shape {shape}: {path}")
+    return sizes[shape]
+
+
+def select_incumbent(candidate, incumbent=None):
+    size = model_size(candidate)
+    incumbent = incumbent if incumbent is not None else INCUMBENTS[size]
+    if model_size(incumbent) != size:
+        raise ValueError(f"Incumbent must have the same GGUF size as the {size} candidate")
+    return incumbent
 
 
 def logic_guard():
