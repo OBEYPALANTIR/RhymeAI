@@ -71,7 +71,7 @@ def gradle(out, phase, model="", port="", seed_offset=0):
         if jbr.exists():
             env["JAVA_HOME"] = str(jbr)
     env.setdefault("ANDROID_HOME", str(Path.home() / "Library/Android/sdk"))
-    test = "promptParity" if phase == "parity" else "generateAndReplay"
+    test = {"parity": "promptParity", "replay": "replaySavedCaptures", "generate": "generateAndReplay"}[phase]
     command = ["./gradlew", "--offline", "--no-daemon", "--max-workers=2", ":app:testDebugUnitTest", "--rerun",
                "--tests", f"com.rhymeai.app.service.LocalModelGateTest.{test}"]
     stamp = time.time_ns()

@@ -14,7 +14,11 @@ starts one owned llama-server at a time, generates both arms, judges the shown
 outputs, and writes `report.md` and `summary.json` with PASS/FAIL for G1-G6.
 A scientific FAIL is a completed run; an execution failure exits nonzero and
 writes an incomplete report. Repeating the command resumes only captures whose
-model, prompt, sampler, and Android source bindings match. It never trains,
+pre-existing model, prompt, sampler, and Android source bindings match. Orphaned
+raw/replay/judge results are rejected. Cached judge batches need a recorded zero
+exit status and a successful terminal event; a recoverable error before success
+is permitted. Starting a rerun removes old verdict files, so interrupted or failed
+runs cannot retain a stale PASS. It never trains,
 downloads a model, changes a catalog, modifies app behavior, or merges a PR.
 
 Requirements: Python 3.11+ with NumPy and llama.cpp's `gguf` Python package, llama.cpp's
@@ -108,6 +112,23 @@ Raw server chunks pass through production `GenerationBoundary` (4096 UTF-16
 units, 120-second deadline), then the real suggestion line budgets and
 retry-once/show-3-5 rule. Each saved capture is replayed offline and compared
 to its live result, including retry prompts and errors.
+
+To explicitly recheck a completed run after a gate-test-only source change:
+
+```sh
+cd finetune
+python3 -B -m gate.recheck --out /path/to/completed-run
+```
+
+This path performs no inference or judge calls. It retains the original bindings
+and verdicts, hashes the saved inputs, verifies model/prompt/sampler bytes and
+unchanged production sources, and replays raw chunks through the current Kotlin
+boundary and validators. It rebinds the gate-test source only after input bytes,
+shown outputs, retries, decisions, errors and blinded pairs are proved unchanged.
+It regenerates the report using the preserved judgments, writes `RECHECK.md` and
+an explicit before/after proof under `evidence/recheck-*/`, and fails without a
+verdict if equivalence cannot be proved. Legacy judge exit statuses are never
+invented; this offline path preserves historical judgments, not resumable batches.
 
 Temperature .7, top-k 40, top-p .95, min-p .05, repeat penalty 1, last_n 64,
 unbounded n_predict within Android's limits; full sampler settings are saved.

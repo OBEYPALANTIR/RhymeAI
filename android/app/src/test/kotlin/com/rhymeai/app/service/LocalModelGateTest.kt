@@ -21,6 +21,7 @@ import java.security.MessageDigest
 import org.junit.Assume.assumeTrue
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /** Promoted from the 2026-10-13 replay: only the JNI transport is replaced by llama-server. */
@@ -94,6 +95,52 @@ class LocalModelGateTest {
 
     private data class CapturedPass(val data: JsonObject)
 
+    private fun generationBoundary() = GenerationBoundary(
+        GGUFPromptFormat.entries.map { it.stopSequence }, LocalModelService.MAX_RESPONSE_CHARS)
+
+    @Test
+    fun gateBoundaryStopsAtEveryProductionMarker() {
+        for (format in GGUFPromptFormat.entries) {
+            val marker = format.stopSequence
+            for (split in 0..marker.length) {
+                val boundary = generationBoundary()
+                val first = boundary.accept("Copper birds settle slowly\n" + marker.take(split))
+                val second = boundary.accept(marker.drop(split) + "unwanted continuation")
+                assertEquals("Copper birds settle slowly\n", first.text + second.text, "$format split=$split")
+                assertEquals("stopSequence", second.terminationReason, "$format split=$split")
+            }
+        }
+    }
+
+    private fun capturedTokens(capture: JsonObject): Flow<String> = flow {
+        val boundary = generationBoundary()
+        for (chunk in capture.getValue("raw_chunks").jsonArray) {
+            val accepted = boundary.accept(chunk.jsonObject.str("text"))
+            if (accepted.text.isNotEmpty()) emit(accepted.text)
+            if (accepted.terminationReason != null) break
+        }
+        val tail = boundary.finish()
+        if (tail.text.isNotEmpty()) emit(tail.text)
+        if (!boundary.isTerminated) capture.nullString("error")?.let { throw IllegalStateException(it) }
+    }
+
+    @Test
+    fun savedRawReplayAppliesBoundaryAndRetainsTransportErrors() = runBlocking {
+        fun capture(chunks: List<String>) = buildJsonObject {
+            put("raw_chunks", JsonArray(chunks.map { buildJsonObject { put("text", it) } }))
+            put("bounded_chunks", strings(listOf("must not reuse old bounded output")))
+            put("error", "saved transport failure")
+        }
+        val output = StringBuilder()
+        capturedTokens(capture(listOf("Copper birds settle slowly\n<end_", "of_turn>extra")))
+            .collect { output.append(it) }
+        assertEquals("Copper birds settle slowly\n", output.toString())
+        val failure = assertFailsWith<IllegalStateException> {
+            capturedTokens(capture(listOf("partial lyric"))).collect()
+        }
+        assertEquals("saved transport failure", failure.message)
+    }
+
     private fun completion(r: JsonObject, model: String, seed: Int, pass: Int, inner: String, captured: MutableList<CapturedPass>): Flow<String> = flow {
         val config = Json.parseToJsonElement(File(root,"sampler.json").readText()).jsonObject
         val samplerSeed = seed + (System.getenv("RHYMEAI_GATE_SEED_OFFSET")?.toInt() ?: 0) + (pass - 1) * 10000
@@ -107,7 +154,7 @@ class LocalModelGateTest {
         var end = "eof"
         var failure: String? = null
         var lastPayload: JsonObject? = null
-        val boundary = GenerationBoundary(listOf("<turn|>"),LocalModelService.MAX_RESPONSE_CHARS)
+        val boundary = generationBoundary()
         val connection = URI("http://127.0.0.1:${System.getenv("RHYMEAI_GATE_PORT")}/completion").toURL().openConnection() as HttpURLConnection
         try {
             connection.requestMethod="POST"; connection.doOutput=true; connection.connectTimeout=10000
@@ -213,6 +260,37 @@ class LocalModelGateTest {
             put("shown_count", shown.size); put("shown_lines", strings(shown)); put("decisions", JsonArray(decisions))
             put("category", if (failure != null) "error" else if (shown.size == 6) "6" else "accepted")
         }
+    }
+
+    @Test
+    fun replaySavedCaptures() = runBlocking {
+        initialize("replay")
+        val model = requireNotNull(System.getenv("RHYMEAI_GATE_MODEL"))
+        fun jsonLines(name: String) = File(root, name).readLines().filter { it.isNotBlank() }
+            .map { Json.parseToJsonElement(it).jsonObject }
+        fun key(r: JsonObject) = r.str("id") + "#" + r.str("seed")
+        val captures = jsonLines("raw-$model.jsonl").associateBy { key(it) + "#" + it.str("pass") }
+        val previous = jsonLines("replay-$model.jsonl").associateBy(::key)
+        val seeds = Json.parseToJsonElement(File(root, "benchmark.json").readText()).jsonObject.getValue("seeds").jsonArray
+        val results = mutableListOf<JsonObject>()
+        for (seed in seeds) for (el in records("prompts.json")) {
+            val r = el.jsonObject
+            assertEquals(r.str("prompt"), prompt(r), "Frozen prompt drift")
+            val slot = r.str("id") + "#" + seed.jsonPrimitive.content
+            var pass = 0
+            val offline = replay(r) { inner ->
+                val capture = captures[slot + "#" + (++pass)]
+                assertTrue(capture != null, "Missing saved pass: $slot#$pass; inference is forbidden")
+                assertEquals(inner, capture.str("prompt"), "Saved retry prompt differs: $slot#$pass")
+                capturedTokens(capture)
+            }
+            val old = previous.getValue(slot)
+            val oldResult = JsonObject(old - setOf("model", "seed", "offline_replay_equal"))
+            results += JsonObject(offline + mapOf("model" to JsonPrimitive(model), "seed" to seed,
+                "offline_replay_equal" to JsonPrimitive(offline == oldResult)))
+        }
+        assertEquals(previous.size, results.size)
+        File(root, "replayed-$model.jsonl").writeText(results.joinToString("\n", postfix="\n"))
     }
 
     @Test
