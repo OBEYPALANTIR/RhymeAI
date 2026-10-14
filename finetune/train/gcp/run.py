@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the frozen round-2 notebook on one bounded Spot VM; collect verified outputs."""
+"""Run the frozen round-2 notebook on one bounded GPU VM; collect verified outputs."""
 import argparse
 import datetime as dt
 import hashlib
@@ -19,10 +19,20 @@ NOTEBOOK_SHA = "2f3a900ad5531716991955fc73aa52107d9016d78f088b98fc7c96e95887dcab
 # Ordered capacity fallback; all prices include the GPU, CPU and RAM.
 TARGETS = (
     {"machine": "a2-ultragpu-1g", "accelerator": "nvidia-a100-80gb", "hours": 2,
+     "region": REGION, "provisioning_model": "SPOT",
      "spot_usd_hour": 3.038823151, "on_demand_usd_hour": 5.06879789},
     {"machine": "g2-standard-12", "accelerator": "nvidia-l4", "hours": 4,
-     "spot_usd_hour": 0.598648, "on_demand_usd_hour": 1.000416348},
+     "region": REGION, "provisioning_model": "SPOT",
+     "spot_usd_hour": 0.598648, "on_demand_usd_hour": 1.000416287},
 )
+# G2 prices = 12 CPU + 48 GiB RAM + 1 L4; public Billing catalog, 2026-10-14.
+L4_PRICES = {
+    "us-central1": (0.598648, 1.000416287),
+    "us-east1": (0.598648, 1.000416287),
+    "us-east4": (0.532016, 0.997140504),
+    "us-west1": (0.598648, 1.000416287),
+    "us-west4": (0.674384, 1.126768820),
+}
 HERE = Path(__file__).resolve().parent
 
 
@@ -78,11 +88,22 @@ def run_budget(target, max_hours=None, spent_usd=0):
             "other_usage_reserve_usd": 3, "rate_date": "2026-10-14"}
 
 
-def capacity_candidates(accelerators):
-    return [(target, zone) for target in TARGETS
+def capacity_targets(extended_l4=False):
+    if not extended_l4:
+        return TARGETS
+    # Explicit opt-in after central Spot stockouts; never silently switch billing modes.
+    regions = ("us-east1", "us-east4", "us-west1", "us-west4")
+    return [{**TARGETS[1], "region": region, "provisioning_model": mode,
+             "spot_usd_hour": L4_PRICES[region][0], "on_demand_usd_hour": L4_PRICES[region][1]}
+            for mode, search_regions in (("SPOT", regions), ("STANDARD", (REGION,) + regions))
+            for region in search_regions]
+
+
+def capacity_candidates(accelerators, targets=TARGETS):
+    return [(target, zone) for target in targets
             for zone in sorted({a["zone"].split("/")[-1] for a in accelerators
                                 if a["name"] == target["accelerator"]
-                                and a["zone"].split("/")[-1].startswith(REGION + "-")})]
+                                and a["zone"].split("/")[-1].startswith(target["region"] + "-")})]
 
 
 def inventory(evidence, label):
@@ -164,12 +185,15 @@ def main():
     parser.add_argument("--evidence", type=Path, required=True, help="small local logs, never weights")
     parser.add_argument("--max-hours", type=float, help="lower the per-GPU cap (A100: 2h; L4: 4h)")
     parser.add_argument("--spent-usd", type=float, default=0, help="prior task usage, including failed runs")
+    parser.add_argument("--extended-l4", action="store_true",
+                        help="after central stockouts: other US Spot L4 regions, then on-demand L4 (explicit authorization required)")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,40}[a-z0-9]", args.run_id):
         parser.error("run-id must be 2-42 lowercase letters/digits/hyphens")
     if args.max_hours is not None and not 0 < args.max_hours <= 4:
         parser.error("max-hours must be greater than zero and at most 4")
-    budgets = [run_budget(target, args.max_hours, args.spent_usd) for target in TARGETS]
+    targets = capacity_targets(args.extended_l4)
+    budgets = [run_budget(target, args.max_hours, args.spent_usd) for target in targets]
     if args.action == "run" and args.package is None:
         parser.error("run requires --package")
     output = external_output(args.output)
@@ -215,9 +239,8 @@ def main():
     write_json(evidence / "package.json", {"sha256": package_sha, "notebook_sha256": NOTEBOOK_SHA,
         "source_sha256": {p.name: sha256(p) for p in HERE.iterdir() if p.is_file()}})
     write_json(evidence / "budget.json", budgets)
-    accelerators = cloud_json("compute", "accelerator-types", "list",
-                             "--filter=zone~us-central1")
-    candidates = capacity_candidates(accelerators)
+    accelerators = cloud_json("compute", "accelerator-types", "list")
+    candidates = capacity_candidates(accelerators, targets)
     write_json(evidence / "capacity-candidates.json", candidates)
     name = "rhymeai-" + args.run_id
     created = None
@@ -227,9 +250,10 @@ def main():
             budget = run_budget(target, args.max_hours, args.spent_usd)
             max_seconds = budget["max_seconds"]
             attempted.append(zone)
-            event(evidence, "create-request", name=name, zone=zone, machine=target["machine"])
+            event(evidence, "create-request", name=name, zone=zone, machine=target["machine"],
+                  provisioning_model=target["provisioning_model"])
             result = gcloud("compute", "instances", "create", name, "--zone=" + zone,
-                "--machine-type=" + target["machine"], "--provisioning-model=SPOT",
+                "--machine-type=" + target["machine"], "--provisioning-model=" + target["provisioning_model"],
                 "--instance-termination-action=DELETE", f"--max-run-duration={max_seconds}s",
                 "--maintenance-policy=TERMINATE", "--no-restart-on-failure",
                 "--image=" + IMAGE, "--image-project=deeplearning-platform-release",
@@ -240,12 +264,13 @@ def main():
                 f"--metadata=run-prefix={prefix},package-sha256={package_sha},image-name={IMAGE},install-nvidia-driver=True",
                 f"--metadata-from-file=startup-script={HERE / 'startup.sh'},shutdown-script={HERE / 'shutdown.sh'}",
                 "--format=json", check=False)
-            (evidence / f"create-{target['machine']}-{zone}.log").write_text(result.stdout + result.stderr)
+            (evidence / f"create-{target['provisioning_model'].lower()}-{target['machine']}-{zone}.log").write_text(result.stdout + result.stderr)
             if result.returncode == 0:
                 created = json.loads(result.stdout)[0]
                 write_json(evidence / "instance.json", created)
                 event(evidence, "created", name=name, zone=zone, id=created["id"],
-                      creation_timestamp=created["creationTimestamp"], machine=target["machine"])
+                      creation_timestamp=created["creationTimestamp"], machine=target["machine"],
+                      provisioning_model=target["provisioning_model"])
                 break
             # Only a confirmed capacity rejection may move to the next zone.
             remaining = inventory(evidence, "after-create-failure")
@@ -254,9 +279,10 @@ def main():
             if not any(code in result.stderr for code in (
                     "ZONE_RESOURCE_POOL_EXHAUSTED", "does not have enough resources", "QUOTA_EXCEEDED")):
                 raise RuntimeError(result.stderr)
-            event(evidence, "zone-unavailable", zone=zone, machine=target["machine"], error=result.stderr.strip())
+            event(evidence, "zone-unavailable", zone=zone, machine=target["machine"],
+                  provisioning_model=target["provisioning_model"], error=result.stderr.strip())
         if created is None:
-            raise RuntimeError("Spot A100 and L4 unavailable in all eligible zones; no quota/billing change attempted")
+            raise RuntimeError("GPU unavailable in every requested region and provisioning mode; no quota/billing configuration changed")
         deadline = time.monotonic() + max_seconds + 300
         while time.monotonic() < deadline:
             current = cloud_json("compute", "instances", "list", "--filter=name=" + name)
@@ -286,11 +312,13 @@ def main():
         if final["instances"] or final["disks"]:
             raise RuntimeError("cleanup incomplete; see after.json")
         if created:
+            rate = target["spot_usd_hour"] if target["provisioning_model"] == "SPOT" else target["on_demand_usd_hour"]
             elapsed = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(
                 created["creationTimestamp"].replace("Z", "+00:00"))).total_seconds()
             write_json(evidence / "cost.json", {"runtime_upper_bound_seconds": elapsed,
-                "machine": target["machine"], "spot_usd_hour": target["spot_usd_hour"],
-                "compute_usd_upper_bound": max(60, elapsed) / 3600 * target["spot_usd_hour"],
+                "machine": target["machine"], "region": target["region"],
+                "provisioning_model": target["provisioning_model"], "list_usd_hour": rate,
+                "compute_usd_upper_bound": max(60, elapsed) / 3600 * rate,
                 "basis": "creation to observed deletion; includes provisioning and polling delay",
                 "prior_spend_usd": args.spent_usd, "other_usage_reserve_usd": 3,
                 "billing_invoice": "not yet available"})

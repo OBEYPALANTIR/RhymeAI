@@ -12,6 +12,20 @@ spec.loader.exec_module(run)
 
 
 class PackageTests(unittest.TestCase):
+    def test_extended_search_uses_all_spot_regions_before_on_demand(self):
+        inventory = [{"name": "nvidia-l4", "zone": "zones/" + r + "-a"}
+                     for r in (*run.L4_PRICES, "europe-west1")]
+        candidates = run.capacity_candidates(inventory, run.capacity_targets(True))
+        self.assertEqual([(t["provisioning_model"], z) for t, z in candidates], [
+            ("SPOT", "us-east1-a"), ("SPOT", "us-east4-a"),
+            ("SPOT", "us-west1-a"), ("SPOT", "us-west4-a"),
+            ("STANDARD", "us-central1-a"), ("STANDARD", "us-east1-a"),
+            ("STANDARD", "us-east4-a"), ("STANDARD", "us-west1-a"),
+            ("STANDARD", "us-west4-a")])
+        self.assertTrue(all(run.run_budget(t, spent_usd=0.01)["conservative_bound_usd"] < 15
+                            for t, _ in candidates))
+        self.assertTrue(all(t["provisioning_model"] == "SPOT" for t in run.capacity_targets()))
+
     def test_capacity_order_keeps_l4_after_all_a100_zones(self):
         inventory = [{"name": name, "zone": "zones/" + zone} for name, zone in (
             ("nvidia-l4", "us-central1-b"), ("nvidia-a100-80gb", "us-central1-c"),

@@ -60,8 +60,30 @@ it back to external storage, and verifies SHA-256 before requesting a VM.
 The controller refuses a project with existing VMs or disks, discovers zones
 offering the A100 80GB, and tries them sequentially, followed by every eligible
 L4 zone. Only confirmed capacity or quota rejection moves to the next candidate.
-It never falls back to on-demand, another region, a larger GPU, or multiple VMs.
+The default command stays in us-central1 on Spot pricing.
 At most one VM is created; it does not automatically retry a preempted run.
+
+After central Spot capacity is exhausted, an explicitly authorized broader
+search can use `--extended-l4` with a new run ID. That mode tries L4 Spot in
+`us-east1`, `us-east4`, `us-west1`, then `us-west4`; if all reject the request,
+it tries on-demand L4 in `us-central1` followed by those same four regions.
+It discovers and tries every eligible zone within each region. It uses the
+same `g2-standard-12`, recipe, four-hour DELETE deadline and $15 budget check.
+Existing regional L4 quotas are required; the runner does not request them.
+The GCS bucket stays in us-central1, so cross-region transfers can add charges.
+
+```sh
+python3 finetune/train/gcp/run.py run --extended-l4 \
+  --package "$HOME/.agents/artifacts/2026-10-14/rhymeai-colab-package-v5" \
+  --run-id e2b-20261014-04 \
+  --output /Volumes/Untitled/models/rhymeai/students-v5-gcp-20261014/E2B-run04 \
+  --evidence "$HOME/.agents/artifacts/2026-10-14/rhymeai-gcp-smoke/run-04" \
+  --spent-usd 0.01
+```
+
+For that mode `--provisioning-model` changes to `STANDARD` only after every
+additional Spot candidate has failed. On-demand is never selected without
+`--extended-l4`; the quoted Spot rate is not used for its cost calculation.
 
 The VM uses `a2-ultragpu-1g` (12 vCPU, 170 GiB RAM) or `g2-standard-12`
 (12 vCPU, 48 GiB RAM), the dated Deep Learning VM image
@@ -161,8 +183,8 @@ gcloud compute disks list --project=rhymeai-training --format=json
 ```
 
 Use the actual zone in `instance.json`. Do not delete unrelated resources.
-An unavailable zone is recorded in `create-<machine>-<zone>.log` and `lifecycle.jsonl`.
-If every eligible A100 and L4 zone rejects the request, stop; no quota or billing changes
+An unavailable zone is recorded in `create-<mode>-<machine>-<zone>.log` and `lifecycle.jsonl`.
+If every requested candidate rejects the request, stop; no quota or billing configuration changes
 are an authorized fallback.
 
 ## Evidence and costs
@@ -179,14 +201,28 @@ At the published `us-central1` prices checked on 2026-10-14:
   [Spot prices](https://cloud.google.com/spot-vms/pricing)
 - On-demand reference: $5.06879789/hour. Two hours plus a $3 reserve for boot
   disk, public IPv4, GCS operations/storage and export downloads is $13.14,
-  before prior task spend. L4's on-demand reference is $1.000416348/hour;
+  before prior task spend. L4's on-demand reference is about $1.0004163/hour;
   four hours plus the same reserve is $7.00 before prior spend.
   Both bounds are below $15 with the example's $0.01 prior-spend reserve.
   [VM prices](https://cloud.google.com/products/compute/pricing/accelerator-optimized)
 - Regional Standard GCS: $0.000027397/GiB-hour (about $0.02/GiB-month), plus
   operations and internet egress. [Storage prices](https://cloud.google.com/storage/pricing)
 
-`cost.json` uses observed creation-to-deletion time multiplied by the Spot list
+The extended L4 mode uses these regional list rates from the public
+[Cloud Billing catalog](https://cloud.google.com/billing/v1/how-tos/catalog-api),
+effective 2026-10-14. Each total is 12 CPU hours + 48 GiB RAM hours + one L4 hour:
+
+| Region | Spot USD/hour | On-demand USD/hour |
+| --- | ---: | ---: |
+| us-central1, us-east1, us-west1 | 0.598648 | 1.000416287 |
+| us-east4 | 0.532016 | 0.997140504 |
+| us-west4 | 0.674384 | 1.126768820 |
+
+Four hours at the largest on-demand rate plus the $3 reserve and $0.01 prior
+spend is $7.5171. The aggregate task cap remains $15, not $15 per attempt.
+
+`cost.json` uses observed creation-to-deletion time multiplied by the selected
+region's Spot or on-demand list
 price; provisioning and the polling interval make this a conservative runtime
 estimate, **not a billing invoice**. Report boot disk, IP, download and retained
 storage separately. Refresh prices before later runs; the monthly budget alert
