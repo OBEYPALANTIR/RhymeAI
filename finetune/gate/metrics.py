@@ -57,9 +57,9 @@ def preference(rows):
     return result
 
 
-# Non-inferiority margins: 2 x the disjoint-seed null's pooled 95% CI half-width (shipped v2.1 against
-# itself), rounded up to 0.5 pp (0.05 pp for repetition), floor 1 pp, so an equal model clears each
-# check about 97.5% of the time. See GATE.md "Calibration". bound=False checks point estimates (G6).
+# Non-inferiority margins (heuristic): 2 x the disjoint-seed null's pooled 95% CI half-width (shipped
+# v2.1 against itself), rounded up to 0.5 pp (0.05 pp for repetition), floor 1 pp. Not a validated
+# null-pass rate; see GATE.md "Calibration". bound=False checks point estimates (G6).
 FULL_SIX_MARGIN, RETRY_MARGIN, LEVEL_MARGIN, REPETITION_MARGIN = .01, .065, .055, .0025
 REWRITE_MARGINS = {"rewrite_passage": .085, "rewrite_word": .035, "synonyms": .01}
 

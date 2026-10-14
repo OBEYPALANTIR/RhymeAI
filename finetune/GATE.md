@@ -98,10 +98,13 @@ bounds up to +10 pp. A model exactly as good as the incumbent could not pass.
 
 Rule, fixed before any round-2 frozen evaluation and using only the null
 run: **margin = 2 × the null's pooled 95% CI half-width, rounded up to 0.5 pp
-(0.05 pp for repetition), with a 1 pp floor.** If the true difference is zero,
-the CI's adverse bound averages minus one half-width, so twice the half-width
-lets an equal model clear each check about 97.5% of the time. A single null
-run is one estimate of that width; a benchmark revision should re-measure it.
+(0.05 pp for repetition), with a 1 pp floor.** This is a heuristic choice, not
+a validated error rate. The intent is slack beyond one equal-model run's
+interval width. Turning it into a pass probability would need assumptions that
+`paired()`'s percentile bootstrap does not establish: a fixed-variance normal
+approximation, or repeated independent null runs or simulation. This gate has
+done neither. A single null run is one estimate of that width; a benchmark
+revision should re-measure it.
 
 | Check | Null pooled 95% CI (pp) | Half-width | Margin |
 |---|---|---:|---:|
@@ -113,9 +116,10 @@ run is one estimate of that width; a benchmark revision should re-measure it.
 | cxlib level pass | [−0.61, +4.74] | 2.67 | −5.5 pp |
 | Template repetition | [−0.15, +0.08] | 0.115 | +0.25 pp |
 
-The margins show what this 40-song benchmark can resolve. With 60 passage
-prompts, it cannot rule out a passage regression under about 8 pp. Only a
-benchmark with more passage prompts can tighten that, not a smaller margin.
+The margins are only as tight as this 40-song benchmark's null interval
+widths. The widest is passage rewrite, with 60 prompts. These margins state
+the losses the gate tolerates; they are not a measured detection limit. Adding
+passage prompts should narrow the null interval, but that needs re-measuring.
 Re-scoring every saved run: the disjoint null now fails only G3; the
 identical-seed null fails G3 and G6; levels, E2B-v4 and E4B-v4 still fail G2,
 G3 and G6.
