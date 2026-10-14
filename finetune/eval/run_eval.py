@@ -106,11 +106,15 @@ def prepare_case(case):
             constraint=constraint,
         )
     elif task == "rewrite_passage":
+        # MainViewModel passes the selection's start for LOCAL rewrites, which adds the selected line.
+        selection_start = case["lyrics"].index(case["selection"])
+        prepared["selection_start"] = selection_start
         prepared["user_prompt"] = prompts.build_rewrite_prompt(
             action=case["action"],
             lyrics=case["lyrics"],
             selection=case["selection"],
             current_section=case["current_section"],
+            selection_start=selection_start,
         )
     elif task == "rewrite_word":
         selection_start = cases_mod.selection_start_for(case)
