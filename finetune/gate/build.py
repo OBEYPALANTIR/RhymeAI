@@ -90,9 +90,8 @@ def audit_overlap(songs, include_frozen=False):
     for root in roots:
         if not root.is_dir():
             raise FileNotFoundError(f"Required training pool unavailable: {root}")
-    v4 = ARTIFACTS / "2026-10-14/rhymeai-teacher-data-v4"
-    if v4.exists():
-        roots.append(v4)
+    # Every teacher-data and Colab package directory is a training pool, including future versions.
+    roots.extend(sorted({*ARTIFACTS.glob("*/rhymeai-teacher-data*"), *ARTIFACTS.glob("*/rhymeai-colab-package*")} - set(roots)))
     paths = set()
     for root in roots:
         # Include Python string pools as well as contexts, outputs and packaged splits.
@@ -118,7 +117,7 @@ def audit_overlap(songs, include_frozen=False):
             time.sleep(1)
         hits.update(found)
         results.append({"path": str(path), "sha256": before, "overlaps": found})
-    audit = {"overlapping_lines": len(hits), "files": results, "v4_present": v4.exists(),
+    audit = {"overlapping_lines": len(hits), "files": results, "pools": [str(root) for root in roots],
              "normalization": "lowercase ASCII word tokens; apostrophes normalized; contiguous 8-grams within each decoded line"}
     if include_frozen:
         audit["frozen_benchmark_sha256"] = sha256(HERE / "benchmark-songs.jsonl")

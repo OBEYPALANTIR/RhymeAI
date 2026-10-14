@@ -99,7 +99,7 @@ class DevEvaluationTest(unittest.TestCase):
                    "songs_sha256": sha256(out / "benchmark-songs.jsonl"), "inputs_sha256": sha256(out / "inputs.json"),
                    "prompts_sha256": sha256(out / "prompts.json")})
         write_jsonl(out / "parity.jsonl", [{"id": row["id"], "frozen_byte_parity": True, "prompt_sha256": row["prompt_sha256"]}])
-        write_json(out / "overlap-final.json", {"overlapping_lines": 0, "files": [], "v4_present": False,
+        write_json(out / "overlap-final.json", {"overlapping_lines": 0, "files": [], "pools": [],
                    "frozen_benchmark_sha256": sha256(build.HERE / "benchmark-songs.jsonl")})
         for role in ("candidate", "incumbent"):
             write_json(out / f"binding-{role}.json", {"model_path": "offline-fixture", "model_sha256": "offline-fixture"})

@@ -112,17 +112,19 @@ their actual bytes/hashes are retained per inference pass.
 
 The overlap checker normalizes case, punctuation and apostrophes, then checks
 contiguous eight-word sequences **within each decoded line**. It scans every
-JSON/JSONL file and Python string pool recursively in the v3 and levels packages
-(a superset of all contexts/train/val/test and levels inputs), plus literals in
+JSON/JSONL file and Python string pool recursively in every training pool
+(a superset of all contexts/train/val/test and package inputs), plus literals in
 `finetune/data/seed_songs.py` and `finetune/eval/cases.py`. Missing required
-directories are errors. It records every scanned file hash and all matching
-benchmark song/line IDs, including duplicates across files.
+directories are errors. It records every scanned file hash, the pool list and
+all matching benchmark song/line IDs, including duplicates across files.
 
-- `~/.agents/artifacts/2026-10-07/rhymeai-teacher-data-v3/`
-- `~/.agents/artifacts/2026-10-08/rhymeai-colab-package-levels/`
-- `~/.agents/artifacts/2026-10-14/rhymeai-teacher-data-v4/` when present
+- Required: `~/.agents/artifacts/2026-10-07/rhymeai-teacher-data-v3/` and
+  `~/.agents/artifacts/2026-10-08/rhymeai-colab-package-levels/`
+- Discovered: every `~/.agents/artifacts/*/rhymeai-teacher-data*` and
+  `~/.agents/artifacts/*/rhymeai-colab-package*` directory, so each new data
+  version is covered without a code change
 
-The scan runs again after generation and judging, to include newly arrived v4
+The scan runs again after generation and judging, to include newly arrived
 data. Original authorship plus exclusion and these inventories establish the
 RhymeAI fine-tuning holdout; they do not claim knowledge of arbitrary external
 models' training histories.
