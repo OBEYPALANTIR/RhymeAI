@@ -73,19 +73,27 @@ class DevEvaluationTest(unittest.TestCase):
         expanded = make_dev_inputs(songs, expanded_words=True)
         self.assertEqual(expanded[:len(original)], original)
         self.assertEqual(make_dev_inputs(songs), original)
+        # The fixture lyrics hold four song lines: three new line endings beyond the original selection.
         self.assertEqual(Counter(r["task"] for r in expanded),
-                         {"suggestions": 16, "rewrite_passage": 6, "rewrite_word": 30, "synonyms": 12})
+                         {"suggestions": 16, "rewrite_passage": 6, "rewrite_word": 28, "synonyms": 12})
         self.assertEqual(len({r["id"] for r in expanded}), len(expanded))
         for song in songs:
             words = [r for r in expanded if r["song_id"] == song["id"] and r["task"] == "rewrite_word"]
-            self.assertEqual(sorted(Counter(r["inputs"]["selection"].lower() for r in words).values()), [3] * 5)
+            plain = [r for r in words if r["inputs"]["action"] != "HARDER_RHYME"]
+            self.assertEqual(sorted(Counter(r["inputs"]["selection"].lower() for r in plain).values()), [2] * 5)
             self.assertEqual(Counter(r["inputs"]["action"] for r in words),
-                             {"REPHRASE": 5, "PUNCH_UP": 5, "HARDER_RHYME": 5})
+                             {"REPHRASE": 5, "PUNCH_UP": 5, "HARDER_RHYME": 4})
+            self.assertEqual(len({r["inputs"]["selection"].lower() for r in words if r["inputs"]["action"] == "HARDER_RHYME"}), 4)
             for row in words:
                 inputs = row["inputs"]
                 offset = inputs["selection_start"] * 2
-                selected = inputs["lyrics"].encode("utf-16-le")[offset:offset + len(inputs["selection"].encode("utf-16-le"))]
-                self.assertEqual(selected.decode("utf-16-le"), inputs["selection"])
+                encoded = inputs["lyrics"].encode("utf-16-le")
+                end = offset + len(inputs["selection"].encode("utf-16-le"))
+                self.assertEqual(encoded[offset:end].decode("utf-16-le"), inputs["selection"])
+                if inputs["action"] == "HARDER_RHYME":
+                    # Android accepts HARDER_RHYME only for a line's last word (isLineEnding).
+                    trailing = encoded[end:].decode("utf-16-le").split("\n")[0]
+                    self.assertFalse(any(ch.isalnum() for ch in trailing), inputs["selection"])
             synonyms = [r["inputs"] for r in expanded if r["song_id"] == song["id"] and r["task"] == "synonyms"]
             self.assertEqual(len({r["word"].lower() for r in synonyms}), 6)
             self.assertTrue(all(r["word"] in r["line_context"] for r in synonyms))
