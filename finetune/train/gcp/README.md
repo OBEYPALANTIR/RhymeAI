@@ -139,7 +139,8 @@ below 35 GB; retaining 8 x 2 avoids silently changing the reproduction recipe.
 The training function is executed unchanged. Both epoch adapters are copied
 and SHA-verified by the notebook's existing callback before GCS persistence.
 Startup creates an isolated Python 3.12 environment from Ubuntu 24.04's system
-Python. The Ubuntu 22.04 DLVM's Python 3.10 cannot install round 2's pinned
+Python and installs its development headers for runtime CUDA helper compilation.
+The Ubuntu 22.04 DLVM's Python 3.10 cannot install round 2's pinned
 TRL 1.15.0, which requires Python 3.11 or newer; that failed bootstrap is
 retained in run-04 evidence. The failed VM saved its logs and deleted itself.
 The seven top-level training dependencies are pinned to versions recorded in

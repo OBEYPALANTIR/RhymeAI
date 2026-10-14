@@ -28,7 +28,7 @@ trap 'exit 130' INT
 timeout 600 bash -c 'until nvidia-smi; do sleep 10; done'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq cmake build-essential git curl python3.12 python3.12-venv
+apt-get install -y -qq cmake build-essential git curl python3.12 python3.12-venv python3.12-dev
 mkdir -p /content/package
 gcloud storage cp "$RUN_PREFIX/package.tar.gz" /content/package.tar.gz --quiet
 EXPECTED_SHA="$(metadata instance/attributes/package-sha256)"
