@@ -96,8 +96,9 @@ class LocalModelGateTest {
 
     private fun completion(r: JsonObject, model: String, seed: Int, pass: Int, inner: String, captured: MutableList<CapturedPass>): Flow<String> = flow {
         val config = Json.parseToJsonElement(File(root,"sampler.json").readText()).jsonObject
+        val samplerSeed = seed + (System.getenv("RHYMEAI_GATE_SEED_OFFSET")?.toInt() ?: 0) + (pass - 1) * 10000
         val request = JsonObject(config + mapOf(
-            "prompt" to JsonPrimitive("<|turn>user\n$inner<turn|>\n<|turn>model\n"), "seed" to JsonPrimitive(seed + (pass - 1) * 10000),
+            "prompt" to JsonPrimitive("<|turn>user\n$inner<turn|>\n<|turn>model\n"), "seed" to JsonPrimitive(samplerSeed),
             "stream" to JsonPrimitive(true), "cache_prompt" to JsonPrimitive(false)))
         val started = System.nanoTime()
         val deadline = started + 120_000_000_000L
@@ -149,7 +150,7 @@ class LocalModelGateTest {
         } finally {
             connection.disconnect()
             val data = buildJsonObject {
-                put("model",model); put("id",r.str("id")); put("pass",pass); put("seed",seed); put("sampler_seed",seed + (pass - 1) * 10000)
+                put("model",model); put("id",r.str("id")); put("pass",pass); put("seed",seed); put("sampler_seed",samplerSeed)
                 put("prompt",inner); put("prompt_sha256",digest(inner)); put("wrapped_prompt_sha256",digest(request.str("prompt")))
                 put("request",request); put("raw_chunks",JsonArray(chunks)); put("bounded_chunks",strings(bounded))
                 put("output",bounded.joinToString("")); put("termination",end); put("error",failure?.let(::JsonPrimitive) ?: JsonNull)

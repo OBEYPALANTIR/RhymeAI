@@ -34,12 +34,13 @@ def post(port, route, value):
         return json.load(response)
 
 
-def gradle(out, phase, model="", port=""):
+def gradle(out, phase, model="", port="", seed_offset=0):
     logic_guard()
     evidence = out / "evidence"
     evidence.mkdir(exist_ok=True)
     env = dict(os.environ, RHYMEAI_GATE_INPUT=str(out), RHYMEAI_GATE_REPO=str(REPO),
-               RHYMEAI_GATE_PHASE=phase, RHYMEAI_GATE_MODEL=model, RHYMEAI_GATE_PORT=str(port))
+               RHYMEAI_GATE_PHASE=phase, RHYMEAI_GATE_MODEL=model, RHYMEAI_GATE_PORT=str(port),
+               RHYMEAI_GATE_SEED_OFFSET=str(seed_offset))
     if "JAVA_HOME" not in env:
         jbr = Path("/Applications/Android Studio Preview.app/Contents/jbr/Contents/Home")
         if jbr.exists():
@@ -88,10 +89,11 @@ def source_binding():
     return {str(p.relative_to(REPO)): sha256(p) for p in paths}
 
 
-def generate(out, model, path):
+def generate(out, model, path, seed_offset=0):
     path = Path(path).resolve(strict=True)
     binding = {"model_path": str(path), "model_sha256": sha256(path), "model_bytes": path.stat().st_size,
-               "prompts_sha256": sha256(out / "prompts.json"), "sampler": SAMPLER, "source": source_binding()}
+               "prompts_sha256": sha256(out / "prompts.json"), "sampler": SAMPLER, "source": source_binding(),
+               "sampler_seed_offset": seed_offset}
     if model == "incumbent" and binding["model_sha256"] != INCUMBENT_SHA256:
         raise ValueError("Incumbent must be the shipped v2.1 E2B hash (path overrides do not change this gate)")
     target = out / f"binding-{model}.json"
@@ -145,7 +147,7 @@ def generate(out, model, path):
                     raise ValueError(f"BOS/context mismatch: {row['id']}")
                 audits.append({"id": row["id"], "template_byte_parity": True, "tokens": len(tokens), "sha256": text_hash(applied)})
             write_json(evidence / f"envelope-{model}.json", audits)
-            gradle(out, "generate", model, port)
+            gradle(out, "generate", model, port, seed_offset)
         finally:
             if server.poll() is None:
                 server.terminate()

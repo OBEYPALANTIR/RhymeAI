@@ -12,6 +12,7 @@ from .generate import SAMPLER
 
 
 def audit_generation(out, role, rows):
+    seed_offset = json.loads((out / f"binding-{role}.json").read_text()).get("sampler_seed_offset", 0)
     raw = read_jsonl(out / f"raw-{role}.jsonl")
     latest = {(r["id"], r["seed"], r["pass"]): r for r in raw}
     used = [latest[r["id"], r["seed"], attempt] for r in rows for attempt in range(1, r["calls"] + 1)]
@@ -20,7 +21,8 @@ def audit_generation(out, role, rows):
         request = capture["request"]
         if any(request.get(key) != value for key, value in SAMPLER.items()):
             raise ValueError("Capture sampler differs from Android contract")
-        if request["seed"] != capture["seed"] + (capture["pass"] - 1) * 10000:
+        if (request["seed"] != capture["seed"] + seed_offset + (capture["pass"] - 1) * 10000
+                or capture["sampler_seed"] != request["seed"]):
             raise ValueError("Capture sampler seed differs from frozen seed")
         if len(capture["output"].encode("utf-16-le")) // 2 > 4096:
             raise ValueError("Capture escaped Android's response character budget")
@@ -87,6 +89,8 @@ def metric_text(metric):
 
 def report(out):
     out = Path(out)
+    bindings = {role: json.loads((out / f"binding-{role}.json").read_text()) for role in ("candidate", "incumbent")}
+    seed_pairings = {str(s): {role: s + b.get("sampler_seed_offset", 0) for role, b in bindings.items()} for s in SEEDS}
     prompt_rows = json.loads((out / "prompts.json").read_text())
     prompts = {r["id"]: r for r in prompt_rows}
     results = {role: graded(out, prompts, role) for role in ("candidate", "incumbent")}
@@ -121,12 +125,14 @@ def report(out):
     gates = {"G1": g1, **scopes["pooled"]["gates"], "G6": all(all(scopes[str(s)]["gates"].values()) for s in SEEDS)}
     verdict = "PASS" if all(gates.values()) else "FAIL"
     judge = json.loads((out / "judge-provenance.json").read_text())
-    write_json(out / "summary.json", {"verdict": verdict, "gates": gates, "scopes": scopes, "judge": judge})
+    write_json(out / "summary.json", {"verdict": verdict, "gates": gates, "scopes": scopes, "judge": judge,
+                                      "seed_pairings": seed_pairings})
     lines = [f"# Frozen model gate: {verdict}", "", "Candidate / incumbent; all differences are candidate minus incumbent.", "",
              "| Gate | Verdict |", "|---|---|"]
     lines.extend(f"| {gate} | {'PASS' if passed else 'FAIL'} |" for gate, passed in gates.items())
     lines.extend(["| G7 | NOT RUN - physical Pixel latency, loading and Stop |", "| G8 | NOT RUN - Tyler blind read |", "",
                   "G3 is mandatory; cxlib cannot rescue a preference failure. G6 requires G2-G5 independently on every seed.", "",
+                  f"Pairing slots and actual first-pass sampler seeds: {seed_pairings}. Retries add 10000 to the corresponding arm's seed.", "",
                   f"G1: {manifest['songs']} new original drafts; 320 suggestions, 60 passage rewrites, 60 word rewrites, 40 synonym requests.",
                   f"Kotlin prompt-byte parity: {len(parity)}/480. Overlapping 8-gram lines: {overlap['overlapping_lines']} across {len(overlap['files'])} files; v4 present: {overlap['v4_present']}.",
                   "See benchmark.json, parity.jsonl, inputs.json, prompts.json and overlap-final.json for hashes and inventory.", "",
@@ -146,7 +152,7 @@ def report(out):
                   "The template metric counts shown line pairs with identical first three content tokens, divided by all shown line pairs; lower is better.",
                   "This captures desktop llama-server inference through Android Kotlin builders, GenerationBoundary and validators. JNI execution and physical-device performance remain manual G7."])
     for role in results:
-        binding = json.loads((out / f"binding-{role}.json").read_text())
+        binding = bindings[role]
         lines.extend(["", f"{role}: `{binding['model_path']}`", f"SHA-256: `{binding['model_sha256']}`."])
     (out / "report.md").write_text("\n".join(lines) + "\n")
     return verdict

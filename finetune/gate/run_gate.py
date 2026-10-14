@@ -12,7 +12,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from gate.build import REPO, audit_overlap, freeze, read_jsonl, write_json
+from gate.build import REPO, SEEDS, audit_overlap, freeze, read_jsonl, write_json
 from gate.generate import INCUMBENT, freeze_prompts, generate
 
 
@@ -20,8 +20,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True, type=Path)
     parser.add_argument("--incumbent", default=INCUMBENT, type=Path)
+    parser.add_argument("--candidate-seed-offset", type=int, default=0,
+                        help="Null noise control: shift candidate seeds; default keeps paired same-seed comparison")
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
+    offset = args.candidate_seed_offset
+    if offset < 0 or max(SEEDS) + offset + 10000 > 2**31 - 1:
+        parser.error("candidate seed offset must preserve nonnegative signed 32-bit sampler seeds")
+    incumbent_seeds = {s + retry for s in SEEDS for retry in (0, 10000)}
+    if offset and not incumbent_seeds.isdisjoint({s + offset for s in incumbent_seeds}):
+        parser.error("nonzero candidate seed offset must give disjoint initial and retry seeds")
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     with (out / "run.lock").open("w") as lock:
@@ -35,7 +43,7 @@ def main():
                 phase = f"generate-{role}"
                 print(phase, flush=True)
                 write_json(out / "status.json", {"phase": phase, "complete": False})
-                generate(out, role, path)
+                generate(out, role, path, offset if role == "candidate" else 0)
             phase = "judge"
             write_json(out / "status.json", {"phase": phase, "complete": False})
             from gate.judge import judge
@@ -45,6 +53,8 @@ def main():
             write_json(out / "provenance.json", {
                 "source_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
                 "command": sys.argv, "python": sys.version,
+                "candidate_seed_offset": offset,
+                "sampler_seeds": {"candidate": [s + offset for s in SEEDS], "incumbent": list(SEEDS)},
                 "manual_gates": {"G7": "NOT RUN: physical Pixel", "G8": "NOT RUN: Tyler blind read"}})
             from gate.report import report
             verdict = report(out)

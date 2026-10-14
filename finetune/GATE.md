@@ -5,6 +5,8 @@ Run from the repository root:
 ```sh
 python3 finetune/gate/run_gate.py --candidate /path/to/candidate.gguf --out /path/to/new-run
 # Optional: --incumbent /another/location/of/the/shipped/gguf
+# Null sampling-noise control (candidate is also the shipped GGUF):
+python3 finetune/gate/run_gate.py --candidate /path/to/shipped.gguf --candidate-seed-offset 1000 --out /path/to/null-noise
 ```
 
 The command freezes/validates inputs, exports exact Android Kotlin prompts,
@@ -104,8 +106,14 @@ to its live result, including retry prompts and errors.
 
 Temperature .7, top-k 40, top-p .95, min-p .05, repeat penalty 1, last_n 64,
 unbounded n_predict within Android's limits; full sampler settings are saved.
-The second attempt uses the seed plus 10000, fixed before observation. Both
-arms receive the same seeds. The server has context 2048, parallelism 1; the
+The second attempt uses the seed plus 10000, fixed before observation. By default
+both arms receive the same seeds. `--candidate-seed-offset` shifts only the
+candidate's sampler seeds, including retries, for a null sampling-noise control.
+Nonzero offsets must produce disjoint initial/retry seeds across arms; offset
+1000 gives candidate 8000/8001/8002 versus incumbent 7000/7001/7002. Reports retain
+7000/7001/7002 as pairing slots and show both actual seed sets. The offset is
+bound in generation metadata, raw request audits and provenance; thresholds
+and prompt selection do not change. The server has context 2048, parallelism 1; the
 GGUF template and BOS/token budget are checked for **every** frozen prompt.
 Only Gemma 4 envelopes that match this production contract are accepted.
 
@@ -157,10 +165,14 @@ are ties. Invalid or missing verdicts fail, never become convenient ties.
 Each seed has 120 suggestions (10 per level/rhyme cell) and 30 passages (10 per
 action), selected by fixed input-ID hashes before observing any output.
 
-The null run independently generates both arms from the same v2.1 bytes; it
-must not pass G3 on equality. A deterministic null CI of [0, 0] includes zero
-and supplies no evidence of improvement. Null results are retained even if
-non-determinism produces a nonzero difference.
+Both null controls independently generate both arms from the same v2.1 bytes.
+The identical-seed control checks judge consistency: it must not pass G3 on
+equality, and a deterministic CI of [0, 0] includes zero without measuring
+sampling variation. The disjoint-seed control measures sampling noise; inspect
+its sign test for a spurious significant win and its yield, level and diversity
+CIs for zero coverage. Declare its offset before generation, retain every
+result, and never search seeds until a desired null outcome appears. Both
+controls use the full blind, swapped judging protocol.
 
 ## Verification
 
@@ -176,4 +188,5 @@ cd ../android
 Tests cover overlap normalization/decoding, ratio bootstrap math, template
 repetition and verdict boundaries. Normal offline unit tests never start an
 inference server. The baseline output directories are `rhymeai-gate-v1/levels`
-and `rhymeai-gate-v1/null`; no training or manual G7/G8 run is included.
+and `rhymeai-gate-v1/null` (identical seeds), with the sampling-noise control in
+`rhymeai-gate-v1/null-noise`; no training or manual G7/G8 run is included.
