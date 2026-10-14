@@ -470,6 +470,39 @@ fun AssistantPanel(
                 if (viewModel.localModelError != null) {
                     Text("Your model could not load. Open model setup to retry or choose another.", style = MaterialTheme.typography.bodySmall, color = colorScheme.error)
                 }
+                val configuredCloudProvider = com.rhymeai.app.service.AIProvider.entries
+                    .firstOrNull { it != com.rhymeai.app.service.AIProvider.LOCAL && viewModel.apiKeyPresence[it.name] == true }
+                if (configuredCloudProvider != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(colorScheme.surfaceContainerLow, RoundedCornerShape(DesignTokens.Radius.md))
+                            .border(1.dp, colorScheme.primary.copy(alpha = 0.35f), RoundedCornerShape(DesignTokens.Radius.md))
+                            .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "${configuredCloudProvider.displayName} API key ready",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colorScheme.onSurface
+                            )
+                            Text(
+                                "Switch to ${configuredCloudProvider.displayName} for OpenUI Generative UI",
+                                fontSize = 11.sp,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = { viewModel.saveProvider(configuredCloudProvider) },
+                            modifier = Modifier.testTag("switchToOpenUICloudButton")
+                        ) {
+                            Text("Use OpenUI", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
             }
 
             // Error message
@@ -477,8 +510,37 @@ fun AssistantPanel(
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
-            // Suggestions
-            if (viewModel.suggestions.isNotEmpty()) {
+            // Suggestions & OpenUI Generative UI Studio
+            if (viewModel.selectedProvider != com.rhymeai.app.service.AIProvider.LOCAL) {
+                // Only render UI the model actually generated. No locally synthesized stand-in.
+                val streamedResult = viewModel.openUIParseResult
+                val emptyResult = remember { com.rhymeai.app.util.OpenUIParser.parse("", forceComplete = true) }
+                OpenUIAssistantSection(
+                    parseResult = streamedResult ?: emptyResult,
+                    rawOpenUICode = viewModel.openUIRawCode,
+                    providerName = viewModel.selectedProvider.displayName,
+                    isStreaming = viewModel.isLoading,
+                    verifiedSuggestions = viewModel.suggestions.associateBy { it.text.lowercase() },
+                    highlightRhyme = viewModel.isHighlightEnabled,
+                    showProsody = viewModel.isStressPreviewEnabled,
+                    keptAlternates = viewModel.songWorkspace.alternates.mapTo(mutableSetOf()) { it.text.trim() },
+                    onUseSuggestion = { text ->
+                        viewModel.insertSuggestion(text)
+                        onSuggestionInserted()
+                    },
+                    onKeepSuggestion = { text -> viewModel.keepAlternate(text) },
+                    onActionChipSelected = { directive ->
+                        viewModel.getSuggestions(directive)
+                    },
+                    selectedModel = viewModel.selectedModel,
+                    availableModels = com.rhymeai.app.service.AIModel.modelsForProvider(viewModel.selectedProvider),
+                    onSelectModel = { model -> viewModel.saveModel(model) },
+                    onGenerate = if (viewModel.lyrics.isNotEmpty()) {
+                        { viewModel.getSuggestions() }
+                    } else null,
+                    notice = viewModel.openUIModelNotice
+                )
+            } else if (viewModel.suggestions.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
                     Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     Text(

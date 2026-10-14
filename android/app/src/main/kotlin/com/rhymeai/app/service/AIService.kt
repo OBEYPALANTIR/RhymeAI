@@ -7,6 +7,12 @@ import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
 import com.rhymeai.app.data.model.SongSection
+import com.rhymeai.app.util.OpenUIElementNode
+import com.rhymeai.app.util.OpenUILibrary
+import com.rhymeai.app.util.OpenUIParseMeta
+import com.rhymeai.app.util.OpenUIParseResult
+import com.rhymeai.app.util.OpenUIStreamingParser
+import com.rhymeai.app.util.OpenUIValue
 import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.RhymeConstraint
@@ -51,7 +57,12 @@ enum class AIProvider(val displayName: String) {
 
 enum class AIModel(val id: String, val displayName: String, val provider: AIProvider) {
     // Gemini
+    GEMINI_38_FLASH("gemini-3.8-flash", "Gemini 3.8 Flash", AIProvider.GEMINI),
+    GEMINI_4_ARGON("gemini-4-argon", "Gemini 4 Argon", AIProvider.GEMINI),
+    GEMINI_37_FLASH("gemini-3.7-flash", "Gemini 3.7 Flash", AIProvider.GEMINI),
+    GEMINI_36_FLASH("gemini-3.6-flash", "Gemini 3.6 Flash", AIProvider.GEMINI),
     GEMINI_35_FLASH("gemini-3.5-flash", "Gemini 3.5 Flash", AIProvider.GEMINI),
+    GEMINI_35_FLASH_LITE("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", AIProvider.GEMINI),
     GEMINI_31_PRO("gemini-3.1-pro-preview", "Gemini 3.1 Pro", AIProvider.GEMINI),
     GEMINI_3_FLASH("gemini-3-flash-preview", "Gemini 3 Flash", AIProvider.GEMINI),
     GEMINI_31_FLASH_LITE("gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite", AIProvider.GEMINI),
@@ -60,6 +71,11 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
     GEMINI_25_FLASH_LITE("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", AIProvider.GEMINI),
 
     // OpenAI
+    GPT_6_ASTRA("gpt-6-astra", "GPT-6 Astra", AIProvider.OPENAI),
+    GPT_61_SOL("gpt-6.1-sol", "GPT-6.1 Sol", AIProvider.OPENAI),
+    GPT_6_SOL("gpt-6-sol", "GPT-6 Sol", AIProvider.OPENAI),
+    GPT_6_LUNA("gpt-6-luna", "GPT-6 Luna", AIProvider.OPENAI),
+    GPT_6_INSTANT("gpt-6-instant", "GPT-6 Instant", AIProvider.OPENAI),
     GPT_55("gpt-5.5", "GPT-5.5", AIProvider.OPENAI),
     GPT_55_PRO("gpt-5.5-pro", "GPT-5.5 Pro", AIProvider.OPENAI),
     GPT_54("gpt-5.4", "GPT-5.4", AIProvider.OPENAI),
@@ -72,6 +88,11 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
     GPT_4O_MINI("gpt-4o-mini", "GPT-4o Mini", AIProvider.OPENAI),
 
     // Claude
+    CLAUDE_FABLE_51("claude-fable-5-1", "Claude Fable 5.1", AIProvider.CLAUDE),
+    CLAUDE_FABLE_5("claude-fable-5", "Claude Fable 5", AIProvider.CLAUDE),
+    CLAUDE_OPUS_55("claude-opus-5-5", "Claude Opus 5.5", AIProvider.CLAUDE),
+    CLAUDE_SONNET_55("claude-sonnet-5-5", "Claude Sonnet 5.5", AIProvider.CLAUDE),
+    CLAUDE_HAIKU_55("claude-haiku-5-5", "Claude Haiku 5.5", AIProvider.CLAUDE),
     CLAUDE_OPUS_47("claude-opus-4-7", "Claude Opus 4.7", AIProvider.CLAUDE),
     CLAUDE_SONNET_46("claude-sonnet-4-6", "Claude Sonnet 4.6", AIProvider.CLAUDE),
     CLAUDE_OPUS("claude-opus-4-20250514", "Claude Opus 4", AIProvider.CLAUDE),
@@ -82,7 +103,7 @@ enum class AIModel(val id: String, val displayName: String, val provider: AIProv
     LOCAL_MODEL("local-model", "On-Device Model", AIProvider.LOCAL);
 
     companion object {
-        val DEFAULT = GEMINI_35_FLASH
+        val DEFAULT = GEMINI_38_FLASH
         fun fromId(id: String): AIModel =
             entries.find { it.id == id } ?: DEFAULT
         fun modelsForProvider(provider: AIProvider): List<AIModel> =
@@ -134,8 +155,21 @@ class AIService {
         "The provider returned lines, but none matched the requested ${rhymeType.name.lowercase()} rhyme. Try another rhyme type."
     )
 
+    /** Non-2xx provider response. The message is already user-safe (never echoes the response body). */
+    internal class ProviderHttpException(val statusCode: Int) : RuntimeException(userFacingStatusMessage(statusCode))
+
     private companion object {
         const val SUGGESTION_COUNT = 6
+        /** A full OpenUI program with 12 lines plus layout statements can exceed 1024 tokens. */
+        const val OPENUI_MAX_OUTPUT_TOKENS = 4096
+
+        /** Long-published model IDs used when the selected model ID is rejected (HTTP 404). */
+        fun fallbackModelFor(provider: AIProvider): AIModel = when (provider) {
+            AIProvider.GEMINI -> AIModel.GEMINI_25_FLASH
+            AIProvider.OPENAI -> AIModel.GPT_41
+            AIProvider.CLAUDE -> AIModel.CLAUDE_SONNET
+            AIProvider.LOCAL -> AIModel.LOCAL_MODEL
+        }
         /** Local rule (PARITY.md): fewer than [SUGGESTION_COUNT] survivors retries once; fewer than this after that is an error. */
         const val MIN_SUGGESTIONS = 3
         // On-device lyric context budget, shared with iOS (see PARITY.md).
@@ -162,6 +196,7 @@ class AIService {
             if (error is CancellationException) throw error
             if (error is NoMatchingRhymesException) return error
             val causes = error.causes()
+            causes.firstOrNull { it is ProviderHttpException }?.let { return RuntimeException(it.message) }
             val rawMessage = causes.joinToString(" ") { cause ->
                 "${cause::class.java.simpleName} ${cause.message.orEmpty()}"
             }
@@ -519,8 +554,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
 
     private fun streamGemini(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): Flow<SuggestedLine> = flow {
         try {
-            val model = GenerativeModel(modelName = modelId, apiKey = apiKey)
-            val tokens = model.generateContentStream(prompt).mapNotNull { it.text }
+            val tokens = streamGeminiHttpTokens(apiKey, modelId, prompt)
             emitLinesFromTokens(tokens, constraint)
         } catch (error: Throwable) {
             throw userFacingProviderException(error)
@@ -563,6 +597,340 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         )
         val tokens = payloads.mapNotNull(::parseClaudeStreamToken)
         emitLinesFromTokens(tokens, constraint)
+    }
+
+    data class OpenUIStreamUpdate(
+        val rawOpenUICode: String,
+        val parseResult: OpenUIParseResult,
+        val suggestions: List<SuggestedLine>
+    )
+
+    internal fun buildOpenUIPrompt(
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        rhymeScheme: String,
+        currentLetter: String,
+        currentSection: SongSection = SongSection.UNKNOWN,
+        complexity: RhymeComplexity,
+        useWholeSongContext: Boolean,
+        constraint: SuggestionRhymeConstraint? = null,
+        sectionRef: SectionRef? = constraint?.sectionRef,
+        refinementDirective: String? = null
+    ): String {
+        val providerLyrics = if (useWholeSongContext) lyrics else targetRhymeLine.orEmpty()
+        val providerSection = sectionRef.takeIf { useWholeSongContext }
+        val providerConstraint = if (useWholeSongContext) constraint else constraint?.let {
+            suggestionRhymeConstraint(targetRhymeLine, rhymeType, it.dictionary, complexity = complexity)
+        }
+        val rhymeInstruction = if (targetRhymeLine != null) {
+            "Crucially, every SuggestionLine MUST end with a **${rhymeType.displayName}** to this specific line: \"$targetRhymeLine\"."
+        } else {
+            "Since this is a new rhyme sound (\"$currentLetter\"), each SuggestionLine should introduce a new end-rhyme that fits the meter and theme."
+        }
+        val constraintBlock = providerConstraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
+        val requestCount = if (providerConstraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        val songContextInstruction = if (useWholeSongContext) {
+            "Analyze the whole song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary. Make each suggestion feel connected to the entire song while still fitting the immediate target line and rhyme scheme."
+        } else {
+            "Prioritize the target line, rhyme scheme, and provided theme/context."
+        }
+        val effectiveTheme = theme.ifEmpty {
+            if (useWholeSongContext) "Whole song context enabled; infer the theme from the full lyrics."
+            else "No specific theme provided"
+        }
+        val sectionDirective = buildSectionDirective(providerSection, providerLyrics)
+        val refinementBlock = refinementDirective?.takeIf { it.isNotBlank() }?.let {
+            "\nRefinement focus requested by writer: \"$it\". Prioritize this creative direction across the RhymeGroup clusters.\n"
+        }.orEmpty()
+
+        val systemSpec = OpenUILibrary.generateSystemPrompt(
+            additionalRules = listOf(
+                "Choose the layout that best fits this writer's request and lyric. The components are building blocks, not a fixed template: use one RhymeGroup for a tight brief or several smaller groups for contrasting angles, add a Card with TextContent only when a short craft note genuinely helps, and use Badge for rhyme families or syllable targets.",
+                "Include a ProsodyMeter only when a target line exists and meter or cadence matters for this request.",
+                "Emit exactly $requestCount SuggestionLine nodes in total, each placed inside a RhymeGroup or Card.",
+                "Finish with an ActionChipBar offering 3-4 refinement directions tailored to this specific lyric, not generic ones.",
+                "Every `SuggestionLine(text, angle, endWord)` must contain a bare lyric line as its first positional argument (no quotes inside the lyric text, no numbering)."
+            )
+        )
+
+        return """
+$systemSpec
+
+## Songwriting Context
+
+Theme/context: "$effectiveTheme"
+Current lyrics:
+${"\"\"\""}
+$providerLyrics
+${"\"\"\""}
+
+Stanza rhyme scheme: "$rhymeScheme" (next line letter: "$currentLetter").
+Current song section: ${currentSection.displayName}.
+${currentSection.promptHint}
+$sectionDirective$rhymeInstruction$constraintBlock
+$songContextInstruction
+$refinementBlock
+Complexity level: ${complexity.label}. ${complexity.promptHint}
+
+Emit valid openui-lang starting with `root = Stack(...)`, laid out for this request, containing exactly $requestCount `SuggestionLine` components.
+""".trimIndent()
+    }
+
+    fun streamOpenUISuggestions(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        rhymeScheme: String,
+        currentLetter: String,
+        currentSection: SongSection = SongSection.UNKNOWN,
+        complexity: RhymeComplexity = RhymeComplexity.MODERATE,
+        useWholeSongContext: Boolean = false,
+        sectionRef: SectionRef? = null,
+        fullLyrics: String = lyrics,
+        refinementDirective: String? = null,
+        onModelFallback: ((AIModel) -> Unit)? = null
+    ): Flow<OpenUIStreamUpdate> = flow {
+        require(provider != AIProvider.LOCAL) { "OpenUI streaming requires a cloud AI provider." }
+        if (apiKey.isBlank()) {
+            throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
+        }
+
+        val chorusEnds = if (useWholeSongContext) firstChorusEndWords(fullLyrics) else emptySet()
+        val constraint = suggestionRhymeConstraint(
+            targetRhymeLine,
+            rhymeType,
+            sectionRef = sectionRef.takeIf { useWholeSongContext },
+            chorusEndWords = chorusEnds,
+            complexity = complexity
+        )
+        val prompt = buildOpenUIPrompt(
+            theme = theme,
+            lyrics = lyrics,
+            targetRhymeLine = targetRhymeLine,
+            rhymeType = rhymeType,
+            rhymeScheme = rhymeScheme,
+            currentLetter = currentLetter,
+            currentSection = currentSection,
+            complexity = complexity,
+            useWholeSongContext = useWholeSongContext,
+            constraint = constraint,
+            sectionRef = sectionRef,
+            refinementDirective = refinementDirective
+        )
+        val rawTokens = streamCloudRawTokensWithFallback(provider, apiKey, modelId, prompt, onModelFallback)
+        emitOpenUIFromTokens(
+            tokens = rawTokens,
+            constraint = constraint,
+            targetRhymeLine = targetRhymeLine,
+            rhymeType = rhymeType,
+            rhymeScheme = rhymeScheme,
+            currentSection = currentSection
+        )
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * Streams tokens for [modelId]. If the provider rejects the model ID itself (HTTP 404 before any
+     * token), retries once with [fallbackModelFor] and reports it through [onModelFallback].
+     */
+    private fun streamCloudRawTokensWithFallback(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        prompt: String,
+        onModelFallback: ((AIModel) -> Unit)?
+    ): Flow<String> = flow {
+        var emitted = false
+        val fallback = fallbackModelFor(provider)
+        try {
+            streamCloudRawTokens(provider, apiKey, modelId, prompt).collect {
+                emitted = true
+                emit(it)
+            }
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            val rejectedModel = error is ProviderHttpException && error.statusCode == 404
+            if (!rejectedModel || emitted || fallback.id == modelId) {
+                throw userFacingProviderException(error)
+            }
+            onModelFallback?.invoke(fallback)
+            try {
+                streamCloudRawTokens(provider, apiKey, fallback.id, prompt).collect { emit(it) }
+            } catch (retryError: Throwable) {
+                throw userFacingProviderException(retryError)
+            }
+        }
+    }
+
+    private fun streamCloudRawTokens(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        prompt: String
+    ): Flow<String> = flow {
+        when (provider) {
+            AIProvider.GEMINI -> {
+                streamGeminiHttpTokens(apiKey, modelId, prompt).collect { emit(it) }
+            }
+            AIProvider.OPENAI -> {
+                val payloads = httpPostStream(
+                    url = "https://api.openai.com/v1/chat/completions",
+                    headers = mapOf(
+                        "Authorization" to "Bearer $apiKey",
+                        "Content-Type" to "application/json",
+                        "Accept" to "text/event-stream"
+                    ),
+                    body = buildOpenAIChatRequestBody(
+                        modelId = modelId,
+                        prompt = prompt,
+                        temperature = 0.8,
+                        stream = true
+                    ).toString()
+                )
+                payloads.mapNotNull(::parseOpenAIStreamToken).collect { emit(it) }
+            }
+            AIProvider.CLAUDE -> {
+                val payloads = httpPostStream(
+                    url = "https://api.anthropic.com/v1/messages",
+                    headers = mapOf(
+                        "x-api-key" to apiKey,
+                        "anthropic-version" to "2023-06-01",
+                        "Content-Type" to "application/json",
+                        "Accept" to "text/event-stream"
+                    ),
+                    body = buildClaudeMessagesRequestBody(
+                        modelId = modelId,
+                        prompt = prompt,
+                        stream = true,
+                        maxTokens = OPENUI_MAX_OUTPUT_TOKENS
+                    ).toString()
+                )
+                payloads.mapNotNull(::parseClaudeStreamToken).collect { emit(it) }
+            }
+            AIProvider.LOCAL -> error("unreachable")
+        }
+    }
+
+    internal suspend fun FlowCollector<OpenUIStreamUpdate>.emitOpenUIFromTokens(
+        tokens: Flow<String>,
+        constraint: SuggestionRhymeConstraint? = null,
+        targetRhymeLine: String? = constraint?.targetLine,
+        rhymeType: RhymeType = constraint?.rhymeType ?: RhymeType.PERFECT,
+        rhymeScheme: String = "AABB",
+        currentSection: SongSection = SongSection.UNKNOWN
+    ) {
+        val rawBuffer = StringBuilder()
+        val streamingParser = OpenUIStreamingParser()
+        val filter = constraint?.lineFilter
+        val seenKeys = mutableSetOf<String>()
+        val verifiedMap = LinkedHashMap<String, SuggestedLine>()
+        var acceptedCount = 0
+        // Must be at least the count buildOpenUIPrompt requests (2x when a constraint is active),
+        // otherwise verified lines are dropped and their RhymeGroups get pruned from the tree.
+        val maxVerified = SUGGESTION_COUNT * 2
+
+        fun evaluateCandidate(rawCandidate: String) {
+            if (verifiedMap.size >= maxVerified) return
+            val cleaned = cleanLocalSuggestionLine(rawCandidate) ?: return
+            val key = normalizeSuggestionKey(cleaned)
+            if (key.isEmpty() || !seenKeys.add(key)) return
+            acceptedCount++
+            val tier = filter?.tier(cleaned) ?: 0
+            if (filter != null && tier == 0) return
+            val isHook = constraint != null && isHookRepeat(cleaned, constraint)
+            verifiedMap[cleaned.lowercase()] = SuggestedLine(cleaned, tier, isHook)
+        }
+
+        fun buildUpdate(isComplete: Boolean): OpenUIStreamUpdate {
+            val rawText = rawBuffer.toString()
+            val parsed = streamingParser.set(rawText, isComplete = isComplete)
+            parsed.extractedSuggestions.forEach(::evaluateCandidate)
+
+            // Fallback if model streamed plain lines instead of OpenUI statements
+            if (parsed.meta.statementCount == 0 && rawText.contains('\n')) {
+                val lines = if (isComplete) rawText.lines() else rawText.lines().dropLast(1)
+                lines.forEach(::evaluateCandidate)
+            } else if (isComplete && parsed.meta.statementCount == 0 && rawText.isNotBlank()) {
+                rawText.lines().forEach(::evaluateCandidate)
+            }
+
+            val suggestionsList = verifiedMap.values.toList()
+            val effectiveRoot = when {
+                parsed.root != null && filter != null -> filterOpenUITreeSuggestions(parsed.root, verifiedMap.keys)
+                parsed.root != null -> parsed.root
+                suggestionsList.isNotEmpty() -> OpenUILibrary.synthesizeTree(
+                    suggestions = suggestionsList,
+                    targetLine = targetRhymeLine,
+                    rhymeTypeLabel = rhymeType.displayName,
+                    schemeLabel = rhymeScheme,
+                    sectionLabel = currentSection.displayName
+                )
+                else -> null
+            }
+
+            return OpenUIStreamUpdate(
+                rawOpenUICode = rawText,
+                parseResult = parsed.copy(root = effectiveRoot),
+                suggestions = suggestionsList
+            )
+        }
+
+        tokens.collect { chunk ->
+            if (chunk.isNotEmpty()) {
+                rawBuffer.append(chunk)
+                emit(buildUpdate(isComplete = false))
+            }
+        }
+
+        if (rawBuffer.isNotEmpty()) {
+            val finalUpdate = buildUpdate(isComplete = true)
+            if (filter != null && acceptedCount > 0 && finalUpdate.suggestions.isEmpty()) {
+                throw NoMatchingRhymesException(filter.rhymeType)
+            }
+            emit(finalUpdate)
+        }
+    }
+
+    private fun filterOpenUITreeSuggestions(
+        node: OpenUIElementNode,
+        allowedNormalizedTexts: Set<String>
+    ): OpenUIElementNode? {
+        if (node.typeName == "SuggestionLine") {
+            val text = node.stringProp("text")?.trim()?.lowercase().orEmpty()
+            val cleaned = cleanLocalSuggestionLine(text)?.lowercase().orEmpty()
+            return if (text in allowedNormalizedTexts || cleaned in allowedNormalizedTexts) node else null
+        }
+        val updatedProps = LinkedHashMap<String, OpenUIValue>()
+        for ((k, v) in node.props) {
+            updatedProps[k] = when (v) {
+                is OpenUIValue.Arr -> OpenUIValue.Arr(
+                    v.items.mapNotNull { item ->
+                        if (item is OpenUIValue.Element) {
+                            filterOpenUITreeSuggestions(item.node, allowedNormalizedTexts)?.let(OpenUIValue::Element)
+                        } else {
+                            item
+                        }
+                    }
+                )
+                is OpenUIValue.Element -> {
+                    filterOpenUITreeSuggestions(v.node, allowedNormalizedTexts)?.let(OpenUIValue::Element)
+                        ?: OpenUIValue.NullVal
+                }
+                else -> v
+            }
+        }
+        if (node.typeName == "RhymeGroup") {
+            val remaining = (updatedProps["suggestions"] as? OpenUIValue.Arr)?.items.orEmpty()
+            if (remaining.isEmpty() && allowedNormalizedTexts.isNotEmpty()) {
+                return null
+            }
+        }
+        return node.copy(props = updatedProps)
     }
 
     internal fun buildOpenAIChatRequestBody(
@@ -609,10 +977,11 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
     internal fun buildClaudeMessagesRequestBody(
         modelId: String,
         prompt: String,
-        stream: Boolean = false
+        stream: Boolean = false,
+        maxTokens: Int = 1024
     ) = buildJsonObject {
         put("model", modelId)
-        put("max_tokens", 1024)
+        put("max_tokens", maxTokens)
         if (stream) {
             put("stream", true)
         }
@@ -638,31 +1007,80 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             obj["delta"]?.jsonObject?.get("text")?.jsonPrimitive?.content
         }.getOrNull()
 
-    private fun geminiModel(
+    internal fun buildGeminiRequestBody(
+        prompt: String,
+        responseMimeType: String? = null
+    ) = buildJsonObject {
+        put("contents", buildJsonArray {
+            add(buildJsonObject {
+                put("parts", buildJsonArray {
+                    add(buildJsonObject {
+                        put("text", prompt)
+                    })
+                })
+            })
+        })
+        if (responseMimeType != null) {
+            put("generationConfig", buildJsonObject {
+                put("responseMimeType", responseMimeType)
+            })
+        }
+    }
+
+    internal fun parseGeminiCandidateText(payload: String): String? =
+        runCatching {
+            val root = json.parseToJsonElement(payload).jsonObject
+            val parts = root["candidates"]?.jsonArray
+                ?.firstOrNull()?.jsonObject
+                ?.get("content")?.jsonObject
+                ?.get("parts")?.jsonArray
+                ?: return@runCatching null
+            val sb = StringBuilder()
+            for (partEl in parts) {
+                val partObj = partEl.jsonObject
+                val isThought = partObj["thought"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() == true
+                if (isThought) continue
+                val text = partObj["text"]?.jsonPrimitive?.content
+                if (!text.isNullOrEmpty()) {
+                    sb.append(text)
+                }
+            }
+            sb.toString().takeIf { it.isNotEmpty() }
+        }.getOrNull()
+
+    private fun streamGeminiHttpTokens(
         apiKey: String,
         modelId: String,
-        mimeType: String? = null
-    ): GenerativeModel =
-        mimeType?.let { responseType ->
-            GenerativeModel(
-                modelName = modelId,
-                apiKey = apiKey,
-                generationConfig = generationConfig {
-                    responseMimeType = responseType
-                }
-            )
-        } ?: GenerativeModel(modelName = modelId, apiKey = apiKey)
+        prompt: String
+    ): Flow<String> {
+        val payloads = httpPostStream(
+            url = "https://generativelanguage.googleapis.com/v1beta/models/$modelId:streamGenerateContent?alt=sse",
+            headers = mapOf(
+                "x-goog-api-key" to apiKey,
+                "Content-Type" to "application/json",
+                "Accept" to "text/event-stream"
+            ),
+            body = buildGeminiRequestBody(prompt = prompt).toString()
+        )
+        return payloads.mapNotNull(::parseGeminiCandidateText)
+    }
 
     private suspend fun generateGeminiText(
         apiKey: String,
         modelId: String,
         prompt: String,
         responseMimeType: String? = null
-    ): String? =
-        geminiModel(apiKey, modelId, responseMimeType)
-            .generateContent(prompt)
-            .text
-            ?.trim()
+    ): String? {
+        val responseText = httpPost(
+            url = "https://generativelanguage.googleapis.com/v1beta/models/$modelId:generateContent",
+            headers = mapOf(
+                "x-goog-api-key" to apiKey,
+                "Content-Type" to "application/json"
+            ),
+            body = buildGeminiRequestBody(prompt = prompt, responseMimeType = responseMimeType).toString()
+        )
+        return parseGeminiCandidateText(responseText)?.trim()
+    }
 
     internal suspend fun FlowCollector<SuggestedLine>.emitLinesFromTokens(
         tokens: Flow<String>,
@@ -804,7 +1222,7 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 // request URL or the API key into user-visible text. A drain failure
                 // must not mask the mapped status message either.
                 runCatching { connection.errorStream?.bufferedReader()?.use { it.readText() } }
-                throw RuntimeException(userFacingStatusMessage(code))
+                throw ProviderHttpException(code)
             }
 
             connection.inputStream.bufferedReader().use { reader ->

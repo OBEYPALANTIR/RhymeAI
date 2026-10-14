@@ -80,10 +80,34 @@ struct Writers_BlockTests {
         #expect(viewModel.cursorPosition == (inserted as NSString).length)
     }
 
+    @Test func geminiModelPickerStartsWithCurrentGeminiModels() {
+        let modelIDs = AIModel.models(for: .gemini).map(\.id)
+
+        #expect(modelIDs == [
+            "gemini-3.8-flash",
+            "gemini-4-argon",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite-preview",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite"
+        ])
+    }
+
     @Test func openAIModelPickerStartsWithCurrentGPT5Models() {
         let modelIDs = AIModel.models(for: .openai).map(\.id)
 
         #expect(modelIDs == [
+            "gpt-6-astra",
+            "gpt-6.1-sol",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-6-instant",
             "gpt-5.5",
             "gpt-5.5-pro",
             "gpt-5.4",
@@ -101,6 +125,11 @@ struct Writers_BlockTests {
         let modelIDs = AIModel.models(for: .claude).map(\.id)
 
         #expect(modelIDs == [
+            "claude-fable-5-1",
+            "claude-fable-5",
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
             "claude-opus-4-7",
             "claude-sonnet-4-6",
             "claude-opus-4-20250514",

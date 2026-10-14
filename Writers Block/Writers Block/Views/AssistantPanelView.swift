@@ -142,6 +142,9 @@ struct AssistantPanelView: View {
             .onChange(of: viewModel.suggestions.isEmpty) { _, isEmpty in
                 if !isEmpty { revealResults(scroll) }
             }
+            .onChange(of: viewModel.openUIParseResult?.root != nil) { _, hasRoot in
+                if hasRoot { revealResults(scroll) }
+            }
             .onChange(of: viewModel.errorMessage) { _, error in
                 if error != nil { revealResults(scroll) }
             }
@@ -438,7 +441,67 @@ struct AssistantPanelView: View {
             }
 
             // MARK: - Suggestions
-            if !viewModel.suggestions.isEmpty {
+            if viewModel.selectedProvider != .local {
+                let workspaceFallback = OpenUILibrary.synthesizeWorkspaceResult(
+                    providerName: viewModel.selectedProvider.displayName,
+                    modelName: viewModel.selectedModel.displayName,
+                    targetLine: rhymeContext.targetLine,
+                    targetSyllables: rhymeContext.targetLine.map { SyllableCounter.countText($0) },
+                    rhymeLetter: String(rhymeContext.currentSchemeLetter),
+                    rhymeTypeLabel: viewModel.rhymeType.shortName
+                )
+                let activeOpenUIResult: OpenUIParseResult = {
+                    if let parsed = viewModel.openUIParseResult, parsed.root != nil {
+                        return parsed
+                    }
+                    if !viewModel.suggestions.isEmpty {
+                        return OpenUILibrary.synthesizeFromSuggestions(
+                            lines: viewModel.suggestions.map(\.text),
+                            targetSyllables: rhymeContext.targetLine.map { SyllableCounter.countText($0) },
+                            rhymeLetter: String(rhymeContext.currentSchemeLetter),
+                            rhymeTypeLabel: viewModel.rhymeType.shortName
+                        )
+                    }
+                    return workspaceFallback.result
+                }()
+                let activeRawCode = viewModel.openUIRawCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? workspaceFallback.rawCode
+                    : viewModel.openUIRawCode
+                let verifiedByText = Dictionary(
+                    viewModel.suggestions.map {
+                        ($0.text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), $0)
+                    },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                OpenUIAssistantSectionView(
+                    parseResult: activeOpenUIResult,
+                    rawCode: activeRawCode,
+                    providerName: viewModel.selectedProvider.displayName,
+                    modelName: viewModel.selectedModel.displayName,
+                    availableModels: AIModel.models(for: viewModel.selectedProvider),
+                    onSelectModel: { model in
+                        viewModel.selectedModel = model
+                    },
+                    isStreaming: viewModel.isLoading,
+                    verifiedSuggestions: verifiedByText,
+                    highlightRhyme: viewModel.isHighlightEnabled,
+                    showProsody: viewModel.isStressPreviewEnabled,
+                    isKept: { text in
+                        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return viewModel.companion.alternates.contains(where: { $0.text == normalized })
+                    },
+                    onKeep: { text in
+                        viewModel.keepAlternate(text)
+                    },
+                    onUse: { text in
+                        viewModel.insertSuggestion(text)
+                        if !isInline { viewModel.showAssistantSheet = false }
+                    },
+                    onActionChipSelected: { directive in
+                        viewModel.getSuggestions(refinementDirective: directive)
+                    }
+                )
+            } else if !viewModel.suggestions.isEmpty {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                     Text("Suggestions")
                         .font(.subheadline.weight(.medium))

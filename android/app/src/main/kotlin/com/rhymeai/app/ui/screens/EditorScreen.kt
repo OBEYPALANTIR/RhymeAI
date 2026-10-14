@@ -587,6 +587,35 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             }
                             else -> {}
                         }
+                        if (!focusMode && viewModel.selectedProvider != com.rhymeai.app.service.AIProvider.LOCAL) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(colorScheme.primary.copy(alpha = 0.12f))
+                                    .border(
+                                        1.dp,
+                                        colorScheme.primary.copy(alpha = 0.32f),
+                                        CircleShape
+                                    )
+                                    .clickable {
+                                        showBottomSheet = true
+                                    }
+                                    .padding(
+                                        horizontal = DesignTokens.Spacing.sm,
+                                        vertical = DesignTokens.Spacing.xs
+                                    )
+                                    .testTag("editorOpenUIStatusPill")
+                            ) {
+                                Text(
+                                    text = "✦ OpenUI · ${viewModel.selectedModel.displayName}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 },
                 actions = {

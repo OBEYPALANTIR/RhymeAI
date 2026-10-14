@@ -318,6 +318,244 @@ struct AIService {
         }
     }
 
+    struct OpenUIStreamUpdate {
+        let rawCode: String
+        let parseResult: OpenUIParseResult
+        let suggestions: [SuggestedLine]
+    }
+
+    /// Streams progressive OpenUI Lang Generative UI updates when a cloud API provider is active.
+    func streamOpenUISuggestions(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        rhymeScheme: String,
+        currentLetter: String,
+        currentSection: SongSection = .unknown,
+        sectionOrdinal: Int = 1,
+        firstChorusLines: [String]? = nil,
+        complexity: RhymeComplexity,
+        useWholeSongContext: Bool,
+        refinementDirective: String? = nil
+    ) -> AsyncThrowingStream<OpenUIStreamUpdate, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard provider != .local else {
+                        throw AIServiceError.invalidResponse
+                    }
+                    guard !apiKey.isEmpty else {
+                        throw AIServiceError.noApiKey(provider: provider.displayName)
+                    }
+
+                    let prompt = buildOpenUIPrompt(
+                        theme: theme,
+                        lyrics: lyrics,
+                        targetRhymeLine: targetRhymeLine,
+                        rhymeType: rhymeType,
+                        rhymeScheme: rhymeScheme,
+                        currentLetter: currentLetter,
+                        currentSection: currentSection,
+                        sectionOrdinal: sectionOrdinal,
+                        firstChorusLines: firstChorusLines,
+                        complexity: complexity,
+                        useWholeSongContext: useWholeSongContext,
+                        refinementDirective: refinementDirective
+                    )
+
+                    let tokens = streamCloudTokens(
+                        provider: provider,
+                        apiKey: apiKey,
+                        modelId: modelId,
+                        prompt: prompt
+                    )
+
+                    let firstChorusEndWordSet: Set<String> = {
+                        guard currentSection == .chorus, sectionOrdinal >= 2,
+                              let lines = firstChorusLines else { return [] }
+                        return Set(lines.compactMap { line -> String? in
+                            let w = RhymeConstraint.lineEndWord(line)
+                            return w.isEmpty ? nil : w
+                        })
+                    }()
+
+                    try await emitOpenUIFromTokens(
+                        from: tokens,
+                        into: continuation,
+                        filter: RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType),
+                        rhymeType: rhymeType,
+                        rhymeScheme: rhymeScheme,
+                        currentLetter: currentLetter,
+                        currentSection: currentSection,
+                        targetRhymeLine: targetRhymeLine,
+                        firstChorusEndWordSet: firstChorusEndWordSet
+                    )
+                    continuation.finish()
+                } catch let error as URLError where error.code == .cancelled {
+                    continuation.finish(throwing: CancellationError())
+                } catch let error as URLError where error.code == .timedOut {
+                    continuation.finish(throwing: AIServiceError.requestTimedOut)
+                } catch is URLError {
+                    continuation.finish(throwing: AIServiceError.networkUnavailable)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func emitOpenUIFromTokens(
+        from tokens: AsyncThrowingStream<String, Error>,
+        into continuation: AsyncThrowingStream<OpenUIStreamUpdate, Error>.Continuation,
+        filter: RhymeLineFilter? = nil,
+        rhymeType: RhymeType = .perfect,
+        rhymeScheme: String = "AABB",
+        currentLetter: String = "A",
+        currentSection: SongSection = .unknown,
+        targetRhymeLine: String? = nil,
+        firstChorusEndWordSet: Set<String> = []
+    ) async throws {
+        var rawBuffer = ""
+        let streamingParser = OpenUIStreamingParser()
+        var seenKeys = Set<String>()
+        var orderedVerified: [SuggestedLine] = []
+        var verifiedByLower: [String: SuggestedLine] = [:]
+        var acceptedCount = 0
+
+        func evaluateCandidate(_ rawCandidate: String) {
+            guard orderedVerified.count < Self.suggestionCount else { return }
+            guard let cleaned = cleanSuggestionLine(rawCandidate) else { return }
+            let key = normalizeSuggestionKey(cleaned)
+            guard !key.isEmpty, seenKeys.insert(key).inserted else { return }
+            acceptedCount += 1
+            let tier = filter?.tier(of: cleaned) ?? 0
+            if filter != nil && tier == 0 { return }
+            let endWord = RhymeConstraint.lineEndWord(cleaned)
+            let isHookRepeat = !firstChorusEndWordSet.isEmpty && firstChorusEndWordSet.contains(endWord)
+            let line = SuggestedLine(text: cleaned, tier: tier, isHookRepeat: isHookRepeat)
+            orderedVerified.append(line)
+            verifiedByLower[cleaned.lowercased()] = line
+        }
+
+        func buildUpdate(isComplete: Bool) -> OpenUIStreamUpdate {
+            let parsed = OpenUIParser.parse(rawBuffer)
+            for payload in parsed.extractedSuggestions {
+                evaluateCandidate(payload.text)
+            }
+
+            if parsed.meta.totalStatements == 0 && rawBuffer.contains("\n") {
+                let rawLines = rawBuffer.components(separatedBy: "\n")
+                let linesToScan = isComplete ? rawLines : Array(rawLines.dropLast())
+                for line in linesToScan {
+                    evaluateCandidate(line)
+                }
+            } else if isComplete && parsed.meta.totalStatements == 0 && !rawBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                for line in rawBuffer.components(separatedBy: "\n") {
+                    evaluateCandidate(line)
+                }
+            }
+
+            let effectiveResult: OpenUIParseResult
+            if let root = parsed.root, filter != nil {
+                let allowedKeys = Set(verifiedByLower.keys)
+                let filteredRoot = filterOpenUITreeSuggestions(node: root, allowedNormalizedTexts: allowedKeys)
+                effectiveResult = OpenUIParseResult(
+                    root: filteredRoot,
+                    meta: parsed.meta,
+                    extractedSuggestions: parsed.extractedSuggestions
+                )
+            } else if parsed.root != nil {
+                effectiveResult = parsed
+            } else if !orderedVerified.isEmpty {
+                effectiveResult = OpenUILibrary.synthesizeTree(
+                    lines: orderedVerified.map(\.text),
+                    rhymeLetter: currentLetter,
+                    rhymeTypeLabel: rhymeType.shortName,
+                    sectionName: currentSection.displayName,
+                    targetSyllables: targetRhymeLine.map { SyllableCounter.countText($0) }
+                )
+            } else {
+                effectiveResult = parsed
+            }
+
+            return OpenUIStreamUpdate(
+                rawCode: rawBuffer,
+                parseResult: effectiveResult,
+                suggestions: orderedVerified
+            )
+        }
+
+        for try await chunk in tokens {
+            try Task.checkCancellation()
+            guard !chunk.isEmpty else { continue }
+            rawBuffer += chunk
+            _ = streamingParser.push(chunk)
+            continuation.yield(buildUpdate(isComplete: false))
+        }
+        try Task.checkCancellation()
+
+        if !rawBuffer.isEmpty {
+            let finalUpdate = buildUpdate(isComplete: true)
+            if filter != nil, acceptedCount > 0, finalUpdate.suggestions.isEmpty {
+                throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
+            }
+            continuation.yield(finalUpdate)
+        }
+    }
+
+    private func filterOpenUITreeSuggestions(
+        node: OpenUIElementNode,
+        allowedNormalizedTexts: Set<String>
+    ) -> OpenUIElementNode? {
+        if node.typeName == "SuggestionLine" {
+            let text = (node.stringProp("text") ?? node.stringProp("arg0") ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let cleaned = cleanSuggestionLine(text)?.lowercased() ?? ""
+            return (allowedNormalizedTexts.contains(text) || allowedNormalizedTexts.contains(cleaned)) ? node : nil
+        }
+
+        var updatedProps: [String: OpenUINodeValue] = [:]
+        for (k, v) in node.props {
+            switch v {
+            case .array(let items):
+                let filteredItems = items.compactMap { item -> OpenUINodeValue? in
+                    if case .element(let child) = item {
+                        return filterOpenUITreeSuggestions(node: child, allowedNormalizedTexts: allowedNormalizedTexts)
+                            .map { .element($0) }
+                    }
+                    return item
+                }
+                updatedProps[k] = .array(filteredItems)
+            case .element(let child):
+                if let kept = filterOpenUITreeSuggestions(node: child, allowedNormalizedTexts: allowedNormalizedTexts) {
+                    updatedProps[k] = .element(kept)
+                } else {
+                    updatedProps[k] = .null
+                }
+            default:
+                updatedProps[k] = v
+            }
+        }
+
+        if node.typeName == "RhymeGroup" {
+            let children = updatedProps["children"]?.asArray()
+                ?? updatedProps["suggestions"]?.asArray()
+                ?? updatedProps["arg1"]?.asArray()
+                ?? []
+            if children.isEmpty && !allowedNormalizedTexts.isEmpty {
+                return nil
+            }
+        }
+
+        return OpenUIElementNode(typeName: node.typeName, props: updatedProps, partial: node.partial)
+    }
+
     /// Local streaming rule: `tokens` is invoked once more for the retry pass.
     private func emitLocalLines(
         tokens makeTokens: () -> AsyncThrowingStream<String, Error>,
@@ -793,6 +1031,112 @@ struct AIService {
         Make sure the rhythm and meter match the style of the current lyrics\(rhymeAdherence).
 
         Respond with exactly \(requestCount) lines, one suggestion per line. No numbering, no bullets, no quotes, no markdown, no code fences, and no commentary — just the bare suggestion lines.
+        """
+        return prompt
+    }
+
+    func buildOpenUIPrompt(
+        theme: String,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        rhymeScheme: String,
+        currentLetter: String,
+        currentSection: SongSection = .unknown,
+        sectionOrdinal: Int = 1,
+        firstChorusLines: [String]? = nil,
+        complexity: RhymeComplexity,
+        useWholeSongContext: Bool,
+        refinementDirective: String? = nil
+    ) -> String {
+        let effectiveTheme = !theme.isEmpty ? theme : (useWholeSongContext
+            ? "Whole song context enabled; infer the theme from the full lyrics."
+            : "No specific theme provided")
+
+        let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
+        let lyricsContext = useWholeSongContext ? lyrics : (targetRhymeLine ?? "")
+        let constraintBlock = Self.rhymeConstraintBlock(
+            targetRhymeLine: targetRhymeLine,
+            rhymeType: rhymeType,
+            currentSection: currentSection,
+            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) },
+            complexity: complexity
+        )
+        let requestCount = constraintBlock == nil ? Self.suggestionCount : Self.suggestionCount * 2
+
+        var rhymeInstruction: String
+        if let target = targetRhymeLine {
+            rhymeInstruction = """
+            Crucially, every SuggestionLine MUST end with a **\(rhymeType.displayName)** to this specific line: "\(target)".
+            """
+        } else {
+            rhymeInstruction = """
+            Since this is a new rhyme sound ("\(currentLetter)"), each SuggestionLine should introduce a new end-rhyme that fits the meter and theme.
+            """
+        }
+        if let constraintBlock {
+            rhymeInstruction += "\n" + constraintBlock
+        }
+
+        let sectionInstanceHint = Self.sectionInstanceSentence(
+            section: currentSection,
+            ordinal: sectionOrdinal,
+            firstChorusLines: permittedChorusLines
+        )
+        let sectionLabelHint = useWholeSongContext ? Self.sectionLabelDirective(
+            Self.explicitSectionLabelForSection(
+                in: lyrics,
+                section: currentSection,
+                ordinal: sectionOrdinal
+            )
+        ) : nil
+
+        let songContextInstruction = useWholeSongContext
+            ? "Analyze the whole song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary. Make each suggestion feel connected to the entire song while still fitting the immediate target line and rhyme scheme."
+            : "Prioritize the immediate writing context, current stanza, target line, rhyme scheme, and provided theme/context."
+
+        let targetSyllables = targetRhymeLine.map { SyllableCounter.countText($0) }
+        let openUISpec = OpenUILibrary.generateSystemPrompt(
+            requestCount: requestCount,
+            rhymeScheme: rhymeScheme,
+            currentLetter: currentLetter,
+            currentSectionName: currentSection.displayName,
+            rhymeTypeLabel: rhymeType.shortName,
+            targetSyllables: targetSyllables
+        )
+
+        var prompt = """
+        You are an expert songwriter and lyricist.
+        \(openUISpec)
+
+        ### Songwriting Context
+        Theme/context: "\(effectiveTheme)".
+        Current lyrics:
+        \"""
+        \(lyricsContext)
+        \"""
+
+        The current stanza follows a "\(rhymeScheme)" rhyme scheme, and the next line corresponds to the letter "\(currentLetter)".
+        Current song section: \(currentSection.displayName).
+        \(currentSection.promptHint)
+        """
+        if let sectionLabelHint {
+            prompt += "\n" + sectionLabelHint
+        }
+        if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
+            prompt += "\n" + sectionInstanceHint
+        }
+        if let directive = refinementDirective?.trimmingCharacters(in: .whitespacesAndNewlines), !directive.isEmpty {
+            prompt += "\nRefinement focus requested by writer: \"\(directive)\". Prioritize this creative direction across the RhymeGroup sections."
+        }
+        prompt += """
+
+        \(rhymeInstruction)
+        \(songContextInstruction)
+
+        Complexity level: \(complexity.label). \(complexity.promptHint)
+
+        Respond ONLY with valid OpenUI Lang statements starting with `root = Stack([...])` containing \(requestCount) total `SuggestionLine` nodes grouped across `RhymeGroup` components.
         """
         return prompt
     }
@@ -2573,11 +2917,17 @@ struct AIService {
         }
 
         guard let content = candidate["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]],
-              let text = parts.first?["text"] as? String else {
+              let parts = content["parts"] as? [[String: Any]] else {
             throw AIServiceError.decodingError
         }
-        return text
+        let nonThoughtTexts = parts.compactMap { part -> String? in
+            if part["thought"] as? Bool == true { return nil }
+            return part["text"] as? String
+        }
+        guard !nonThoughtTexts.isEmpty else {
+            throw AIServiceError.decodingError
+        }
+        return nonThoughtTexts.joined()
     }
 
     // MARK: - Parsing

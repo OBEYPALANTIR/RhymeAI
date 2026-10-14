@@ -35,6 +35,7 @@ import com.rhymeai.app.service.LocalModelService
 import com.rhymeai.app.service.LocalModelOperationGate
 import com.rhymeai.app.service.SyntheticGenerationCapture
 import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.util.OpenUIParseResult
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.EditHistory
 import com.rhymeai.app.util.RhymeMatches
@@ -184,6 +185,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // UI state
     var suggestions by mutableStateOf<List<SuggestedLine>>(emptyList())
+    var openUIParseResult by mutableStateOf<OpenUIParseResult?>(null)
+    var openUIRawCode by mutableStateOf("")
+    /** Set when the selected model ID was rejected and the request was retried on a fallback model. */
+    var openUIModelNotice by mutableStateOf<String?>(null)
     var suggestionInsertion by mutableStateOf<SuggestionInsertion?>(null)
         private set
     private var suggestionInsertionRevision = 0L
@@ -573,10 +578,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingCloudAIContext = null
     }
 
+    private fun clearSuggestionState() {
+        suggestions = emptyList()
+        openUIParseResult = null
+        openUIRawCode = ""
+    }
+
     private fun cancelEditorAIWork() {
         cancelCloudAISharing()
         cancelSuggestions()
-        suggestions = emptyList()
+        clearSuggestionState()
         errorMessage = null
         dismissRewrite()
         synonymsRevision++
@@ -980,13 +991,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         localModelService.captureNextSyntheticRequestForTesting(capture)
     }
 
-    fun getSuggestions() {
+    fun getSuggestions(refinementDirective: String? = null) {
         if (lyrics.isEmpty()) return
         if (selectedProvider == AIProvider.LOCAL && !localReady) {
             errorMessage = if (localModelLoading) "Wait for your local model to finish loading." else "Choose a local model in Settings to get suggestions."
             return
         }
-        if (!authorizeCloudAI("suggestions", ::getSuggestions)) return
+        if (!authorizeCloudAI("suggestions") { getSuggestions(refinementDirective) }) return
         val context = computeRhymeContext()
         cancelSuggestions()
         val revision = suggestionsRevision
@@ -1004,7 +1015,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val cursorLine = if (provider == AIProvider.LOCAL || wholeSong) {
             NextLinePlacement(lyrics, cursorPosition).cursorLineIndex
         } else null
-        suggestions = emptyList()
+        clearSuggestionState()
         errorMessage = null
         isLoading = true
         suggestionsJob = viewModelScope.launch {
@@ -1012,14 +1023,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val key = resolveApiKey(provider)
                 if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@launch
                 var emittedSuggestion = false
-                aiService.streamSuggestions(
-                    provider, key, modelId, requestTheme, requestLyrics, context.targetLine,
-                    requestRhymeType, requestScheme, context.currentLetter, context.currentSection,
-                    requestComplexity, wholeSong, sectionRef, requestLyrics, cursorLine
-                ).collect { line ->
-                    if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@collect
-                    emittedSuggestion = true
-                    suggestions = suggestions + line
+                if (provider == AIProvider.LOCAL) {
+                    aiService.streamSuggestions(
+                        provider, key, modelId, requestTheme, requestLyrics, context.targetLine,
+                        requestRhymeType, requestScheme, context.currentLetter, context.currentSection,
+                        requestComplexity, wholeSong, sectionRef, requestLyrics, cursorLine
+                    ).collect { line ->
+                        if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@collect
+                        emittedSuggestion = true
+                        suggestions = suggestions + line
+                    }
+                } else {
+                    openUIModelNotice = null
+                    val requestedModelName = selectedModel.displayName
+                    aiService.streamOpenUISuggestions(
+                        provider = provider,
+                        apiKey = key,
+                        modelId = modelId,
+                        theme = requestTheme,
+                        lyrics = requestLyrics,
+                        targetRhymeLine = context.targetLine,
+                        rhymeType = requestRhymeType,
+                        rhymeScheme = requestScheme,
+                        currentLetter = context.currentLetter,
+                        currentSection = context.currentSection,
+                        complexity = requestComplexity,
+                        useWholeSongContext = wholeSong,
+                        sectionRef = sectionRef,
+                        fullLyrics = requestLyrics,
+                        refinementDirective = refinementDirective,
+                        onModelFallback = { fallback ->
+                            viewModelScope.launch {
+                                openUIModelNotice = "$requestedModelName isn't available for this API key. Used ${fallback.displayName} instead."
+                            }
+                        }
+                    ).collect { update ->
+                        if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@collect
+                        openUIParseResult = update.parseResult
+                        openUIRawCode = update.rawOpenUICode
+                        suggestions = update.suggestions
+                        if (update.suggestions.isNotEmpty() || update.parseResult.root != null) {
+                            emittedSuggestion = true
+                        }
+                    }
                 }
                 if (revision == suggestionsRevision && isCurrentAIContext(requestContext) && !emittedSuggestion) {
                     errorMessage = "AI did not return suggestions. Try again."
@@ -1177,7 +1223,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         theme = ""
         currentProjectId = null
         restoreEditorPosition()
-        suggestions = emptyList()
+        clearSuggestionState()
         isSyllableColoringEnabled = true
         isRhymeHighlightEnabled = true
         saveStatus = SaveStatus.SAVED
@@ -1399,7 +1445,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             range = TextRange(insertion.start, insertion.end),
             lyrics = insertion.text
         )
-        suggestions = emptyList()
+        clearSuggestionState()
         triggerAutoSave()
     }
 
@@ -1422,7 +1468,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 selection = TextRange(insertion.cursor)
             )
         )
-        suggestions = emptyList()
+        clearSuggestionState()
         triggerAutoSave()
     }
 
@@ -1439,7 +1485,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     currentProjectId = null
                     projects = committed
                     restoreEditorPosition()
-                    suggestions = emptyList()
+                    clearSuggestionState()
                     showProjectsDialog = false
                     showStartMenu = false
                     resetLyricsHistory()
@@ -1463,7 +1509,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     theme = project.theme
                     currentProjectId = project.id
                     restoreEditorPosition()
-                    suggestions = emptyList()
+                    clearSuggestionState()
                     showProjectsDialog = false
                     showStartMenu = false
                     resetLyricsHistory()
@@ -1652,7 +1698,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         theme = ""
         currentProjectId = null
         restoreEditorPosition()
-        suggestions = emptyList()
+        clearSuggestionState()
         errorMessage = null
         saveStatus = SaveStatus.IDLE
         resetLyricsHistory()
@@ -1673,7 +1719,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             theme = project.theme
             currentProjectId = project.id
             restoreEditorPosition()
-            suggestions = emptyList()
+            clearSuggestionState()
             showProjectsDialog = false
             showStartMenu = false
             resetLyricsHistory()
@@ -1961,7 +2007,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         dismissRewrite()
         dismissInspector()
         lyricsFieldValue = state.withValidRanges()
-        suggestions = emptyList()
+        clearSuggestionState()
         updateLyricsHistoryAvailability()
         triggerAutoSave()
     }

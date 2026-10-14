@@ -173,7 +173,7 @@ final class EditorViewModel: ObservableObject {
             // The theme field stays editable while a request runs, so a theme edit
             // drops in-flight AI work and its results, as Android onThemeChanged does.
             cancelEditorAIWork()
-            suggestions = []
+            clearSuggestionState()
             errorMessage = nil
             triggerAutoSave()
         }
@@ -208,8 +208,16 @@ final class EditorViewModel: ObservableObject {
     // MARK: - AI State
 
     @Published var suggestions: [SuggestedLine] = []
+    @Published var openUIParseResult: OpenUIParseResult?
+    @Published var openUIRawCode: String = ""
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+
+    private func clearSuggestionState() {
+        suggestions = []
+        openUIParseResult = nil
+        openUIRawCode = ""
+    }
 
     // MARK: - Rhyme Settings
 
@@ -742,15 +750,15 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - AI Suggestions
 
-    func getSuggestions() {
+    func getSuggestions(refinementDirective: String? = nil) {
         guard !lyrics.isEmpty else { return }
         guard authorizeCloudAI(purpose: "suggestions", action: { [weak self] in
-            self?.startSuggestions()
+            self?.startSuggestions(refinementDirective: refinementDirective)
         }) else { return }
-        startSuggestions()
+        startSuggestions(refinementDirective: refinementDirective)
     }
 
-    private func startSuggestions() {
+    private func startSuggestions(refinementDirective: String? = nil) {
         let input = makeSuggestionInput()
         suggestionsTask?.cancel()
         let requestID = UUID()
@@ -759,7 +767,54 @@ final class EditorViewModel: ObservableObject {
         // The first autosave can assign a project ID while generation is in flight.
         isLoading = true
         errorMessage = nil
-        suggestions = []
+        clearSuggestionState()
+
+        if input.provider != .local {
+            let openUIStream = aiService.streamOpenUISuggestions(
+                provider: input.provider,
+                apiKey: input.apiKey,
+                modelId: input.modelID,
+                theme: input.theme,
+                lyrics: input.lyrics,
+                targetRhymeLine: input.targetRhymeLine,
+                rhymeType: input.rhymeType,
+                rhymeScheme: input.rhymeScheme,
+                currentLetter: input.currentLetter,
+                currentSection: input.currentSection,
+                sectionOrdinal: input.sectionOrdinal,
+                firstChorusLines: input.firstChorusLines,
+                complexity: input.complexity,
+                useWholeSongContext: input.useWholeSongContext,
+                refinementDirective: refinementDirective
+            )
+
+            suggestionsTask = Task { @MainActor in
+                defer {
+                    if self.suggestionsRequestID == requestID { self.isLoading = false }
+                }
+                do {
+                    var emittedSuggestion = false
+                    for try await update in openUIStream {
+                        guard !Task.isCancelled, self.suggestionsRequestID == requestID else { return }
+                        self.openUIParseResult = update.parseResult
+                        self.openUIRawCode = update.rawCode
+                        self.suggestions = update.suggestions
+                        if !update.suggestions.isEmpty || update.parseResult.root != nil {
+                            emittedSuggestion = true
+                        }
+                    }
+                    if !emittedSuggestion, !Task.isCancelled, self.suggestionsRequestID == requestID {
+                        self.errorMessage = "AI did not return suggestions. Try again."
+                    }
+                } catch is CancellationError {
+                    // expected when cancelSuggestions() is invoked
+                } catch {
+                    guard self.suggestionsRequestID == requestID else { return }
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+            return
+        }
 
         let stream = aiService.streamSuggestions(
             provider: input.provider,
@@ -1195,14 +1250,14 @@ final class EditorViewModel: ObservableObject {
         insertedLineRange = insertion.insertedRange
         insertionFeedbackText = lyrics
         insertionFeedbackID = UUID()
-        suggestions = []
+        clearSuggestionState()
         triggerAutoSave()
     }
 
     func insertSection(_ label: String) {
         let insertion = SectionMap.insertHeader(label, in: lyrics, cursor: cursorPosition)
         applyAtomicLyricsEdit(text: insertion.text, cursorPosition: insertion.cursor)
-        suggestions = []
+        clearSuggestionState()
         triggerAutoSave()
     }
 
@@ -1266,7 +1321,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = state.text
         cursorPosition = min(state.cursorPosition, state.text.utf16.count)
         selectedRange = clampedSelection(state.selectedRange, text: state.text)
-        suggestions = []
+        clearSuggestionState()
         updateLyricsHistoryAvailability()
         triggerAutoSave()
     }
@@ -1310,7 +1365,7 @@ final class EditorViewModel: ObservableObject {
         cursorPosition = 0
         currentProjectId = nil
         resetCompanionPosition()
-        suggestions = []
+        clearSuggestionState()
         errorMessage = nil
         saveStatus = .idle
         showWelcome = false
@@ -1346,7 +1401,7 @@ final class EditorViewModel: ObservableObject {
         cursorPosition = 0
         currentProjectId = project.id
         restoreCompanionPosition()
-        suggestions = []
+        clearSuggestionState()
         errorMessage = nil
         saveStatus = .idle
         showWelcome = false
@@ -1574,7 +1629,7 @@ final class EditorViewModel: ObservableObject {
         cursorPosition = 0
         currentProjectId = nil
         resetCompanionPosition()
-        suggestions = []
+        clearSuggestionState()
         errorMessage = nil
         saveStatus = .idle
         resetLyricsHistory()
@@ -1642,7 +1697,7 @@ final class EditorViewModel: ObservableObject {
         theme = project.theme
         cursorPosition = project.lyrics.utf16.count
         currentProjectId = project.id
-        suggestions = []
+        clearSuggestionState()
         errorMessage = nil
         saveStatus = .saved
         showWelcome = false
@@ -1670,7 +1725,7 @@ final class EditorViewModel: ObservableObject {
         cursorPosition = project.lyrics.utf16.count
         currentProjectId = project.id
         resetCompanionPosition()
-        suggestions = []
+        clearSuggestionState()
         errorMessage = nil
         saveStatus = .saved
         showWelcome = false
@@ -1693,7 +1748,7 @@ final class EditorViewModel: ObservableObject {
         cursorPosition = 0
         currentProjectId = nil
         resetCompanionPosition()
-        suggestions = []
+        clearSuggestionState()
         saveStatus = .idle
         showWelcome = false
         showTemplatesSheet = false
@@ -2572,7 +2627,7 @@ final class EditorViewModel: ObservableObject {
                 theme = stored.0.theme
                 selectedRange = NSRange(location: 0, length: 0)
                 cursorPosition = 0
-                suggestions = []
+                clearSuggestionState()
                 errorMessage = nil
                 saveStatus = .saved
                 resetLyricsHistory()

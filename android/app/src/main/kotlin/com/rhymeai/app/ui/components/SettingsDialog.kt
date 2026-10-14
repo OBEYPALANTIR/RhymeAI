@@ -312,6 +312,26 @@ internal fun SettingsDialog(
     var isClosing by remember { mutableStateOf(false) }
     fun closePage() {
         if (isClosing) return
+        val hasPendingKeyEdits = geminiKey.isNotBlank() || openaiKey.isNotBlank() || claudeKey.isNotBlank() || keysToRemove.isNotEmpty()
+        val hasPendingProviderOrModel = selectedProvider != currentProvider || selectedModel != currentModel
+        if (!saved && (hasPendingKeyEdits || hasPendingProviderOrModel)) {
+            val keyUpdates = buildMap {
+                if (geminiKey.isNotBlank()) put(AIProvider.GEMINI, geminiKey.trim())
+                if (openaiKey.isNotBlank()) put(AIProvider.OPENAI, openaiKey.trim())
+                if (claudeKey.isNotBlank()) put(AIProvider.CLAUDE, claudeKey.trim())
+                keysToRemove.forEach { put(it, "") }
+            }
+            val submittedProvider = selectedProvider
+            val submittedModel = if (submittedProvider == AIProvider.LOCAL) {
+                AIModel.LOCAL_MODEL
+            } else {
+                selectedModel.takeIf { it.provider == submittedProvider }
+                    ?: AIModel.modelsForProvider(submittedProvider).first()
+            }
+            coroutineScope.launch {
+                runCatching { onApplyAISettings(submittedProvider, submittedModel, keyUpdates) }
+            }
+        }
         isClosing = true
         pageTransition.targetState = false
     }
@@ -463,25 +483,6 @@ internal fun SettingsDialog(
                 ) {
                 Column(Modifier.fillMaxWidth()) {
                 Spacer(Modifier.height(DesignTokens.Spacing.sm))
-                if (selectedProvider != AIProvider.LOCAL) {
-                    Text("Sharing with ${selectedProvider.displayName}", fontWeight = FontWeight.Medium, color = colorScheme.onSurface)
-                    Text(
-                        "Suggestions send your target line, theme and rhyme settings. Rewrites send the selected passage. Synonyms send the selected word and its current line. Whole Song Context also sends the full lyric for suggestions and rewrites. API keys are stored encrypted on this device and sent to the selected provider for authentication. You can revoke sharing below.",
-                        color = colorScheme.onSurfaceVariant,
-                        fontSize = DesignTokens.Typography.caption
-                    )
-                    com.rhymeai.app.CloudAISharingScope.entries.forEach { scope ->
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Allow ${scope.label.lowercase()}", modifier = Modifier.weight(1f), color = colorScheme.onSurface)
-                            Switch(
-                                checked = hasCloudAISharingConsent(selectedProvider, scope),
-                                onCheckedChange = { onCloudAISharingConsentChange(selectedProvider, scope, it) },
-                                modifier = Modifier.semantics { contentDescription = "Allow ${scope.label.lowercase()} with ${selectedProvider.displayName}" }
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(DesignTokens.Spacing.md))
-                }
                 Text("AI Provider", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
 
@@ -861,6 +862,7 @@ internal fun SettingsDialog(
                                         AIProvider.GEMINI -> geminiKey = newKey
                                         AIProvider.OPENAI -> openaiKey = newKey
                                         AIProvider.CLAUDE -> claudeKey = newKey
+                                        AIProvider.LOCAL -> {}
                                     }
                                     keysToRemove = keysToRemove - providerForContent
                                     saved = false
@@ -953,6 +955,67 @@ internal fun SettingsDialog(
                                             }
                                         )
                                     }
+                                }
+                            }
+
+                            Spacer(Modifier.height(DesignTokens.Spacing.md))
+
+                            // OpenUI Generative UI Studio badge card
+                            val isKeyReady = providerHasSavedKey || keyForContent.isNotBlank()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        if (isKeyReady) colorScheme.tertiaryContainer else colorScheme.surfaceContainerLow,
+                                        RoundedCornerShape(DesignTokens.Radius.lg)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isKeyReady) colorScheme.tertiary else colorScheme.outlineVariant,
+                                        RoundedCornerShape(DesignTokens.Radius.lg)
+                                    )
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = if (isKeyReady) colorScheme.onTertiaryContainer else colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        if (isKeyReady) "OpenUI Generative UI Ready" else "OpenUI Generative UI Studio",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isKeyReady) colorScheme.onTertiaryContainer else colorScheme.onSurface
+                                    )
+                                    Text(
+                                        "Streams live openui-lang components (ProsodyMeter, RhymeGroup clusters, ActionChipBar) in the Assistant panel with ${displayedModel.displayName}.",
+                                        fontSize = 12.sp,
+                                        color = if (isKeyReady) colorScheme.onTertiaryContainer.copy(alpha = 0.85f) else subtleColor,
+                                        lineHeight = 16.sp
+                                    )
+                                }
+                            }
+
+                            Spacer(Modifier.height(DesignTokens.Spacing.lg))
+
+                            Text("Sharing with ${providerForContent.displayName}", fontWeight = FontWeight.Medium, color = colorScheme.onSurface)
+                            Text(
+                                "Suggestions send your target line, theme and rhyme settings. Rewrites send the selected passage. Synonyms send the selected word and its current line. Whole Song Context also sends the full lyric for suggestions and rewrites. API keys are stored encrypted on this device and sent to the selected provider for authentication. You can revoke sharing below.",
+                                color = colorScheme.onSurfaceVariant,
+                                fontSize = DesignTokens.Typography.caption
+                            )
+                            com.rhymeai.app.CloudAISharingScope.entries.forEach { scope ->
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Allow ${scope.label.lowercase()}", modifier = Modifier.weight(1f), color = colorScheme.onSurface)
+                                    Switch(
+                                        checked = hasCloudAISharingConsent(providerForContent, scope),
+                                        onCheckedChange = { onCloudAISharingConsentChange(providerForContent, scope, it) },
+                                        modifier = Modifier.semantics { contentDescription = "Allow ${scope.label.lowercase()} with ${providerForContent.displayName}" }
+                                    )
                                 }
                             }
                         }
