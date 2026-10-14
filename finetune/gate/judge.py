@@ -131,7 +131,7 @@ def codex_batch(directory, pairs, swapped, name):
         after = account_usage()
         write_json(directory / f"{name}.billing.json", {"before": before, "after": after})
         if proc.returncode:
-            raise RuntimeError(f"Independent judge failed: {directory / (name + '.stderr.log')}")
+            raise RuntimeError(f"Independent judge failed; see {events_path} and {directory / (name + '.stderr.log')}")
     billing = json.loads((directory / f"{name}.billing.json").read_text())
     if (billing["before"]["account_fingerprint"] != billing["after"]["account_fingerprint"]
             or billing["before"]["credits"] != billing["after"]["credits"]):
