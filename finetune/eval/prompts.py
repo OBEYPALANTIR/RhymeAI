@@ -61,7 +61,7 @@ SONG_SECTIONS = {
     ),
     "UNKNOWN": (
         "Unmarked section",
-        "Section direction: no verse, chorus, or bridge header was detected. Fit the immediate stanza and surrounding lyric context.",
+        "Section direction: follow any explicit section label that is provided; otherwise fit the immediate stanza and surrounding lyric context.",
     ),
 }
 
@@ -196,9 +196,6 @@ class SuggestionRhymeConstraint:
     chorus_end_words_ordered: tuple = ()
 
 
-_HEADER_LINE = re.compile(r"^\s*\[.+]\s*$")
-
-
 def _is_header_line(line: str) -> bool:
     """SectionMap.headerTitle(line) != null: a bracketed or bare section header."""
     trimmed = line.strip()
@@ -236,7 +233,7 @@ def first_chorus_lines(lyrics: str) -> List[str]:
         if idx >= len(lines):
             continue
         line = lines[idx]
-        if line.strip() and not _HEADER_LINE.match(line):
+        if line.strip() and not _is_header_line(line):
             result.append(line)
     return result
 
