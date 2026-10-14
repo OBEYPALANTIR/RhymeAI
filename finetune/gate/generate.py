@@ -103,7 +103,10 @@ def generate(out, model, path, seed_offset=0):
     target = out / f"binding-{model}.json"
     if target.exists() and json.loads(target.read_text()) != binding:
         raise ValueError("Refusing to mix runs with different source, sampler, prompts or model")
-    write_json(target, binding)
+    if not target.exists():
+        if any((out / f"{kind}-{model}.jsonl").exists() for kind in ("raw", "replay")):
+            raise ValueError("Existing captures have no original binding; refusing to reuse them")
+        write_json(target, binding)
     write_json(out / "sampler.json", SAMPLER)
     expected = len(json.loads((out / "prompts.json").read_text())) * 3
     replay = out / f"replay-{model}.jsonl"

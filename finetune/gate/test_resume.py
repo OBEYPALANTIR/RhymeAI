@@ -1,0 +1,78 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from .build import sha256, text_hash, write_json, write_jsonl
+from .generate import SAMPLER, generate, source_binding
+from .judge import JUDGE_MODEL, JUDGE_PROMPT, codex_batch
+
+
+def capture_fixture(out):
+    model = out / "unrelated.gguf"
+    model.write_bytes(b"not the GGUF that produced these captures")
+    write_json(out / "prompts.json", [{}])
+    binding = {"model_path": str(model.resolve()), "model_sha256": sha256(model),
+               "model_bytes": model.stat().st_size, "prompts_sha256": sha256(out / "prompts.json"),
+               "sampler": SAMPLER, "source": source_binding(), "sampler_seed_offset": 0}
+    return model, binding
+
+
+def judge_fixture(out):
+    pairs = [{"pair_id": "one", "inner": "Write a lyric", "left": "Copper birds settle slowly", "right": "Silver birds fly home"}]
+    prompt = ("Judge each independent pair below. Use only the supplied text and rubric. Do not use tools, "
+              "read files, or infer model identities. Return exactly one judgment for every pair_id in the schema.\n"
+              + json.dumps([{"pair_id": "one", "task": JUDGE_PROMPT % (pairs[0]["inner"], pairs[0]["left"], pairs[0]["right"])}], ensure_ascii=False))
+    binding = {"model": JUDGE_MODEL, "reasoning_effort": "low", "prompt_sha256": text_hash(prompt),
+               "subscription_auth": True, "incremental_api_cost_usd": 0.0}
+    write_json(out / "batch.result.json", {"judgments": [{"pair_id": "one", "winner": "L", "reason": "concrete"}]})
+    billing = {"account_fingerprint": "same-account", "credits": 0.0}
+    write_json(out / "batch.billing.json", {"before": billing, "after": billing})
+    write_jsonl(out / "batch.events.jsonl", [{"type": "turn.completed", "usage": {"input_tokens": 10}}])
+    write_json(out / "batch.exit.json", {"returncode": 0})
+    return pairs, binding
+
+
+class CaptureBindingTest(unittest.TestCase):
+    def test_orphaned_replay_or_raw_cannot_acquire_a_new_binding(self):
+        for name in ("replay-candidate.jsonl", "raw-candidate.jsonl"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                out = Path(directory)
+                model, _ = capture_fixture(out)
+                write_jsonl(out / name, [{}, {}, {}])
+                with patch("gate.generate.logic_guard", side_effect=AssertionError("Inference must not start")):
+                    with self.assertRaisesRegex(ValueError, "binding"):
+                        generate(out, "candidate", model)
+                self.assertFalse((out / "binding-candidate.json").exists())
+
+    def test_changed_binding_is_rejected_without_overwriting_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            model, binding = capture_fixture(out)
+            binding["model_sha256"] = "different-model"
+            write_json(out / "binding-candidate.json", binding)
+            write_jsonl(out / "replay-candidate.jsonl", [{}, {}, {}])
+            with self.assertRaises(ValueError):
+                generate(out, "candidate", model)
+            self.assertEqual(json.loads((out / "binding-candidate.json").read_text()), binding)
+
+    def test_identical_existing_binding_allows_completed_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            model, binding = capture_fixture(out)
+            write_json(out / "binding-candidate.json", binding)
+            write_jsonl(out / "replay-candidate.jsonl", [{}, {}, {}])
+            self.assertEqual(generate(out, "candidate", model), binding)
+
+    def test_orphaned_judge_result_cannot_acquire_a_new_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            pairs, _ = judge_fixture(out)
+            with self.assertRaisesRegex(ValueError, "binding"):
+                codex_batch(out, pairs, False, "batch")
+            self.assertFalse((out / "batch.binding.json").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

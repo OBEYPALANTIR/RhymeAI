@@ -112,7 +112,10 @@ def codex_batch(directory, pairs, swapped, name):
     binding_path = directory / f"{name}.binding.json"
     if binding_path.exists() and json.loads(binding_path.read_text()) != binding:
         raise ValueError("Judge resume binding mismatch")
-    write_json(binding_path, binding)
+    if not binding_path.exists():
+        if result_path.exists() or events_path.exists():
+            raise ValueError("Existing judge captures have no original binding")
+        write_json(binding_path, binding)
     if not result_path.exists():
         logic_guard()
         auth = subprocess.run(["codex", "login", "status"], capture_output=True, text=True, timeout=30)
