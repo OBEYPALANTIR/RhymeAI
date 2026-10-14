@@ -1,5 +1,9 @@
 # finetune/train/ — Phase 3 LoRA Training Runbook
 
+For the scripted round-2 E2B reproduction on a bounded Google Cloud Spot A100 or L4,
+see [the GCP training path](gcp/README.md). It runs the frozen notebook headlessly,
+caches the pinned weights/CUDA build, and verifies GCS downloads on external storage.
+
 End-to-end procedure for fine-tuning the on-device Gemma 4 models
 (E2B + E4B) on the verified Phase 2 dataset, on a **rented GPU box**
 (RunPod / Lambda; one A100 or one RTX 4090 is plenty), then exporting and
