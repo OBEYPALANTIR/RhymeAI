@@ -189,20 +189,30 @@ def make_dev_inputs(songs, expanded_words=False):
         synonym = next(r for r in rows if r["song_id"] == song["id"] and r["task"] == "synonyms")
         lyrics = templates[0]["inputs"]["lyrics"]
         seen = {synonym["inputs"]["word"].lower()}
-        selections = []
-        for line in song["lines"][:4]:
-            for match in re.finditer(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)*", line):
+        selections, endings = [], []
+        ending_seen = seen | {re.sub(r"[^a-z'\u2019]", "", word) for word in seen}
+        for index, line in enumerate(song["lines"]):
+            if line not in lyrics:
+                continue
+            matches = list(re.finditer(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)*", line))
+            for match in matches:
                 word = match.group()
-                if word.lower() in seen or word.lower() in FUNCTION_WORDS:
-                    continue
-                seen.add(word.lower())
                 position = lyrics.index(line) + match.start()
-                selections.append((word, line, len(lyrics[:position].encode("utf-16-le")) // 2))
+                selection = (word, line, len(lyrics[:position].encode("utf-16-le")) // 2)
+                # Android rejects HARDER_RHYME on any word that does not end its line (AIService.kt
+                # harderRhymeFitsContext), so that action only gets line-ending selections.
+                if match is matches[-1] and word.lower() not in ending_seen and word.lower() not in FUNCTION_WORDS:
+                    ending_seen.add(word.lower())
+                    endings.append(selection)
+                if index < 4 and word.lower() not in seen and word.lower() not in FUNCTION_WORDS:
+                    seen.add(word.lower())
+                    selections.append(selection)
+        for template in templates:
+            pool = endings if template["inputs"]["action"] == "HARDER_RHYME" else selections
+            for number, (word, line, position) in enumerate(pool[:4], 1):
+                rows.append(dict(template, id=f"{template['id']}-word-{number}",
+                                 inputs=dict(template["inputs"], selection=word, selection_start=position)))
         for number, (word, line, position) in enumerate(selections[:5], 1):
-            if number <= 4:
-                for template in templates:
-                    rows.append(dict(template, id=f"{template['id']}-word-{number}",
-                                     inputs=dict(template["inputs"], selection=word, selection_start=position)))
             rows.append(dict(synonym, id=f"{synonym['id']}-word-{number}",
                              inputs=dict(synonym["inputs"], word=word, line_context=line)))
     for row in rows:
