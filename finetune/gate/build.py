@@ -15,6 +15,8 @@ ARTIFACTS = Path.home() / ".agents/artifacts"
 SEEDS = (7000, 7001, 7002)
 LEVELS = ("Simple", "Moderate", "Complex")
 RHYMES = ("PERFECT", "NEAR", "SLANT", "NEW_SOUND")
+FROZEN_VERSION = "rhymeai-gate-v1"
+DEV_VERSION = "rhymeai-dev"
 
 
 def sha256(path):
@@ -82,7 +84,7 @@ def overlapping_lines(songs, pool):
     return sorted(hits)
 
 
-def audit_overlap(songs):
+def audit_overlap(songs, include_frozen=False):
     roots = [ARTIFACTS / "2026-10-07/rhymeai-teacher-data-v3",
              ARTIFACTS / "2026-10-08/rhymeai-colab-package-levels"]
     for root in roots:
@@ -96,6 +98,8 @@ def audit_overlap(songs):
         # Include Python string pools as well as contexts, outputs and packaged splits.
         paths.update(p for p in root.rglob("*") if p.suffix in (".jsonl", ".json", ".py") and p.is_file())
     paths.update([REPO / "finetune/data/seed_songs.py", REPO / "finetune/eval/cases.py"])
+    if include_frozen:
+        paths.add(HERE / "benchmark-songs.jsonl")
     results = []
     hits = set()
     for path in sorted(paths):
@@ -114,8 +118,11 @@ def audit_overlap(songs):
             time.sleep(1)
         hits.update(found)
         results.append({"path": str(path), "sha256": before, "overlaps": found})
-    return {"overlapping_lines": len(hits), "files": results, "v4_present": v4.exists(),
-            "normalization": "lowercase ASCII word tokens; apostrophes normalized; contiguous 8-grams within each decoded line"}
+    audit = {"overlapping_lines": len(hits), "files": results, "v4_present": v4.exists(),
+             "normalization": "lowercase ASCII word tokens; apostrophes normalized; contiguous 8-grams within each decoded line"}
+    if include_frozen:
+        audit["frozen_benchmark_sha256"] = sha256(HERE / "benchmark-songs.jsonl")
+    return audit
 
 
 def make_inputs(songs):
@@ -161,9 +168,50 @@ def make_inputs(songs):
     return rows
 
 
+def require_mode(out, version):
+    manifest = out / "benchmark.json"
+    if manifest.exists():
+        if json.loads(manifest.read_text()).get("version") != version:
+            raise ValueError("Cannot mix frozen-gate and DEV artifacts; use a separate output directory")
+    elif version == DEV_VERSION and any(next(out.glob(pattern), None) is not None for pattern in
+                                        ("inputs.json", "prompts.json", "benchmark-songs.jsonl", "binding-*.json",
+                                         "raw-*.jsonl", "replay-*.jsonl", "summary.json", "pairs.jsonl", "judgments.jsonl")):
+        raise ValueError("Unclassified/frozen artifacts cannot be adopted into a DEV directory")
+
+
+def prepare_dev(out, songs_path):
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    require_mode(out, DEV_VERSION)
+    songs = read_jsonl(songs_path)
+    if (not songs or any(not isinstance(s, dict) or not all(isinstance(s.get(k), str) and s[k].strip() for k in ("id", "title", "theme"))
+                         or not isinstance(s.get("lines"), list) or len(s["lines"]) < 4
+                         or any(not isinstance(line, str) or not line.strip() for line in s["lines"]) for s in songs)
+            or len({s["id"] for s in songs}) != len(songs)):
+        raise ValueError("DEV songs require unique IDs, title/theme and at least four nonempty lyric lines")
+    inputs = make_inputs(songs)
+    target = out / "inputs.json"
+    if target.exists() and json.loads(target.read_text()) != inputs:
+        raise ValueError("DEV inputs changed; use a separate output directory")
+    # Persist the mode before artifacts so an interrupted DEV preparation cannot become a frozen run.
+    write_json(out / "benchmark.json", {"version": DEV_VERSION})
+    write_jsonl(out / "benchmark-songs.jsonl", songs)
+    write_json(target, inputs)
+    audit = audit_overlap(songs, include_frozen=True)
+    write_json(out / "overlap.json", audit)
+    manifest = {"version": DEV_VERSION, "seeds": SEEDS, "songs": len(songs), "prompts": len(inputs),
+                "task_counts": dict(Counter(r["task"] for r in inputs)), "songs_sha256": sha256(out / "benchmark-songs.jsonl"),
+                "inputs_sha256": sha256(target), "overlapping_lines": audit["overlapping_lines"]}
+    write_json(out / "benchmark.json", manifest)
+    if audit["overlapping_lines"]:
+        raise ValueError(f"DEV contamination: {audit['overlapping_lines']} overlapping lines in frozen benchmark/training pools")
+    return manifest
+
+
 def freeze(out):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    require_mode(out, FROZEN_VERSION)
     songs = read_jsonl(HERE / "benchmark-songs.jsonl")
     inputs = make_inputs(songs)
     target = out / "inputs.json"

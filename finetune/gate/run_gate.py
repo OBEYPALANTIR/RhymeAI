@@ -12,13 +12,14 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from gate.build import REPO, SEEDS, audit_overlap, freeze, read_jsonl, write_json
+from gate.build import DEV_VERSION, FROZEN_VERSION, REPO, SEEDS, audit_overlap, freeze, prepare_dev, read_jsonl, require_mode, write_json
 from gate.generate import freeze_prompts, generate, select_incumbent
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True, type=Path)
+    parser.add_argument("--dev-songs", type=Path, help="Separate DEV corpus JSONL; informational results, never an adoption verdict")
     parser.add_argument("--incumbent", type=Path, help="Shipped GGUF override; must match the candidate's structural size")
     parser.add_argument("--candidate-seed-offset", type=int, default=0,
                         help="Null noise control: shift candidate seeds; default keeps paired same-seed comparison")
@@ -34,14 +35,19 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     with (out / "run.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        require_mode(out, DEV_VERSION if args.dev_songs else FROZEN_VERSION)
         for name in ("summary.json", "report.md"):
             (out / name).unlink(missing_ok=True)
         phase = "freeze"
         try:
             write_json(out / "status.json", {"phase": phase, "complete": False})
-            freeze(out)
+            if args.dev_songs:
+                prepare_dev(out, args.dev_songs)
+            else:
+                freeze(out)
             phase = "model-size"
             incumbent = select_incumbent(args.candidate, args.incumbent)
+            phase = "prompt-parity"
             freeze_prompts(out)
             for role, path in (("candidate", args.candidate), ("incumbent", incumbent)):
                 phase = f"generate-{role}"
@@ -53,7 +59,10 @@ def main():
             from gate.judge import judge
             judge(out)
             phase = "report"
-            write_json(out / "overlap-final.json", audit_overlap(read_jsonl(out / "benchmark-songs.jsonl")))
+            overlap = audit_overlap(read_jsonl(out / "benchmark-songs.jsonl"), include_frozen=bool(args.dev_songs))
+            write_json(out / "overlap-final.json", overlap)
+            if args.dev_songs and overlap["overlapping_lines"]:
+                raise ValueError("DEV corpus overlaps the frozen benchmark or training pools")
             write_json(out / "provenance.json", {
                 "source_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
                 "command": sys.argv, "python": sys.version,

@@ -44,6 +44,33 @@ Before Gradle or inference, it checks `general.architecture`, `gemma4.block_coun
 and `gemma4.embedding_length`: E2B is 35/1536 and E4B is 42/2560. Filenames are
 ignored; a mismatched `--incumbent` or unsupported metadata shape is rejected.
 
+## Separate development evaluation
+
+```sh
+python3 finetune/gate/run_gate.py --dev-songs /path/to/songs.jsonl --candidate /path/to/candidate.gguf --out /path/to/new-dev-run
+```
+
+DEV songs use the benchmark JSONL schema: unique `id`, `title`, `theme`, and
+nonempty lyric `lines` (at least four). The supplied songs build the inputs;
+they never replace or select the frozen benchmark. DEV requires zero normalized
+8-gram overlap with both the frozen songs and every required training pool.
+The overlap audit runs again before reporting. Frozen and DEV artifacts cannot
+share an output directory, including an interrupted DEV preparation.
+
+DEV keeps the same Kotlin prompt parity, sampler, seeds, structural incumbent
+check, Android replay, judge rubric and position swap. The judge selects up to
+10 prompts per suggestion cell and up to 10 per passage action; a short cell
+contributes every available prompt. The report and summary record distinct
+judged prompt counts per cell, including zero counts. Frozen mode still requires
+the original 150 prompt IDs per seed and all frozen hashes/counts.
+
+The DEV manifest version is `rhymeai-dev`; the report is labeled
+`DEV EVALUATION - not an adoption verdict`, and the summary verdict is always
+`DEV`, even if every informational gate metric passes. A failed execution still
+has no verdict. DEV results cannot authorize model adoption.
+
+## Frozen adoption requirements
+
 | Gate | Required evidence and decision |
 |---|---|
 | G1 | Frozen, newly authored benchmark with zero overlapping 8-gram lines in the specified training pools; exact Kotlin prompt-byte parity for every prompt. |

@@ -7,10 +7,11 @@ import random
 import select
 import subprocess
 import time
+from collections import Counter
 from pathlib import Path
 
 from eval.run_naturalness import JUDGE_PROMPT, consolidate
-from .build import SEEDS, read_jsonl, text_hash, write_json, write_jsonl
+from .build import DEV_VERSION, LEVELS, RHYMES, SEEDS, read_jsonl, text_hash, write_json, write_jsonl
 from .generate import logic_guard
 
 # This model is available through the existing ChatGPT login; no paid API credential is used.
@@ -58,7 +59,7 @@ def account_usage():
             process.wait()
 
 
-def selected_prompts(rows):
+def selected_prompts(rows, dev=False):
     groups = {}
     for row in rows:
         if row["task"] == "suggestions":
@@ -70,13 +71,22 @@ def selected_prompts(rows):
     for action in ("REPHRASE", "HARDER_RHYME", "PUNCH_UP"):
         passages = [r for r in rows if r["task"] == "rewrite_passage" and r["inputs"]["action"] == action]
         selected.extend(sorted(passages, key=lambda r: text_hash(r["id"]))[:10])
-    if len(selected) != 150:
+    if not dev and len(selected) != 150:
         raise ValueError("Judge requires 150 frozen prompt IDs per seed")
     return selected
 
 
+def judged_counts(rows):
+    counts = {f"suggestions/{level}/{rhyme}": 0 for level in LEVELS for rhyme in RHYMES}
+    counts.update({f"rewrite_passage/{action}": 0 for action in ("REPHRASE", "HARDER_RHYME", "PUNCH_UP")})
+    counts.update(Counter(f"suggestions/{r['level']}/{r['rhyme_type']}" if r["task"] == "suggestions"
+                          else f"rewrite_passage/{r['inputs']['action']}" for r in rows))
+    return counts
+
+
 def make_pairs(out):
-    prompts = selected_prompts(json.loads((out / "prompts.json").read_text()))
+    dev = json.loads((out / "benchmark.json").read_text())["version"] == DEV_VERSION
+    prompts = selected_prompts(json.loads((out / "prompts.json").read_text()), dev=dev)
     results = {role: {(r["id"], r["seed"]): r for r in read_jsonl(out / f"replay-{role}.jsonl")}
                for role in ("candidate", "incumbent")}
     rng = random.Random(3407)
@@ -182,7 +192,7 @@ def judge(out):
                           "orders": [first, swapped], "judge_model": JUDGE_MODEL})
     write_jsonl(out / "judgments.jsonl", judgments)
     write_json(out / "judge-provenance.json", {"model": JUDGE_MODEL, "provider": "OpenAI via Codex ChatGPT login",
-               "reasoning_effort": "low", "pairs": len(pairs), "prompt_ids_per_seed": 150, "orders": 2,
+               "reasoning_effort": "low", "pairs": len(pairs), "prompt_ids_per_seed": len({p["id"] for p in pairs}), "orders": 2,
                "incremental_api_cost_usd": 0.0, "cost_basis": "Included ChatGPT subscription; unchanged native credit balance around every batch",
                "usage": {key: sum(u.get(key, 0) for u in usages) for key in {k for u in usages for k in u}},
                "blind_workspace": str(directory), "rubric_sha256": text_hash(JUDGE_PROMPT)})
