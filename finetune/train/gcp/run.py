@@ -14,7 +14,7 @@ import time
 
 PROJECT = "rhymeai-training"
 REGION = "us-central1"
-IMAGE = "pytorch-2-9-cu129-ubuntu-2204-nvidia-580-v20261001"
+IMAGE = "common-cu129-ubuntu-2404-nvidia-580-v20261001"
 NOTEBOOK_SHA = "2f3a900ad5531716991955fc73aa52107d9016d78f088b98fc7c96e95887dcab"
 # Ordered capacity fallback; all prices include the GPU, CPU and RAM.
 TARGETS = (

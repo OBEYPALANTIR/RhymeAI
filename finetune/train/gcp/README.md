@@ -87,7 +87,7 @@ additional Spot candidate has failed. On-demand is never selected without
 
 The VM uses `a2-ultragpu-1g` (12 vCPU, 170 GiB RAM) or `g2-standard-12`
 (12 vCPU, 48 GiB RAM), the dated Deep Learning VM image
-`pytorch-2-9-cu129-ubuntu-2204-nvidia-580-v20261001`, a 200 GB auto-delete
+`common-cu129-ubuntu-2404-nvidia-580-v20261001`, a 200 GB auto-delete
 balanced boot disk (G2 does not support `pd-standard`), and these settings:
 
 ```text
@@ -135,6 +135,10 @@ below 35 GB; retaining 8 x 2 avoids silently changing the reproduction recipe.
 
 The training function is executed unchanged. Both epoch adapters are copied
 and SHA-verified by the notebook's existing callback before GCS persistence.
+Startup creates an isolated Python 3.12 environment from Ubuntu 24.04's system
+Python. The Ubuntu 22.04 DLVM's Python 3.10 cannot install round 2's pinned
+TRL 1.15.0, which requires Python 3.11 or newer; that failed bootstrap is
+retained in run-04 evidence. The failed VM saved its logs and deleted itself.
 The seven top-level training dependencies are pinned to versions recorded in
 round 2; the VM prints the resolved transitive environment with `pip freeze`.
 

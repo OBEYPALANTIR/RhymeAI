@@ -29,7 +29,7 @@ trap 'exit 130' INT
 timeout 600 bash -c 'until nvidia-smi; do sleep 10; done'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq cmake build-essential git curl python3-pip python3-venv
+apt-get install -y -qq cmake build-essential git curl python3.12 python3.12-venv
 mkdir -p /content/package
 gcloud storage cp "$RUN_PREFIX/package.tar.gz" /content/package.tar.gz --quiet
 EXPECTED_SHA="$(metadata instance/attributes/package-sha256)"
@@ -38,9 +38,12 @@ tar -xzf /content/package.tar.gz -C /content/package
 cd /content/package/inputs
 sha256sum --check SHA256SUMS
 cd /content
-# Use the image's preinstalled Python/Torch environment; all model/cache writes stay on the VM.
+# TRL 1.15 requires Python >=3.11; keep training packages separate from gcloud's Python.
+/usr/bin/python3.12 -m venv /content/venv
+PYTHON=/content/venv/bin/python
+"$PYTHON" -c 'import sys; assert sys.version_info[:2] == (3, 12); print(sys.version)'
 export HF_HOME=/content/hf-cache
 export PIP_CACHE_DIR=/content/pip-cache
 export TOKENIZERS_PARALLELISM=false
-python3 -m pip install --quiet ipython
-python3 -u /content/package/notebook.py
+"$PYTHON" -m pip install --quiet ipython
+"$PYTHON" -u /content/package/notebook.py
