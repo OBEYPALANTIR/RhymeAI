@@ -71,6 +71,14 @@ class ControlMarkerTests(unittest.TestCase):
             record, reason = generate.generate_one(ReplyClient(raw), case, "1-0-0")
             self.assertEqual((record, reason), (None, "rejected_by_scorer"))
 
+    def test_unterminated_thought_channel_is_explicitly_rejected(self):
+        case, rewrite = rewrite_case()
+        for raw in ("<|channel>thought", " \n<|channel>thought\n" + rewrite,
+                    "<|channel>thought\n<|turn>model\n" + rewrite):
+            with self.subTest(raw=raw):
+                record, reason = generate.generate_one(ReplyClient(raw), case, "1-0-0")
+                self.assertEqual((record, reason), (None, "unterminated_thought_channel"))
+
     def test_gemma4_marker_fails_every_validator(self):
         for marker in GEMMA4_MARKERS:
             lines = ["Line %s number %d" % (word, i) for i, word in

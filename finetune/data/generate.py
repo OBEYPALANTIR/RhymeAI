@@ -236,6 +236,9 @@ def generate_one(client, case, case_seed):
     prepared = prepare_case(case)
     # zlib.crc32 is stable across processes (unlike hash() on strings).
     raw = client.generate(prepared["user_prompt"], seed=zlib.crc32(case_seed.encode("utf-8")))
+    # Reject before cleaning or salvage can hide an unfinished thought channel.
+    if raw.lstrip().startswith("<|channel>") and "<channel|>" not in raw:
+        return None, "unterminated_thought_channel"
     completion = clean_teacher_output(raw)
     if not completion:
         return None, "empty_output"
@@ -363,8 +366,8 @@ def main():
                     sys.exit("aborting (progress is saved in %s): %s"
                              % (args.out, error))
                 if record is None:
-                    stats[task]["rejected" if reason == "rejected_by_scorer"
-                               else "empty"] += 1
+                    stats[task]["empty" if reason == "empty_output"
+                               else "rejected"] += 1
                     print("[%4d/%d] %-16s attempt %d %s" % (
                         index + 1, args.count, task, attempt, reason))
                     continue

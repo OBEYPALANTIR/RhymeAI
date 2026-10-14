@@ -136,8 +136,8 @@ def cmd_generate(args):
                                os.path.splitext(args.out)[0] + ".y.server.log")
 
     rng = random.Random(args.seed)
-    x_name = os.path.basename(args.model_x)
-    y_name = os.path.basename(args.model_y)
+    x_name = "x: " + os.path.basename(args.model_x)
+    y_name = "y: " + os.path.basename(args.model_y)
     pairs = []
     for case in cases:
         for k in range(args.samples):
@@ -228,9 +228,10 @@ def sign_test_p(wins_a: int, wins_b: int) -> float:
 
 
 def cmd_report(args):
-    pairs = {p["pair_id"]: p for line in open(args.pairs, encoding="utf-8")
-             for p in [json.loads(line)]}
-    judgments = [json.loads(line) for line in open(args.judgments, encoding="utf-8")]
+    with open(args.pairs, encoding="utf-8") as handle:
+        pairs = {p["pair_id"]: p for line in handle for p in [json.loads(line)]}
+    with open(args.judgments, encoding="utf-8") as handle:
+        judgments = [json.loads(line) for line in handle]
 
     models = sorted({p["left_model"] for p in pairs.values()}
                     | {p["right_model"] for p in pairs.values()})
