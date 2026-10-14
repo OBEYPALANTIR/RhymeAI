@@ -178,7 +178,39 @@ def require_mode(out, version):
         raise ValueError("Unclassified/frozen artifacts cannot be adopted into a DEV directory")
 
 
-def prepare_dev(out, songs_path):
+def make_dev_inputs(songs, expanded_words=False):
+    rows = make_inputs(songs)
+    if not expanded_words:
+        return rows
+    from .metrics import FUNCTION_WORDS
+
+    for song in songs[:20]:
+        templates = [r for r in rows if r["song_id"] == song["id"] and r["task"] == "rewrite_word"]
+        synonym = next(r for r in rows if r["song_id"] == song["id"] and r["task"] == "synonyms")
+        lyrics = templates[0]["inputs"]["lyrics"]
+        seen = {synonym["inputs"]["word"].lower()}
+        selections = []
+        for line in song["lines"][:4]:
+            for match in re.finditer(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)*", line):
+                word = match.group()
+                if word.lower() in seen or word.lower() in FUNCTION_WORDS:
+                    continue
+                seen.add(word.lower())
+                position = lyrics.index(line) + match.start()
+                selections.append((word, line, len(lyrics[:position].encode("utf-16-le")) // 2))
+        for number, (word, line, position) in enumerate(selections[:5], 1):
+            if number <= 4:
+                for template in templates:
+                    rows.append(dict(template, id=f"{template['id']}-word-{number}",
+                                     inputs=dict(template["inputs"], selection=word, selection_start=position)))
+            rows.append(dict(synonym, id=f"{synonym['id']}-word-{number}",
+                             inputs=dict(synonym["inputs"], word=word, line_context=line)))
+    for row in rows:
+        row["inputs_sha256"] = text_hash(json.dumps(row["inputs"], sort_keys=True, ensure_ascii=False))
+    return rows
+
+
+def prepare_dev(out, songs_path, expanded_words=False):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     require_mode(out, DEV_VERSION)
@@ -188,7 +220,7 @@ def prepare_dev(out, songs_path):
                          or any(not isinstance(line, str) or not line.strip() for line in s["lines"]) for s in songs)
             or len({s["id"] for s in songs}) != len(songs)):
         raise ValueError("DEV songs require unique IDs, title/theme and at least four nonempty lyric lines")
-    inputs = make_inputs(songs)
+    inputs = make_dev_inputs(songs, expanded_words)
     target = out / "inputs.json"
     if target.exists() and json.loads(target.read_text()) != inputs:
         raise ValueError("DEV inputs changed; use a separate output directory")
@@ -201,6 +233,8 @@ def prepare_dev(out, songs_path):
     manifest = {"version": DEV_VERSION, "seeds": SEEDS, "songs": len(songs), "prompts": len(inputs),
                 "task_counts": dict(Counter(r["task"] for r in inputs)), "songs_sha256": sha256(out / "benchmark-songs.jsonl"),
                 "inputs_sha256": sha256(target), "overlapping_lines": audit["overlapping_lines"]}
+    if expanded_words:
+        manifest["expanded_words"] = True
     write_json(out / "benchmark.json", manifest)
     if audit["overlapping_lines"]:
         raise ValueError(f"DEV contamination: {audit['overlapping_lines']} overlapping lines in frozen benchmark/training pools")

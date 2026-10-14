@@ -20,11 +20,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True, type=Path)
     parser.add_argument("--dev-songs", type=Path, help="Separate DEV corpus JSONL; informational results, never an adoption verdict")
+    parser.add_argument("--dev-expanded-words", action="store_true",
+                        help="DEV only: up to five distinct word selections per song, all three actions, and six synonym requests (first 20 songs)")
     parser.add_argument("--incumbent", type=Path, help="Shipped GGUF override; must match the candidate's structural size")
     parser.add_argument("--candidate-seed-offset", type=int, default=0,
                         help="Null noise control: shift candidate seeds; default keeps paired same-seed comparison")
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
+    if args.dev_expanded_words and not args.dev_songs:
+        parser.error("--dev-expanded-words requires --dev-songs")
     offset = args.candidate_seed_offset
     if offset < 0 or max(SEEDS) + offset + 10000 > 2**31 - 1:
         parser.error("candidate seed offset must preserve nonnegative signed 32-bit sampler seeds")
@@ -42,7 +46,7 @@ def main():
         try:
             write_json(out / "status.json", {"phase": phase, "complete": False})
             if args.dev_songs:
-                prepare_dev(out, args.dev_songs)
+                prepare_dev(out, args.dev_songs, expanded_words=args.dev_expanded_words)
             else:
                 freeze(out)
             phase = "model-size"
