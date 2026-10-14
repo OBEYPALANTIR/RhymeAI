@@ -57,11 +57,27 @@ def preference(rows):
     return result
 
 
-def yield_pass(metrics, candidate_errors):
+# Non-inferiority margins: 2 x the disjoint-seed null's pooled 95% CI half-width (shipped v2.1 against
+# itself), rounded up to 0.5 pp (0.05 pp for repetition), floor 1 pp, so an equal model clears each
+# check about 97.5% of the time. See GATE.md "Calibration". bound=False checks point estimates (G6).
+FULL_SIX_MARGIN, RETRY_MARGIN, LEVEL_MARGIN, REPETITION_MARGIN = .01, .065, .055, .0025
+REWRITE_MARGINS = {"rewrite_passage": .085, "rewrite_word": .035, "synonyms": .01}
+
+
+def _lower(metric, bound):
+    return metric["ci95"][0] if bound else metric["delta"]
+
+
+def _upper(metric, bound):
+    return metric["ci95"][1] if bound else metric["delta"]
+
+
+def yield_pass(metrics, candidate_errors, bound=True):
     required = [metrics.get(key) for key in ("full_six", "retry", "rewrite_passage", "rewrite_word", "synonyms")]
     return (all(m is not None for m in required) and candidate_errors == 0
-            and metrics["full_six"]["delta"] >= -1e-12 and metrics["retry"]["ci95"][1] <= .05 + 1e-12
-            and all(metrics[k]["ci95"][0] >= -.02 - 1e-12 for k in ("rewrite_passage", "rewrite_word", "synonyms")))
+            and _lower(metrics["full_six"], bound) >= -FULL_SIX_MARGIN - 1e-12
+            and _upper(metrics["retry"], bound) <= RETRY_MARGIN + 1e-12
+            and all(_lower(metrics[k], bound) >= -margin - 1e-12 for k, margin in REWRITE_MARGINS.items()))
 
 
 def preference_pass(groups, distinct_prompts):
@@ -72,5 +88,8 @@ def preference_pass(groups, distinct_prompts):
                         for key, g in groups.items() if key != "all"))
 
 
-def not_worse(metric, higher_is_better=True):
-    return metric is not None and (metric["ci95"][0] >= -1e-12 if higher_is_better else metric["ci95"][1] <= 1e-12)
+def not_worse(metric, margin, higher_is_better=True, bound=True):
+    if metric is None:
+        return False
+    return (_lower(metric, bound) >= -margin - 1e-12 if higher_is_better
+            else _upper(metric, bound) <= margin + 1e-12)

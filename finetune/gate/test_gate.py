@@ -6,6 +6,7 @@ from pathlib import Path
 from .build import grams, overlapping_lines, pool_lines
 from .cxlib import grade_shown_lines
 from .metrics import not_worse, paired, preference, preference_pass, template_pairs, yield_pass
+from .report import gate_verdict
 
 
 class OverlapTest(unittest.TestCase):
@@ -43,8 +44,8 @@ class MetricTest(unittest.TestCase):
         result = paired(rows, "n", "d")
         self.assertEqual(result["delta"], 0)
         self.assertEqual(result["ci95"], [0, 0])
-        self.assertTrue(not_worse(result))
-        self.assertTrue(not_worse(result, False))
+        self.assertTrue(not_worse(result, 0))
+        self.assertTrue(not_worse(result, 0, False))
 
     def test_ratio_of_sums_and_song_clustering(self):
         rows = [{"song_id": "same", "candidate": {"n": 1, "d": 2}, "incumbent": {"n": 0, "d": 2}},
@@ -61,20 +62,57 @@ class VerdictTest(unittest.TestCase):
     def metric(self, lo=0, hi=0, delta=0):
         return {"ci95": [lo, hi], "delta": delta}
 
-    def test_yield_thresholds_and_errors(self):
+    def test_yield_margins_and_errors(self):
         metrics = {k: self.metric() for k in ("full_six", "retry", "rewrite_passage", "rewrite_word", "synonyms")}
-        metrics["retry"] = self.metric(-.01, .05)
-        metrics["rewrite_word"] = self.metric(-.02, .01)
+        metrics["retry"] = self.metric(-.01, .065)
+        metrics["rewrite_passage"] = self.metric(-.085, .01)
+        metrics["rewrite_word"] = self.metric(-.035, .01)
+        metrics["synonyms"] = self.metric(-.01, 0)
         self.assertTrue(yield_pass(metrics, 0))
         self.assertFalse(yield_pass(metrics, 1))
-        metrics["rewrite_word"] = self.metric(-.021, .01)
+        for key, past in (("rewrite_passage", -.0851), ("rewrite_word", -.0351), ("synonyms", -.0101), ("full_six", -.0101)):
+            saved, metrics[key] = metrics[key], self.metric(past, .01)
+            self.assertFalse(yield_pass(metrics, 0), key)
+            metrics[key] = saved
+        metrics["retry"] = self.metric(0, .0651)
         self.assertFalse(yield_pass(metrics, 0))
-        metrics["rewrite_word"] = self.metric()
-        metrics["retry"] = self.metric(0, .051)
-        self.assertFalse(yield_pass(metrics, 0))
-        metrics["retry"] = self.metric()
-        metrics["full_six"] = self.metric(-.02, .01, -.001)
-        self.assertFalse(yield_pass(metrics, 0))
+        # Point-estimate mode (G6 per seed) ignores interval width but keeps the margins.
+        wide = {k: self.metric(-.5, .5, 0) for k in metrics}
+        self.assertTrue(yield_pass(wide, 0, bound=False))
+        wide["rewrite_word"] = self.metric(-.5, .5, -.036)
+        self.assertFalse(yield_pass(wide, 0, bound=False))
+        wide["rewrite_word"] = self.metric(-.5, .5, 0)
+        wide["retry"] = self.metric(-.5, .5, .066)
+        self.assertFalse(yield_pass(wide, 0, bound=False))
+
+    def test_level_and_repetition_margins_in_both_modes(self):
+        self.assertTrue(not_worse(self.metric(-.055, .01), .055))
+        self.assertFalse(not_worse(self.metric(-.0551, .01), .055))
+        self.assertTrue(not_worse(self.metric(-.01, .0025), .0025, False))
+        self.assertFalse(not_worse(self.metric(-.01, .0026), .0025, False))
+        self.assertTrue(not_worse(self.metric(-.5, .5, -.055), .055, bound=False))
+        self.assertFalse(not_worse(self.metric(-.5, .5, -.056), .055, bound=False))
+        self.assertTrue(not_worse(self.metric(-.5, .5, .0025), .0025, False, bound=False))
+        self.assertFalse(not_worse(self.metric(-.5, .5, .0026), .0025, False, bound=False))
+        self.assertFalse(not_worse(None, .055))
+
+    def test_g6_needs_every_seed_and_never_rescues_pooled_g3(self):
+        agree = {"G2": True, "G3": True, "G4": True, "G5": True}
+        pooled = {"gates": {"G2": True, "G3": True, "G4": True, "G5": True}}
+        seeds = {s: {"consistent": dict(agree)} for s in ("7000", "7001", "7002")}
+        self.assertEqual(gate_verdict(True, {"pooled": pooled, **seeds})[1], "PASS")
+        # One seed with zero or negative net preference fails G6 and the verdict.
+        seeds["7001"]["consistent"]["G3"] = False
+        gates, verdict = gate_verdict(True, {"pooled": pooled, **seeds})
+        self.assertFalse(gates["G6"])
+        self.assertEqual(verdict, "FAIL")
+        # G6 agreement cannot rescue a pooled G3 failure (the disjoint-seed null's shape).
+        seeds["7001"]["consistent"]["G3"] = True
+        pooled["gates"]["G3"] = False
+        gates, verdict = gate_verdict(True, {"pooled": pooled, **seeds})
+        self.assertTrue(gates["G6"])
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(gate_verdict(True, {"pooled": {"gates": dict(agree)}, **seeds}, dev=True)[1], "DEV")
 
     def test_null_does_not_win_and_stratum_loss_blocks_overall_win(self):
         ties = preference([{"song_id": str(i), "outcome": "tie"} for i in range(150)])
@@ -85,8 +123,8 @@ class VerdictTest(unittest.TestCase):
         self.assertFalse(preference_pass({"all": win}, 149))
         loss = preference([{"song_id": str(i), "outcome": "incumbent"} for i in range(10)])
         self.assertFalse(preference_pass({"all": win, "level:Complex": loss}, 150))
-        self.assertFalse(not_worse(self.metric(-.001, .01)))
-        self.assertFalse(not_worse(self.metric(-.01, .001), False))
+        self.assertFalse(not_worse(self.metric(-.056, .01), .055))
+        self.assertFalse(not_worse(self.metric(-.01, .0026), .0025, False))
 
     def test_repeated_songs_cannot_manufacture_a_significant_win(self):
         # 120 wins from one song vs 60 losses from another: row sign p is tiny, but two songs carry no evidence.

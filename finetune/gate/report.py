@@ -7,7 +7,8 @@ from pathlib import Path
 
 from . import cxlib
 from .build import DEV_VERSION, FROZEN_VERSION, HERE, SEEDS, read_jsonl, sha256, text_hash, write_json
-from .metrics import paired, preference, preference_pass, template_pairs, yield_pass, not_worse
+from .metrics import (LEVEL_MARGIN, REPETITION_MARGIN, not_worse, paired, preference, preference_pass,
+                      template_pairs, yield_pass)
 from .generate import SAMPLER
 from .judge import judged_counts
 
@@ -75,9 +76,22 @@ def summarize(rows, judgments):
             groups[f"{axis}:{value}"] = preference([j for j in judgments if j["task"] == "suggestions" and j[axis] == value])
     gates = {"G2": yield_pass(metrics, errors["candidate"]),
              "G3": preference_pass(groups, len({j["id"] for j in judgments})),
-             "G4": not_worse(metrics["level_pass"]), "G5": not_worse(metrics["template_repetition"], False)}
-    return {"gates": gates, "metrics": metrics, "suggestion_errors": errors, "preference": groups,
+             "G4": not_worse(metrics["level_pass"], LEVEL_MARGIN),
+             "G5": not_worse(metrics["template_repetition"], REPETITION_MARGIN, False)}
+    # Per-seed agreement for G6: point estimates only, since one seed's CIs are too wide to bound.
+    net = groups["all"]["net_preference"]
+    consistent = {"G2": yield_pass(metrics, errors["candidate"], bound=False),
+                  "G3": net is not None and net["delta"] > 0,
+                  "G4": not_worse(metrics["level_pass"], LEVEL_MARGIN, bound=False),
+                  "G5": not_worse(metrics["template_repetition"], REPETITION_MARGIN, False, bound=False)}
+    return {"gates": gates, "consistent": consistent, "metrics": metrics, "suggestion_errors": errors, "preference": groups,
             "suggestion_categories": {role: dict(Counter(r[role]["category"] for r in suggestions)) for role in errors}}
+
+
+def gate_verdict(g1, scopes, dev=False):
+    """Pooled G2-G5 decide; G6 needs every seed's point estimates to agree. DEV never passes."""
+    gates = {"G1": g1, **scopes["pooled"]["gates"], "G6": all(all(scopes[str(s)]["consistent"].values()) for s in SEEDS)}
+    return gates, "DEV" if dev else ("PASS" if all(gates.values()) else "FAIL")
 
 
 def metric_text(metric):
@@ -131,8 +145,7 @@ def report(out):
           and sha256(out / "inputs.json") == manifest["inputs_sha256"]
           and sha256(out / "prompts.json") == (manifest["prompts_sha256"] if dev else frozen["prompts_sha256"])
           and all(text_hash(p["prompt"]) == p["prompt_sha256"] for p in prompt_rows))
-    gates = {"G1": g1, **scopes["pooled"]["gates"], "G6": all(all(scopes[str(s)]["gates"].values()) for s in SEEDS)}
-    verdict = "DEV" if dev else ("PASS" if all(gates.values()) else "FAIL")
+    gates, verdict = gate_verdict(g1, scopes, dev)
     judge = json.loads((out / "judge-provenance.json").read_text())
     lines = ["# DEV EVALUATION - not an adoption verdict" if dev else f"# Frozen model gate: {verdict}", "",
              "Candidate / incumbent; all differences are candidate minus incumbent.", "",
@@ -140,7 +153,7 @@ def report(out):
     lines.extend(f"| {gate} | {'PASS' if passed else 'FAIL'} |" for gate, passed in gates.items())
     lines.extend(["| G7 | NOT RUN - physical Pixel latency, loading and Stop |", "| G8 | NOT RUN - Tyler blind read |", "",
                   "DEV metrics are informational; no gate result authorizes adoption." if dev else
-                  "G3 is mandatory; cxlib cannot rescue a preference failure. G6 requires G2-G5 independently on every seed.", "",
+                  "G3 is mandatory; cxlib cannot rescue a preference failure. G6 requires every seed's point estimates to agree: positive net preference and G2/G4/G5 within their margins.", "",
                   f"Pairing slots and actual first-pass sampler seeds: {seed_pairings}. Retries add 10000 to the corresponding arm's seed.", "",
                   f"G1: {manifest['songs']} {'DEV' if dev else 'new original'} drafts; {counts['suggestions']} suggestions, {counts['rewrite_passage']} passage rewrites, {counts['rewrite_word']} word rewrites, {counts['synonyms']} synonym requests.",
                   f"Kotlin prompt-byte parity: {len(parity)}/{manifest['prompts'] if dev else 480}. Overlapping 8-gram lines: {overlap['overlapping_lines']} across {len(overlap['files'])} files"
@@ -152,7 +165,8 @@ def report(out):
         lines.extend([f"## {scope}", "", "| Metric | Candidate / incumbent; delta [95% CI] |", "|---|---|"])
         lines.extend(f"| {name} | {metric_text(value)} |" for name, value in data["metrics"].items())
         lines.extend(["", f"Suggestion errors: {data['suggestion_errors']}; categories: {data['suggestion_categories']}.",
-                      "Verdicts: " + ", ".join(f"{k}={'PASS' if v else 'FAIL'}" for k, v in data["gates"].items()), "",
+                      "Verdicts: " + ", ".join(f"{k}={'PASS' if v else 'FAIL'}" for k, v in data["gates"].items())
+                      + "; point-estimate agreement: " + ", ".join(f"{k}={'yes' if v else 'no'}" for k, v in data["consistent"].items()), "",
                       "| Judge scope | Wins / losses / ties | Exact two-sided sign p | Net preference [95% CI] |", "|---|---|---|---|"])
         for key, p in data["preference"].items():
             lines.append(f"| {key} | {p['wins']} / {p['losses']} / {p['ties']} | {p['sign_p']:.6g} | {metric_text(p['net_preference'])} |")

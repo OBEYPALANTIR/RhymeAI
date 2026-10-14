@@ -1,3 +1,5 @@
+PRE-CALIBRATION (gate at 348c7bb, original margins). Under the calibrated margins (GATE.md "Calibration"):
+levels FAIL (G2, G3, G6); null FAIL (G3, G6); null-noise FAIL (G3 only). Original record follows.
 levels {'G1': True, 'G2': False, 'G3': False, 'G4': True, 'G5': False, 'G6': False}
 null {'G1': True, 'G2': True, 'G3': False, 'G4': True, 'G5': True, 'G6': False}
 null-noise {'G1': True, 'G2': False, 'G3': False, 'G4': False, 'G5': False, 'G6': False}
