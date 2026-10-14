@@ -41,7 +41,7 @@ The runner refuses any incumbent whose bytes are not one of these shipped files.
 |---|---|
 | G1 | Frozen, newly authored benchmark with zero overlapping 8-gram lines in the specified training pools; exact Kotlin prompt-byte parity for every prompt. |
 | G2 | Suggestions: share showing all six lines at least incumbent, zero candidate errors, and retry delta 95% CI upper bound at most +5 percentage points. Each of passage rewrite, single-word rewrite and synonym pass rates must have delta CI lower bound at least -2 pp. |
-| G3 | Independent blind lyric-craft judge on 150 distinct suggestion/passage prompts per seed; two orders, inconsistent judgments tied. Candidate wins overall with two-sided exact sign-test p < .05 and does not lose significantly in any suggestion level or rhyme-type stratum. |
+| G3 | Independent blind lyric-craft judge on 150 distinct suggestion/passage prompts per seed; two orders, inconsistent judgments tied. Candidate wins overall: the song-cluster bootstrap 95% CI of net preference (win rate minus loss rate) lies entirely above zero. No suggestion level or rhyme-type stratum may have its net-preference CI entirely below zero. |
 | G4 | cxlib level-rule pass rate among Android-shown suggestion lines has delta CI lower bound at least zero. Secondary evidence only: it cannot rescue G3 because the levels training data was graded by cxlib. |
 | G5 | Template-repetition delta CI upper bound at most zero. Lower repetition is better. |
 | G6 | G2-G5 each pass separately on seeds 7000, 7001 and 7002, as well as pooled. |
@@ -128,10 +128,12 @@ Paired ratio confidence intervals use 20,000 percentile bootstrap resamples
 with seed 20261014. The resampling unit is the original song, keeping its
 multiple prompts, three sampler seeds and shown lines together. Reports also
 show each seed separately. Ratios use total numerators/denominators, not the
-mean of per-request ratios. The exact sign test is `run_naturalness.sign_test_p`;
-its unit is a judged prompt/seed pair. Song-cluster bootstrap CIs supplement
-that prescribed test for net preference. Stratum tests are unadjusted and
-therefore conservative about blocking a candidate.
+mean of per-request ratios. Judgments repeat each prompt over three seeds and
+each song over several prompts, so they are not independent: G3 decides on the
+song-cluster net-preference CI. The exact sign test (`run_naturalness.sign_test_p`,
+unit = judged prompt/seed pair) is reported as descriptive only; on clustered
+rows it overstates significance. Stratum tests are unadjusted and therefore
+conservative about blocking a candidate.
 
 The mechanical diversity metric is the share of unordered pairs in a shown
 suggestion set whose first three content tokens match. Tokens are lowercase

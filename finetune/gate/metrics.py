@@ -49,7 +49,8 @@ def preference(rows):
     ties = sum(r["outcome"] == "tie" for r in rows)
     result = {"n": len(rows), "wins": wins, "losses": losses, "ties": ties,
               "invalid": len(rows) - wins - losses - ties, "sign_p": sign_test_p(wins, losses)}
-    # Net preference and its paired song bootstrap supplement the required exact sign test.
+    # Judgments repeat prompts (3 seeds) and songs (several prompts each), so rows are not
+    # independent: the verdict uses the song-cluster bootstrap; sign_p stays descriptive.
     paired_rows = [{"song_id": r["song_id"], "candidate": {"win": int(r["outcome"] == "candidate"), "one": 1},
                     "incumbent": {"win": int(r["outcome"] == "incumbent"), "one": 1}} for r in rows]
     result["net_preference"] = paired(paired_rows, "win", "one")
@@ -65,9 +66,10 @@ def yield_pass(metrics, candidate_errors):
 
 def preference_pass(groups, distinct_prompts):
     overall = groups["all"]
-    return (distinct_prompts >= 150 and overall["invalid"] == 0 and overall["wins"] > overall["losses"]
-            and overall["sign_p"] < .05
-            and not any(g["losses"] > g["wins"] and g["sign_p"] < .05 for key, g in groups.items() if key != "all"))
+    net = overall["net_preference"]
+    return (distinct_prompts >= 150 and overall["invalid"] == 0 and net is not None and net["ci95"][0] > 0
+            and not any(g["net_preference"] is not None and g["net_preference"]["ci95"][1] < 0
+                        for key, g in groups.items() if key != "all"))
 
 
 def not_worse(metric, higher_is_better=True):

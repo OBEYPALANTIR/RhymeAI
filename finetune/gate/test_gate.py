@@ -88,6 +88,17 @@ class VerdictTest(unittest.TestCase):
         self.assertFalse(not_worse(self.metric(-.001, .01)))
         self.assertFalse(not_worse(self.metric(-.01, .001), False))
 
+    def test_repeated_songs_cannot_manufacture_a_significant_win(self):
+        # 120 wins from one song vs 60 losses from another: row sign p is tiny, but two songs carry no evidence.
+        rows = ([{"song_id": "a", "outcome": "candidate"}] * 120 + [{"song_id": "b", "outcome": "incumbent"}] * 60)
+        clustered = preference(rows)
+        self.assertLess(clustered["sign_p"], .001)
+        self.assertFalse(preference_pass({"all": clustered}, 150))
+        # The same imbalance spread over many songs is real evidence.
+        spread = preference([{"song_id": f"w{i}", "outcome": "candidate"} for i in range(120)]
+                            + [{"song_id": f"l{i}", "outcome": "incumbent"} for i in range(60)])
+        self.assertTrue(preference_pass({"all": spread}, 150))
+
 
 if __name__ == "__main__":
     unittest.main()
