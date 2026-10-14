@@ -57,11 +57,26 @@ def preference(rows):
     return result
 
 
-def yield_pass(metrics, candidate_errors):
+# Non-inferiority margins, set from the disjoint-seed null (shipped v2.1 against itself) so an
+# equal model passes; see GATE.md "Calibration". bound=False checks point estimates (G6 per seed).
+FULL_SIX_MARGIN, RETRY_MARGIN, REWRITE_MARGIN, LEVEL_MARGIN, REPETITION_MARGIN = .01, .075, .05, .03, .0025
+
+
+def _lower(metric, bound):
+    return metric["ci95"][0] if bound else metric["delta"]
+
+
+def _upper(metric, bound):
+    return metric["ci95"][1] if bound else metric["delta"]
+
+
+def yield_pass(metrics, candidate_errors, bound=True):
     required = [metrics.get(key) for key in ("full_six", "retry", "rewrite_passage", "rewrite_word", "synonyms")]
     return (all(m is not None for m in required) and candidate_errors == 0
-            and metrics["full_six"]["delta"] >= -1e-12 and metrics["retry"]["ci95"][1] <= .05 + 1e-12
-            and all(metrics[k]["ci95"][0] >= -.02 - 1e-12 for k in ("rewrite_passage", "rewrite_word", "synonyms")))
+            and _lower(metrics["full_six"], bound) >= -FULL_SIX_MARGIN - 1e-12
+            and _upper(metrics["retry"], bound) <= RETRY_MARGIN + 1e-12
+            and all(_lower(metrics[k], bound) >= -REWRITE_MARGIN - 1e-12
+                    for k in ("rewrite_passage", "rewrite_word", "synonyms")))
 
 
 def preference_pass(groups, distinct_prompts):
@@ -72,5 +87,8 @@ def preference_pass(groups, distinct_prompts):
                         for key, g in groups.items() if key != "all"))
 
 
-def not_worse(metric, higher_is_better=True):
-    return metric is not None and (metric["ci95"][0] >= -1e-12 if higher_is_better else metric["ci95"][1] <= 1e-12)
+def not_worse(metric, margin, higher_is_better=True, bound=True):
+    if metric is None:
+        return False
+    return (_lower(metric, bound) >= -margin - 1e-12 if higher_is_better
+            else _upper(metric, bound) <= margin + 1e-12)

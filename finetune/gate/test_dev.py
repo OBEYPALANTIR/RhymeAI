@@ -114,8 +114,8 @@ class DevEvaluationTest(unittest.TestCase):
         write_json(out / "judge-provenance.json", {"model": "offline-fixture", "provider": "fixture", "incremental_api_cost_usd": 0,
                    "cost_basis": "no calls", "usage": {}})
         # Force the strongest possible metric result to exercise DEV's non-adoption guarantee.
-        all_pass = {"gates": {f"G{i}": True for i in range(2, 6)}, "metrics": {}, "preference": {},
-                    "suggestion_errors": {}, "suggestion_categories": {}}
+        all_pass = {"gates": {f"G{i}": True for i in range(2, 6)}, "consistent": {f"G{i}": True for i in range(2, 6)},
+                    "metrics": {}, "preference": {}, "suggestion_errors": {}, "suggestion_categories": {}}
         with patch("gate.report.summarize", return_value=all_pass):
             self.assertEqual(report(out), "DEV")
         summary = json.loads((out / "summary.json").read_text())

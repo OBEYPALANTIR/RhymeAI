@@ -74,18 +74,31 @@ has no verdict. DEV results cannot authorize model adoption.
 | Gate | Required evidence and decision |
 |---|---|
 | G1 | Frozen, newly authored benchmark with zero overlapping 8-gram lines in the specified training pools; exact Kotlin prompt-byte parity for every prompt. |
-| G2 | Suggestions: share showing all six lines at least incumbent, zero candidate errors, and retry delta 95% CI upper bound at most +5 percentage points. Each of passage rewrite, single-word rewrite and synonym pass rates must have delta CI lower bound at least -2 pp. |
+| G2 | Zero candidate suggestion errors. 95% CI bounds of candidate minus incumbent: six-line display lower bound ≥ −1 pp; suggestion retry upper bound ≤ +7.5 pp; passage rewrite, single-word rewrite and synonym pass lower bounds ≥ −5 pp each. |
 | G3 | Independent blind lyric-craft judge on 150 distinct suggestion/passage prompts per seed; two orders, inconsistent judgments tied. Candidate wins overall: the song-cluster bootstrap 95% CI of net preference (win rate minus loss rate) lies entirely above zero. No suggestion level or rhyme-type stratum may have its net-preference CI entirely below zero. |
-| G4 | cxlib level-rule pass rate among Android-shown suggestion lines has delta CI lower bound at least zero. Secondary evidence only: it cannot rescue G3 because the levels training data was graded by cxlib. |
-| G5 | Template-repetition delta CI upper bound at most zero. Lower repetition is better. |
-| G6 | G2-G5 each pass separately on seeds 7000, 7001 and 7002, as well as pooled. |
+| G4 | cxlib level-rule pass rate among Android-shown suggestion lines: delta CI lower bound ≥ −3 pp. Secondary evidence only: it cannot rescue G3 because the levels training data was graded by cxlib. |
+| G5 | Template repetition: delta CI upper bound ≤ +0.25 pp. Lower repetition is better. |
+| G6 | Every seed (7000, 7001, 7002) agrees in direction: positive net preference, and G2/G4/G5 point estimates within the margins above. One seed's CIs are too wide to bound, so G6 checks agreement while the pooled gates carry the uncertainty. |
 | G7 - manual | Physical Pixel: model loads; first validated suggestion within 10 s warm / 30 s cold; Stop works. Recorded, not run here. |
 | G8 - manual | Tyler blind-reads at least 30 paired outputs, including 20 Complex, and prefers the candidate. Recorded, not run here. |
 
-The six-line yield criterion uses the observed paired difference, with its CI
-reported. The other CI rules are the conservative bounds above, not a claim
-that an insignificant loss establishes equivalence. No metric is rounded
-before a decision. Undefined denominators and missing evidence cannot pass.
+G2, G4 and G5 are non-inferiority checks: a candidate passes when its 95% CI
+excludes a loss larger than the margin. Only G3 requires a demonstrated
+improvement. No metric is rounded before a decision. Undefined denominators
+and missing evidence cannot pass.
+
+### Calibration (2026-10-14)
+
+The first version used zero or near-zero margins (rewrites −2 pp, cxlib 0,
+repetition 0, retry +5 pp, and every G2-G5 CI on every seed). The
+disjoint-seed null control (shipped v2.1 against itself, seeds 8000-8002 vs
+7000-7002) failed G2, G4, G5 and G6 under that version: passage lower bound
+−2.78 pp, cxlib −0.61 pp, repetition upper bound +0.08 pp, retry upper bound
++4.90 pp, and per-seed retry up to +10 pp. A model exactly as good as the
+incumbent could not pass. The margins above were set from that null run
+alone, before any round-2 frozen evaluation, as round values above the null's
+worst bound. Re-scoring every saved run: the null passes G2, G4, G5 and G6 and
+still fails G3. Levels, E2B-v4 and E4B-v4 still fail G2 and G3.
 
 ## Frozen benchmark and contamination audit
 

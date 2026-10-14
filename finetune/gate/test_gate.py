@@ -43,8 +43,8 @@ class MetricTest(unittest.TestCase):
         result = paired(rows, "n", "d")
         self.assertEqual(result["delta"], 0)
         self.assertEqual(result["ci95"], [0, 0])
-        self.assertTrue(not_worse(result))
-        self.assertTrue(not_worse(result, False))
+        self.assertTrue(not_worse(result, 0))
+        self.assertTrue(not_worse(result, 0, False))
 
     def test_ratio_of_sums_and_song_clustering(self):
         rows = [{"song_id": "same", "candidate": {"n": 1, "d": 2}, "incumbent": {"n": 0, "d": 2}},
@@ -61,20 +61,26 @@ class VerdictTest(unittest.TestCase):
     def metric(self, lo=0, hi=0, delta=0):
         return {"ci95": [lo, hi], "delta": delta}
 
-    def test_yield_thresholds_and_errors(self):
+    def test_yield_margins_and_errors(self):
         metrics = {k: self.metric() for k in ("full_six", "retry", "rewrite_passage", "rewrite_word", "synonyms")}
-        metrics["retry"] = self.metric(-.01, .05)
-        metrics["rewrite_word"] = self.metric(-.02, .01)
+        metrics["retry"] = self.metric(-.01, .075)
+        metrics["rewrite_word"] = self.metric(-.05, .01)
         self.assertTrue(yield_pass(metrics, 0))
         self.assertFalse(yield_pass(metrics, 1))
-        metrics["rewrite_word"] = self.metric(-.021, .01)
+        metrics["rewrite_word"] = self.metric(-.051, .01)
         self.assertFalse(yield_pass(metrics, 0))
         metrics["rewrite_word"] = self.metric()
-        metrics["retry"] = self.metric(0, .051)
+        metrics["retry"] = self.metric(0, .076)
         self.assertFalse(yield_pass(metrics, 0))
         metrics["retry"] = self.metric()
-        metrics["full_six"] = self.metric(-.02, .01, -.001)
+        metrics["full_six"] = self.metric(-.011, .01, -.001)
         self.assertFalse(yield_pass(metrics, 0))
+        # Point-estimate mode (G6 per seed) ignores interval width but keeps the margins.
+        metrics["full_six"] = self.metric(-.2, .2, 0)
+        metrics["rewrite_passage"] = self.metric(-.2, .2, -.04)
+        self.assertTrue(yield_pass(metrics, 0, bound=False))
+        metrics["rewrite_passage"] = self.metric(-.2, .2, -.06)
+        self.assertFalse(yield_pass(metrics, 0, bound=False))
 
     def test_null_does_not_win_and_stratum_loss_blocks_overall_win(self):
         ties = preference([{"song_id": str(i), "outcome": "tie"} for i in range(150)])
@@ -85,8 +91,8 @@ class VerdictTest(unittest.TestCase):
         self.assertFalse(preference_pass({"all": win}, 149))
         loss = preference([{"song_id": str(i), "outcome": "incumbent"} for i in range(10)])
         self.assertFalse(preference_pass({"all": win, "level:Complex": loss}, 150))
-        self.assertFalse(not_worse(self.metric(-.001, .01)))
-        self.assertFalse(not_worse(self.metric(-.01, .001), False))
+        self.assertFalse(not_worse(self.metric(-.031, .01), .03))
+        self.assertFalse(not_worse(self.metric(-.01, .0026), .0025, False))
 
     def test_repeated_songs_cannot_manufacture_a_significant_win(self):
         # 120 wins from one song vs 60 losses from another: row sign p is tiny, but two songs carry no evidence.
