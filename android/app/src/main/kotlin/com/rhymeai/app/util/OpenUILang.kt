@@ -107,11 +107,48 @@ data class OpenUIAutoCloseResult(
     val wasIncomplete: Boolean
 )
 
+/**
+ * Events emitted by generated UI. [ToAssistant] is OpenUI's `continue_conversation`; the others
+ * are this app's custom actions and are performed natively without calling the model.
+ */
+sealed class OpenUIAction {
+    /** [context] is a JSON object string with action context and form values, or null. */
+    data class ToAssistant(val message: String, val context: String? = null) : OpenUIAction()
+    data class InsertLine(val text: String) : OpenUIAction()
+    data class ReplaceLine(val original: String, val replacement: String) : OpenUIAction()
+    data class KeepAlternate(val text: String) : OpenUIAction()
+    data class SetTheme(val theme: String) : OpenUIAction()
+}
+
+/** Minimal JSON encoding for action context and form values sent back to the model. */
+fun OpenUIValue.toJson(): String = when (this) {
+    is OpenUIValue.Str -> jsonQuote(value)
+    is OpenUIValue.Num -> asString() ?: "0"
+    is OpenUIValue.BoolVal -> value.toString()
+    is OpenUIValue.Arr -> items.joinToString(",", "[", "]") { it.toJson() }
+    is OpenUIValue.Obj -> entries.entries.joinToString(",", "{", "}") { (k, v) -> "${jsonQuote(k)}:${v.toJson()}" }
+    is OpenUIValue.StateRef -> jsonQuote("\$$name")
+    is OpenUIValue.PropPath -> jsonQuote((listOf(rootName) + path).joinToString("."))
+    is OpenUIValue.Element, is OpenUIValue.UnresolvedRef, OpenUIValue.NullVal -> "null"
+}
+
+internal fun jsonQuote(s: String): String = buildString {
+    append('"')
+    for (c in s) {
+        when (c) {
+            '"' -> append("\\\"")
+            '\\' -> append("\\\\")
+            '\n' -> append("\\n")
+            '\r' -> append("\\r")
+            '\t' -> append("\\t")
+            else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
+        }
+    }
+    append('"')
+}
+
 object OpenUILibrary {
     const val ROOT_COMPONENT = "Stack"
-
-    /** Component groups that only work when a toolProvider and tool specs are supplied. */
-    private val TOOL_COMPONENT_GROUPS = setOf("Data & Execution", "Forms & Tables")
 
     val components: Map<String, OpenUIComponentSpec> = linkedMapOf(
         "Stack" to OpenUIComponentSpec(
@@ -201,6 +238,136 @@ object OpenUILibrary {
             ),
             description = "Interactive refinement chips that steer the next generative pass (e.g. tighter meter, darker imagery).",
             group = "Songwriting & Prosody"
+        ),
+        "StanzaMap" to OpenUIComponentSpec(
+            name = "StanzaMap",
+            params = listOf(
+                OpenUIParamSpec("lines", "string[]", required = true),
+                OpenUIParamSpec("letters", "string[]", required = true),
+                OpenUIParamSpec("note", "string", required = false)
+            ),
+            description = "Shows lyric lines with their rhyme-scheme letter; lines sharing a letter are coloured as one rhyme family. lines and letters must be equal length.",
+            group = "Songwriting & Prosody"
+        ),
+        // OpenUI chat-library content components
+        "Callout" to OpenUIComponentSpec(
+            name = "Callout",
+            params = listOf(
+                OpenUIParamSpec("variant", "\"info\" | \"success\" | \"warning\" | \"error\"", required = true),
+                OpenUIParamSpec("title", "string", required = true),
+                OpenUIParamSpec("description", "string", required = false)
+            ),
+            description = "Short highlighted note: a craft observation, a warning about meter, or a confirmation.",
+            group = "Content"
+        ),
+        "TagBlock" to OpenUIComponentSpec(
+            name = "TagBlock",
+            params = listOf(OpenUIParamSpec("tags", "Tag[]", required = true)),
+            description = "Row of small tags, e.g. rhyme words, themes, or labels (at most 8 tags).",
+            group = "Content"
+        ),
+        "Tag" to OpenUIComponentSpec(
+            name = "Tag",
+            params = listOf(
+                OpenUIParamSpec("text", "string", required = true),
+                OpenUIParamSpec("variant", "\"neutral\" | \"success\" | \"warning\" | \"error\"", required = false)
+            ),
+            description = "A single tag inside TagBlock.",
+            group = "Content"
+        ),
+        "ListBlock" to OpenUIComponentSpec(
+            name = "ListBlock",
+            params = listOf(OpenUIParamSpec("items", "ListItem[]", required = true)),
+            description = "Vertical list of short items such as steps, notes, or song-structure parts.",
+            group = "Content"
+        ),
+        "ListItem" to OpenUIComponentSpec(
+            name = "ListItem",
+            params = listOf(
+                OpenUIParamSpec("title", "string", required = true),
+                OpenUIParamSpec("subtitle", "string", required = false)
+            ),
+            description = "One item inside ListBlock.",
+            group = "Content"
+        ),
+        "Separator" to OpenUIComponentSpec(
+            name = "Separator",
+            params = emptyList(),
+            description = "Thin divider between sections of a Card.",
+            group = "Content"
+        ),
+        "Tabs" to OpenUIComponentSpec(
+            name = "Tabs",
+            params = listOf(OpenUIParamSpec("items", "TabItem[]", required = true)),
+            description = "Alternative views of the same answer, e.g. three directions for a chorus.",
+            group = "Layout"
+        ),
+        "TabItem" to OpenUIComponentSpec(
+            name = "TabItem",
+            params = listOf(
+                OpenUIParamSpec("label", "string", required = true),
+                OpenUIParamSpec("children", "Component[]", required = true)
+            ),
+            description = "One tab inside Tabs.",
+            group = "Layout"
+        ),
+        "FollowUpBlock" to OpenUIComponentSpec(
+            name = "FollowUpBlock",
+            params = listOf(OpenUIParamSpec("items", "FollowUpItem[]", required = true)),
+            description = "Suggested next requests, shown at the END of the Card. Tapping one sends its text as the writer's next message.",
+            group = "Follow-ups"
+        ),
+        "FollowUpItem" to OpenUIComponentSpec(
+            name = "FollowUpItem",
+            params = listOf(OpenUIParamSpec("text", "string", required = true)),
+            description = "One follow-up request, written as the writer would say it.",
+            group = "Follow-ups"
+        ),
+        // Actions (spec 1.0). Built-in: @ToAssistant, @Set, @Reset, @Run. Custom: the app's own effects.
+        "@ToAssistant" to OpenUIComponentSpec(
+            name = "@ToAssistant",
+            params = listOf(
+                OpenUIParamSpec("message", "string", required = true),
+                OpenUIParamSpec("context", "object", required = false)
+            ),
+            description = "Sends message as the writer's next turn, with context and any form values attached.",
+            group = "Actions"
+        ),
+        "@InsertLine" to OpenUIComponentSpec(
+            name = "@InsertLine",
+            params = listOf(OpenUIParamSpec("text", "string", required = true)),
+            description = "Inserts text as the next lyric line at the writer's cursor.",
+            group = "Actions"
+        ),
+        "@ReplaceLine" to OpenUIComponentSpec(
+            name = "@ReplaceLine",
+            params = listOf(
+                OpenUIParamSpec("original", "string", required = true),
+                OpenUIParamSpec("replacement", "string", required = true)
+            ),
+            description = "Replaces the lyric line whose text exactly equals original with replacement.",
+            group = "Actions"
+        ),
+        "@KeepAlternate" to OpenUIComponentSpec(
+            name = "@KeepAlternate",
+            params = listOf(OpenUIParamSpec("text", "string", required = true)),
+            description = "Saves text to the song notebook's alternates.",
+            group = "Actions"
+        ),
+        "@SetTheme" to OpenUIComponentSpec(
+            name = "@SetTheme",
+            params = listOf(OpenUIParamSpec("theme", "string", required = true)),
+            description = "Sets the song's theme/context.",
+            group = "Actions"
+        ),
+        "@Set" to OpenUIComponentSpec(
+            name = "@Set",
+            params = listOf(
+                OpenUIParamSpec("target", "any", required = true),
+                OpenUIParamSpec("value", "any", required = true)
+            ),
+            description = "Writes a value to a \$state variable.",
+            group = "Actions"
         ),
         // Generate-Once, Execute-Locally (Query / Mutation / Reactive Forms & Tables)
         "Query" to OpenUIComponentSpec(
@@ -341,19 +508,61 @@ object OpenUILibrary {
     private const val DEFAULT_PREAMBLE =
         "You are an AI songwriting assistant that responds using openui-lang, a declarative streaming UI language. Your ENTIRE response must be valid openui-lang code — no markdown, no explanations, no code fences, just openui-lang."
 
+    /** Components advertised by the single-shot next-line suggestion prompt. */
+    val SUGGESTION_COMPONENTS: Set<String> = setOf(
+        "Stack", "Card", "CardHeader", "TextContent", "Badge",
+        "RhymeGroup", "SuggestionLine", "ProsodyMeter", "ActionChipBar"
+    )
+
+    /** Components advertised by the conversational agent prompt (OpenUI chat-library shape, root Card). */
+    val AGENT_COMPONENTS: Set<String> = setOf(
+        "Card", "CardHeader", "TextContent", "Stack", "Separator",
+        "RhymeGroup", "SuggestionLine", "ProsodyMeter", "StanzaMap",
+        "Callout", "TagBlock", "Tag", "ListBlock", "ListItem", "Tabs", "TabItem",
+        "Table", "Col", "Form", "FormControl", "Input", "Select", "SelectItem", "Buttons", "Button",
+        "FollowUpBlock", "FollowUpItem"
+    )
+
+    /** Actions the agent may use: one built-in that returns to the model, plus the app's own effects. */
+    val AGENT_ACTIONS: Set<String> = setOf("@ToAssistant", "@InsertLine", "@ReplaceLine", "@KeepAlternate", "@SetTheme")
+
+    /** Only meaningful with a toolProvider and tool specs. */
+    private val TOOL_ONLY_COMPONENTS: Set<String> = setOf(
+        "Query", "Mutation", "Action", "Form", "FormControl", "Input", "Select", "SelectItem",
+        "Buttons", "Button", "Table", "Col"
+    )
+
+    private val SUGGESTION_EXAMPLE = """
+root = Stack([meter, group1, group2, chips], "column", "md")
+meter = ProsodyMeter("Yellow lights on a midnight road", "da-DUM da-DUM da-DUM da-DUM", "4-beat driving cadence ending on /oʊd/")
+group1 = RhymeGroup("Concrete Imagery", [s1, s2, s3], "/oʊd/", "Grounded street-level detail")
+s1 = SuggestionLine("Coffee gone cold beside the dashboard glowed", "Sensory detail", "glowed")
+s2 = SuggestionLine("Rain-slicked turns where the highway slowed", "Motion", "slowed")
+s3 = SuggestionLine("Carrying the weight of a quiet load", "Internal tension", "load")
+group2 = RhymeGroup("Emotional Pivot", [s4, s5, s6], "/oʊd/", "Shifts focus inward")
+s4 = SuggestionLine("Every mile another promise owed", "Stakes", "owed")
+s5 = SuggestionLine("Tracing every crack in the life we chose", "Reflection", "chose")
+s6 = SuggestionLine("Still chasing the spark before the circuit blowed", "Urgency", "blowed")
+chips = ActionChipBar("Steer direction", ["Tighter meter", "More concrete imagery", "Internal rhyme", "Darker tone"])
+""".trim()
+
     fun generateSystemPrompt(
         preamble: String = DEFAULT_PREAMBLE,
         additionalRules: List<String> = emptyList(),
         tools: List<OpenUIToolSpec> = emptyList(),
         toolCalls: Boolean = false,
-        bindings: Boolean = false
+        bindings: Boolean = false,
+        componentNames: Set<String> = SUGGESTION_COMPONENTS,
+        rootComponent: String = ROOT_COMPONENT,
+        actionNames: Set<String> = emptySet(),
+        example: String = SUGGESTION_EXAMPLE
     ): String {
-        // Data/form components only work with a toolProvider; advertising them without tools
+        // Data components only work with a toolProvider; advertising them without tools
         // invites the model to invent Query("...") calls that nothing can execute.
         val toolComponentsEnabled = tools.isNotEmpty()
+        val advertised = if (toolComponentsEnabled) componentNames + TOOL_ONLY_COMPONENTS else componentNames
         val grouped = components.values
-            .filterNot { it.name.startsWith("@") }
-            .filter { toolComponentsEnabled || it.group !in TOOL_COMPONENT_GROUPS }
+            .filter { !it.name.startsWith("@") && it.name in advertised }
             .groupBy { it.group }
         val catalogLines = buildString {
             appendLine("## Component Library")
@@ -367,14 +576,27 @@ object OpenUILibrary {
             }
         }.trimEnd()
 
+        val actionsSection = if (actionNames.isNotEmpty()) {
+            buildString {
+                appendLine()
+                appendLine()
+                appendLine("## Actions")
+                appendLine()
+                appendLine("Pass an action as a Button's action argument. Use ONLY these:")
+                components.values.filter { it.name in actionNames }.forEach { spec ->
+                    appendLine("- `${spec.signature}` — ${spec.description}")
+                }
+            }.trimEnd()
+        } else ""
+
         val rules = mutableListOf(
             "1. Each statement is on its own line: `identifier = Expression`",
-            "2. `root` is the entry point — every program must define `root = $ROOT_COMPONENT(...)` first so the UI streams progressively top-down",
+            "2. `root` is the entry point — every program must define `root = $rootComponent(...)` first so the UI streams progressively top-down",
             "3. Expressions are: strings (\"...\"), numbers, booleans (true/false), null, arrays ([...]), objects ({...}), or component calls TypeName(arg1, arg2, ...)",
-            "4. Use references for readability: define `root = Stack([...])` on the first line, then define each child variable on subsequent lines",
+            "4. Use references for readability: define `root = $rootComponent([...])` on the first line, then define each child variable on subsequent lines",
             "5. EVERY variable (except root and \$state) MUST be referenced by at least one parent component. Unreferenced variables are dropped and will NOT render",
             "6. Arguments are POSITIONAL (order matters, not names). Write `Stack([group1, group2], \"column\", \"md\")` NOT `Stack(children: [group1], direction: \"column\")` — colon syntax inside component calls is NOT supported",
-            "7. Optional arguments can be omitted from the end",
+            "7. Optional arguments can be omitted from the end; use null to skip an optional argument in the middle",
             "8. Use ONLY the components listed in the Component Library below"
         )
         if (toolComponentsEnabled && bindings) {
@@ -414,21 +636,85 @@ $preamble
 
 ${numberedRules.joinToString("\n")}
 
-$catalogLines$toolsSection
+$catalogLines$actionsSection$toolsSection
 
 ## Example (one possible layout — adapt the structure to each request)
 
-root = Stack([meter, group1, group2, chips], "column", "md")
-meter = ProsodyMeter("Yellow lights on a midnight road", "da-DUM da-DUM da-DUM da-DUM", "4-beat driving cadence ending on /oʊd/")
-group1 = RhymeGroup("Concrete Imagery", [s1, s2, s3], "/oʊd/", "Grounded street-level detail")
-s1 = SuggestionLine("Coffee gone cold beside the dashboard glowed", "Sensory detail", "glowed")
-s2 = SuggestionLine("Rain-slicked turns where the highway slowed", "Motion", "slowed")
-s3 = SuggestionLine("Carrying the weight of a quiet load", "Internal tension", "load")
-group2 = RhymeGroup("Emotional Pivot", [s4, s5, s6], "/oʊd/", "Shifts focus inward")
-s4 = SuggestionLine("Every mile another promise owed", "Stakes", "owed")
-s5 = SuggestionLine("Tracing every crack in the life we chose", "Reflection", "chose")
-s6 = SuggestionLine("Still chasing the spark before the circuit blowed", "Urgency", "blowed")
-chips = ActionChipBar("Steer direction", ["Tighter meter", "More concrete imagery", "Internal rhyme", "Darker tone"])
+$example
+""".trimIndent()
+    }
+
+    private const val AGENT_PREAMBLE =
+        "You are the songwriting assistant inside Writers Block, a lyric-writing app. You reply to the writer with generated interfaces written in openui-lang, a declarative streaming UI language. Your ENTIRE reply must be valid openui-lang — no markdown, no prose outside statements, no code fences."
+
+    private val AGENT_RULES = listOf(
+        "Every reply is exactly ONE program whose root is a Card. Its first child is a CardHeader that names what you are answering.",
+        "Choose components that fit the request: RhymeGroup with SuggestionLine for candidate lyric lines, StanzaMap for rhyme schemes, ProsodyMeter for meter and stress, Table for comparisons, ListBlock for steps or structure, Callout for one important observation, Tabs for alternative directions. Keep prose short: TextContent of one or two sentences.",
+        "Offer candidate lyric lines ONLY as SuggestionLine inside a RhymeGroup. The app adds Use and Keep buttons to every SuggestionLine, so never add your own buttons to insert or keep those lines.",
+        "End every Card with a FollowUpBlock of 2 to 4 FollowUpItem, phrased as the writer would ask, specific to this song.",
+        "Only add a Button for an action listed under Actions. A Button with @ReplaceLine must copy `original` character for character from the lyrics. Never add buttons for things the app cannot do (export, play audio, open links, share).",
+        "If the request is ambiguous or you need details to do it well, ask with a Form instead of guessing: Form(\"details\", Buttons([Button(\"Continue\", @ToAssistant(\"Here are the details\"), \"primary\")]), [field1, field2]) with each field defined as its own FormControl reference. The writer's answers are attached to that message automatically.",
+        "Follow the rhyme settings and complexity in Song Context unless the writer asks for something different.",
+        "Never mention colours; refer to rhyme families by their letters."
+    )
+
+    private val AGENT_EXAMPLE = """
+root = Card([header, intro, group1, follow])
+header = CardHeader("Next line for Verse 2", "Rhymes with \"road\" · AABB")
+intro = TextContent("Two directions: one concrete, one turning inward.", "muted")
+group1 = RhymeGroup("Concrete images", [s1, s2, s3], "/oʊd/")
+s1 = SuggestionLine("Headlights spill across the empty road", "Image", "road")
+s2 = SuggestionLine("Every mile marker feels like something owed", "Stakes", "owed")
+s3 = SuggestionLine("Static on the radio, the signal slowed", "Sound", "slowed")
+follow = FollowUpBlock([f1, f2, f3])
+f1 = FollowUpItem("Make these darker")
+f2 = FollowUpItem("Check the meter of this verse")
+f3 = FollowUpItem("Turn this into a chorus hook")
+""".trim()
+
+    /** Live song state sent with every agent turn, so replies match the writer's current position. */
+    data class AgentSongContext(
+        val title: String,
+        val theme: String,
+        val lyrics: String,
+        val wholeSong: Boolean,
+        val targetLine: String?,
+        val currentLetter: String,
+        val rhymeScheme: String,
+        val sectionName: String,
+        val rhymeTypeLabel: String,
+        val complexityLabel: String,
+        val complexityHint: String
+    )
+
+    fun generateAgentSystemPrompt(song: AgentSongContext): String {
+        val base = generateSystemPrompt(
+            preamble = AGENT_PREAMBLE,
+            additionalRules = AGENT_RULES,
+            componentNames = AGENT_COMPONENTS,
+            rootComponent = "Card",
+            actionNames = AGENT_ACTIONS,
+            example = AGENT_EXAMPLE
+        )
+        val lyricsLabel = if (song.wholeSong) "Full lyrics" else "Lyrics excerpt (writer shares only the current line)"
+        val target = song.targetLine?.let { "\"$it\" (the next line should rhyme with it)" }
+            ?: "none — the next line opens a new rhyme sound"
+        return """
+$base
+
+## Song Context
+
+Title: ${song.title.ifBlank { "Untitled" }}
+Theme: ${song.theme.ifBlank { "not set" }}
+Current section: ${song.sectionName}
+Rhyme scheme: ${song.rhymeScheme} (next line is letter ${song.currentLetter})
+Rhyme anchor: $target
+Rhyme type: ${song.rhymeTypeLabel}
+Complexity: ${song.complexityLabel}. ${song.complexityHint}
+$lyricsLabel:
+${"\"\"\""}
+${song.lyrics.ifBlank { "(no lyrics yet)" }}
+${"\"\"\""}
 """.trimIndent()
     }
 

@@ -744,11 +744,20 @@ Emit valid openui-lang starting with `root = Stack(...)`, laid out for this requ
         modelId: String,
         prompt: String,
         onModelFallback: ((AIModel) -> Unit)?
+    ): Flow<String> = withModelFallback(provider, modelId, onModelFallback) { id ->
+        streamCloudRawTokens(provider, apiKey, id, prompt)
+    }
+
+    private fun withModelFallback(
+        provider: AIProvider,
+        modelId: String,
+        onModelFallback: ((AIModel) -> Unit)?,
+        stream: (String) -> Flow<String>
     ): Flow<String> = flow {
         var emitted = false
         val fallback = fallbackModelFor(provider)
         try {
-            streamCloudRawTokens(provider, apiKey, modelId, prompt).collect {
+            stream(modelId).collect {
                 emitted = true
                 emit(it)
             }
@@ -760,11 +769,143 @@ Emit valid openui-lang starting with `root = Stack(...)`, laid out for this requ
             }
             onModelFallback?.invoke(fallback)
             try {
-                streamCloudRawTokens(provider, apiKey, fallback.id, prompt).collect { emit(it) }
+                stream(fallback.id).collect { emit(it) }
             } catch (retryError: Throwable) {
                 throw userFacingProviderException(retryError)
             }
         }
+    }
+
+    /** One turn of an assistant conversation. [role] is "user" or "assistant". */
+    data class ChatTurn(val role: String, val content: String)
+
+    /**
+     * Streams the raw text of the agent's next reply (an OpenUI Lang program) for a multi-turn
+     * conversation. [systemPrompt] carries the component library and the live song context.
+     */
+    fun streamAssistantReply(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        systemPrompt: String,
+        turns: List<ChatTurn>,
+        onModelFallback: ((AIModel) -> Unit)? = null
+    ): Flow<String> = flow {
+        require(provider != AIProvider.LOCAL) { "The generative assistant requires a cloud AI provider." }
+        if (apiKey.isBlank()) {
+            throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
+        }
+        val normalized = normalizeChatTurns(turns)
+        require(normalized.isNotEmpty()) { "Nothing to send." }
+        withModelFallback(provider, modelId, onModelFallback) { id ->
+            streamChatTokens(provider, apiKey, id, systemPrompt, normalized)
+        }.collect { emit(it) }
+    }.flowOn(Dispatchers.IO)
+
+    private fun streamChatTokens(
+        provider: AIProvider,
+        apiKey: String,
+        modelId: String,
+        systemPrompt: String,
+        turns: List<ChatTurn>
+    ): Flow<String> = when (provider) {
+        AIProvider.GEMINI -> httpPostStream(
+            url = "https://generativelanguage.googleapis.com/v1beta/models/$modelId:streamGenerateContent?alt=sse",
+            headers = mapOf(
+                "x-goog-api-key" to apiKey,
+                "Content-Type" to "application/json",
+                "Accept" to "text/event-stream"
+            ),
+            body = buildGeminiChatRequestBody(systemPrompt, turns).toString()
+        ).mapNotNull(::parseGeminiCandidateText)
+        AIProvider.OPENAI -> httpPostStream(
+            url = "https://api.openai.com/v1/chat/completions",
+            headers = mapOf(
+                "Authorization" to "Bearer $apiKey",
+                "Content-Type" to "application/json",
+                "Accept" to "text/event-stream"
+            ),
+            body = buildOpenAIChatTurnsRequestBody(modelId, systemPrompt, turns).toString()
+        ).mapNotNull(::parseOpenAIStreamToken)
+        AIProvider.CLAUDE -> httpPostStream(
+            url = "https://api.anthropic.com/v1/messages",
+            headers = mapOf(
+                "x-api-key" to apiKey,
+                "anthropic-version" to "2023-06-01",
+                "Content-Type" to "application/json",
+                "Accept" to "text/event-stream"
+            ),
+            body = buildClaudeChatTurnsRequestBody(modelId, systemPrompt, turns).toString()
+        ).mapNotNull(::parseClaudeStreamToken)
+        AIProvider.LOCAL -> error("unreachable")
+    }
+
+    /**
+     * Providers require the conversation to start with the user and to alternate roles. Drops
+     * leading assistant turns and blank turns, and merges consecutive turns of the same role
+     * (e.g. two user messages around a failed reply).
+     */
+    internal fun normalizeChatTurns(turns: List<ChatTurn>): List<ChatTurn> {
+        val result = mutableListOf<ChatTurn>()
+        for (turn in turns) {
+            if (turn.content.isBlank()) continue
+            val role = if (turn.role == "assistant") "assistant" else "user"
+            if (result.isEmpty() && role == "assistant") continue
+            val last = result.lastOrNull()
+            if (last != null && last.role == role) {
+                result[result.lastIndex] = last.copy(content = last.content + "\n\n" + turn.content)
+            } else {
+                result += ChatTurn(role, turn.content)
+            }
+        }
+        return result
+    }
+
+    internal fun buildGeminiChatRequestBody(systemPrompt: String, turns: List<ChatTurn>) = buildJsonObject {
+        put("systemInstruction", buildJsonObject {
+            put("parts", buildJsonArray { add(buildJsonObject { put("text", systemPrompt) }) })
+        })
+        put("contents", buildJsonArray {
+            turns.forEach { turn ->
+                add(buildJsonObject {
+                    put("role", if (turn.role == "assistant") "model" else "user")
+                    put("parts", buildJsonArray { add(buildJsonObject { put("text", turn.content) }) })
+                })
+            }
+        })
+    }
+
+    // No temperature: several current OpenAI reasoning models reject any value other than the default.
+    internal fun buildOpenAIChatTurnsRequestBody(modelId: String, systemPrompt: String, turns: List<ChatTurn>) = buildJsonObject {
+        put("model", modelId)
+        put("stream", true)
+        put("messages", buildJsonArray {
+            add(buildJsonObject {
+                put("role", "system")
+                put("content", systemPrompt)
+            })
+            turns.forEach { turn ->
+                add(buildJsonObject {
+                    put("role", turn.role)
+                    put("content", turn.content)
+                })
+            }
+        })
+    }
+
+    internal fun buildClaudeChatTurnsRequestBody(modelId: String, systemPrompt: String, turns: List<ChatTurn>) = buildJsonObject {
+        put("model", modelId)
+        put("max_tokens", OPENUI_MAX_OUTPUT_TOKENS)
+        put("stream", true)
+        put("system", systemPrompt)
+        put("messages", buildJsonArray {
+            turns.forEach { turn ->
+                add(buildJsonObject {
+                    put("role", turn.role)
+                    put("content", turn.content)
+                })
+            }
+        })
     }
 
     private fun streamCloudRawTokens(

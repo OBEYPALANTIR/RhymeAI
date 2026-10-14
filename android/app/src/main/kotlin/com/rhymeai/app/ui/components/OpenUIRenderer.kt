@@ -41,6 +41,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -55,20 +57,31 @@ import com.rhymeai.app.util.OpenUIParseResult
 import com.rhymeai.app.util.SyllableCounter
 
 import com.rhymeai.app.service.AIModel
+import com.rhymeai.app.util.OpenUIAction
 import com.rhymeai.app.util.OpenUIValue
+import com.rhymeai.app.util.toJson
+import com.rhymeai.app.ui.theme.LocalAppAppearance
+import com.rhymeai.app.ui.theme.rhymePalette
+import com.rhymeai.app.ui.theme.statusErrorColor
+import com.rhymeai.app.ui.theme.statusSuccessColor
+import com.rhymeai.app.ui.theme.statusWarningColor
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import kotlinx.coroutines.launch
 
 typealias OpenUIToolProvider = Map<String, suspend (Map<String, Any?>) -> OpenUIValue>
@@ -78,14 +91,19 @@ class OpenUIRuntimeState(
     val stateValues: MutableMap<String, OpenUIValue>,
     val queryResults: MutableMap<String, OpenUIValue>,
     val toolProvider: OpenUIToolProvider,
-    private val runScope: kotlinx.coroutines.CoroutineScope
+    private val runScope: kotlinx.coroutines.CoroutineScope,
+    private val dispatch: (OpenUIAction) -> Unit = {}
 ) {
+    /** Fields the writer has filled in; their values are attached to @ToAssistant as form state. */
+    private val userFields = linkedSetOf<String>()
+
     fun getStateString(varName: String): String {
         val v = stateValues[varName] ?: parseResult.stateDeclarations[varName]
         return v?.asString().orEmpty()
     }
 
     fun setStateString(varName: String, newValue: String) {
+        userFields += varName
         stateValues[varName] = OpenUIValue.Str(newValue)
     }
 
@@ -106,6 +124,11 @@ class OpenUIRuntimeState(
         val handler = toolProvider[toolName] ?: return
         val argsMap = resolveArgsObject(mutationNode.props["args"])
         runCatching { handler(argsMap) }
+    }
+
+    /** OpenUI default: a Button without an action sends its own label to the assistant. */
+    fun sendLabel(label: String) {
+        if (label.isNotBlank()) dispatch(OpenUIAction.ToAssistant(label, buildContextJson(null)))
     }
 
     fun executeActionNode(actionNode: OpenUIElementNode?) {
@@ -135,9 +158,44 @@ class OpenUIRuntimeState(
                             }
                         }
                     }
+                    "@Set" -> {
+                        val target = step.props["target"] as? OpenUIValue.StateRef
+                        val value = step.props["value"]
+                        if (target != null && value != null) stateValues[target.name] = resolve(value)
+                    }
+                    "@ToAssistant" -> {
+                        val message = resolve(step.props["message"] ?: OpenUIValue.NullVal).asString().orEmpty()
+                        if (message.isNotBlank()) {
+                            dispatch(OpenUIAction.ToAssistant(message, buildContextJson(step.props["context"])))
+                        }
+                    }
+                    "@InsertLine" -> dispatch(OpenUIAction.InsertLine(propText(step, "text")))
+                    "@ReplaceLine" -> dispatch(OpenUIAction.ReplaceLine(propText(step, "original"), propText(step, "replacement")))
+                    "@KeepAlternate" -> dispatch(OpenUIAction.KeepAlternate(propText(step, "text")))
+                    "@SetTheme" -> dispatch(OpenUIAction.SetTheme(propText(step, "theme")))
                 }
             }
         }
+    }
+
+    private fun propText(step: OpenUIElementNode, name: String): String =
+        resolve(step.props[name] ?: OpenUIValue.NullVal).asString().orEmpty()
+
+    /** Substitutes current $state values for state references. */
+    private fun resolve(value: OpenUIValue): OpenUIValue = when (value) {
+        is OpenUIValue.StateRef -> stateValues[value.name] ?: parseResult.stateDeclarations[value.name] ?: OpenUIValue.NullVal
+        is OpenUIValue.Arr -> OpenUIValue.Arr(value.items.map(::resolve))
+        is OpenUIValue.Obj -> OpenUIValue.Obj(value.entries.mapValues { resolve(it.value) })
+        else -> value
+    }
+
+    /** `{"context": ..., "form": {...}}` with only the parts that exist, or null. */
+    private fun buildContextJson(context: OpenUIValue?): String? {
+        val parts = LinkedHashMap<String, OpenUIValue>()
+        context?.let(::resolve)?.takeUnless { it is OpenUIValue.NullVal }?.let { parts["context"] = it }
+        val form = userFields.associateWith { stateValues[it] ?: OpenUIValue.Str("") }
+        if (form.isNotEmpty()) parts["form"] = OpenUIValue.Obj(form)
+        return if (parts.isEmpty()) null else OpenUIValue.Obj(parts).toJson()
     }
 
     fun resolveColumnCells(dataProp: OpenUIValue?): List<String> {
@@ -190,39 +248,42 @@ class OpenUIRuntimeState(
 private val LocalOpenUIRuntime = compositionLocalOf<OpenUIRuntimeState?> { null }
 
 /** Component types that are runtime wiring (referenced through props), never rendered on their own. */
-private val NON_VISUAL_OPENUI_TYPES = setOf("Query", "Mutation", "Action", "@Run", "@Reset", "Col", "SelectItem")
+private val NON_VISUAL_OPENUI_TYPES = setOf(
+    "Query", "Mutation", "Action", "@Run", "@Reset", "@Set", "@ToAssistant", "@InsertLine",
+    "@ReplaceLine", "@KeepAlternate", "@SetTheme", "Col", "SelectItem"
+)
 
+/** Dispatches generated-UI events to the host. */
+internal val LocalOpenUIActionHandler = compositionLocalOf<(OpenUIAction) -> Unit> { {} }
+
+/** False while a message is still streaming: OpenUI keeps interactions off until the program is complete. */
+internal val LocalOpenUIInteractive = compositionLocalOf { true }
+
+/**
+ * Renders one generated assistant reply (an OpenUI Lang program). Each message gets its own
+ * runtime so `$state` and form values are scoped to that program, as in the OpenUI spec.
+ * Shows a plain-text fallback when the model ignored the format, and a Source toggle with any
+ * parse issues once streaming has finished.
+ */
 @Composable
-fun OpenUIAssistantSection(
+fun OpenUIMessageView(
     parseResult: OpenUIParseResult,
-    rawOpenUICode: String,
-    providerName: String,
+    rawProgram: String,
     isStreaming: Boolean,
     verifiedSuggestions: Map<String, SuggestedLine>,
     highlightRhyme: Boolean,
     showProsody: Boolean,
     keptAlternates: Set<String>,
-    onUseSuggestion: (String) -> Unit,
-    onKeepSuggestion: (String) -> Unit,
-    onActionChipSelected: (String) -> Unit,
-    selectedModel: AIModel? = null,
-    availableModels: List<AIModel> = emptyList(),
-    onSelectModel: ((AIModel) -> Unit)? = null,
-    toolProvider: OpenUIToolProvider? = null,
-    onGenerate: (() -> Unit)? = null,
-    notice: String? = null,
-    modifier: Modifier = Modifier
+    onAction: (OpenUIAction) -> Unit,
+    modifier: Modifier = Modifier,
+    toolProvider: OpenUIToolProvider? = null
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val animationsEnabled = LocalAnimationsEnabled.current
-    var showInspector by remember { mutableStateOf(false) }
-    var modelMenuExpanded by remember { mutableStateOf(false) }
-    var steeringInput by remember { mutableStateOf("") }
     val effectiveTools = toolProvider ?: emptyMap()
+    val currentOnAction by rememberUpdatedState(onAction)
     val stateValues = remember(parseResult.stateDeclarations) {
-        mutableStateMapOf<String, OpenUIValue>().apply {
-            putAll(parseResult.stateDeclarations)
-        }
+        mutableStateMapOf<String, OpenUIValue>().apply { putAll(parseResult.stateDeclarations) }
     }
     val queryResults = remember(parseResult.queries) {
         mutableStateMapOf<String, OpenUIValue>().apply {
@@ -238,324 +299,106 @@ fun OpenUIAssistantSection(
             stateValues = stateValues,
             queryResults = queryResults,
             toolProvider = effectiveTools,
-            runScope = scope
+            runScope = scope,
+            dispatch = { currentOnAction(it) }
         )
     }
-
-    LaunchedEffect(parseResult.queries, effectiveTools) {
-        for (queryId in parseResult.queries.keys) {
-            runtime.executeQuery(queryId)
+    // Spec: queries run when streaming ends, never mid-stream.
+    LaunchedEffect(parseResult.queries, effectiveTools, isStreaming) {
+        if (!isStreaming) {
+            for (queryId in parseResult.queries.keys) runtime.executeQuery(queryId)
         }
     }
+    var showSource by remember { mutableStateOf(false) }
+    val root = parseResult.root
 
     Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(colorScheme.surfaceContainer, RoundedCornerShape(DesignTokens.Radius.lg))
-            .border(1.dp, colorScheme.primary.copy(alpha = 0.35f), RoundedCornerShape(DesignTokens.Radius.lg))
-            .padding(DesignTokens.Spacing.md)
-            .testTag("openUIAssistantSection"),
-        verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
     ) {
-        // OpenUI Cloud Generative UI header bar with live Model Selector & Inspect toggle
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
-                modifier = Modifier.weight(1f)
+        when {
+            root != null -> CompositionLocalProvider(
+                LocalOpenUIRuntime provides runtime,
+                LocalOpenUIActionHandler provides { action -> currentOnAction(action) },
+                LocalOpenUIInteractive provides !isStreaming
             ) {
-                IconOrSpinner(isStreaming = isStreaming)
-                Column {
-                    Text(
-                        text = "$providerName · OpenUI Generative UI",
-                        fontSize = DesignTokens.Typography.caption,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colorScheme.onSurface
-                    )
-                    Text(
-                        text = when {
-                            isStreaming -> "Streaming openui-lang (${parseResult.meta.statementCount} statements)..."
-                            parseResult.root == null -> "Nothing generated yet"
-                            parseResult.meta.errors.isNotEmpty() ->
-                                "Generated · ${parseResult.meta.statementCount} statements · ${parseResult.meta.errors.size} issue(s), tap Inspect"
-                            else -> "Generated · ${parseResult.meta.statementCount} statements"
-                        },
-                        fontSize = 12.sp,
-                        color = colorScheme.onSurfaceVariant,
-                        fontStyle = FontStyle.Italic
-                    )
-                }
-            }
-
-            if (rawOpenUICode.isNotBlank()) {
-                TextButton(
-                    onClick = { showInspector = !showInspector },
-                    modifier = Modifier
-                        .heightIn(min = DesignTokens.Touch.minTarget)
-                        .testTag("openUIInspectButton")
-                ) {
-                    androidx.compose.material3.Icon(
-                        Icons.Default.Code,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = if (showInspector) "Hide Lang" else "Inspect",
-                        fontSize = 12.sp
-                    )
-                }
-            }
-        }
-
-        // Inline Model Picker row inside the OpenUI Studio so user can switch 3.8 Flash / 4 Argon / GPT-6 / Claude 5.5 anytime
-        if (selectedModel != null && availableModels.isNotEmpty() && onSelectModel != null) {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { modelMenuExpanded = true }
-                        .testTag("openUIModelSelector"),
-                    shape = RoundedCornerShape(DesignTokens.Radius.md),
-                    color = colorScheme.surfaceContainerHigh,
-                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.sm),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Active Cloud Model",
-                                fontSize = 11.sp,
-                                color = colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "${selectedModel.displayName} (${selectedModel.id})",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = colorScheme.onSurface
-                            )
-                        }
-                        androidx.compose.material3.Icon(
-                            Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Change model",
-                            tint = colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                DropdownMenu(
-                    expanded = modelMenuExpanded,
-                    onDismissRequest = { modelMenuExpanded = false }
-                ) {
-                    availableModels.forEach { model ->
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(
-                                        text = model.displayName,
-                                        fontWeight = if (model == selectedModel) FontWeight.SemiBold else FontWeight.Normal,
-                                        fontSize = 14.sp
-                                    )
-                                    Text(
-                                        text = model.id,
-                                        fontSize = 11.sp,
-                                        color = colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            },
-                            onClick = {
-                                modelMenuExpanded = false
-                                onSelectModel(model)
-                            }
-                        )
-                    }
-                }
-            }
-        }
-
-        AnimatedVisibility(
-            visible = showInspector && rawOpenUICode.isNotBlank(),
-            enter = if (animationsEnabled) {
-                expandVertically(
-                    tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing),
-                    expandFrom = Alignment.Top
+                OpenUINodeRenderer(
+                    node = root,
+                    verifiedSuggestions = verifiedSuggestions,
+                    highlightRhyme = highlightRhyme,
+                    showProsody = showProsody,
+                    keptAlternates = keptAlternates,
+                    onUseSuggestion = { currentOnAction(OpenUIAction.InsertLine(it)) },
+                    onKeepSuggestion = { currentOnAction(OpenUIAction.KeepAlternate(it)) },
+                    onActionChipSelected = { currentOnAction(OpenUIAction.ToAssistant(it)) }
                 )
-            } else {
-                EnterTransition.None
-            },
-            exit = if (animationsEnabled) {
-                shrinkVertically(
-                    tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing),
-                    shrinkTowards = Alignment.Top
-                )
-            } else {
-                ExitTransition.None
             }
-        ) {
-            Box(
+            !isStreaming && rawProgram.isNotBlank() && parseResult.meta.statementCount == 0 -> Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(colorScheme.surfaceContainerLow, RoundedCornerShape(DesignTokens.Radius.md))
-                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.md))
+                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.lg))
                     .padding(DesignTokens.Spacing.md)
-                    .testTag("openUILangInspector")
+                    .testTag("openUIPlainTextReply"),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "openui-lang stream",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = colorScheme.onSurfaceVariant
-                        )
-                        if (parseResult.meta.unresolved.isNotEmpty()) {
-                            Text(
-                                text = "Resolving: ${parseResult.meta.unresolved.joinToString(", ")}",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                color = colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                Text(
+                    "Replied in plain text instead of a generated interface.",
+                    fontSize = 12.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+                Text(rawProgram.trim(), fontSize = 14.sp, lineHeight = 20.sp, color = colorScheme.onSurface)
+            }
+        }
+
+        if (!isStreaming && rawProgram.isNotBlank() && parseResult.meta.statementCount > 0) {
+            val issues = parseResult.meta.errors.size
+            TextButton(
+                onClick = { showSource = !showSource },
+                modifier = Modifier
+                    .heightIn(min = DesignTokens.Touch.minTarget)
+                    .testTag("openUISourceToggle")
+            ) {
+                androidx.compose.material3.Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = when {
+                        showSource -> "Hide source"
+                        issues > 0 -> "Source · $issues issue${if (issues == 1) "" else "s"}"
+                        else -> "Source"
+                    },
+                    fontSize = 12.sp,
+                    color = if (issues > 0 && !showSource) colorScheme.error else colorScheme.onSurfaceVariant
+                )
+            }
+            AnimatedVisibility(
+                visible = showSource,
+                enter = if (animationsEnabled) {
+                    expandVertically(tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing), expandFrom = Alignment.Top)
+                } else EnterTransition.None,
+                exit = if (animationsEnabled) {
+                    shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                } else ExitTransition.None
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(colorScheme.surfaceContainerLow, RoundedCornerShape(DesignTokens.Radius.md))
+                        .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.md))
+                        .padding(DesignTokens.Spacing.md)
+                        .testTag("openUILangInspector"),
+                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+                ) {
                     parseResult.meta.errors.forEach { err ->
-                        Text(
-                            text = "⚠ $err",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            color = colorScheme.error
-                        )
+                        Text("⚠ $err", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = colorScheme.error)
                     }
                     Text(
-                        text = rawOpenUICode.trim(),
+                        text = rawProgram.trim(),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
                         color = colorScheme.onSurface
                     )
                 }
-            }
-        }
-
-        notice?.let {
-            Text(
-                text = it,
-                fontSize = 12.sp,
-                color = colorScheme.onSurfaceVariant,
-                modifier = Modifier.testTag("openUINotice")
-            )
-        }
-
-        // Render the live OpenUI ElementNode tree
-        val rootNode = parseResult.root
-        if (rootNode == null) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("openUIEmptyState"),
-                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
-            ) {
-                Text(
-                    text = if (isStreaming) "Waiting for the model to start the layout…" else "No generated UI yet",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = colorScheme.onSurface
-                )
-                if (!isStreaming) {
-                    Text(
-                        text = if (onGenerate != null) {
-                            "The model will build the layout for your current line: rhyme groups, meter, and next steps."
-                        } else {
-                            "Write a line in the editor first, then generate."
-                        },
-                        fontSize = 12.sp,
-                        color = colorScheme.onSurfaceVariant
-                    )
-                    if (onGenerate != null) {
-                        Button(
-                            onClick = onGenerate,
-                            modifier = Modifier
-                                .heightIn(min = DesignTokens.Touch.minTarget)
-                                .testTag("openUIGenerateButton"),
-                            shape = RoundedCornerShape(DesignTokens.Radius.md)
-                        ) {
-                            Text("Generate", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        }
-                    }
-                }
-            }
-        } else {
-            CompositionLocalProvider(LocalOpenUIRuntime provides runtime) {
-                OpenUINodeRenderer(
-                    node = rootNode,
-                    verifiedSuggestions = verifiedSuggestions,
-                    highlightRhyme = highlightRhyme,
-                    showProsody = showProsody,
-                    keptAlternates = keptAlternates,
-                    onUseSuggestion = onUseSuggestion,
-                    onKeepSuggestion = onKeepSuggestion,
-                    onActionChipSelected = onActionChipSelected
-                )
-            }
-        }
-
-        // Custom OpenUI Steering Composer
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
-        ) {
-            OutlinedTextField(
-                value = steeringInput,
-                onValueChange = { steeringInput = it },
-                placeholder = {
-                    Text(
-                        "Steer OpenUI (e.g., midnight highway imagery)...",
-                        fontSize = 12.sp
-                    )
-                },
-                singleLine = true,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("openUISteeringInput"),
-                shape = RoundedCornerShape(DesignTokens.Radius.md),
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedContainerColor = colorScheme.surfaceContainerLow,
-                    focusedContainerColor = colorScheme.surfaceContainerLow
-                ),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = colorScheme.onSurface)
-            )
-            OutlinedButton(
-                onClick = {
-                    val directive = steeringInput.trim()
-                    if (directive.isNotEmpty()) {
-                        onActionChipSelected(directive)
-                        steeringInput = ""
-                    } else {
-                        onActionChipSelected("Fresh creative angle")
-                    }
-                },
-                enabled = !isStreaming,
-                modifier = Modifier
-                    .heightIn(min = DesignTokens.Touch.minTarget)
-                    .testTag("openUISteerButton"),
-                shape = RoundedCornerShape(DesignTokens.Radius.md)
-            ) {
-                Text("Steer", fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -595,6 +438,7 @@ fun OpenUINodeRenderer(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val runtime = LocalOpenUIRuntime.current
+    val interactive = LocalOpenUIInteractive.current
 
     when (node.typeName) {
         "Stack" -> {
@@ -916,6 +760,7 @@ fun OpenUINodeRenderer(
                         actions.forEach { actionLabel ->
                             OutlinedButton(
                                 onClick = { onActionChipSelected(actionLabel) },
+                                enabled = interactive,
                                 modifier = Modifier.heightIn(min = DesignTokens.Touch.minTarget),
                                 shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                 border = BorderStroke(1.dp, colorScheme.outlineVariant)
@@ -1093,9 +938,13 @@ fun OpenUINodeRenderer(
             val label = node.stringProp("label").orEmpty()
             val variant = node.stringProp("variant") ?: "primary"
             val actionNode = (node.props["action"] as? OpenUIValue.Element)?.node
-            if (variant == "secondary") {
+            val onClick: () -> Unit = {
+                if (actionNode != null) runtime?.executeActionNode(actionNode) else runtime?.sendLabel(label)
+            }
+            if (variant == "secondary" || variant == "tertiary") {
                 OutlinedButton(
-                    onClick = { runtime?.executeActionNode(actionNode) },
+                    onClick = onClick,
+                    enabled = interactive,
                     modifier = modifier.heightIn(min = DesignTokens.Touch.minTarget),
                     shape = RoundedCornerShape(DesignTokens.Radius.md)
                 ) {
@@ -1103,7 +952,8 @@ fun OpenUINodeRenderer(
                 }
             } else {
                 Button(
-                    onClick = { runtime?.executeActionNode(actionNode) },
+                    onClick = onClick,
+                    enabled = interactive,
                     modifier = modifier.heightIn(min = DesignTokens.Touch.minTarget),
                     shape = RoundedCornerShape(DesignTokens.Radius.md)
                 ) {
@@ -1159,6 +1009,237 @@ fun OpenUINodeRenderer(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        "Callout" -> {
+            val variant = node.stringProp("variant") ?: "info"
+            val title = node.stringProp("title").orEmpty()
+            val description = node.stringProp("description")
+            val isDark = LocalAppAppearance.current.isDark
+            val accent = when (variant) {
+                "success" -> statusSuccessColor(isDark)
+                "warning" -> statusWarningColor(isDark)
+                "error" -> statusErrorColor(isDark)
+                else -> colorScheme.onSurfaceVariant
+            }
+            Row(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .background(colorScheme.surfaceContainer, RoundedCornerShape(DesignTokens.Radius.md))
+                    .border(1.dp, accent.copy(alpha = 0.6f), RoundedCornerShape(DesignTokens.Radius.md))
+                    .padding(DesignTokens.Spacing.md)
+                    .semantics(mergeDescendants = true) {},
+                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+            ) {
+                Box(
+                    Modifier
+                        .padding(top = 4.dp)
+                        .size(8.dp)
+                        .background(accent, RoundedCornerShape(4.dp))
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (title.isNotBlank()) {
+                        Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colorScheme.onSurface)
+                    }
+                    if (!description.isNullOrBlank()) {
+                        Text(description, fontSize = 13.sp, lineHeight = 18.sp, color = colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+
+        "TagBlock" -> {
+            val tags = node.childrenProp("tags")
+            FlowRow(
+                modifier = modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+            ) {
+                tags.forEach { tag ->
+                    OpenUINodeRenderer(
+                        node = tag,
+                        verifiedSuggestions = verifiedSuggestions,
+                        highlightRhyme = highlightRhyme,
+                        showProsody = showProsody,
+                        keptAlternates = keptAlternates,
+                        onUseSuggestion = onUseSuggestion,
+                        onKeepSuggestion = onKeepSuggestion,
+                        onActionChipSelected = onActionChipSelected
+                    )
+                }
+            }
+        }
+
+        "Tag" -> {
+            val text = node.stringProp("text").orEmpty()
+            if (text.isNotBlank()) {
+                val isDark = LocalAppAppearance.current.isDark
+                val tint = when (node.stringProp("variant")) {
+                    "success" -> statusSuccessColor(isDark)
+                    "warning" -> statusWarningColor(isDark)
+                    "error" -> statusErrorColor(isDark)
+                    else -> null
+                }
+                Surface(
+                    modifier = modifier,
+                    shape = RoundedCornerShape(DesignTokens.Radius.xs),
+                    color = colorScheme.surfaceContainerHigh,
+                    contentColor = tint ?: colorScheme.onSurfaceVariant,
+                    border = tint?.let { BorderStroke(1.dp, it.copy(alpha = 0.6f)) }
+                ) {
+                    Text(
+                        text = text,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
+                    )
+                }
+            }
+        }
+
+        "ListBlock" -> {
+            val items = node.childrenProp("items")
+            Column(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.md))
+            ) {
+                items.forEachIndexed { index, item ->
+                    if (index > 0) HorizontalDivider(color = colorScheme.outlineVariant)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(item.stringProp("title").orEmpty(), fontSize = 14.sp, color = colorScheme.onSurface)
+                        item.stringProp("subtitle")?.takeIf { it.isNotBlank() }?.let {
+                            Text(it, fontSize = 12.sp, color = colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+
+        "Separator" -> HorizontalDivider(modifier = modifier, color = colorScheme.outlineVariant)
+
+        "Tabs" -> {
+            val tabs = node.childrenProp("items")
+            if (tabs.isNotEmpty()) {
+                var selected by remember(node.statementId, tabs.size) { mutableIntStateOf(0) }
+                val current = selected.coerceIn(0, tabs.lastIndex)
+                Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                    ScrollableTabRow(
+                        selectedTabIndex = current,
+                        edgePadding = 0.dp,
+                        containerColor = colorScheme.surface,
+                        contentColor = colorScheme.onSurface,
+                        divider = { HorizontalDivider(color = colorScheme.outlineVariant) }
+                    ) {
+                        tabs.forEachIndexed { index, tab ->
+                            Tab(
+                                selected = index == current,
+                                onClick = { selected = index },
+                                modifier = Modifier.heightIn(min = DesignTokens.Touch.minTarget),
+                                text = { Text(tab.stringProp("label").orEmpty(), fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+                            )
+                        }
+                    }
+                    tabs[current].childrenProp("children").forEach { child ->
+                        OpenUINodeRenderer(
+                            node = child,
+                            verifiedSuggestions = verifiedSuggestions,
+                            highlightRhyme = highlightRhyme,
+                            showProsody = showProsody,
+                            keptAlternates = keptAlternates,
+                            onUseSuggestion = onUseSuggestion,
+                            onKeepSuggestion = onKeepSuggestion,
+                            onActionChipSelected = onActionChipSelected
+                        )
+                    }
+                }
+            }
+        }
+
+        "FollowUpBlock" -> {
+            val items = node.childrenProp("items").mapNotNull { it.stringProp("text")?.takeIf(String::isNotBlank) }
+            if (items.isNotEmpty()) {
+                val handler = LocalOpenUIActionHandler.current
+                Column(
+                    modifier = modifier
+                        .fillMaxWidth()
+                        .testTag("openUIFollowUps"),
+                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+                ) {
+                    Text("Next", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+                    ) {
+                        items.forEach { text ->
+                            OutlinedButton(
+                                onClick = { handler(OpenUIAction.ToAssistant(text)) },
+                                enabled = interactive,
+                                modifier = Modifier.heightIn(min = DesignTokens.Touch.minTarget),
+                                shape = RoundedCornerShape(DesignTokens.Radius.pill),
+                                border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                            ) {
+                                Text(text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        "StanzaMap" -> {
+            val lines = node.stringListProp("lines")
+            val letters = node.stringListProp("letters")
+            val note = node.stringProp("note")
+            val palette = rhymePalette(LocalAppAppearance.current.isDark)
+            val letterOrder = letters.map { it.trim().uppercase() }.filter { it.isNotEmpty() }.distinct()
+            Column(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .background(colorScheme.surfaceContainerLow, RoundedCornerShape(DesignTokens.Radius.md))
+                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.md))
+                    .padding(DesignTokens.Spacing.md)
+                    .testTag("openUIStanzaMap"),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+            ) {
+                lines.forEachIndexed { index, line ->
+                    val letter = letters.getOrNull(index)?.trim()?.uppercase().orEmpty()
+                    val familyIndex = letterOrder.indexOf(letter)
+                    val familyColor = if (familyIndex >= 0) palette[familyIndex % palette.size] else colorScheme.onSurfaceVariant
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics(mergeDescendants = true) {
+                                contentDescription = if (letter.isNotEmpty()) "Rhyme $letter: $line" else line
+                            },
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = letter.ifEmpty { "–" },
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = familyColor,
+                            modifier = Modifier.width(20.dp)
+                        )
+                        Text(
+                            text = line,
+                            fontFamily = FontFamily.Serif,
+                            fontSize = 14.sp,
+                            color = colorScheme.onSurface
+                        )
+                    }
+                }
+                if (!note.isNullOrBlank()) {
+                    Text(note, fontSize = 12.sp, color = colorScheme.onSurfaceVariant)
                 }
             }
         }

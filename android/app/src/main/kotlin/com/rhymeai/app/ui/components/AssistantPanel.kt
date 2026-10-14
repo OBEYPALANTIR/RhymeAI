@@ -93,6 +93,16 @@ fun AssistantPanel(
     onSuggestionInserted: () -> Unit = {},
     onModelSetup: () -> Unit = { viewModel.showSettingsDialog = true }
 ) {
+    // Cloud providers get the generative OpenUI agent; the on-device model keeps this panel.
+    if (viewModel.selectedProvider != com.rhymeai.app.service.AIProvider.LOCAL) {
+        AssistantAgentPanel(
+            viewModel = viewModel,
+            rhymeContext = rhymeContext,
+            modifier = modifier,
+            onLyricsChanged = onSuggestionInserted
+        )
+        return
+    }
     val colorScheme = MaterialTheme.colorScheme
     val appearance = LocalAppAppearance.current
     val placeholderColor = placeholderColorFor(appearance)
@@ -510,37 +520,8 @@ fun AssistantPanel(
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
-            // Suggestions & OpenUI Generative UI Studio
-            if (viewModel.selectedProvider != com.rhymeai.app.service.AIProvider.LOCAL) {
-                // Only render UI the model actually generated. No locally synthesized stand-in.
-                val streamedResult = viewModel.openUIParseResult
-                val emptyResult = remember { com.rhymeai.app.util.OpenUIParser.parse("", forceComplete = true) }
-                OpenUIAssistantSection(
-                    parseResult = streamedResult ?: emptyResult,
-                    rawOpenUICode = viewModel.openUIRawCode,
-                    providerName = viewModel.selectedProvider.displayName,
-                    isStreaming = viewModel.isLoading,
-                    verifiedSuggestions = viewModel.suggestions.associateBy { it.text.lowercase() },
-                    highlightRhyme = viewModel.isHighlightEnabled,
-                    showProsody = viewModel.isStressPreviewEnabled,
-                    keptAlternates = viewModel.songWorkspace.alternates.mapTo(mutableSetOf()) { it.text.trim() },
-                    onUseSuggestion = { text ->
-                        viewModel.insertSuggestion(text)
-                        onSuggestionInserted()
-                    },
-                    onKeepSuggestion = { text -> viewModel.keepAlternate(text) },
-                    onActionChipSelected = { directive ->
-                        viewModel.getSuggestions(directive)
-                    },
-                    selectedModel = viewModel.selectedModel,
-                    availableModels = com.rhymeai.app.service.AIModel.modelsForProvider(viewModel.selectedProvider),
-                    onSelectModel = { model -> viewModel.saveModel(model) },
-                    onGenerate = if (viewModel.lyrics.isNotEmpty()) {
-                        { viewModel.getSuggestions() }
-                    } else null,
-                    notice = viewModel.openUIModelNotice
-                )
-            } else if (viewModel.suggestions.isNotEmpty()) {
+            // On-device suggestions (cloud providers use AssistantAgentPanel)
+            if (viewModel.suggestions.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
                     Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                     Text(
@@ -569,91 +550,8 @@ fun AssistantPanel(
 
             // Tempo control + per-line grid — shown only when Beat Grid is enabled (toggled in Settings).
             if (viewModel.isBeatGridEnabled) {
-                // Tap-tempo state: keep the last 4 tap timestamps in memory.
-                var tapTimestamps by remember { mutableStateOf(emptyList<Long>()) }
-
-                // BPM stepper row with tap-tempo button.
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "BPM",
-                        fontSize = DesignTokens.Typography.caption,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                        color = colorScheme.onSurfaceVariant
-                    )
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Tap-tempo button
-                        IconButton(
-                            onClick = {
-                                val now = System.currentTimeMillis()
-                                val updated = (tapTimestamps + now).takeLast(5)
-                                tapTimestamps = updated
-                                BeatGrid.tapTempoBpm(updated)?.let { viewModel.beatGridBpm = it }
-                            },
-                            modifier = Modifier.semantics { contentDescription = "Tap tempo" }
-                        ) {
-                            Icon(
-                                Icons.Default.MusicNote,
-                                contentDescription = null,
-                                tint = colorScheme.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-
-                        // Stepper: decrement
-                        TextButton(
-                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm - 1).coerceAtLeast(40) },
-                            modifier = Modifier.semantics { contentDescription = "Decrease BPM" }
-                        ) { Text("−", fontSize = 16.sp) }
-
-                        Text(
-                            "${viewModel.beatGridBpm}",
-                            fontSize = 15.sp,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                            color = colorScheme.onSurface,
-                            modifier = Modifier.width(42.dp),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-
-                        // Stepper: increment
-                        TextButton(
-                            onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm + 1).coerceAtMost(220) },
-                            modifier = Modifier.semantics { contentDescription = "Increase BPM" }
-                        ) { Text("+", fontSize = 16.sp) }
-                    }
-                }
-
-                // BPM slider 40–220
-                Slider(
-                    value = viewModel.beatGridBpm.toFloat(),
-                    onValueChange = { viewModel.beatGridBpm = it.toInt() },
-                    valueRange = 40f..220f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = colorScheme.primary,
-                        activeTrackColor = colorScheme.primary,
-                        inactiveTrackColor = colorScheme.outlineVariant
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "BPM, ${viewModel.beatGridBpm}" }
-                )
-
-                // Per-line beat strip
-                if (viewModel.lyrics.isNotEmpty()) {
-                    BeatGridPreview(
-                        lyrics = viewModel.lyrics,
-                        bpm = viewModel.beatGridBpm
-                    )
-                }
+                BeatGridSection(viewModel)
             }
-
             Spacer(Modifier.height(DesignTokens.Spacing.lg))
         }
         }
@@ -710,4 +608,96 @@ private fun RhymeType.shortLabel(): String = when (this) {
     RhymeType.PERFECT -> "Perfect"
     RhymeType.NEAR -> "Near"
     RhymeType.SLANT -> "Slant"
+}
+
+/** Tempo control and per-line beat strip; shown only when Beat Grid is enabled in Settings. */
+@Composable
+internal fun BeatGridSection(viewModel: MainViewModel, modifier: Modifier = Modifier) {
+    val colorScheme = MaterialTheme.colorScheme
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+        // Tap-tempo state: keep the last 4 tap timestamps in memory.
+        var tapTimestamps by remember { mutableStateOf(emptyList<Long>()) }
+
+        // BPM stepper row with tap-tempo button.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "BPM",
+                fontSize = DesignTokens.Typography.caption,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                color = colorScheme.onSurfaceVariant
+            )
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Tap-tempo button
+                IconButton(
+                    onClick = {
+                        val now = System.currentTimeMillis()
+                        val updated = (tapTimestamps + now).takeLast(5)
+                        tapTimestamps = updated
+                        BeatGrid.tapTempoBpm(updated)?.let { viewModel.beatGridBpm = it }
+                    },
+                    modifier = Modifier.semantics { contentDescription = "Tap tempo" }
+                ) {
+                    Icon(
+                        Icons.Default.MusicNote,
+                        contentDescription = null,
+                        tint = colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                // Stepper: decrement
+                TextButton(
+                    onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm - 1).coerceAtLeast(40) },
+                    modifier = Modifier.semantics { contentDescription = "Decrease BPM" }
+                ) { Text("−", fontSize = 16.sp) }
+
+                Text(
+                    "${viewModel.beatGridBpm}",
+                    fontSize = 15.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = colorScheme.onSurface,
+                    modifier = Modifier.width(42.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+
+                // Stepper: increment
+                TextButton(
+                    onClick = { viewModel.beatGridBpm = (viewModel.beatGridBpm + 1).coerceAtMost(220) },
+                    modifier = Modifier.semantics { contentDescription = "Increase BPM" }
+                ) { Text("+", fontSize = 16.sp) }
+            }
+        }
+
+        // BPM slider 40–220
+        Slider(
+            value = viewModel.beatGridBpm.toFloat(),
+            onValueChange = { viewModel.beatGridBpm = it.toInt() },
+            valueRange = 40f..220f,
+            colors = SliderDefaults.colors(
+                thumbColor = colorScheme.primary,
+                activeTrackColor = colorScheme.primary,
+                inactiveTrackColor = colorScheme.outlineVariant
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "BPM, ${viewModel.beatGridBpm}" }
+        )
+
+        // Per-line beat strip
+        if (viewModel.lyrics.isNotEmpty()) {
+            BeatGridPreview(
+                lyrics = viewModel.lyrics,
+                bpm = viewModel.beatGridBpm
+            )
+        }
+        
+    }
 }

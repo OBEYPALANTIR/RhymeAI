@@ -177,7 +177,10 @@ class MainActivity : ComponentActivity() {
                             title = { androidx.compose.material3.Text("Share ${request.scope.label.lowercase()} with ${request.provider.displayName}?") },
                             text = {
                                 androidx.compose.material3.Text(
-                                    "For ${request.purpose}, suggestions share the target line, theme and rhyme settings; rewrites share the selected passage; synonyms share the selected word and current line. " +
+                                    (if (request.purpose == "assistant")
+                                        "The assistant shares your messages, its earlier replies in this song's conversation, the song title, theme, rhyme settings and target line. "
+                                    else
+                                        "For ${request.purpose}, suggestions share the target line, theme and rhyme settings; rewrites share the selected passage; synonyms share the selected word and current line. ") +
                                     (if (request.scope == CloudAISharingScope.WHOLE_SONG) "This request also shares your full lyric. " else "") +
                                     "Your API key is sent directly to ${request.provider.displayName} for authentication. Permission applies to this provider and scope. You can revoke it in Settings."
                                 )

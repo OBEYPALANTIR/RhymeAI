@@ -35,6 +35,10 @@ import com.rhymeai.app.service.LocalModelService
 import com.rhymeai.app.service.LocalModelOperationGate
 import com.rhymeai.app.service.SyntheticGenerationCapture
 import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.data.model.AssistantTurn
+import com.rhymeai.app.util.OpenUIAction
+import com.rhymeai.app.util.OpenUILibrary
+import com.rhymeai.app.util.OpenUIParser
 import com.rhymeai.app.util.OpenUIParseResult
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.EditHistory
@@ -342,6 +346,197 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun removeAlternate(id: String) {
         currentProjectId?.let { songId -> updateWorkspace(songId) { it.copy(alternates = it.alternates.filterNot { line -> line.id == id }) } }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Generative assistant (OpenUI agent). The conversation lives in the song's
+    // local notebook; each assistant turn stores the raw OpenUI Lang program.
+    // ---------------------------------------------------------------------------
+
+    val assistantTurns: List<AssistantTurn> get() = songWorkspace.assistantTurns
+    /** Raw text of the reply being streamed, re-parsed on every chunk. */
+    var assistantStreamingText by mutableStateOf("")
+        private set
+    var assistantStreamingResult by mutableStateOf<OpenUIParseResult?>(null)
+        private set
+    /** Song the in-flight reply belongs to, so a switched song never shows another song's stream. */
+    var assistantStreamingProjectId by mutableStateOf<String?>(null)
+        private set
+    var assistantBusy by mutableStateOf(false)
+        private set
+    var assistantError by mutableStateOf<String?>(null)
+        private set
+    var assistantNotice by mutableStateOf<String?>(null)
+        private set
+    private var assistantJob: Job? = null
+    private var assistantRunRevision = 0L
+
+    fun sendAssistantMessage(message: String, context: String? = null) {
+        val text = message.trim()
+        if (text.isEmpty() || assistantBusy) return
+        if (selectedProvider == AIProvider.LOCAL) return
+        if (notebookError != null || restoringDraft) {
+            assistantError = "The song notebook can't be saved right now, so the conversation is unavailable."
+            return
+        }
+        if (!authorizeCloudAI("assistant") { sendAssistantMessage(message, context) }) return
+        val projectId = ensureProjectForNotebook()
+        updateWorkspace(projectId) {
+            it.appendAssistantTurn(
+                AssistantTurn(role = AssistantTurn.USER, text = text, context = context, createdAt = System.currentTimeMillis())
+            )
+        }
+        runAssistantTurn(projectId)
+    }
+
+    /** Re-requests a reply to the conversation as it stands (after an error or a stop). */
+    fun retryAssistant() {
+        val projectId = currentProjectId ?: return
+        if (assistantBusy || assistantTurns.lastOrNull()?.role != AssistantTurn.USER) return
+        if (!authorizeCloudAI("assistant") { retryAssistant() }) return
+        runAssistantTurn(projectId)
+    }
+
+    fun stopAssistant() {
+        assistantRunRevision++
+        assistantJob?.cancel()
+        assistantJob = null
+        resetAssistantStream()
+    }
+
+    fun clearAssistantConversation() {
+        stopAssistant()
+        assistantError = null
+        assistantNotice = null
+        currentProjectId?.let { id -> updateWorkspace(id) { it.copy(assistantTurns = emptyList()) } }
+    }
+
+    fun handleAssistantAction(action: OpenUIAction) {
+        when (action) {
+            is OpenUIAction.ToAssistant -> sendAssistantMessage(action.message, action.context)
+            is OpenUIAction.InsertLine -> if (action.text.isNotBlank()) insertSuggestion(action.text.trim())
+            is OpenUIAction.KeepAlternate -> keepAlternate(action.text)
+            is OpenUIAction.SetTheme -> onThemeChanged(action.theme.trim())
+            is OpenUIAction.ReplaceLine -> {
+                if (!replaceLyricLine(action.original, action.replacement)) {
+                    assistantNotice = "That line isn't in your lyrics anymore, so nothing was replaced."
+                }
+            }
+        }
+    }
+
+    /** Replaces the first lyric line whose trimmed text equals [original]. Returns false if none matches. */
+    internal fun replaceLyricLine(original: String, replacement: String): Boolean {
+        val target = original.trim()
+        val newLine = replacement.trim()
+        if (target.isEmpty() || newLine.isEmpty()) return false
+        val lines = lyrics.split("\n")
+        val index = lines.indexOfFirst { it.trim() == target }
+        if (index < 0) return false
+        val updated = lines.toMutableList().also { it[index] = newLine }.joinToString("\n")
+        val lineStart = lines.take(index).sumOf { it.length + 1 }
+        applyAtomicLyricsEdit(TextFieldValue(updated, TextRange(lineStart + newLine.length)))
+        triggerAutoSave()
+        return true
+    }
+
+    private fun resetAssistantStream() {
+        assistantBusy = false
+        assistantStreamingText = ""
+        assistantStreamingResult = null
+        assistantStreamingProjectId = null
+    }
+
+    internal fun agentSongContext(): OpenUILibrary.AgentSongContext {
+        val context = computeRhymeContext()
+        return OpenUILibrary.AgentSongContext(
+            title = title,
+            theme = theme,
+            lyrics = if (useWholeSongContext) lyrics else context.targetLine.orEmpty(),
+            wholeSong = useWholeSongContext,
+            targetLine = context.targetLine,
+            currentLetter = context.currentLetter,
+            rhymeScheme = activeRhymeScheme,
+            sectionName = context.currentSection.displayName,
+            rhymeTypeLabel = rhymeType.displayName,
+            complexityLabel = rhymeComplexity.label,
+            complexityHint = rhymeComplexity.promptHint
+        )
+    }
+
+    private fun runAssistantTurn(projectId: String) {
+        assistantJob?.cancel()
+        val runId = ++assistantRunRevision
+        assistantError = null
+        assistantNotice = null
+        assistantStreamingText = ""
+        assistantStreamingResult = null
+        assistantStreamingProjectId = projectId
+        assistantBusy = true
+        val provider = selectedProvider
+        val model = selectedModel
+        val systemPrompt = OpenUILibrary.generateAgentSystemPrompt(agentSongContext())
+        val turns = assistantHistoryForModel(workspaces[projectId]?.assistantTurns.orEmpty())
+        assistantJob = viewModelScope.launch {
+            try {
+                val key = resolveApiKey(provider)
+                val buffer = StringBuilder()
+                aiService.streamAssistantReply(
+                    provider = provider,
+                    apiKey = key,
+                    modelId = model.id,
+                    systemPrompt = systemPrompt,
+                    turns = turns,
+                    onModelFallback = { fallback ->
+                        viewModelScope.launch {
+                            if (runId == assistantRunRevision) {
+                                assistantNotice = "${model.displayName} isn't available for this API key. Used ${fallback.displayName} instead."
+                            }
+                        }
+                    }
+                ).collect { chunk ->
+                    if (runId != assistantRunRevision) return@collect
+                    buffer.append(chunk)
+                    assistantStreamingText = buffer.toString()
+                    assistantStreamingResult = OpenUIParser.parse(buffer.toString(), rootComponentName = "Card")
+                }
+                if (runId != assistantRunRevision) return@launch
+                val program = buffer.toString().trim()
+                when {
+                    program.isEmpty() -> assistantError = "The model returned an empty reply. Try again."
+                    currentProjectId == projectId -> updateWorkspace(projectId) {
+                        it.appendAssistantTurn(
+                            AssistantTurn(role = AssistantTurn.ASSISTANT, text = program, createdAt = System.currentTimeMillis())
+                        )
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (runId == assistantRunRevision) assistantError = error.message ?: "The assistant couldn't reply. Try again."
+            } finally {
+                if (runId == assistantRunRevision) resetAssistantStream()
+            }
+        }
+    }
+
+    /**
+     * Recent turns within a character budget, newest kept. User turns carry their action/form
+     * context the way OpenUI's reference app sends it: "<message>\ncontext and form values = <json>".
+     */
+    private fun assistantHistoryForModel(turns: List<AssistantTurn>): List<AIService.ChatTurn> {
+        val budget = 16_000
+        var used = 0
+        val selected = mutableListOf<AIService.ChatTurn>()
+        for (turn in turns.asReversed()) {
+            val content = if (turn.role == AssistantTurn.USER && !turn.context.isNullOrBlank()) {
+                "${turn.text}\ncontext and form values = ${turn.context}"
+            } else turn.text
+            if (selected.isNotEmpty() && used + content.length > budget) break
+            used += content.length
+            selected += AIService.ChatTurn(turn.role, content)
+        }
+        return selected.asReversed()
     }
 
     fun saveDraftVersion() {
@@ -2014,6 +2209,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun resetLyricsHistory() {
         cancelEditorAIWork()
+        stopAssistant()
+        assistantError = null
+        assistantNotice = null
         suggestionInsertion = null
         lyricsHistory.reset()
         updateLyricsHistoryAvailability()
