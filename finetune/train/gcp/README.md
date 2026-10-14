@@ -5,13 +5,42 @@ Spot A100 80GB, or a Spot L4 when A100 capacity is unavailable**, using `gcloud`
 Drive connector, Hugging Face upload, service-account key, app change, or
 catalog change is involved. The notebook and training data stay outside Git.
 
-The 2026-10-14 smoke attempt stopped at the capacity gate: A100 80GB was
-stocked out in `us-central1-a/c`, then L4 (`g2-standard-12`) was stocked out
-in `us-central1-a/b/c`. All five requests returned
-`ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS`. No VM started; final instance
-and disk lists were empty. Package SHA readback and six local checks passed.
-GPU training, loss comparison, GGUF exports, cache hits, and guest deletion
-remain **NOT RUN**. Do not treat this implementation as a completed reproduction.
+The 2026-10-14 run `e2b-20261014-06` completed training and both GGUF exports on
+an explicitly authorized **on-demand L4** in `us-central1-a`. Central A100/L4
+Spot capacity and the additional regional L4 Spot candidates were stocked out.
+Both GGUFs passed the notebook's tensor/envelope checks and GCS SHA readback;
+remote `SAVED_OK` was published before the VM deleted itself. Final instance
+and disk inventories were empty. All eight products passed full SHA-256 readback
+on `/Volumes/Untitled/models/rhymeai/students-v5-gcp-20261014/E2B-run06/`;
+local and remote `SAVED_OK` markers match.
+
+| Epoch / checkpoint step | Round-2 train loss | GCP train loss | Round-2 validation | GCP validation |
+| --- | ---: | ---: | ---: | ---: |
+| 1 / 329 | 1.590874 | 1.589823 | 1.579573 | 1.580683 |
+| 2 / 658 | 1.266429 | 1.261975 | 1.561372 | 1.560337 |
+
+Train losses are the last logged values before each checkpoint (steps 325/655).
+Trainer runtime was 1,977.3804 seconds versus round 2's 1,020.9291 seconds;
+peak reserved VRAM was 12.50 GB versus 12.52 GB. This is a recipe reproduction,
+not a controlled GPU benchmark or an adoption verdict. Each GGUF is
+3,427,880,800 bytes, with 601 tensors, all 60 shared-KV tensors, one BOS in
+the checked envelope, and matching 275-token prompt IDs. Byte identity with
+round 2 was not expected.
+
+The measured notebook phases were dependencies 354.926 s, training including
+setup/checkpoint transport 2,126.973 s, CUDA build 634.460 s, export/checks
+450.198 s, and local save 86.766 s. The VM's creation-to-observed-cleanup bound
+was 4,185.922 s. Base-cache restoration was exercised; a subsequent CUDA-cache
+restore, actual Spot preemption, and A100 execution remain **NOT RUN**.
+External collection took 1,303.342 s from first download to final readback,
+including a local SDK CRC32C stall and verified recovery. The documented SDK
+setup below resolved it; the VM had already deleted itself.
+
+The task's three provisioned attempts total $1.5293 in compute at list prices;
+including disk, IPv4, product downloads and a small operations allowance gives
+about **$2.37 before credits**, below the $15 cap. The private bucket retains
+25.94 GiB, about $0.52 per 730-hour month. Detailed local evidence is under
+`~/.agents/artifacts/2026-10-14/rhymeai-gcp-smoke/run-06/`.
 
 ## Prerequisites
 
@@ -26,15 +55,34 @@ remain **NOT RUN**. Do not treat this implementation as a completed reproduction
   a symlink to the internal disk. Existing different output bytes are preserved.
 - Original package `~/.agents/artifacts/2026-10-14/rhymeai-colab-package-v5/`.
 
-On this Mac the SDK's Python 3.14 environment fails loading `gcloud storage`
-with `ssl.PROTOCOL_TLSv1`. Select the already-installed Python 3.12 for the
-command; no SDK replacement is necessary:
+On this Mac, SDK 589.0.0's Python 3.14 environment fails loading `gcloud storage`
+with `ssl.PROTOCOL_TLSv1`, and its native CRC32C helper stalled during a large
+composite-object download. Use the existing Python 3.12 and an isolated fast
+Python CRC32C extension. This keeps CRC32C validation mandatory and avoids the
+native helper without replacing the SDK or changing macOS security settings.
+The following setup uses the installed `uv`; its small environment/cache stays
+on the external drive:
 
 ```sh
-export CLOUDSDK_PYTHON="$HOME/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/bin/python3.12"
+task_gcloud_env=/Volumes/Untitled/models/rhymeai/students-v5-gcp-20261014/.gcloud-python
+"$HOME/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/bin/python3.12" \
+  -m venv "$task_gcloud_env"
+UV_CACHE_DIR="$task_gcloud_env/.uv-cache" uv pip install \
+  --python "$task_gcloud_env/bin/python" google-crc32c==1.9.0
+export CLOUDSDK_PYTHON="$task_gcloud_env/bin/python"
+export CLOUDSDK_PYTHON_SITEPACKAGES=1
+export CLOUDSDK_STORAGE_USE_GCLOUD_CRC32C=false
+export CLOUDSDK_STORAGE_CHECK_HASHES=always
+"$CLOUDSDK_PYTHON" -c 'import google_crc32c; assert google_crc32c.implementation == "c"'
+gcloud storage hash finetune/train/gcp/requirements.txt --format=json
 gcloud auth list --filter=status:ACTIVE
 gcloud storage buckets list --project=rhymeai-training
 ```
+
+Keep these scoped shell settings for `run` and `collect`. The controller also
+checks SHA-256 after each download and rereads all final products. If collection
+is interrupted, rerun `collect`; never launch another VM just to retrieve saved
+outputs, and never disable transfer checks to work around the SDK.
 
 If inspecting Cloud Quotas, include `--billing-project=rhymeai-training`.
 The default client project can hit a shared daily limit.
@@ -75,15 +123,17 @@ The GCS bucket stays in us-central1, so cross-region transfers can add charges.
 ```sh
 python3 finetune/train/gcp/run.py run --extended-l4 \
   --package "$HOME/.agents/artifacts/2026-10-14/rhymeai-colab-package-v5" \
-  --run-id e2b-20261014-04 \
-  --output /Volumes/Untitled/models/rhymeai/students-v5-gcp-20261014/E2B-run04 \
-  --evidence "$HOME/.agents/artifacts/2026-10-14/rhymeai-gcp-smoke/run-04" \
-  --spent-usd 0.01
+  --run-id e2b-20261014-06 \
+  --output /Volumes/Untitled/models/rhymeai/students-v5-gcp-20261014/E2B-run06 \
+  --evidence "$HOME/.agents/artifacts/2026-10-14/rhymeai-gcp-smoke/run-06" \
+  --spent-usd 0.50
 ```
 
 For that mode `--provisioning-model` changes to `STANDARD` only after every
 additional Spot candidate has failed. On-demand is never selected without
 `--extended-l4`; the quoted Spot rate is not used for its cost calculation.
+The command above records the successful run; use a new ID and the actual
+cumulative spend for another attempt.
 
 The VM uses `a2-ultragpu-1g` (12 vCPU, 170 GiB RAM) or `g2-standard-12`
 (12 vCPU, 48 GiB RAM), the dated Deep Learning VM image
@@ -143,6 +193,10 @@ Python and installs its development headers for runtime CUDA helper compilation.
 The Ubuntu 22.04 DLVM's Python 3.10 cannot install round 2's pinned
 TRL 1.15.0, which requires Python 3.11 or newer; that failed bootstrap is
 retained in run-04 evidence. The failed VM saved its logs and deleted itself.
+Run-05 was deliberately stopped after missing headers caused CUDA helper
+fallback; its serial evidence and cleanup inventories are retained. Run-06
+installed and asserted the headers before dependencies and completed training
+without those errors.
 The seven top-level training dependencies are pinned to versions recorded in
 round 2; the VM prints the resolved transitive environment with `pip freeze`.
 
@@ -226,8 +280,9 @@ effective 2026-10-14. Each total is 12 CPU hours + 48 GiB RAM hours + one L4 hou
 | us-east4 | 0.532016 | 0.997140504 |
 | us-west4 | 0.674384 | 1.126768820 |
 
-Four hours at the largest on-demand rate plus the $3 reserve and $0.01 prior
-spend is $7.5171. The aggregate task cap remains $15, not $15 per attempt.
+Four hours at the largest on-demand rate plus the $3 reserve and the extended
+example's $0.50 prior spend is $8.0071. The aggregate task cap remains $15,
+not $15 per attempt.
 
 `cost.json` uses observed creation-to-deletion time multiplied by the selected
 region's Spot or on-demand list
