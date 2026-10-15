@@ -110,7 +110,8 @@ def server_backend(props, log, binary_sha256):
     if offload and int(offload[1]) > 0:
         if "CUDA0" in log:
             kind = "cuda"
-        elif "Metal" in log:
+        # llama.cpp b11429 logs the Metal device as MTL0 and ggml_metal_init, never the word "Metal".
+        elif re.search(r"\bMTL\d|ggml_metal_init|\bMetal\b", log):
             kind = "metal"
         else:
             raise ValueError("Unrecognized GPU backend")
