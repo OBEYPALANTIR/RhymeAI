@@ -9,6 +9,7 @@ from .generate import SAMPLER, generate, source_binding
 from .judge import JUDGE_MODEL, JUDGE_PROMPT, codex_batch
 from .run_gate import main
 
+BACKEND = {"kind": "metal", "build_info": "test-build", "binary_sha256": "0" * 64}
 
 def capture_fixture(out):
     model = out / "unrelated.gguf"
@@ -16,7 +17,7 @@ def capture_fixture(out):
     write_json(out / "prompts.json", [{}])
     binding = {"model_path": str(model.resolve()), "model_sha256": sha256(model),
                "model_bytes": model.stat().st_size, "prompts_sha256": sha256(out / "prompts.json"),
-               "sampler": SAMPLER, "source": source_binding(), "sampler_seed_offset": 0}
+               "sampler": SAMPLER, "source": source_binding(), "sampler_seed_offset": 0, "backend": BACKEND}
     return model, binding
 
 

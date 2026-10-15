@@ -30,6 +30,55 @@ Before Gradle, inference, or a new judge session, `pgrep -x "Logic Pro"` must
 show it closed; otherwise defer and ask the coordinator. The runner leaves
 other workers' servers untouched and terminates only its own server.
 
+## Cloud CUDA lane
+
+`cloud_lane.py` uses the existing private `rhymeai-training` bucket and pinned
+llama.cpp `049326a00025d00b08cc188ed716b681e984a3f8` CUDA sm89 cache. Uploads are
+content-addressed, read back for SHA-256 verification, and checked again on the
+VM. Models must be on the mounted external drive; no local weight copy is made.
+It tries Spot L4 capacity across the five quota regions, then on-demand L4.
+
+```sh
+python3 finetune/gate/cloud_lane.py start --state /path/to/lane/lane.json \
+  --run-id unique-run-name --model /Volumes/Untitled/path/candidate.gguf \
+  --model /Volumes/Untitled/path/shipped-v21.gguf --max-hours 6
+# Keep this command running in another terminal; both ends bind only loopback:
+python3 finetune/gate/cloud_lane.py tunnel --state /path/to/lane/lane.json --port 18080
+python3 finetune/gate/run_gate.py --candidate /Volumes/Untitled/path/candidate.gguf \
+  --out /path/to/new-run --server-url http://127.0.0.1:18080 --cloud-lane /path/to/lane/lane.json
+python3 finetune/gate/cloud_lane.py stop --state /path/to/lane/lane.json
+```
+
+The runner selects each arm over SSH and binds the VM's actual GGUF SHA-256,
+server launch identity, `/props`, CUDA backend, binary hash and pinned build.
+It never starts a local server in remote mode. To select a model manually, use
+`cloud_lane.py select --state ... --model ...`; supply all needed models at start.
+The lane lock rejects concurrent runs or switches through the same state file.
+Keep one state file per VM. The SSH tunnel exposes no public inference port and
+creates no firewall rule. Existing project SSH access is used.
+
+Candidate and incumbent must have identical backend/build bindings, including
+for judging and offline reporting. Cloud runs regenerate both arms on CUDA;
+Mac captures and legacy captures without backend evidence cannot be reused or
+silently rebound. Kotlin replay, prompt/template checks, seeds and sampling stay
+the same. CUDA results do not prove Metal or physical Android performance.
+
+For a small, unjudged smoke, supply a tiny `--dev-songs` JSONL and
+`--dev-generation-only`. Both arms are generated and replayed offline again;
+`generation-smoke.json` records equality. This produces **no adoption verdict**,
+leaves `status.json` with `complete: false`, and spends no judge allowance.
+Omit that flag on a later invocation to resume through the ordinary judge.
+
+The VM has a hard DELETE deadline (at most six hours), an auto-delete boot disk,
+and a 20-minute idle deletion timer (`--idle-minutes`, 5-60). `--spent-usd` accounts
+for previous attempts; duration plus a transfer/storage reserve must fit $10.
+Always run `stop`, including after failures: it deletes owned resources and
+records empty instance/disk inventories, lifecycle logs and a compute cost upper
+bound. Stored model/build caches remain for reuse; the cost estimate is not an
+invoice. For the smoke use `--max-hours 1`. If the local gcloud storage command
+fails under an unsupported Python, set `CLOUDSDK_PYTHON` to an installed supported
+interpreter for these commands without changing shared configuration.
+
 ## Gate definition
 
 All G1-G6 must pass against the shipped catalog GGUF of the same size, both v2.1 Q4_K_M:

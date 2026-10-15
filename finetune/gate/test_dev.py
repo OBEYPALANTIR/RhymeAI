@@ -12,6 +12,7 @@ from .generate import SAMPLER
 from .judge import judged_counts, make_pairs, selected_prompts
 from .report import report
 from .run_gate import main
+from .test_resume import BACKEND
 
 
 def dev_songs():
@@ -158,7 +159,7 @@ class DevEvaluationTest(unittest.TestCase):
         write_json(out / "overlap-final.json", {"overlapping_lines": 0, "files": [], "pools": [],
                    "frozen_benchmark_sha256": sha256(build.HERE / "benchmark-songs.jsonl")})
         for role in ("candidate", "incumbent"):
-            write_json(out / f"binding-{role}.json", {"model_path": "offline-fixture", "model_sha256": "offline-fixture"})
+            write_json(out / f"binding-{role}.json", {"model_path": "offline-fixture", "model_sha256": "offline-fixture", "backend": BACKEND})
             write_jsonl(out / f"replay-{role}.jsonl", [dict(id=row["id"], seed=seed, task="suggestions", level="Simple",
                        shown_lines=["Copper wheels settle beside the door"], shown_count=1, error=None, calls=1,
                        category="accepted", offline_replay_equal=True) for seed in SEEDS])

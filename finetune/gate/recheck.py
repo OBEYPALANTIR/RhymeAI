@@ -13,6 +13,7 @@ from .build import REPO, read_jsonl, sha256, write_json
 from .generate import SAMPLER, SHIPPED_INCUMBENT_SHA256, gradle, select_incumbent, source_binding
 from .judge import make_pairs
 from .report import report
+from .backend import require_same_backend
 
 GATE_TEST = "android/app/src/test/kotlin/com/rhymeai/app/service/LocalModelGateTest.kt"
 ROLES = ("candidate", "incumbent")
@@ -76,6 +77,7 @@ def recheck(out):
             verify_unchanged(before, hashes)
             verify_unchanged(stage, hashes)
             bindings = {role: replay_binding(stage, role) for role in ROLES}
+            require_same_backend(bindings)
             select_incumbent(Path(bindings["candidate"]["model_path"]), Path(bindings["incumbent"]["model_path"]))
             proof["source_changes"] = {role: {"before": json.loads((before / f"binding-{role}.json").read_text())["source"],
                                                    "after": bindings[role]["source"]} for role in ROLES}
