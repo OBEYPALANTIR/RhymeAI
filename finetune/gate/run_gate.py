@@ -107,6 +107,7 @@ def main():
             write_json(out / "status.json", {"phase": phase, "complete": False})
             from gate.judge import judge
             judge(out)
+            judge_provenance = json.loads((out / "judge-provenance.json").read_text())
             phase = "report"
             overlap = audit_overlap(read_jsonl(out / "benchmark-songs.jsonl"), include_frozen=bool(args.dev_songs), benchmark=args.benchmark)
             write_json(out / "overlap-final.json", overlap)
@@ -115,6 +116,7 @@ def main():
             write_json(out / "provenance.json", {
                 "source_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
                 "benchmark_version": version,
+                "judge_rubric": {key: judge_provenance[key] for key in ("rubric_version", "rubric_sha256")},
                 "command": sys.argv, "python": sys.version,
                 "candidate_seed_offset": offset,
                 "sampler_seeds": {"candidate": [s + offset for s in SEEDS], "incumbent": list(SEEDS)},

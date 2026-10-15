@@ -83,10 +83,10 @@ def yield_pass(metrics, candidate_errors, bound=True, margins=None):
             and all(_lower(metrics[k], bound) >= -margins[k] - 1e-12 for k in REWRITE_MARGINS))
 
 
-def preference_pass(groups, distinct_prompts):
+def preference_pass(groups, distinct_prompts, minimum_prompts=150):
     overall = groups["all"]
     net = overall["net_preference"]
-    return (distinct_prompts >= 150 and overall["invalid"] == 0 and net is not None and net["ci95"][0] > 0
+    return (distinct_prompts >= minimum_prompts and overall["invalid"] == 0 and net is not None and net["ci95"][0] > 0
             and not any(g["net_preference"] is not None and g["net_preference"]["ci95"][1] < 0
                         for key, g in groups.items() if key != "all"))
 

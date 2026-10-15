@@ -9,7 +9,7 @@ from unittest.mock import patch
 from . import build
 from .build import DEV_VERSION, FROZEN_VERSION, SEEDS, freeze, make_inputs, make_dev_inputs, prepare_dev, read_jsonl, sha256, text_hash, write_json, write_jsonl
 from .generate import SAMPLER
-from .judge import judged_counts, make_pairs, selected_prompts
+from .judge import NEXTLINE_RUBRIC, NEXTLINE_PROMPT, judged_counts, make_pairs, selected_prompts
 from .report import report
 from .run_gate import main
 from .test_resume import BACKEND, legacy_evidence
@@ -137,12 +137,13 @@ class DevEvaluationTest(unittest.TestCase):
     def test_short_dev_cells_are_judged_without_changing_frozen_selection(self):
         rows = make_inputs(dev_songs())
         selected = selected_prompts(rows, dev=True)
-        self.assertEqual(len(selected), 22)
-        self.assertEqual(sum(judged_counts(selected).values()), 22)
+        self.assertEqual(len(selected), 16)
+        self.assertEqual(sum(judged_counts(selected).values()), 16)
+        self.assertTrue(all(r["task"] == "suggestions" for r in selected))
         self.assertTrue(all(count <= 10 for count in judged_counts(selected).values()))
-        with self.assertRaisesRegex(ValueError, "150"):
+        with self.assertRaisesRegex(ValueError, "120"):
             selected_prompts(rows)
-        self.assertEqual(len(selected_prompts(make_inputs(read_jsonl(build.HERE / "benchmark-songs.jsonl")))), 150)
+        self.assertEqual(len(selected_prompts(make_inputs(read_jsonl(build.HERE / "benchmark-songs.jsonl")))), 120)
 
     def test_dev_report_cannot_pass_even_when_every_metric_passes(self):
         out = self.root / "report"
@@ -167,9 +168,10 @@ class DevEvaluationTest(unittest.TestCase):
                        sampler_seed=seed, output="Copper wheels settle beside the door", termination="server_stop", elapsed_ms=0) for seed in SEEDS])
         pairs = make_pairs(out)
         write_jsonl(out / "pairs.jsonl", pairs)
-        write_jsonl(out / "judgments.jsonl", [{"pair_id": p["pair_id"], "winner": "tie"} for p in pairs])
+        write_jsonl(out / "judgments.jsonl", [{"pair_id": p["pair_id"], "winner": "tie", "rubric_version": NEXTLINE_RUBRIC} for p in pairs])
         write_json(out / "judge-provenance.json", {"model": "offline-fixture", "provider": "fixture", "incremental_api_cost_usd": 0,
-                   "cost_basis": "no calls", "usage": {}})
+                   "cost_basis": "no calls", "usage": {}, "rubric_version": NEXTLINE_RUBRIC,
+                   "rubric_sha256": text_hash(NEXTLINE_PROMPT)})
         # Force the strongest possible metric result to exercise DEV's non-adoption guarantee.
         all_pass = {"gates": {f"G{i}": True for i in range(2, 6)}, "consistent": {f"G{i}": True for i in range(2, 6)},
                     "metrics": {}, "preference": {}, "suggestion_errors": {}, "suggestion_categories": {}}

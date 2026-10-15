@@ -11,7 +11,7 @@ from .metrics import (MARGINS, not_worse, paired, preference, preference_pass,
                       template_pairs, yield_pass)
 from .generate import SAMPLER
 from .backend import read_binding, require_same_backend
-from .judge import judged_counts, make_pairs
+from .judge import LEGACY_RUBRIC, NEXTLINE_RUBRIC, judged_counts, make_pairs, recorded_rubric
 
 
 def audit_generation(out, role, rows):
@@ -63,7 +63,7 @@ def graded(out, prompts, role):
     return {(r["id"], r["seed"]): r for r in rows}
 
 
-def summarize(rows, judgments, margins=None):
+def summarize(rows, judgments, margins=None, rubric_version=NEXTLINE_RUBRIC, minimum_prompts=120):
     margins = MARGINS if margins is None else margins
     suggestions = [r for r in rows if r["task"] == "suggestions"]
     metrics = {"full_six": paired(suggestions, "full_six", "one"), "retry": paired(suggestions, "retry", "one"),
@@ -72,12 +72,16 @@ def summarize(rows, judgments, margins=None):
     for task in ("rewrite_passage", "rewrite_word", "synonyms"):
         metrics[task] = paired([r for r in rows if r["task"] == task], "passed", "one")
     errors = {role: sum(r[role]["error"] is not None for r in suggestions) for role in ("candidate", "incumbent")}
-    groups = {"all": preference(judgments)}
+    if rubric_version not in (LEGACY_RUBRIC, NEXTLINE_RUBRIC):
+        raise ValueError("Unknown judge rubric version")
+    judged = [j for j in judgments if j["task"] == "suggestions"] if rubric_version == NEXTLINE_RUBRIC else judgments
+    groups = {"all": preference(judged)}
     for axis in ("level", "rhyme_type"):
         for value in sorted({j[axis] for j in judgments if j["task"] == "suggestions"}):
             groups[f"{axis}:{value}"] = preference([j for j in judgments if j["task"] == "suggestions" and j[axis] == value])
     gates = {"G2": yield_pass(metrics, errors["candidate"], margins=margins),
-             "G3": preference_pass(groups, len({j["id"] for j in judgments})),
+             "G3": preference_pass(groups, len({j["id"] for j in judged}),
+                                   150 if rubric_version == LEGACY_RUBRIC else minimum_prompts),
              "G4": not_worse(metrics["level_pass"], margins["level_pass"]),
              "G5": not_worse(metrics["template_repetition"], margins["template_repetition"], False)}
     # Per-seed agreement for G6: point estimates only, since one seed's CIs are too wide to bound.
@@ -114,6 +118,9 @@ def report(out):
     margins = frozen["margins"] if manifest["version"] == V2_VERSION else MARGINS
     bindings = {role: read_binding(out, role) for role in ("candidate", "incumbent")}
     require_same_backend(bindings)
+    judge = json.loads((out / "judge-provenance.json").read_text())
+    rubric_version = recorded_rubric(judge)
+    nextline = rubric_version == NEXTLINE_RUBRIC
     seed_pairings = {str(s): {role: s + b.get("sampler_seed_offset", 0) for role, b in bindings.items()} for s in SEEDS}
     prompt_rows = json.loads((out / "prompts.json").read_text())
     prompts = {r["id"]: r for r in prompt_rows}
@@ -122,20 +129,25 @@ def report(out):
                  **{role: results[role][p["id"], seed] for role in results}) for p in prompt_rows for seed in SEEDS]
     pairs = {p["pair_id"]: p for p in read_jsonl(out / "pairs.jsonl")}
     raw_judgments = read_jsonl(out / "judgments.jsonl")
-    if manifest["version"] == V2_VERSION and read_jsonl(out / "pairs.jsonl") != make_pairs(out):
-        raise ValueError("V2 judged pairs differ from the frozen selection or captured outputs")
-    expected_judgments = len(pairs) if dev else (810 if manifest["version"] == V2_VERSION else 450)
+    if (nextline or manifest["version"] == V2_VERSION) and read_jsonl(out / "pairs.jsonl") != make_pairs(out, rubric_version):
+        raise ValueError("Judged pairs differ from the recorded selection or captured outputs")
+    minimum_prompts = len({p["id"] for p in pairs.values()}) if dev else (180 if manifest["version"] == V2_VERSION else 120)
+    expected_judgments = len(pairs) if dev else (minimum_prompts * len(SEEDS) if nextline else
+                                               (810 if manifest["version"] == V2_VERSION else 450))
     if len(raw_judgments) != expected_judgments or {j["pair_id"] for j in raw_judgments} != pairs.keys():
         raise ValueError("Missing, extra or duplicate blinded judgments")
     judgments = []
     for judgment in raw_judgments:
+        if nextline and judgment.get("rubric_version") != rubric_version:
+            raise ValueError("Judgment rubric differs from provenance")
         p = pairs[judgment["pair_id"]]
         winner = judgment["winner"]
         outcome = p["left_model" if winner == "L" else "right_model"] if winner in ("L", "R") else winner
         judgments.append(dict(p, outcome=outcome))
-    scopes = {"pooled": summarize(rows, judgments, margins)}
+    scopes = {"pooled": summarize(rows, judgments, margins, rubric_version, minimum_prompts)}
     for seed in SEEDS:
-        scopes[str(seed)] = summarize([r for r in rows if r["seed"] == seed], [j for j in judgments if j["seed"] == seed], margins)
+        scopes[str(seed)] = summarize([r for r in rows if r["seed"] == seed], [j for j in judgments if j["seed"] == seed],
+                                      margins, rubric_version, minimum_prompts)
     parity = read_jsonl(out / "parity.jsonl")
     overlap = json.loads((out / "overlap-final.json").read_text())
     counts = Counter(p["task"] for p in prompt_rows)
@@ -155,7 +167,6 @@ def report(out):
           and sha256(out / "prompts.json") == (manifest["prompts_sha256"] if dev else frozen["prompts_sha256"])
           and all(text_hash(p["prompt"]) == p["prompt_sha256"] for p in prompt_rows))
     gates, verdict = gate_verdict(g1, scopes, dev)
-    judge = json.loads((out / "judge-provenance.json").read_text())
     lines = ["# DEV EVALUATION - not an adoption verdict" if dev else f"# Frozen model gate: {verdict}", "",
              f"Benchmark version: {manifest['version']}.", "",
              "Candidate / incumbent; all differences are candidate minus incumbent.", "",
@@ -171,6 +182,29 @@ def report(out):
                   "See benchmark.json, parity.jsonl, inputs.json, prompts.json and overlap-final.json for hashes and inventory.", "",
                   "95% paired percentile intervals use 20,000 bootstrap resamples of whole songs (seed 20261014), retaining all tasks, prompts, lines and sampler seeds inside each song cluster.",
                   "A [0, 0] null interval contains zero; equality supplies no evidence of a strict improvement.", ""])
+    if nextline:
+        lines.extend(["## Next-line suggestions", "",
+                      "G3 and G6 preference use suggestion pairs only. G3 requires a positive song-cluster CI lower bound",
+                      "and blocks any suggestion level or rhyme-type stratum whose CI is entirely below zero.", "",
+                      "| Scope | Wins / losses / ties | Net preference [95% CI] |", "|---|---|---|"])
+        for key, pref in scopes["pooled"]["preference"].items():
+            lines.append(f"| {key} | {pref['wins']} / {pref['losses']} / {pref['ties']} | {metric_text(pref['net_preference'])} |")
+        lines.extend(["", "Three example pairs: input-ID hash ranks 1, 2 and 3 in sampler seeds 7000, 7001 and 7002, without outcome filtering (wrapping for tiny DEV sets).", ""])
+        for index, seed in enumerate(SEEDS):
+            examples = [p for p in pairs.values() if p["task"] == "suggestions" and p["seed"] == seed]
+            if not examples:
+                continue
+            pair = sorted(examples, key=lambda p: text_hash(p["id"]))[index % len(examples)]
+            lines.extend([f"### {pair['id']} / seed {seed}", "", "Exact task and preceding lyrics:", "~~~text", pair["inner"], "~~~", ""])
+            for role in ("candidate", "incumbent"):
+                side = "left" if pair["left_model"] == role else "right"
+                lines.extend([f"{role.capitalize()} options:", "~~~text", pair[side], "~~~", ""])
+        lines.extend(["## Rewrites and synonyms: non-inferiority", "",
+                      "G2 uses production validator pass rates. These tasks contribute no preference votes to adoption.", "",
+                      "| Task | Candidate / incumbent; delta [95% CI] | Allowed loss (pp) |", "|---|---|---:|"])
+        for task in ("rewrite_passage", "rewrite_word", "synonyms"):
+            lines.append(f"| {task} | {metric_text(scopes['pooled']['metrics'].get(task))} | {100 * margins[task]:g} |")
+        lines.append("")
     for scope, data in scopes.items():
         lines.extend([f"## {scope}", "", "| Metric | Candidate / incumbent; delta [95% CI] |", "|---|---|"])
         lines.extend(f"| {name} | {metric_text(value)} |" for name, value in data["metrics"].items())
@@ -191,6 +225,8 @@ def report(out):
                   f"Incremental judge API cost: ${judge['incremental_api_cost_usd']:.2f}. {judge['cost_basis']}. Token usage: {judge['usage']}.",
                   "The template metric counts shown line pairs with identical first three content tokens, divided by all shown line pairs; lower is better.",
                   "This captures desktop llama-server inference through Android Kotlin builders, GenerationBoundary and validators. JNI execution and physical-device performance remain manual G7."])
+    if nextline:
+        lines.extend([f"Rubric / objective: `{rubric_version}`; SHA-256: `{judge['rubric_sha256']}`."])
     for role in results:
         binding = bindings[role]
         lines.extend(["", f"{role}: `{binding['model_path']}`", f"SHA-256: `{binding['model_sha256']}`.",

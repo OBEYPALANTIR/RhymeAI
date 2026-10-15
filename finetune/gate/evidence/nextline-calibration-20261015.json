@@ -1,0 +1,827 @@
+{
+  "rule": {
+    "rubric_version": "nextline-v1",
+    "rubric_sha256": "3b2713ecdb05a176213b556c6efc1383fad5241e2b7b875a7b78e8e127c7c92e",
+    "source_head": "d80b126119abcf7ac5cc33a53fcf5664f6ad3bb9",
+    "g3": "suggestion-only song-cluster CI lower > 0; no level/rhyme CI upper < 0",
+    "g6": "suggestion-only positive net for each seed",
+    "max_ordinary_points": 15,
+    "frozen_v2_sha256": "cf7ff341d14b96b54ef31a2a518a8aaee984f3a13fab69c718c8e7bb23c73210",
+    "sources": {
+      "v2-null-noise": "/Users/tylermanring/.agents/artifacts/2026-10-15/rhymeai-gate-v2/null-noise",
+      "v2-null-identical": "/Users/tylermanring/.agents/artifacts/2026-10-15/rhymeai-gate-v2/null-identical"
+    },
+    "fixed_at_utc": "2026-10-15T21:55:00.486104+00:00"
+  },
+  "calibration_plan_sha256": "63817a6b3de88752c4e476428df025b383763321e8e0b7ba1b0f1c28c9a791e1",
+  "controls": {
+    "null-noise": {
+      "gates": {
+        "G1": true,
+        "G2": true,
+        "G3": false,
+        "G4": true,
+        "G5": true,
+        "G6": false
+      },
+      "preference": {
+        "all": {
+          "n": 540,
+          "wins": 207,
+          "losses": 190,
+          "ties": 143,
+          "invalid": 0,
+          "sign_p": 0.42199987246007603,
+          "net_preference": {
+            "candidate": 0.38333333333333336,
+            "incumbent": 0.35185185185185186,
+            "delta": 0.0314814814814815,
+            "ci95": [
+              -0.03271983640081799,
+              0.0967109800675906
+            ],
+            "candidate_counts": [
+              207,
+              540
+            ],
+            "incumbent_counts": [
+              190,
+              540
+            ],
+            "song_clusters": 56,
+            "paired_requests": 540,
+            "bootstrap_valid": 20000
+          }
+        },
+        "level:Complex": {
+          "n": 180,
+          "wins": 68,
+          "losses": 57,
+          "ties": 55,
+          "invalid": 0,
+          "sign_p": 0.3711606948508096,
+          "net_preference": {
+            "candidate": 0.37777777777777777,
+            "incumbent": 0.31666666666666665,
+            "delta": 0.061111111111111116,
+            "ci95": [
+              -0.06896551724137934,
+              0.1896551724137931
+            ],
+            "candidate_counts": [
+              68,
+              180
+            ],
+            "incumbent_counts": [
+              57,
+              180
+            ],
+            "song_clusters": 38,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "level:Moderate": {
+          "n": 180,
+          "wins": 65,
+          "losses": 69,
+          "ties": 46,
+          "invalid": 0,
+          "sign_p": 0.7956287149703877,
+          "net_preference": {
+            "candidate": 0.3611111111111111,
+            "incumbent": 0.38333333333333336,
+            "delta": -0.022222222222222254,
+            "ci95": [
+              -0.13333333333333336,
+              0.08333333333333331
+            ],
+            "candidate_counts": [
+              65,
+              180
+            ],
+            "incumbent_counts": [
+              69,
+              180
+            ],
+            "song_clusters": 43,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "level:Simple": {
+          "n": 180,
+          "wins": 74,
+          "losses": 64,
+          "ties": 42,
+          "invalid": 0,
+          "sign_p": 0.4437150035266715,
+          "net_preference": {
+            "candidate": 0.4111111111111111,
+            "incumbent": 0.35555555555555557,
+            "delta": 0.055555555555555525,
+            "ci95": [
+              -0.05555555555555558,
+              0.1722270114942525
+            ],
+            "candidate_counts": [
+              74,
+              180
+            ],
+            "incumbent_counts": [
+              64,
+              180
+            ],
+            "song_clusters": 38,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "rhyme_type:NEAR": {
+          "n": 135,
+          "wins": 53,
+          "losses": 44,
+          "ties": 38,
+          "invalid": 0,
+          "sign_p": 0.4167748410890993,
+          "net_preference": {
+            "candidate": 0.3925925925925926,
+            "incumbent": 0.32592592592592595,
+            "delta": 0.06666666666666665,
+            "ci95": [
+              -0.024999999999999967,
+              0.15942028985507245
+            ],
+            "candidate_counts": [
+              53,
+              135
+            ],
+            "incumbent_counts": [
+              44,
+              135
+            ],
+            "song_clusters": 36,
+            "paired_requests": 135,
+            "bootstrap_valid": 20000
+          }
+        },
+        "rhyme_type:NEW_SOUND": {
+          "n": 135,
+          "wins": 55,
+          "losses": 60,
+          "ties": 20,
+          "invalid": 0,
+          "sign_p": 0.7093227303228257,
+          "net_preference": {
+            "candidate": 0.4074074074074074,
+            "incumbent": 0.4444444444444444,
+            "delta": -0.037037037037037035,
+            "ci95": [
+              -0.18700457317073177,
+              0.11627906976744184
+            ],
+            "candidate_counts": [
+              55,
+              135
+            ],
+            "incumbent_counts": [
+              60,
+              135
+            ],
+            "song_clusters": 40,
+            "paired_requests": 135,
+            "bootstrap_valid": 20000
+          }
+        },
+        "rhyme_type:PERFECT": {
+          "n": 135,
+          "wins": 51,
+          "losses": 45,
+          "ties": 39,
+          "invalid": 0,
+          "sign_p": 0.6100682661051768,
+          "net_preference": {
+            "candidate": 0.37777777777777777,
+            "incumbent": 0.3333333333333333,
+            "delta": 0.04444444444444445,
+            "ci95": [
+              -0.12592592592592594,
+              0.2248062015503876
+            ],
+            "candidate_counts": [
+              51,
+              135
+            ],
+            "incumbent_counts": [
+              45,
+              135
+            ],
+            "song_clusters": 36,
+            "paired_requests": 135,
+            "bootstrap_valid": 20000
+          }
+        },
+        "rhyme_type:SLANT": {
+          "n": 135,
+          "wins": 48,
+          "losses": 41,
+          "ties": 46,
+          "invalid": 0,
+          "sign_p": 0.5250147872924269,
+          "net_preference": {
+            "candidate": 0.35555555555555557,
+            "incumbent": 0.3037037037037037,
+            "delta": 0.05185185185185187,
+            "ci95": [
+              -0.09523809523809523,
+              0.19755291005290812
+            ],
+            "candidate_counts": [
+              48,
+              135
+            ],
+            "incumbent_counts": [
+              41,
+              135
+            ],
+            "song_clusters": 34,
+            "paired_requests": 135,
+            "bootstrap_valid": 20000
+          }
+        }
+      },
+      "seed_preference": {
+        "7000": {
+          "n": 180,
+          "wins": 68,
+          "losses": 68,
+          "ties": 44,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.37777777777777777,
+            "incumbent": 0.37777777777777777,
+            "delta": 0.0,
+            "ci95": [
+              -0.1350033783783784,
+              0.14204545454545453
+            ],
+            "candidate_counts": [
+              68,
+              180
+            ],
+            "incumbent_counts": [
+              68,
+              180
+            ],
+            "song_clusters": 56,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "7001": {
+          "n": 180,
+          "wins": 69,
+          "losses": 66,
+          "ties": 45,
+          "invalid": 0,
+          "sign_p": 0.8634152303019917,
+          "net_preference": {
+            "candidate": 0.38333333333333336,
+            "incumbent": 0.36666666666666664,
+            "delta": 0.01666666666666672,
+            "ci95": [
+              -0.09195402298850575,
+              0.12234042553191488
+            ],
+            "candidate_counts": [
+              69,
+              180
+            ],
+            "incumbent_counts": [
+              66,
+              180
+            ],
+            "song_clusters": 56,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "7002": {
+          "n": 180,
+          "wins": 70,
+          "losses": 56,
+          "ties": 54,
+          "invalid": 0,
+          "sign_p": 0.24670624718941767,
+          "net_preference": {
+            "candidate": 0.3888888888888889,
+            "incumbent": 0.3111111111111111,
+            "delta": 0.07777777777777778,
+            "ci95": [
+              -0.04321071071071073,
+              0.19786235516934036
+            ],
+            "candidate_counts": [
+              70,
+              180
+            ],
+            "incumbent_counts": [
+              56,
+              180
+            ],
+            "song_clusters": 56,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        }
+      },
+      "judge_usage": {
+        "cache_write_input_tokens": 0,
+        "reasoning_output_tokens": 2254,
+        "input_tokens": 2020365,
+        "cached_input_tokens": 202240,
+        "output_tokens": 51146
+      },
+      "margins": {
+        "full_six": 0.01,
+        "retry": 0.06,
+        "level_pass": 0.05,
+        "template_repetition": 0.0025,
+        "rewrite_passage": 0.04,
+        "rewrite_word": 0.025,
+        "synonyms": 0.01
+      },
+      "mechanical_metrics_unchanged": true,
+      "originals_unchanged": true,
+      "binding_changes": 0,
+      "batches": 36,
+      "tool_calls": 0,
+      "hashes": {
+        "summary.json": "cd210cac39424b36dd9c14f1e467d1781a0cb5e546fa8361a1bebd2c4c6fc4e8",
+        "report.md": "d4606feba2dc45a5cf20b9031c5eb6e1c21b1c924b52cc2c427c466c0831206e",
+        "pairs.jsonl": "77172779c6ec5fa7908a278bb7adb725ce5b97d8e22bb14478ffbc179485dde6",
+        "judgments.jsonl": "f13f79049bedb600fab08a6913a5e13f07970a0c69021a3a8945dedc9efed50a",
+        "judge-provenance.json": "2891440257c2b41db34eaaf1699f1f1e54a7e5cd1c8063c7b4af520724904542"
+      },
+      "capture_sha256": {
+        "binding-candidate.json": "d8bd0b35517fec0cc191d397736bb4167db2926627124e9f46d6ffaf51e74384",
+        "binding-incumbent.json": "e9f768a141567e9f9e6e27ff267b32b0ab1c008f8ebe22e78abcc8c90a77338c",
+        "raw-candidate.jsonl": "d9ae4734582df32290d2abea1d66edd9d9cb6fe4961f7bd6499dbfb673a992d5",
+        "raw-incumbent.jsonl": "55b01a118908c16b9e5e7164db62e02dea6da037717ac5f928ef72e50cf2872c",
+        "replay-candidate.jsonl": "0f0a7b2faf72e321cc83cf967c3deed41fe9ed1c4ce7a6ea36d3f18b0bdcff7c",
+        "replay-incumbent.jsonl": "18a4af1f0f9d9bfe64652aad59568c48ad9508e92eca24ac6b15335282d8a3b6"
+      }
+    },
+    "null-identical": {
+      "gates": {
+        "G1": true,
+        "G2": true,
+        "G3": false,
+        "G4": true,
+        "G5": true,
+        "G6": false
+      },
+      "preference": {
+        "all": {
+          "n": 540,
+          "wins": 0,
+          "losses": 0,
+          "ties": 540,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              540
+            ],
+            "incumbent_counts": [
+              0,
+              540
+            ],
+            "song_clusters": 56,
+            "paired_requests": 540,
+            "bootstrap_valid": 20000
+          }
+        },
+        "level:Complex": {
+          "n": 180,
+          "wins": 0,
+          "losses": 0,
+          "ties": 180,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              180
+            ],
+            "incumbent_counts": [
+              0,
+              180
+            ],
+            "song_clusters": 38,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "level:Moderate": {
+          "n": 180,
+          "wins": 0,
+          "losses": 0,
+          "ties": 180,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              180
+            ],
+            "incumbent_counts": [
+              0,
+              180
+            ],
+            "song_clusters": 43,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "level:Simple": {
+          "n": 180,
+          "wins": 0,
+          "losses": 0,
+          "ties": 180,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              180
+            ],
+            "incumbent_counts": [
+              0,
+              180
+            ],
+            "song_clusters": 38,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "rhyme_type:NEAR": {
+          "n": 135,
+          "wins": 0,
+          "losses": 0,
+          "ties": 135,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              135
+            ],
+            "incumbent_counts": [
+              0,
+              135
+            ],
+            "song_clusters": 36,
+            "paired_requests": 135,
+            "bootstrap_valid": 20000
+          }
+        },
+        "rhyme_type:NEW_SOUND": {
+          "n": 135,
+          "wins": 0,
+          "losses": 0,
+          "ties": 135,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              135
+            ],
+            "incumbent_counts": [
+              0,
+              135
+            ],
+            "song_clusters": 40,
+            "paired_requests": 135,
+            "bootstrap_valid": 20000
+          }
+        },
+        "rhyme_type:PERFECT": {
+          "n": 135,
+          "wins": 0,
+          "losses": 0,
+          "ties": 135,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              135
+            ],
+            "incumbent_counts": [
+              0,
+              135
+            ],
+            "song_clusters": 36,
+            "paired_requests": 135,
+            "bootstrap_valid": 20000
+          }
+        },
+        "rhyme_type:SLANT": {
+          "n": 135,
+          "wins": 0,
+          "losses": 0,
+          "ties": 135,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              135
+            ],
+            "incumbent_counts": [
+              0,
+              135
+            ],
+            "song_clusters": 34,
+            "paired_requests": 135,
+            "bootstrap_valid": 20000
+          }
+        }
+      },
+      "seed_preference": {
+        "7000": {
+          "n": 180,
+          "wins": 0,
+          "losses": 0,
+          "ties": 180,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              180
+            ],
+            "incumbent_counts": [
+              0,
+              180
+            ],
+            "song_clusters": 56,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "7001": {
+          "n": 180,
+          "wins": 0,
+          "losses": 0,
+          "ties": 180,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              180
+            ],
+            "incumbent_counts": [
+              0,
+              180
+            ],
+            "song_clusters": 56,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        },
+        "7002": {
+          "n": 180,
+          "wins": 0,
+          "losses": 0,
+          "ties": 180,
+          "invalid": 0,
+          "sign_p": 1.0,
+          "net_preference": {
+            "candidate": 0.0,
+            "incumbent": 0.0,
+            "delta": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "candidate_counts": [
+              0,
+              180
+            ],
+            "incumbent_counts": [
+              0,
+              180
+            ],
+            "song_clusters": 56,
+            "paired_requests": 180,
+            "bootstrap_valid": 20000
+          }
+        }
+      },
+      "judge_usage": {
+        "cache_write_input_tokens": 0,
+        "reasoning_output_tokens": 420,
+        "input_tokens": 2015830,
+        "cached_input_tokens": 424192,
+        "output_tokens": 31994
+      },
+      "margins": {
+        "full_six": 0.01,
+        "retry": 0.06,
+        "level_pass": 0.05,
+        "template_repetition": 0.0025,
+        "rewrite_passage": 0.04,
+        "rewrite_word": 0.025,
+        "synonyms": 0.01
+      },
+      "mechanical_metrics_unchanged": true,
+      "originals_unchanged": true,
+      "binding_changes": 0,
+      "batches": 36,
+      "tool_calls": 0,
+      "hashes": {
+        "summary.json": "e044040018e35159d20aa017ac23d4a23f9f24230c13dad29b0ee0a0b303b6a8",
+        "report.md": "7c3dd84aa6b52eaa5d8391a45c564239758e684a24f911df0aa671492b1b11d4",
+        "pairs.jsonl": "3bc8ff9f7d2300e9bbd982313e6a8c47bc4886d96a41fd919ec112819e7b847a",
+        "judgments.jsonl": "2a434ef6773556f344864617eb8f6e443958432153eba7e2e04f1173707cc2e9",
+        "judge-provenance.json": "c781cc3de2172f1cb9d1f469977dada41ff31ddd74badca90a0ff8013346e7f9"
+      },
+      "capture_sha256": {
+        "binding-candidate.json": "e9f768a141567e9f9e6e27ff267b32b0ab1c008f8ebe22e78abcc8c90a77338c",
+        "binding-incumbent.json": "e9f768a141567e9f9e6e27ff267b32b0ab1c008f8ebe22e78abcc8c90a77338c",
+        "raw-candidate.jsonl": "39d9f3b50e91b4dd11b5e22ee8114a97d5593857a0825eaef18f41eb3c3527df",
+        "raw-incumbent.jsonl": "55b01a118908c16b9e5e7164db62e02dea6da037717ac5f928ef72e50cf2872c",
+        "replay-candidate.jsonl": "8bb9e13d4083419f81dedfe0f75f30d16ef30ec9b63c537a1b7070e91fc70431",
+        "replay-incumbent.jsonl": "18a4af1f0f9d9bfe64652aad59568c48ad9508e92eca24ac6b15335282d8a3b6"
+      }
+    }
+  },
+  "ordinary_allowance": {
+    "start_percent": 3,
+    "end_percent": 9,
+    "positive_meter_points": 6,
+    "credits_unchanged": true,
+    "incremental_api_cost_usd": 0,
+    "ledger_sha256": "a89cdcf23502d66bf7607829303a652ad90a911812343ac6dbde1b6d244d0b10"
+  },
+  "legacy_rescore": {
+    "main_head": "6dcef3053b6c77a8042e6aee95d4be48ff5070d3",
+    "exact_main_summary_matches": 3,
+    "test_log_sha256": "fd311844c0dc383aa0292f692168a474b4ca92b35a0cd3ba53d8c0a91ad654f6",
+    "preexisting_saved_v1_vs_main_changes": [
+      {
+        "path": "/gates/G2",
+        "saved": false,
+        "main": true
+      },
+      {
+        "path": "/gates/G4",
+        "saved": false,
+        "main": true
+      },
+      {
+        "path": "/gates/G5",
+        "saved": false,
+        "main": true
+      },
+      {
+        "path": "/gates/G6",
+        "saved": false,
+        "main": true
+      },
+      {
+        "path": "/scopes/pooled/gates/G2",
+        "saved": false,
+        "main": true
+      },
+      {
+        "path": "/scopes/pooled/gates/G4",
+        "saved": false,
+        "main": true
+      },
+      {
+        "path": "/scopes/pooled/gates/G5",
+        "saved": false,
+        "main": true
+      },
+      {
+        "path": "/scopes/7000/gates/G4",
+        "saved": false,
+        "main": true
+      },
+      {
+        "path": "/scopes/7001/gates/G5",
+        "saved": false,
+        "main": true
+      },
+      {
+        "path": "/scopes/7002/gates/G4",
+        "saved": false,
+        "main": true
+      }
+    ]
+  },
+  "restart": {
+    "completed_batches_reused_unchanged": 25,
+    "interrupted_batch": "order-1-batch-007",
+    "partial_evidence_preserved": true,
+    "recovery_proof_sha256": "3393fd441942f4b451c6e5e9abcd406eab1ce3adc86c9d268abbbec7624c74c5",
+    "resume_max_concurrent_batches": 2,
+    "interrupted_batch_token_usage": "unavailable; ordinary meter retained across restart"
+  },
+  "billing_recovery": {
+    "batches": [
+      "order-1-batch-010",
+      "order-1-batch-011"
+    ],
+    "new_judge_calls": 0,
+    "scope": "Post-judgment account/rateLimits/read failed; actual outer meter readings enclose each completed batch",
+    "recovery_proof_sha256": "61d37ac4451ea7dd6e3902500a0058107e27443c7e434a3200ca7d78b06d921f",
+    "remaining_max_concurrent_batches": 1
+  },
+  "not_run": [
+    "candidate judging",
+    "inference",
+    "training",
+    "cloud compute",
+    "Android build/device",
+    "G7",
+    "G8"
+  ]
+}
