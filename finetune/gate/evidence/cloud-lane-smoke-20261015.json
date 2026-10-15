@@ -1,0 +1,162 @@
+{
+  "tested_source_head": "20a0ec48936357e3b68a08b9fc4f97cc889119a3",
+  "model_sha256": "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5",
+  "model_bytes": 3427880800,
+  "backend": {
+    "kind": "cuda",
+    "build_info": "b9949-049326a00",
+    "binary_sha256": "9367097485c0b020d783c0cfe4f4afec43e8472f55f2693f7b43620bd51cbe0d",
+    "llama_cpp_commit": "049326a00025d00b08cc188ed716b681e984a3f8",
+    "cache_sha256": "737a51bf76cc1e578452c6958944e99b15bac32046dc05a891be8576ed5b82fb",
+    "gpu": "NVIDIA L4, 580.178.04"
+  },
+  "target": {
+    "machine": "g2-standard-12",
+    "accelerator": "nvidia-l4",
+    "region": "us-central1",
+    "provisioning_model": "STANDARD"
+  },
+  "instance_id": "5529977031799703451",
+  "created_at": "2026-10-14T19:24:52.471-07:00",
+  "deleted_by": "2026-10-15T02:31:46.664141+00:00",
+  "hard_deadline_seconds": 3600,
+  "termination_action": "DELETE",
+  "auto_delete_boot_disk": true,
+  "idle_seconds": 900,
+  "corpus": {
+    "songs": 1,
+    "prompts": 15,
+    "seeds": [
+      7000,
+      7001,
+      7002
+    ]
+  },
+  "arms": {
+    "candidate": {
+      "rows": 45,
+      "mismatches": 0,
+      "backend": {
+        "kind": "cuda",
+        "build_info": "b9949-049326a00",
+        "binary_sha256": "9367097485c0b020d783c0cfe4f4afec43e8472f55f2693f7b43620bd51cbe0d",
+        "llama_cpp_commit": "049326a00025d00b08cc188ed716b681e984a3f8",
+        "cache_sha256": "737a51bf76cc1e578452c6958944e99b15bac32046dc05a891be8576ed5b82fb",
+        "gpu": "NVIDIA L4, 580.178.04"
+      },
+      "errors": 0,
+      "shown_lines": 195,
+      "server_pid": 2218,
+      "gcs_generation": "1792030378610255",
+      "gcs_readback_sha256": "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5",
+      "sampler_audit": {
+        "raw_passes": 47,
+        "used_passes": 47,
+        "effective_sampler_observations": 45,
+        "termination_counts": {
+          "server_stop": 45,
+          "android_line_or_display_cap": 2
+        },
+        "sum_generation_seconds": 28.012
+      }
+    },
+    "incumbent": {
+      "rows": 45,
+      "mismatches": 0,
+      "backend": {
+        "kind": "cuda",
+        "build_info": "b9949-049326a00",
+        "binary_sha256": "9367097485c0b020d783c0cfe4f4afec43e8472f55f2693f7b43620bd51cbe0d",
+        "llama_cpp_commit": "049326a00025d00b08cc188ed716b681e984a3f8",
+        "cache_sha256": "737a51bf76cc1e578452c6958944e99b15bac32046dc05a891be8576ed5b82fb",
+        "gpu": "NVIDIA L4, 580.178.04"
+      },
+      "errors": 0,
+      "shown_lines": 195,
+      "server_pid": 2297,
+      "gcs_generation": "1792030378610255",
+      "gcs_readback_sha256": "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5",
+      "sampler_audit": {
+        "raw_passes": 47,
+        "used_passes": 47,
+        "effective_sampler_observations": 45,
+        "termination_counts": {
+          "server_stop": 45,
+          "android_line_or_display_cap": 2
+        },
+        "sum_generation_seconds": 28.031
+      }
+    }
+  },
+  "paired_result_mismatches": 0,
+  "network": {
+    "local": "127.0.0.1:18080",
+    "vm": "127.0.0.1:8080",
+    "external_port_8080_reachable": false,
+    "live_server_processes": 1,
+    "source_and_model_sha256_verified_over_ssh": true
+  },
+  "spot_attempt": {
+    "instance_id": "8622404208483469053",
+    "zone": "us-east1-c",
+    "preemption": [
+      {
+        "operationType": "compute.instances.preempted",
+        "startTime": "2026-10-14T19:21:20.385-07:00",
+        "endTime": "2026-10-14T19:21:30.298-07:00",
+        "statusMessage": "Instance was preempted."
+      }
+    ],
+    "inventories_after": {
+      "instances": [],
+      "disks": []
+    }
+  },
+  "inventories_after": {
+    "instances": [],
+    "disks": []
+  },
+  "cost": {
+    "compute_usd_upper_bound_all_attempts": 0.15772065882718206,
+    "conservative_total_with_prior_usage_and_reserves_usd": 2.4006777056166912,
+    "basis": "Compute creation to observed deletion; includes $0.60 prior usage reserve and $1.68557616 transfer/storage reserve; invoice pending"
+  },
+  "tests": {
+    "gate_unit_tests_passed": 37,
+    "kotlin_prompt_parity": true,
+    "live_replay_and_independent_offline_replay": true,
+    "shell_syntax": true
+  },
+  "not_run": [
+    "judge (zero allowance used)",
+    "adoption verdict",
+    "physical Android G7/G8",
+    "local inference",
+    "waiting for hard deadline or idle expiry"
+  ],
+  "evidence_sha256": {
+    "lifecycle.jsonl": "f54b6b023f57f6c56eecf7a0a101b4ef131f68e06b019481e7f527efd70b4580",
+    "operations.json": "f0b8ff021b7e7e132bef874f1a66c74ac11aa0076aa5bff827908b7136493124",
+    "after.json": "48a6a7c13c3f521f3b6dc92ae99de1d3d9561137bbc8483ea4083f5d284acab9",
+    "cost.json": "e60476ccba306da6bd23746e31817fa61d3e2df74dc77d3e38123ca7a8e2643d",
+    "ondemand/lifecycle.jsonl": "5e93dffbe30c993e96d851d9099493088af423e5b69118b0e7bf37ce23450371",
+    "ondemand/operations.json": "822835b635732f9fb8cd9f77da8d259c731fc454d246389208fcc9ad983a9ff6",
+    "ondemand/after.json": "48a6a7c13c3f521f3b6dc92ae99de1d3d9561137bbc8483ea4083f5d284acab9",
+    "ondemand/cost.json": "59bea72c9c0b2baced1ab7208817fa41ce45f683985a51d58fba9b7465ef9d2a",
+    "ondemand/network-and-hash.json": "a0666f62988db8622dc48a8eb1a9fc5dc9b64d2689b8f9b61eb9cff2e65e980f",
+    "ondemand/tunnel-command.json": "66945a2f9aa35a7c0c095e72053441adc56d750219bf6541961371c701b01456",
+    "ondemand/smoke/generation-smoke.json": "fb727a6381bbd1b5afe4ce71083a42f0f421c922d57c93c1f0a573bfb275da35",
+    "ondemand/smoke/binding-candidate.json": "cd57b9922ecf15e8e364023354de652fdc6e0597c83edbd0a51d384bf2c6d037",
+    "ondemand/smoke/raw-candidate.jsonl": "48618a5d903a4bcc157a868c1a9a76e66dc84ecae863663b084a53d0febc7d78",
+    "ondemand/smoke/replay-candidate.jsonl": "1674d3708d465a8674264f81ec2eb4c319bb022aef850fad743fa8ab0cd423f0",
+    "ondemand/smoke/replayed-candidate.jsonl": "1674d3708d465a8674264f81ec2eb4c319bb022aef850fad743fa8ab0cd423f0",
+    "ondemand/smoke/generation-audit-candidate.json": "d7b164ea234baccdb0ac1051a5b386f988a08a8e2edaa5d2c48e75c901cd1a84",
+    "ondemand/smoke/binding-incumbent.json": "cd57b9922ecf15e8e364023354de652fdc6e0597c83edbd0a51d384bf2c6d037",
+    "ondemand/smoke/raw-incumbent.jsonl": "4c141d1113b010745a83d72ee82f9f98f165e3f3a55a4701c32f4dbf5c12639d",
+    "ondemand/smoke/replay-incumbent.jsonl": "d712a6c5b0743dba82755aae1ba07052f9959435f5c660df9faecf059e0bf36e",
+    "ondemand/smoke/replayed-incumbent.jsonl": "d712a6c5b0743dba82755aae1ba07052f9959435f5c660df9faecf059e0bf36e",
+    "ondemand/smoke/generation-audit-incumbent.json": "bf45fd6109ff8341bc1aea5efbc693546590e4eec21120dc0fc0b7be5610267b",
+    "ondemand/smoke/evidence/remote-candidate-1792031219117240000.json": "4644d80f78cfc17072b60c7441af2afde2746efa5435af1997ee5fb6241494cc",
+    "ondemand/smoke/evidence/remote-incumbent-1792031288382506000.json": "14e68e1f6a9b012b9bdbc6b0b8a3e7c2614986739ef1547fd0f2140bd8044afb"
+  }
+}

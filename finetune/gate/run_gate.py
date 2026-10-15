@@ -7,6 +7,7 @@ import fcntl
 import json
 import subprocess
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -14,6 +15,7 @@ if __package__ in (None, ""):
 
 from gate.build import DEV_VERSION, FROZEN_VERSION, V2_VERSION, REPO, SEEDS, audit_overlap, freeze, frozen_path, prepare_dev, read_jsonl, require_mode, write_json
 from gate.generate import freeze_prompts, generate, select_incumbent
+from gate.backend import tunnel_port
 
 
 def main():
@@ -27,7 +29,16 @@ def main():
     parser.add_argument("--candidate-seed-offset", type=int, default=0,
                         help="Null noise control: shift candidate seeds; default keeps paired same-seed comparison")
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--server-url", help="Existing SSH tunnel, http://127.0.0.1:<port>; never starts a local server")
+    parser.add_argument("--cloud-lane", type=Path, help="cloud_lane.py state; selects and SHA-verifies each arm on its VM")
+    parser.add_argument("--dev-generation-only", action="store_true", help="DEV smoke: replay both arms offline, skip judging, no verdict")
     args = parser.parse_args()
+    if bool(args.server_url) != bool(args.cloud_lane):
+        parser.error("--server-url and --cloud-lane are required together for verified remote inference")
+    if args.server_url:
+        tunnel_port(args.server_url)
+    if args.dev_generation_only and not args.dev_songs:
+        parser.error("--dev-generation-only requires --dev-songs; frozen gates always judge")
     if args.dev_expanded_words and not args.dev_songs:
         parser.error("--dev-expanded-words requires --dev-songs")
     if args.dev_songs and args.benchmark != "v1":
@@ -43,8 +54,11 @@ def main():
         parser.error("nonzero candidate seed offset must give disjoint initial and retry seeds")
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    with (out / "run.lock").open("w") as lock:
+    with ExitStack() as stack, (out / "run.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if args.cloud_lane:
+            from gate.cloud_lane import lane_lock, select_model
+            stack.enter_context(lane_lock(args.cloud_lane))
         require_mode(out, version)
         for name in ("summary.json", "report.md"):
             (out / name).unlink(missing_ok=True)
@@ -63,7 +77,32 @@ def main():
                 phase = f"generate-{role}"
                 print(phase, flush=True)
                 write_json(out / "status.json", {"phase": phase, "complete": False})
-                generate(out, role, path, offset if role == "candidate" else 0)
+                remote = {"server_url": args.server_url, "remote_proof": select_model(args.cloud_lane, path)} if args.server_url else {}
+                generate(out, role, path, offset if role == "candidate" else 0, **remote)
+            if args.dev_generation_only:
+                from gate.generate import gradle
+                proof = {"mode": DEV_VERSION, "judge": "NOT RUN", "verdict": "NOT RUN", "arms": {},
+                         "source_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
+                         "command": sys.argv}
+                for role in ("candidate", "incumbent"):
+                    phase = f"offline-replay-{role}"
+                    gradle(out, "replay", role, seed_offset=offset if role == "candidate" else 0)
+                    live = read_jsonl(out / f"replay-{role}.jsonl")
+                    offline = read_jsonl(out / f"replayed-{role}.jsonl")
+                    if live != offline or not all(r["offline_replay_equal"] for r in live):
+                        raise ValueError("DEV smoke live/offline replay mismatch")
+                    proof["arms"][role] = {"rows": len(live), "mismatches": 0,
+                                           "backend": json.loads((out / f"binding-{role}.json").read_text())["backend"]}
+                overlap = audit_overlap(read_jsonl(out / "benchmark-songs.jsonl"), include_frozen=True)
+                write_json(out / "overlap-final.json", overlap)
+                if overlap["overlapping_lines"]:
+                    raise ValueError("DEV corpus overlaps the frozen benchmark or training pools")
+                write_json(out / "generation-smoke.json", proof)
+                write_json(out / "status.json", {"phase": "generation-only", "complete": False, "generation_complete": True,
+                                                 "judge": "NOT RUN", "verdict": "NOT RUN"})
+                (out / "report.md").write_text("# DEV generation smoke\n\nBoth arms match offline replay. Judge and adoption verdict: NOT RUN.\n")
+                print(f"DEV generation smoke: {out / 'generation-smoke.json'}", flush=True)
+                return
             phase = "judge"
             write_json(out / "status.json", {"phase": phase, "complete": False})
             from gate.judge import judge
