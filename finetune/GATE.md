@@ -184,6 +184,10 @@ natural phrasing, no padding and no cliches. Blind randomized L/R assignment,
 separate swapped sessions and inconsistent-to-tie consolidation are unchanged.
 `judge-provenance.json` and each batch binding record `nextline-v1` and the exact
 rubric SHA-256; the runner also records both in `provenance.json`.
+The fixed rubric SHA-256 is
+`3b2713ecdb05a176213b556c6efc1383fad5241e2b7b875a7b78e8e127c7c92e`.
+The rule was committed at `d80b126119abcf7ac5cc33a53fcf5664f6ad3bb9` and the
+calibration plan recorded at `2026-10-15T21:55:00.486104+00:00`, before judging.
 
 Existing runs keep their original rubric identity: the recorded SHA-256
 `7960b74f1411493a49c1852d721e865b4fe93b9b6ff3170cd8b277249c4fdd9c`
@@ -200,9 +204,45 @@ only. The combined re-judging budget is at most 15 allowance points. No inferenc
 training or candidate judging is part of this calibration. The spent v6 B epoch 2
 v2 captures are excluded; its old result remains under its recorded rubric.
 
-Calibration results and copied legacy-rescore evidence are recorded with this
-change after both controls complete. No candidate may use the new rule before
-that calibration is recorded.
+| Control | Wins / losses / ties | Suggestion net preference [95% CI], pp |
+|---|---|---|
+| Disjoint seeds | 207 / 190 / 143 | +3.1481 [−3.2720, +9.6711] |
+| Identical captures | 0 / 0 / 540 | 0 [0, 0] |
+
+The disjoint null has 56 judged song clusters and shows no significant next-line
+win. Every level and rhyme-type interval includes zero; seed net preferences are
+0, +1.6667 and +7.7778 pp. The identical null has all 1,080 individual order
+judgments tied, yielding 540 consolidated ties. Both controls pass G1/G2/G4/G5
+and fail G3/G6 as expected when there is no demonstrated improvement. Mechanical
+metrics and frozen margins match the original controls exactly.
+
+The native ordinary-allowance meter rose from 3% to 9% (6 observed points,
+including the restart window), with unchanged credit balance throughout. This
+is an observed shared-account meter change, not isolated per-task attribution.
+All 72 completed batches have successful native exits, terminal completion and
+zero tool calls. The restart preserved and reused 25 completed batches; the
+unfinished batch's partial evidence was archived before retrying it. Its token
+usage is unavailable. Two later post-batch billing reads failed; their completed
+judgments were retained unchanged and billing was verified using wider enclosing
+native meter readings, with the recovery recorded explicitly. No completed
+batch was re-judged for either recovery.
+
+[Calibration evidence](gate/evidence/nextline-calibration-20261015.json) records
+unrounded intervals/strata, source and result hashes, ordinary allowance and
+recovery limitations. Captures, native completion evidence and the verification
+script remain under `~/.agents/artifacts/2026-10-15/rhymeai-nextline-v1/`.
+
+Three copied legacy runs (v1 disjoint null and both v2 controls) reproduce main
+`6dcef3053b6c77a8042e6aee95d4be48ff5070d3` summaries exactly under their recorded
+craft rubric. The original v1 saved null predates an earlier margin calibration:
+main already differs in ten gate booleans, with unchanged numerical metrics and
+preferences. That pre-existing difference is recorded in `legacy-baseline.json`;
+the source artifacts are preserved.
+
+Verification passed: 66 gate tests (including real copied v1/v2 rescoring), 33
+evaluator tests, and the calibration artifact assertions. Calibration is complete
+before any candidate is judged with this rule; the next candidate's v2 next-line
+look remains unused.
 
 ### V1 calibration (2026-10-14)
 
