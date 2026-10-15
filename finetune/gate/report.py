@@ -10,6 +10,7 @@ from .build import DEV_VERSION, FROZEN_VERSION, V2_VERSION, HERE, SEEDS, frozen_
 from .metrics import (MARGINS, not_worse, paired, preference, preference_pass,
                       template_pairs, yield_pass)
 from .generate import SAMPLER
+from .backend import read_binding, require_same_backend
 from .judge import judged_counts, make_pairs
 
 
@@ -111,7 +112,8 @@ def report(out):
     dev = manifest["version"] == DEV_VERSION
     frozen = None if dev else json.loads(frozen_path(manifest["version"]).read_text())
     margins = frozen["margins"] if manifest["version"] == V2_VERSION else MARGINS
-    bindings = {role: json.loads((out / f"binding-{role}.json").read_text()) for role in ("candidate", "incumbent")}
+    bindings = {role: read_binding(out, role) for role in ("candidate", "incumbent")}
+    require_same_backend(bindings)
     seed_pairings = {str(s): {role: s + b.get("sampler_seed_offset", 0) for role, b in bindings.items()} for s in SEEDS}
     prompt_rows = json.loads((out / "prompts.json").read_text())
     prompts = {r["id"]: r for r in prompt_rows}
@@ -191,10 +193,12 @@ def report(out):
                   "This captures desktop llama-server inference through Android Kotlin builders, GenerationBoundary and validators. JNI execution and physical-device performance remain manual G7."])
     for role in results:
         binding = bindings[role]
-        lines.extend(["", f"{role}: `{binding['model_path']}`", f"SHA-256: `{binding['model_sha256']}`."])
+        lines.extend(["", f"{role}: `{binding['model_path']}`", f"SHA-256: `{binding['model_sha256']}`.",
+                      f"Backend/build: `{json.dumps(binding['backend'], sort_keys=True)}`."])
     (out / "report.md").write_text("\n".join(lines) + "\n")
     write_json(out / "summary.json", {"verdict": verdict, "gates": gates, "scopes": scopes, "judge": judge,
                                       "benchmark_version": manifest["version"], "margins": margins,
                                       "seed_pairings": seed_pairings, "judged_prompt_counts_per_cell": cell_counts,
+                                      "backend": bindings["candidate"]["backend"],
                                       **({"mode": DEV_VERSION} if dev else {})})
     return verdict

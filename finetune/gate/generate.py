@@ -8,9 +8,11 @@ import socket
 import subprocess
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 from .build import DEV_VERSION, REPO, frozen_path, read_jsonl, sha256, text_hash, write_json
+from .backend import read_binding, require_backend, require_same_backend, server_backend, tunnel_port, verify_remote
 from eval.prompts import GEMMA4, app_prompt
 
 INCUMBENT = Path("/Volumes/Untitled/models/rhymeai/students-v21-20261006/E2B/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf")
@@ -119,7 +121,9 @@ def source_binding():
     return {str(p.relative_to(REPO)): sha256(p) for p in paths}
 
 
-def generate(out, model, path, seed_offset=0):
+def generate(out, model, path, seed_offset=0, *, server_url=None, remote_proof=None):
+    if server_url and not remote_proof:
+        raise ValueError("A verified remote model SHA-256 is required before starting a run")
     path = Path(path).resolve(strict=True)
     binding = {"model_path": str(path), "model_sha256": sha256(path), "model_bytes": path.stat().st_size,
                "prompts_sha256": sha256(out / "prompts.json"), "sampler": SAMPLER, "source": source_binding(),
@@ -127,17 +131,79 @@ def generate(out, model, path, seed_offset=0):
     if model == "incumbent" and binding["model_sha256"] not in SHIPPED_INCUMBENT_SHA256:
         raise ValueError("Incumbent must be a shipped catalog GGUF (v2.1 E2B or E4B)")
     target = out / f"binding-{model}.json"
-    if target.exists() and json.loads(target.read_text()) != binding:
+    existing = read_binding(out, model) if target.exists() else None
+    if existing and {k: v for k, v in existing.items() if k not in ("backend", "remote_model_sha256")} != binding:
         raise ValueError("Refusing to mix runs with different source, sampler, prompts or model")
-    if not target.exists():
+    if existing is None:
         if any((out / f"{kind}-{model}.jsonl").exists() for kind in ("raw", "replay")):
             raise ValueError("Existing captures have no original binding; refusing to reuse them")
-        write_json(target, binding)
-    write_json(out / "sampler.json", SAMPLER)
     expected = len(json.loads((out / "prompts.json").read_text())) * 3
     replay = out / f"replay-{model}.jsonl"
-    if replay.exists() and len(read_jsonl(replay)) == expected:
-        return binding
+    complete = replay.exists() and len(read_jsonl(replay)) == expected
+    other_role = "incumbent" if model == "candidate" else "candidate"
+    other = out / f"binding-{other_role}.json"
+
+    def bind():
+        require_backend(binding.get("backend"))
+        if existing is not None:
+            require_same_backend({model: binding, "existing": existing})
+            if existing.get("remote_model_sha256") != binding.get("remote_model_sha256"):
+                raise ValueError("Refusing to mix backend/build or remote model bindings; regenerate captures")
+            if existing["backend"].get("legacy"):
+                binding["backend"] = existing["backend"]
+        if other.exists():
+            require_same_backend({model: binding, other_role: read_binding(out, other_role)})
+        if not complete:
+            write_json(target, binding)
+            write_json(out / "sampler.json", SAMPLER)
+
+    if not server_url and complete:
+        if other.exists():
+            require_same_backend({model: existing, other_role: read_binding(out, other_role)})
+        return existing
+    evidence = out / "evidence"
+    evidence.mkdir(exist_ok=True)
+    if server_url:
+        port = tunnel_port(server_url)
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/props", timeout=10) as response:
+            props = json.load(response)
+        binding["backend"] = verify_remote(remote_proof, props, binding["model_sha256"], binding["model_bytes"])
+        binding["remote_model_sha256"] = remote_proof["model_sha256"]
+        bind()
+        write_json(evidence / f"remote-{model}-{time.time_ns()}.json", remote_proof)
+        write_json(evidence / f"props-{model}.json", props)
+        if not complete:
+            generate_from_server(out, model, port, seed_offset)
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/props", timeout=10) as response:
+            verify_remote(remote_proof, json.load(response), binding["model_sha256"], binding["model_bytes"])
+    else:
+        with local_server(out, model, path) as (port, props, backend):
+            binding["backend"] = backend
+            bind()
+            generate_from_server(out, model, port, seed_offset)
+    rows = read_jsonl(replay)
+    if len(rows) != expected or len({(r["id"], r["seed"]) for r in rows}) != expected:
+        raise ValueError("Incomplete or duplicate generation rows")
+    return binding
+
+
+def generate_from_server(out, model, port, seed_offset):
+    audits = []
+    for row in json.loads((out / "prompts.json").read_text()):
+        applied = post(port, "apply-template", {"messages": [{"role": "user", "content": row["prompt"]}],
+                       "add_generation_prompt": True, "chat_template_kwargs": {"enable_thinking": False}})["prompt"]
+        if applied != row["wrapped_prompt"]:
+            raise ValueError(f"GGUF template mismatch: {row['id']}")
+        tokens = post(port, "tokenize", {"content": applied, "add_special": True, "parse_special": True})["tokens"]
+        if tokens[0] != 2 or tokens.count(2) != 1 or len(tokens) >= 2048:
+            raise ValueError(f"BOS/context mismatch: {row['id']}")
+        audits.append({"id": row["id"], "template_byte_parity": True, "tokens": len(tokens), "sha256": text_hash(applied)})
+    write_json(out / "evidence" / f"envelope-{model}.json", audits)
+    gradle(out, "generate", model, port, seed_offset)
+
+
+@contextmanager
+def local_server(out, model, path):
     logic_guard()
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -146,7 +212,7 @@ def generate(out, model, path, seed_offset=0):
     if not binary:
         raise FileNotFoundError("Install llama.cpp; model downloads are not performed by this runner")
     command = [binary, "-m", str(path), "--ctx-size", "2048", "--parallel", "1", "--host", "127.0.0.1",
-               "--port", str(port), "--n-gpu-layers", "99", "--no-webui"]
+               "--port", str(port), "--n-gpu-layers", "99", "--no-webui", "--log-verbosity", "4"]
     evidence = out / "evidence"
     evidence.mkdir(exist_ok=True)
     stamp = time.time_ns()
@@ -168,19 +234,14 @@ def generate(out, model, path, seed_offset=0):
                     raise TimeoutError("llama-server startup deadline")
                 time.sleep(1)
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/props", timeout=10) as response:
-                write_json(evidence / f"props-{model}.json", json.load(response))
-            audits = []
-            for row in json.loads((out / "prompts.json").read_text()):
-                applied = post(port, "apply-template", {"messages": [{"role": "user", "content": row["prompt"]}],
-                               "add_generation_prompt": True, "chat_template_kwargs": {"enable_thinking": False}})["prompt"]
-                if applied != row["wrapped_prompt"]:
-                    raise ValueError(f"GGUF template mismatch: {row['id']}")
-                tokens = post(port, "tokenize", {"content": applied, "add_special": True, "parse_special": True})["tokens"]
-                if tokens[0] != 2 or tokens.count(2) != 1 or len(tokens) >= 2048:
-                    raise ValueError(f"BOS/context mismatch: {row['id']}")
-                audits.append({"id": row["id"], "template_byte_parity": True, "tokens": len(tokens), "sha256": text_hash(applied)})
-            write_json(evidence / f"envelope-{model}.json", audits)
-            gradle(out, "generate", model, port, seed_offset)
+                props = json.load(response)
+                props_path = evidence / f"props-{model}.json"
+                if props_path.exists():
+                    # A resumed legacy binding still cites the original props bytes.
+                    props_path = evidence / f"props-{model}-{stamp}.json"
+                write_json(props_path, props)
+            backend = server_backend(props, Path(log.name).read_text(), sha256(binary))
+            yield port, props, backend
         finally:
             if server.poll() is None:
                 server.terminate()
@@ -190,7 +251,3 @@ def generate(out, model, path, seed_offset=0):
                     server.kill()
                     server.wait()
             write_json(evidence / f"server-{model}-{stamp}-exit.json", {"pid": server.pid, "returncode": server.returncode})
-    rows = read_jsonl(replay)
-    if len(rows) != expected or len({(r["id"], r["seed"]) for r in rows}) != expected:
-        raise ValueError("Incomplete or duplicate generation rows")
-    return binding

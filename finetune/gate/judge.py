@@ -86,6 +86,8 @@ def judged_counts(rows):
 
 
 def make_pairs(out):
+    from .backend import read_binding, require_same_backend
+    require_same_backend({role: read_binding(out, role) for role in ("candidate", "incumbent")})
     version = json.loads((out / "benchmark.json").read_text())["version"]
     prompts = selected_prompts(json.loads((out / "prompts.json").read_text()), dev=version == DEV_VERSION, version=version)
     results = {role: {(r["id"], r["seed"]): r for r in read_jsonl(out / f"replay-{role}.jsonl")}
