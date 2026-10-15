@@ -61,7 +61,9 @@ class RemoteBindingTest(unittest.TestCase):
 
     def test_backend_comes_from_actual_offload_and_build(self):
         _, props = proof_fixture()
-        for kind, device in (("cuda", "CUDA0"), ("metal", "Metal")):
+        # "MTL0_Mapped" and ggml_metal_init are what llama.cpp b11429 actually logs on Apple GPUs.
+        for kind, device in (("cuda", "CUDA0"), ("metal", "Metal"), ("metal", "load_tensors:  MTL0_Mapped model buffer"),
+                             ("metal", "ggml_metal_init: allocating")):
             self.assertEqual(server_backend(props, f"{device}\noffloaded 36/36 layers to GPU", "1" * 64)["kind"], kind)
         self.assertEqual(server_backend(props, "CPU model buffer", "1" * 64)["kind"], "cpu")
         with self.assertRaises(ValueError):
