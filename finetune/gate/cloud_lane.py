@@ -133,8 +133,9 @@ def start(args):
     write_json(evidence / "budget.json", limits)
     for file in (evidence / "config.json", HERE / "cloud_worker.py", HERE / "backend.py", HERE.parent / "train/gcp/notebook.py"):
         gcloud("storage", "cp", file, prefix + "/" + file.name)
+    modes = ("STANDARD",) if args.on_demand else ("SPOT", "STANDARD")
     targets = [{"machine": "g2-standard-12", "accelerator": "nvidia-l4", "region": region,
-                "provisioning_model": mode} for mode in ("SPOT", "STANDARD") for region in L4_PRICES]
+                "provisioning_model": mode} for mode in modes for region in L4_PRICES]
     candidates = capacity_candidates(cloud_json("compute", "accelerator-types", "list"), targets)
     try:
         for target, zone in candidates:
@@ -202,6 +203,7 @@ def stop(state_path):
             raise ValueError("Refusing deletion of an attached or unowned disk")
         gcloud("compute", "disks", "delete", disk["name"], "--zone=" + zone)
     final = inventory(evidence, "after")
+    write_json(evidence / "operations.json", cloud_json("compute", "operations", "list", "--filter=targetLink:" + state["name"]))
     if final["instances"] or final["disks"]:
         raise RuntimeError("Inventories are not empty; preserve other work and investigate after.json")
     if "instance" in state and "stopped_at" not in state:
@@ -226,6 +228,7 @@ def main():
     parser.add_argument("--max-hours", type=float, default=6)
     parser.add_argument("--spent-usd", type=float, default=0)
     parser.add_argument("--idle-minutes", type=int, default=20)
+    parser.add_argument("--on-demand", action="store_true", help="Skip Spot when restarting after preemption; the same $10 budget applies")
     parser.add_argument("--port", type=int, default=18080)
     args = parser.parse_args()
     if args.action == "start":

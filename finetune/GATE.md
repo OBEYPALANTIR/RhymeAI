@@ -38,6 +38,8 @@ content-addressed and pinned to a GCS object generation. The VM downloads that
 exact generation and verifies its SHA-256 against the external-drive source
 before serving. Models must be on the mounted external drive; no local copy is made.
 It tries Spot L4 capacity across the five quota regions, then on-demand L4.
+After a Spot preemption, use a new state/run ID with `--on-demand` and include
+the earlier usage in `--spent-usd`.
 
 ```sh
 python3 finetune/gate/cloud_lane.py start --state /path/to/lane/lane.json \
