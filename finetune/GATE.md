@@ -136,11 +136,13 @@ The overlap audit runs again before reporting. Frozen and DEV artifacts cannot
 share an output directory, including an interrupted DEV preparation.
 
 DEV keeps the same Kotlin prompt parity, sampler, seeds, structural incumbent
-check, Android replay, judge rubric and position swap. The judge selects up to
-10 prompts per suggestion cell and up to 10 per passage action; a short cell
+check, Android replay, next-line judge rubric and position swap. The judge selects up to
+10 prompts per suggestion cell; a short cell
 contributes every available prompt. The report and summary record distinct
 judged prompt counts per cell, including zero counts. Frozen mode requires
-150 v1 or 270 v2 prompt IDs per seed and all version-specific frozen hashes/counts.
+120 v1 or 180 v2 suggestion prompt IDs per seed and all version-specific frozen hashes/counts.
+DEV uses the same suggestion-only G3 and G6 preference; available cells determine
+its coverage, while the CI and stratum-loss rules are unchanged.
 
 The DEV manifest version is `rhymeai-dev`; the report is labeled
 `DEV EVALUATION - not an adoption verdict`, and the summary verdict is always
@@ -153,10 +155,10 @@ has no verdict. DEV results cannot authorize model adoption.
 |---|---|
 | G1 | Frozen, newly authored benchmark with zero overlapping 8-gram lines in the specified training pools; exact Kotlin prompt-byte parity for every prompt. |
 | G2 | Zero candidate suggestion errors. Non-inferiority bounds use the benchmark's calibration table below. V1: six-line display lower bound ≥ −1 pp; suggestion retry upper bound ≤ +6.5 pp; passage rewrite ≥ −8.5 pp, single-word rewrite ≥ −3.5 pp, synonyms ≥ −1 pp (lower bounds). |
-| G3 | Independent blind lyric-craft judge on 150 v1 or 270 v2 distinct suggestion/passage prompts per seed; two orders, inconsistent judgments tied. Candidate wins overall: the song-cluster bootstrap 95% CI of net preference (win rate minus loss rate) lies entirely above zero. No suggestion level or rhyme-type stratum may have its net-preference CI entirely below zero. |
+| G3 | Independent blind next-line judge on 120 v1 or 180 v2 distinct suggestion prompts per seed; two orders, inconsistent judgments tied. Candidate wins on next-line suggestions alone: the song-cluster bootstrap 95% CI of net preference (win rate minus loss rate) lies entirely above zero. No suggestion level or rhyme-type stratum may have its net-preference CI entirely below zero. |
 | G4 | cxlib level-rule pass rate among Android-shown suggestion lines: delta CI lower bound excludes the calibrated loss (v1: −5.5 pp). Secondary evidence only: it cannot rescue G3 because the levels training data was graded by cxlib. |
 | G5 | Template repetition: delta CI upper bound excludes the calibrated increase (v1: +0.25 pp). Lower repetition is better. |
-| G6 | Every seed (7000, 7001, 7002) agrees in direction: positive net preference, and G2/G4/G5 point estimates within the margins above. One seed's CIs are too wide to bound, so G6 checks agreement while the pooled gates carry the uncertainty. |
+| G6 | Every seed (7000, 7001, 7002) agrees in direction: positive next-line suggestion net preference, and G2/G4/G5 point estimates within the margins above. One seed's CIs are too wide to bound, so G6 checks agreement while the pooled gates carry the uncertainty. |
 | G7 - manual | Physical Pixel: model loads; first validated suggestion within 10 s warm / 30 s cold; Stop works. Recorded, not run here. |
 | G8 - manual | Tyler blind-reads at least 30 paired outputs, including 20 Complex, and prefers the candidate. Recorded, not run here. |
 
@@ -164,6 +166,43 @@ G2, G4 and G5 are non-inferiority checks: a candidate passes when its 95% CI
 excludes a loss larger than the margin. Only G3 requires a demonstrated
 improvement. No metric is rounded before a decision. Undefined denominators
 and missing evidence cannot pass.
+
+### Next-line objective (2026-10-15)
+
+The primary task is helping a writer continue after the current line with options
+that fit the stanza's rhyme scheme. `nextline-v1` fixes G3 to suggestion-only
+net preference and applies the same objective to every seed in G6 and to DEV
+selection. This rule and rubric were fixed **before any candidate was judged
+with them**. The benchmark bytes and G2/G4/G5 margins remain frozen. Passage
+rewrites, word replacements and synonyms are secondary G2 non-inferiority checks;
+passage judging is disabled for new runs and contributes no adoption votes.
+
+The rubric evaluates each option set as alternatives for the next line after
+the supplied lyrics: continuity of thought/story/voice, natural fit to the scheme
+letter/target and rhyme type, matching meter/length, distinct useful choices,
+natural phrasing, no padding and no cliches. Blind randomized L/R assignment,
+separate swapped sessions and inconsistent-to-tie consolidation are unchanged.
+`judge-provenance.json` and each batch binding record `nextline-v1` and the exact
+rubric SHA-256; the runner also records both in `provenance.json`.
+
+Existing runs keep their original rubric identity: the recorded SHA-256
+`7960b74f1411493a49c1852d721e865b4fe93b9b6ff3170cd8b277249c4fdd9c`
+identifies `lyric-craft-v1` even in older files without a version name. Reporting
+and offline rechecks retain their pooled suggestion/passage G3 and G6, selection
+counts and judgments. Unknown or mismatched versions/hashes fail closed; new
+judging cannot overwrite a historical rubric in place.
+
+Calibration uses copies of frozen-v2 shipped v2.1 null captures only: disjoint
+candidate seeds 8000-8002 versus incumbent 7000-7002, and the identical-capture
+control. Both re-judge the fixed 180 suggestion IDs per seed, 540 pairs in two
+orders (1,080 judgments) per control, using gpt-6-astra and ordinary allowance
+only. The combined re-judging budget is at most 15 allowance points. No inference,
+training or candidate judging is part of this calibration. The spent v6 B epoch 2
+v2 captures are excluded; its old result remains under its recorded rubric.
+
+Calibration results and copied legacy-rescore evidence are recorded with this
+change after both controls complete. No candidate may use the new rule before
+that calibration is recorded.
 
 ### V1 calibration (2026-10-14)
 
@@ -404,22 +443,23 @@ subscription is not allocated to this run. Token usage is recorded. No paid
 fallback is configured; ask the coordinator before exceeding the $25 baseline
 budget.
 
-The rubric and consolidation rule come directly from `eval/run_naturalness.py`
-(PR #97). The judge sees only prompt text, shown output and randomized L/R
+The `nextline-v1` rubric is in `gate/judge.py`; the historical craft rubric and
+unchanged consolidation rule come from `eval/run_naturalness.py` (PR #97).
+The judge sees only prompt text, shown output and randomized L/R
 labels. It sees no model names, level scores, gate thresholds or answer key.
 Two separate orders are shuffled independently and judged in fresh sessions;
 tools are forbidden and any observed tool use invalidates the batch. A win
 requires agreement after reversing the swapped order; inconsistent judgments
 are ties. Invalid or missing verdicts fail, never become convenient ties.
-V1 selects 120 suggestions (10 per level/rhyme cell) and 30 passages (10 per
-action) per seed. V2 scales this to 180 suggestions (15 per cell) and 90 passages
-(30 per action): 270 prompts per seed, 810 paired comparisons, 1,620 order
-judgments and 54 batches of 30 per comparison. Both versions select the lowest
+New V1 runs select 120 suggestions (10 per level/rhyme cell) per seed. V2 selects
+180 suggestions (15 per cell): 540 paired comparisons, 1,080 order judgments and
+36 batches of 30 per comparison. Both versions select the lowest
 input-ID hashes before observing any output; word/synonym prompts receive the
 production acceptance checks but do not enter the lyric-craft judge. V2 reports
 the distinct judged count for every cell.
-This preserves the original sampling fractions within each task family. V1 and
-v2 have different task weights; compare model arms within one version.
+Historical `lyric-craft-v1` runs also selected 30 v1 or 90 v2 passage prompts per
+seed (450 or 810 pairs total); their recorded selection and scores are preserved.
+Compare arms within a single benchmark and rubric version.
 
 The disjoint null independently generates both arms from the same v2.1 bytes.
 The v2 identical null reuses the incumbent capture for both role labels, after

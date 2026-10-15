@@ -12,7 +12,7 @@ from unittest.mock import patch
 from . import build
 from .build import (FROZEN_VERSION, V2_VERSION, freeze, make_inputs, make_v2_inputs,
                     read_jsonl, require_mode, sha256, text_hash, write_json)
-from .judge import judged_counts, selected_prompts
+from .judge import LEGACY_RUBRIC, judged_counts, selected_prompts
 from .metrics import FUNCTION_WORDS, MARGINS, yield_pass
 from .run_gate import main
 
@@ -29,7 +29,7 @@ class FrozenV2Test(unittest.TestCase):
         frozen = json.loads((build.HERE / "frozen.json").read_text())
         self.assertEqual(frozen["prompts_sha256"],
                          "51a9220357d31731139ddcd8faab07dd8f6ebfe18a20ef709f532d69ff830b83")
-        self.assertEqual(text_hash(json.dumps([r["id"] for r in selected_prompts(rows)])),
+        self.assertEqual(text_hash(json.dumps([r["id"] for r in selected_prompts(rows, rubric_version=LEGACY_RUBRIC)])),
                          "a66a6e9da0af2cca4cae1b558db8654b014f71222a9f8bae655187b8d3cff708")
 
     def test_v2_mix_and_production_word_selection_positions(self):
@@ -61,13 +61,13 @@ class FrozenV2Test(unittest.TestCase):
 
     def test_v2_judge_scales_cells_before_observing_outputs(self):
         rows = make_v2_inputs(read_jsonl(build.HERE / "benchmark-songs-v2.jsonl"))
-        selected = selected_prompts(rows, version=V2_VERSION)
+        selected = selected_prompts(rows, version=V2_VERSION, rubric_version=LEGACY_RUBRIC)
         self.assertEqual(len(selected), 270)
-        self.assertEqual(selected, selected_prompts(list(reversed(rows)), version=V2_VERSION))
+        self.assertEqual(selected, selected_prompts(list(reversed(rows)), version=V2_VERSION, rubric_version=LEGACY_RUBRIC))
         self.assertEqual({v for k, v in judged_counts(selected).items() if k.startswith("suggestions/")}, {15})
         self.assertEqual({v for k, v in judged_counts(selected).items() if k.startswith("rewrite_passage/")}, {30})
         with self.assertRaisesRegex(ValueError, "270"):
-            selected_prompts(rows[:8], version=V2_VERSION)
+            selected_prompts(rows[:8], version=V2_VERSION, rubric_version=LEGACY_RUBRIC)
 
     def test_versions_cannot_share_even_interrupted_output(self):
         with tempfile.TemporaryDirectory() as directory:

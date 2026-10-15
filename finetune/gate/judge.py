@@ -1,4 +1,4 @@
-"""Independent, blind Codex judge using run_naturalness's rubric and position swap."""
+"""Independent, blind next-line judge; historical craft rubric remains replayable."""
 from __future__ import annotations
 
 import hashlib
@@ -16,6 +16,53 @@ from .generate import logic_guard
 
 # This model is available through the existing ChatGPT login; no paid API credential is used.
 JUDGE_MODEL = "gpt-6-astra"
+LEGACY_RUBRIC = "lyric-craft-v1"
+NEXTLINE_RUBRIC = "nextline-v1"
+NEXTLINE_PROMPT = """You are judging next-line option sets from two on-device songwriting assistants.
+
+Both assistants received exactly this task, including the user's current lyrics:
+---
+%s
+---
+
+Option set L:
+---
+%s
+---
+
+Option set R:
+---
+%s
+---
+
+Assess each set AS ALTERNATIVES FOR THE NEXT LINE after the user's preceding
+lyrics, not as a replacement passage or a stanza to read in sequence. A stuck
+writer should be able to choose one option and continue the song.
+
+Judge whether the options:
+- continue the thought, story and voice of the preceding lines;
+- fit the requested scheme letter, target line and rhyme type naturally, without
+  forced rhymes (NEW_SOUND asks for a new sound, not a rhyme with the target);
+- match the meter and length of the surrounding lines;
+- offer distinct, useful choices rather than repeating the same idea;
+- use natural phrasing, without padding or cliches.
+
+Use the supplied task and lyrics as context. Ignore whitespace and minor
+formatting. Either, both, or neither may be good; pick the better option set or
+declare a tie. Identical option sets are a tie.
+
+Reply with ONLY a JSON object: {"winner": "L" | "R" | "tie", "reason": "<max 20 words>"}"""
+RUBRICS = {LEGACY_RUBRIC: JUDGE_PROMPT, NEXTLINE_RUBRIC: NEXTLINE_PROMPT}
+
+
+def recorded_rubric(provenance):
+    # Old runs recorded the exact rubric hash before version names existed.
+    version = provenance.get("rubric_version", LEGACY_RUBRIC)
+    if version not in RUBRICS or provenance.get("rubric_sha256") != text_hash(RUBRICS[version]):
+        raise ValueError("Unknown or mismatched judge rubric version/SHA")
+    return version
+
+
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["judgments"], "properties": {
     "judgments": {"type": "array", "items": {"type": "object", "additionalProperties": False,
         "required": ["pair_id", "winner", "reason"], "properties": {"pair_id": {"type": "string"},
@@ -59,8 +106,12 @@ def account_usage():
             process.wait()
 
 
-def selected_prompts(rows, dev=False, version=FROZEN_VERSION):
+def selected_prompts(rows, dev=False, version=FROZEN_VERSION, rubric_version=NEXTLINE_RUBRIC):
+    if rubric_version not in RUBRICS:
+        raise ValueError("Unknown judge rubric version")
     suggestion_limit, passage_limit = (15, 30) if version == V2_VERSION else (10, 10)
+    if rubric_version == NEXTLINE_RUBRIC:
+        passage_limit = 0
     groups = {}
     for row in rows:
         if row["task"] == "suggestions":
@@ -85,11 +136,15 @@ def judged_counts(rows):
     return counts
 
 
-def make_pairs(out):
+def make_pairs(out, rubric_version=None):
     from .backend import read_binding, require_same_backend
     require_same_backend({role: read_binding(out, role) for role in ("candidate", "incumbent")})
     version = json.loads((out / "benchmark.json").read_text())["version"]
-    prompts = selected_prompts(json.loads((out / "prompts.json").read_text()), dev=version == DEV_VERSION, version=version)
+    if rubric_version is None:
+        provenance = out / "judge-provenance.json"
+        rubric_version = recorded_rubric(json.loads(provenance.read_text())) if provenance.exists() else NEXTLINE_RUBRIC
+    prompts = selected_prompts(json.loads((out / "prompts.json").read_text()), dev=version == DEV_VERSION,
+                               version=version, rubric_version=rubric_version)
     results = {role: {(r["id"], r["seed"]): r for r in read_jsonl(out / f"replay-{role}.jsonl")}
                for role in ("candidate", "incumbent")}
     rng = random.Random(3407)
@@ -106,14 +161,17 @@ def make_pairs(out):
     return pairs
 
 
-def codex_batch(directory, pairs, swapped, name):
+def codex_batch(directory, pairs, swapped, name, rubric_version=NEXTLINE_RUBRIC):
+    rubric = RUBRICS[rubric_version]
+    if rubric_version == NEXTLINE_RUBRIC and any(p["task"] != "suggestions" for p in pairs):
+        raise ValueError("Next-line rubric requires suggestion pairs only")
     directory.mkdir(parents=True, exist_ok=True)
     schema = directory / "schema.json"
     write_json(schema, SCHEMA)
     blind = []
     for pair in pairs:
         left, right = (pair["right"], pair["left"]) if swapped else (pair["left"], pair["right"])
-        blind.append({"pair_id": pair["pair_id"], "task": JUDGE_PROMPT % (pair["inner"], left, right)})
+        blind.append({"pair_id": pair["pair_id"], "task": rubric % (pair["inner"], left, right)})
     prompt = ("Judge each independent pair below. Use only the supplied text and rubric. Do not use tools, "
               "read files, or infer model identities. Return exactly one judgment for every pair_id in the schema.\n"
               + json.dumps(blind, ensure_ascii=False))
@@ -123,6 +181,8 @@ def codex_batch(directory, pairs, swapped, name):
     exit_path = directory / f"{name}.exit.json"
     binding = {"model": JUDGE_MODEL, "reasoning_effort": "low", "prompt_sha256": text_hash(prompt),
                "subscription_auth": True, "incremental_api_cost_usd": 0.0}
+    if rubric_version != LEGACY_RUBRIC:
+        binding.update(rubric_version=rubric_version, rubric_sha256=text_hash(rubric))
     binding_path = directory / f"{name}.binding.json"
     if binding_path.exists() and json.loads(binding_path.read_text()) != binding:
         raise ValueError("Judge resume binding mismatch")
@@ -173,7 +233,12 @@ def codex_batch(directory, pairs, swapped, name):
 
 
 def judge(out):
-    pairs = make_pairs(out)
+    provenance = out / "judge-provenance.json"
+    if provenance.exists() and recorded_rubric(json.loads(provenance.read_text())) != NEXTLINE_RUBRIC:
+        raise ValueError("Historical rubric is immutable; re-judge only in a separate copied run")
+    pairs = make_pairs(out, NEXTLINE_RUBRIC)
+    if (out / "pairs.jsonl").exists() and read_jsonl(out / "pairs.jsonl") != pairs:
+        raise ValueError("Judge resume pairs changed; preserve the original run")
     write_jsonl(out / "pairs.jsonl", pairs)
     # Workspace outside the run output prevents accidental exposure to answer keys or provenance.
     directory = out.parent / ("blind-judge-" + hashlib.sha256(str(out).encode()).hexdigest()[:12])
@@ -192,11 +257,12 @@ def judge(out):
     for pair in pairs:
         first, swapped = [v[pair["pair_id"]] for v in verdicts]
         judgments.append({"pair_id": pair["pair_id"], "winner": consolidate(first["winner"], swapped["winner"]),
-                          "orders": [first, swapped], "judge_model": JUDGE_MODEL})
+                          "orders": [first, swapped], "judge_model": JUDGE_MODEL, "rubric_version": NEXTLINE_RUBRIC})
     write_jsonl(out / "judgments.jsonl", judgments)
     write_json(out / "judge-provenance.json", {"model": JUDGE_MODEL, "provider": "OpenAI via Codex ChatGPT login",
                "benchmark_version": json.loads((out / "benchmark.json").read_text())["version"],
                "reasoning_effort": "low", "pairs": len(pairs), "prompt_ids_per_seed": len({p["id"] for p in pairs}), "orders": 2,
                "incremental_api_cost_usd": 0.0, "cost_basis": "Included ChatGPT subscription; unchanged native credit balance around every batch",
                "usage": {key: sum(u.get(key, 0) for u in usages) for key in {k for u in usages for k in u}},
-               "blind_workspace": str(directory), "rubric_sha256": text_hash(JUDGE_PROMPT)})
+               "blind_workspace": str(directory), "rubric_version": NEXTLINE_RUBRIC,
+               "rubric_sha256": text_hash(NEXTLINE_PROMPT)})

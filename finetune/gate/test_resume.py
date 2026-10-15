@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from .build import sha256, text_hash, write_json, write_jsonl
 from .generate import SAMPLER, generate, local_server, source_binding
-from .judge import JUDGE_MODEL, JUDGE_PROMPT, codex_batch
+from .judge import JUDGE_MODEL, JUDGE_PROMPT, LEGACY_RUBRIC, codex_batch
 from .run_gate import main
 
 BACKEND = {"kind": "metal", "build_info": "b1-123456789", "binary_sha256": "0" * 64}
@@ -150,7 +150,7 @@ class CaptureBindingTest(unittest.TestCase):
             out = Path(directory)
             pairs, _ = judge_fixture(out)
             with self.assertRaisesRegex(ValueError, "binding"):
-                codex_batch(out, pairs, False, "batch")
+                codex_batch(out, pairs, False, "batch", LEGACY_RUBRIC)
             self.assertFalse((out / "batch.binding.json").exists())
 
 
@@ -174,7 +174,7 @@ class JudgeCompletionTest(unittest.TestCase):
                     write_json(out / "batch.exit.json", {"returncode": exit_code})
                 write_jsonl(out / "batch.events.jsonl", events)
                 with self.assertRaisesRegex(RuntimeError, "complet"):
-                    codex_batch(out, pairs, False, "batch")
+                    codex_batch(out, pairs, False, "batch", LEGACY_RUBRIC)
 
     def test_recoverable_error_followed_by_success_remains_reusable(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -183,7 +183,7 @@ class JudgeCompletionTest(unittest.TestCase):
             write_json(out / "batch.binding.json", binding)
             write_jsonl(out / "batch.events.jsonl", [{"type": "error", "message": "retrying"},
                                                        {"type": "turn.completed", "usage": {"input_tokens": 10}}])
-            result, usage = codex_batch(out, pairs, False, "batch")
+            result, usage = codex_batch(out, pairs, False, "batch", LEGACY_RUBRIC)
             self.assertEqual(result[0]["winner"], "L")
             self.assertEqual(usage, [{"input_tokens": 10}])
 
