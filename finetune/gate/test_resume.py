@@ -129,7 +129,8 @@ class RerunVerdictTest(unittest.TestCase):
             out = Path(directory)
             write_json(out / "summary.json", {"verdict": "PASS"})
             (out / "report.md").write_text("PASS")
-            def interrupted_freeze(target):
+            def interrupted_freeze(target, benchmark):
+                self.assertEqual(benchmark, "v1")
                 self.assertFalse((target / "summary.json").exists())
                 self.assertFalse((target / "report.md").exists())
                 raise KeyboardInterrupt()

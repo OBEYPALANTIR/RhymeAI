@@ -11,7 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 from eval.run_naturalness import JUDGE_PROMPT, consolidate
-from .build import DEV_VERSION, LEVELS, RHYMES, SEEDS, read_jsonl, text_hash, write_json, write_jsonl
+from .build import DEV_VERSION, FROZEN_VERSION, V2_VERSION, LEVELS, RHYMES, SEEDS, read_jsonl, text_hash, write_json, write_jsonl
 from .generate import logic_guard
 
 # This model is available through the existing ChatGPT login; no paid API credential is used.
@@ -59,20 +59,21 @@ def account_usage():
             process.wait()
 
 
-def selected_prompts(rows, dev=False):
+def selected_prompts(rows, dev=False, version=FROZEN_VERSION):
+    suggestion_limit, passage_limit = (15, 30) if version == V2_VERSION else (10, 10)
     groups = {}
     for row in rows:
         if row["task"] == "suggestions":
             groups.setdefault((row["level"], row["rhyme_type"]), []).append(row)
     selected = []
     for key in sorted(groups):
-        selected.extend(sorted(groups[key], key=lambda r: text_hash(r["id"]))[:10])
-    # 120 suggestions across all 12 cells plus 30 passages (all actions) per seed.
+        selected.extend(sorted(groups[key], key=lambda r: text_hash(r["id"]))[:suggestion_limit])
     for action in ("REPHRASE", "HARDER_RHYME", "PUNCH_UP"):
         passages = [r for r in rows if r["task"] == "rewrite_passage" and r["inputs"]["action"] == action]
-        selected.extend(sorted(passages, key=lambda r: text_hash(r["id"]))[:10])
-    if not dev and len(selected) != 150:
-        raise ValueError("Judge requires 150 frozen prompt IDs per seed")
+        selected.extend(sorted(passages, key=lambda r: text_hash(r["id"]))[:passage_limit])
+    required = 12 * suggestion_limit + 3 * passage_limit
+    if not dev and len(selected) != required:
+        raise ValueError(f"Judge requires {required} frozen prompt IDs per seed")
     return selected
 
 
@@ -85,8 +86,8 @@ def judged_counts(rows):
 
 
 def make_pairs(out):
-    dev = json.loads((out / "benchmark.json").read_text())["version"] == DEV_VERSION
-    prompts = selected_prompts(json.loads((out / "prompts.json").read_text()), dev=dev)
+    version = json.loads((out / "benchmark.json").read_text())["version"]
+    prompts = selected_prompts(json.loads((out / "prompts.json").read_text()), dev=version == DEV_VERSION, version=version)
     results = {role: {(r["id"], r["seed"]): r for r in read_jsonl(out / f"replay-{role}.jsonl")}
                for role in ("candidate", "incumbent")}
     rng = random.Random(3407)
@@ -192,6 +193,7 @@ def judge(out):
                           "orders": [first, swapped], "judge_model": JUDGE_MODEL})
     write_jsonl(out / "judgments.jsonl", judgments)
     write_json(out / "judge-provenance.json", {"model": JUDGE_MODEL, "provider": "OpenAI via Codex ChatGPT login",
+               "benchmark_version": json.loads((out / "benchmark.json").read_text())["version"],
                "reasoning_effort": "low", "pairs": len(pairs), "prompt_ids_per_seed": len({p["id"] for p in pairs}), "orders": 2,
                "incremental_api_cost_usd": 0.0, "cost_basis": "Included ChatGPT subscription; unchanged native credit balance around every batch",
                "usage": {key: sum(u.get(key, 0) for u in usages) for key in {k for u in usages for k in u}},

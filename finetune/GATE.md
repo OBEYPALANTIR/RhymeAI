@@ -1,13 +1,22 @@
-# Frozen on-device model gate v1
+# Frozen on-device model gate
 
 Run from the repository root:
 
 ```sh
-python3 finetune/gate/run_gate.py --candidate /path/to/candidate.gguf --out /path/to/new-run
+python3 finetune/gate/run_gate.py --benchmark v2 --candidate /path/to/candidate.gguf --out /path/to/new-run
 # Optional: --incumbent /another/location/of/the/shipped/gguf
 # Null sampling-noise control (candidate is also the shipped GGUF):
-python3 finetune/gate/run_gate.py --candidate /path/to/shipped.gguf --candidate-seed-offset 1000 --out /path/to/null-noise
+python3 finetune/gate/run_gate.py --benchmark v2 --candidate /path/to/shipped.gguf --candidate-seed-offset 1000 --out /path/to/null-noise
 ```
+
+`--benchmark v1` (the compatibility default) retains the original frozen inputs,
+prompts and margins. V1 has informed six candidate evaluations; any further
+adoption claim requires confirmation on v2 after candidate selection is complete.
+Neither corpus may enter training or checkpoint selection. V2 has a separate
+`frozen-v2.json` and `benchmark-songs-v2.jsonl`; output directories cannot mix
+versions, including interrupted preparation. Every summary and report names
+the benchmark version. V2 evaluation refuses to start until its null calibration
+has frozen the margins.
 
 The command freezes/validates inputs, exports exact Android Kotlin prompts,
 starts one owned llama-server at a time, generates both arms, judges the shown
@@ -53,7 +62,7 @@ python3 finetune/gate/run_gate.py --dev-songs /path/to/songs.jsonl --candidate /
 DEV songs use the benchmark JSONL schema: unique `id`, `title`, `theme`, and
 nonempty lyric `lines` (at least four). The supplied songs build the inputs;
 they never replace or select the frozen benchmark. DEV requires zero normalized
-8-gram overlap with both the frozen songs and every required training pool.
+8-gram overlap with both frozen versions and every required training pool.
 The overlap audit runs again before reporting. Frozen and DEV artifacts cannot
 share an output directory, including an interrupted DEV preparation.
 
@@ -61,8 +70,8 @@ DEV keeps the same Kotlin prompt parity, sampler, seeds, structural incumbent
 check, Android replay, judge rubric and position swap. The judge selects up to
 10 prompts per suggestion cell and up to 10 per passage action; a short cell
 contributes every available prompt. The report and summary record distinct
-judged prompt counts per cell, including zero counts. Frozen mode still requires
-the original 150 prompt IDs per seed and all frozen hashes/counts.
+judged prompt counts per cell, including zero counts. Frozen mode requires
+150 v1 or 270 v2 prompt IDs per seed and all version-specific frozen hashes/counts.
 
 The DEV manifest version is `rhymeai-dev`; the report is labeled
 `DEV EVALUATION - not an adoption verdict`, and the summary verdict is always
@@ -74,10 +83,10 @@ has no verdict. DEV results cannot authorize model adoption.
 | Gate | Required evidence and decision |
 |---|---|
 | G1 | Frozen, newly authored benchmark with zero overlapping 8-gram lines in the specified training pools; exact Kotlin prompt-byte parity for every prompt. |
-| G2 | Zero candidate suggestion errors. 95% CI bounds of candidate minus incumbent: six-line display lower bound ≥ −1 pp; suggestion retry upper bound ≤ +6.5 pp; passage rewrite ≥ −8.5 pp, single-word rewrite ≥ −3.5 pp, synonyms ≥ −1 pp (lower bounds). |
-| G3 | Independent blind lyric-craft judge on 150 distinct suggestion/passage prompts per seed; two orders, inconsistent judgments tied. Candidate wins overall: the song-cluster bootstrap 95% CI of net preference (win rate minus loss rate) lies entirely above zero. No suggestion level or rhyme-type stratum may have its net-preference CI entirely below zero. |
-| G4 | cxlib level-rule pass rate among Android-shown suggestion lines: delta CI lower bound ≥ −5.5 pp. Secondary evidence only: it cannot rescue G3 because the levels training data was graded by cxlib. |
-| G5 | Template repetition: delta CI upper bound ≤ +0.25 pp. Lower repetition is better. |
+| G2 | Zero candidate suggestion errors. Non-inferiority bounds use the benchmark's calibration table below. V1: six-line display lower bound ≥ −1 pp; suggestion retry upper bound ≤ +6.5 pp; passage rewrite ≥ −8.5 pp, single-word rewrite ≥ −3.5 pp, synonyms ≥ −1 pp (lower bounds). |
+| G3 | Independent blind lyric-craft judge on 150 v1 or 270 v2 distinct suggestion/passage prompts per seed; two orders, inconsistent judgments tied. Candidate wins overall: the song-cluster bootstrap 95% CI of net preference (win rate minus loss rate) lies entirely above zero. No suggestion level or rhyme-type stratum may have its net-preference CI entirely below zero. |
+| G4 | cxlib level-rule pass rate among Android-shown suggestion lines: delta CI lower bound excludes the calibrated loss (v1: −5.5 pp). Secondary evidence only: it cannot rescue G3 because the levels training data was graded by cxlib. |
+| G5 | Template repetition: delta CI upper bound excludes the calibrated increase (v1: +0.25 pp). Lower repetition is better. |
 | G6 | Every seed (7000, 7001, 7002) agrees in direction: positive net preference, and G2/G4/G5 point estimates within the margins above. One seed's CIs are too wide to bound, so G6 checks agreement while the pooled gates carry the uncertainty. |
 | G7 - manual | Physical Pixel: model loads; first validated suggestion within 10 s warm / 30 s cold; Stop works. Recorded, not run here. |
 | G8 - manual | Tyler blind-reads at least 30 paired outputs, including 20 Complex, and prefers the candidate. Recorded, not run here. |
@@ -87,7 +96,7 @@ excludes a loss larger than the margin. Only G3 requires a demonstrated
 improvement. No metric is rounded before a decision. Undefined denominators
 and missing evidence cannot pass.
 
-### Calibration (2026-10-14)
+### V1 calibration (2026-10-14)
 
 The first version used near-zero margins (rewrites −2 pp, cxlib 0,
 repetition 0, retry +5 pp, and every G2-G5 CI on every seed). The
@@ -98,7 +107,8 @@ bounds up to +10 pp. A model exactly as good as the incumbent could not pass.
 
 Rule, fixed before any round-2 frozen evaluation and using only the null
 run: **margin = 2 × the null's pooled 95% CI half-width, rounded up to 0.5 pp
-(0.05 pp for repetition), with a 1 pp floor.** This is a heuristic choice, not
+with a 1 pp floor for yield and cxlib; repetition uses 0.05 pp steps without
+the 1 pp floor.** This is a heuristic choice, not
 a validated error rate. The intent is slack beyond one equal-model run's
 interval width. Turning it into a pass probability would need assumptions that
 `paired()`'s percentile bootstrap does not establish: a fixed-variance normal
@@ -124,7 +134,83 @@ Re-scoring every saved run: the disjoint null now fails only G3; the
 identical-seed null fails G3 and G6; levels, E2B-v4 and E4B-v4 still fail G2,
 G3 and G6.
 
+### V2 calibration (2026-10-15)
+
+The rule above was fixed before inspecting v2 null results. Shipped E2B v2.1
+was independently generated against itself with candidate seeds 8000-8002 and
+incumbent seeds 7000-7002: 3,420 prompt/seed captures per arm, all checked by
+Kotlin offline replay. No candidate model touched v2 before these margins were
+frozen. [`gate/frozen-v2.json`](gate/frozen-v2.json) pins the exact intervals,
+margins and raw/replay capture hashes; decisions use those unrounded numbers.
+
+| Check | Null pooled 95% CI (pp) | Half-width (pp) | Margin |
+|---|---|---:|---:|
+| Six-line display | [−0.2083, +0.2083] | 0.2083 | −1 pp (floor) |
+| Suggestion retry | [−4.3056, +1.3194] | 2.8125 | +6 pp |
+| Passage rewrite pass | [−1.8519, +1.8519] | 1.8519 | −4 pp |
+| Word rewrite pass | [−0.9259, +1.2037] | 1.0648 | −2.5 pp |
+| Synonym pass | [0, 0] | 0 | −1 pp (floor) |
+| cxlib level pass | [−4.9425, −0.1906] | 2.3760 | −5 pp |
+| Template repetition | [−0.1991, +0.0047] | 0.1019 | +0.25 pp |
+
+More rewrite coverage narrowed this null's passage margin from 8.5 to 4 pp
+and word margin from 3.5 to 2.5 pp. Retry narrowed from 6.5 to 6 pp. These are
+observed widths from one control, not guaranteed sensitivity. The cxlib null
+interval excludes zero on the loss side; this result is retained unchanged
+and shows why one null cannot establish CI coverage or a false-pass rate.
+
+Both completed controls pass G1/G2/G4/G5 and fail G3/G6. The
+[disjoint null report](gate/evidence/v2-null-noise.md) records 299 wins,
+296 losses and 215 ties: net preference +0.37 pp, song-cluster 95% CI
+[−4.73, +5.47] pp, sign-test p=0.934662. The
+[identical null report](gate/evidence/v2-null-identical.md) records 810 ties,
+with ties in all 1,620 individual order judgments and net CI [0, 0]. Every
+mechanical delta and CI is also exactly zero in that reused-capture control.
+Neither control demonstrates an improvement. G7/G8 remain NOT RUN.
+
+The disjoint run paused after 179 complete captures when another worker's
+server overlapped with the owned server. The coordinator serialized the
+remaining inference; the saved prefix was retained byte-for-byte and every
+capture passed Kotlin offline replay. No captured result was filtered and no
+device-latency claim is made. All 108 judge batches completed without tool use;
+the shared ordinary-allowance meter moved from 54% to 64%, with unchanged
+credits. Raw captures, bindings, audit inventories, native judge logs and
+readback proofs remain under `~/.agents/artifacts/2026-10-15/rhymeai-gate-v2/`.
+
+Known fixture quirk: the existing function-word list omits the determiners
+`Each` and `One`. `gate-v2-song-21-rewrite_word-REPHRASE-1` selects `Each`;
+`gate-v2-song-59-rewrite_word-REPHRASE-1` selects `One`. Their `PUNCH_UP-1`
+counterparts and `gate-v2-song-21-synonyms-1` / `gate-v2-song-59-synonyms-1`
+use the same words: six of 1,140 prompts. Production accepts these selections
+and builds valid prompts. The coordinator explicitly retained them after
+calibration to preserve the frozen inputs and capture bindings; both arms
+receive the same fixtures. A future v3 selector must exclude determiners.
+
+`gate-v2-song-30-rewrite_word-HARDER_RHYME-1` selects the line-ending `in`.
+It meets the location rule, but production excludes `in` from rhyme keys
+(`ProsodyAnalyzer.kt:238`) and requires nonempty keys for HARDER_RHYME
+(`AIService.kt:1294`). All three seeds in both disjoint-null arms returned
+no valid replacement after two calls. This one fixed failure remains in the
+word-pass denominator; it is retained with the frozen inputs. A future v3
+must also exclude rhyme-key stopwords from HARDER_RHYME selections.
+
 ## Frozen benchmark and contamination audit
+
+V2 contains 60 new original drafts published for exclusion by round-4 training at
+`~/.agents/artifacts/2026-10-15/rhymeai-gate-v2/benchmark-songs.jsonl`.
+The repository and published bytes have SHA-256
+`03edf49b827eaa5348aa42ee483a6c2a8f4841ccd42e6be14c6a047980f195ed`.
+The initial audit found zero overlapping 8-gram lines across 1,447 files total:
+13 training pools, repository seed/fixture sources, v1 and round-2 DEV.
+`song-overlap-freeze.json` records every file hash. V2 requires the round-2 DEV
+file to remain available for both audits.
+All 1,140 Kotlin prompts passed byte parity: 480 suggestions (40 per level/rhyme
+cell), 180 passage rewrites (60 per action), 360 word rewrites (120 per action),
+and 120 synonyms. Each song supplies all actions, two word selections per action,
+and two synonyms. REPHRASE/PUNCH_UP use the existing function-word exclusion
+list, with the two determiner exceptions above; HARDER_RHYME selects only
+line-ending words. Half of the word requests include prior rejected words.
+Both versions keep the same section/context rotation and three sampler seeds.
 
 `gate/benchmark-songs.jsonl` contains 40 original drafts written for this gate
 on 2026-10-14, with no owner/private lyrics or copied repository/artifact lyrics.
@@ -256,10 +342,21 @@ Two separate orders are shuffled independently and judged in fresh sessions;
 tools are forbidden and any observed tool use invalidates the batch. A win
 requires agreement after reversing the swapped order; inconsistent judgments
 are ties. Invalid or missing verdicts fail, never become convenient ties.
-Each seed has 120 suggestions (10 per level/rhyme cell) and 30 passages (10 per
-action), selected by fixed input-ID hashes before observing any output.
+V1 selects 120 suggestions (10 per level/rhyme cell) and 30 passages (10 per
+action) per seed. V2 scales this to 180 suggestions (15 per cell) and 90 passages
+(30 per action): 270 prompts per seed, 810 paired comparisons, 1,620 order
+judgments and 54 batches of 30 per comparison. Both versions select the lowest
+input-ID hashes before observing any output; word/synonym prompts receive the
+production acceptance checks but do not enter the lyric-craft judge. V2 reports
+the distinct judged count for every cell.
+This preserves the original sampling fractions within each task family. V1 and
+v2 have different task weights; compare model arms within one version.
 
-Both null controls independently generate both arms from the same v2.1 bytes.
+The disjoint null independently generates both arms from the same v2.1 bytes.
+The v2 identical null reuses the incumbent capture for both role labels, after
+full model/source/sampler/prompt binding checks and exact Kotlin offline replay;
+`capture-reuse.json` retains source/target hashes and records the role-only change.
+This reuse measures judge consistency, not repeat-inference determinism.
 The identical-seed control checks judge consistency: it must not pass G3 on
 equality, and a deterministic CI of [0, 0] includes zero without measuring
 sampling variation. The disjoint-seed control measures sampling noise; inspect

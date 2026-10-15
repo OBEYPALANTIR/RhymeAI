@@ -16,7 +16,12 @@ SEEDS = (7000, 7001, 7002)
 LEVELS = ("Simple", "Moderate", "Complex")
 RHYMES = ("PERFECT", "NEAR", "SLANT", "NEW_SOUND")
 FROZEN_VERSION = "rhymeai-gate-v1"
+V2_VERSION = "rhymeai-gate-v2"
 DEV_VERSION = "rhymeai-dev"
+
+
+def frozen_path(version):
+    return HERE / {FROZEN_VERSION: "frozen.json", V2_VERSION: "frozen-v2.json"}[version]
 
 
 def sha256(path):
@@ -84,7 +89,7 @@ def overlapping_lines(songs, pool):
     return sorted(hits)
 
 
-def audit_overlap(songs, include_frozen=False):
+def audit_overlap(songs, include_frozen=False, benchmark="v1"):
     roots = [ARTIFACTS / "2026-10-07/rhymeai-teacher-data-v3",
              ARTIFACTS / "2026-10-08/rhymeai-colab-package-levels"]
     for root in roots:
@@ -99,6 +104,10 @@ def audit_overlap(songs, include_frozen=False):
     paths.update([REPO / "finetune/data/seed_songs.py", REPO / "finetune/eval/cases.py"])
     if include_frozen:
         paths.add(HERE / "benchmark-songs.jsonl")
+        paths.add(HERE / "benchmark-songs-v2.jsonl")
+    if benchmark == "v2":
+        paths.add(HERE / "benchmark-songs.jsonl")
+        paths.add(ARTIFACTS / "2026-10-14/rhymeai-round2/dev-songs.jsonl")
     results = []
     hits = set()
     for path in sorted(paths):
@@ -167,15 +176,47 @@ def make_inputs(songs):
     return rows
 
 
+def make_v2_inputs(songs):
+    from .metrics import FUNCTION_WORDS
+
+    rows = [r for r in make_inputs(songs) if r["task"] == "suggestions"]
+    for i, song in enumerate(songs):
+        suggestion = rows[i * 8]
+        common = {key: suggestion["inputs"][key] for key in ("lyrics", "current_section", "selection_start")}
+        base = {"song_id": song["id"], "level": LEVELS[i % 3], "rhyme_type": "NEW_SOUND"}
+        words, endings = [], []
+        for line in song["lines"][:2]:
+            tokens = list(re.finditer(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)*", line))
+            # Frozen v2 retains "Each"/"One" from this list; v3 must exclude determiners (GATE.md).
+            content = next(t for t in tokens if t.group().lower() not in FUNCTION_WORDS)
+            for pool, token in ((words, content), (endings, tokens[-1])):
+                position = common["lyrics"].index(line) + token.start()
+                pool.append((token.group(), line, len(common["lyrics"][:position].encode("utf-16-le")) // 2))
+        for action in ("REPHRASE", "PUNCH_UP", "HARDER_RHYME"):
+            rows.append(dict(base, id=f"{song['id']}-rewrite_passage-{action}", task="rewrite_passage",
+                             inputs=dict(common, action=action, selection="\n".join(song["lines"][:2]), rejected_candidates=[])))
+            # Production accepts HARDER_RHYME only at line endings; other actions use content words.
+            for number, (word, line, position) in enumerate(endings if action == "HARDER_RHYME" else words):
+                rows.append(dict(base, id=f"{song['id']}-rewrite_word-{action}-{number}", task="rewrite_word",
+                                 inputs=dict(common, action=action, selection=word, selection_start=position,
+                                             rejected_candidates=["old", "new"] if (i + number) % 2 else [])))
+        for number, (word, line, position) in enumerate(words):
+            rows.append(dict(base, id=f"{song['id']}-synonyms-{number}", task="synonyms",
+                             inputs=dict(common, word=word, line_context=line, limit=8)))
+    for row in rows:
+        row["inputs_sha256"] = text_hash(json.dumps(row["inputs"], sort_keys=True, ensure_ascii=False))
+    return rows
+
+
 def require_mode(out, version):
     manifest = out / "benchmark.json"
     if manifest.exists():
         if json.loads(manifest.read_text()).get("version") != version:
-            raise ValueError("Cannot mix frozen-gate and DEV artifacts; use a separate output directory")
-    elif version == DEV_VERSION and any(next(out.glob(pattern), None) is not None for pattern in
+            raise ValueError("Cannot mix benchmark versions or DEV artifacts; use a separate output directory")
+    elif version != FROZEN_VERSION and any(next(out.glob(pattern), None) is not None for pattern in
                                         ("inputs.json", "prompts.json", "benchmark-songs.jsonl", "binding-*.json",
                                          "raw-*.jsonl", "replay-*.jsonl", "summary.json", "pairs.jsonl", "judgments.jsonl")):
-        raise ValueError("Unclassified/frozen artifacts cannot be adopted into a DEV directory")
+        raise ValueError("Unclassified artifacts cannot be adopted into a different benchmark directory")
 
 
 def make_dev_inputs(songs, expanded_words=False):
@@ -251,25 +292,31 @@ def prepare_dev(out, songs_path, expanded_words=False):
     return manifest
 
 
-def freeze(out):
+def freeze(out, benchmark="v1"):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    require_mode(out, FROZEN_VERSION)
-    songs = read_jsonl(HERE / "benchmark-songs.jsonl")
-    inputs = make_inputs(songs)
+    version = {"v1": FROZEN_VERSION, "v2": V2_VERSION}[benchmark]
+    require_mode(out, version)
+    source = HERE / ("benchmark-songs.jsonl" if benchmark == "v1" else "benchmark-songs-v2.jsonl")
+    songs = read_jsonl(source)
+    inputs = make_inputs(songs) if benchmark == "v1" else make_v2_inputs(songs)
     target = out / "inputs.json"
     if (out / "prompts.json").exists() and json.loads(target.read_text()) != inputs:
         raise ValueError("Frozen inputs changed; use a new benchmark version/output directory")
-    write_jsonl(out / "benchmark-songs.jsonl", songs)
+    write_json(out / "benchmark.json", {"version": version})
+    if benchmark == "v1":
+        write_jsonl(out / "benchmark-songs.jsonl", songs)
+    else:
+        (out / "benchmark-songs.jsonl").write_bytes(source.read_bytes())
     write_json(target, inputs)
-    audit = audit_overlap(songs)
+    audit = audit_overlap(songs, benchmark=benchmark)
     write_json(out / "overlap.json", audit)
-    manifest = {"version": "rhymeai-gate-v1", "seeds": SEEDS, "songs": len(songs), "prompts": len(inputs),
+    manifest = {"version": version, "seeds": SEEDS, "songs": len(songs), "prompts": len(inputs),
                 "task_counts": dict(Counter(r["task"] for r in inputs)), "songs_sha256": sha256(out / "benchmark-songs.jsonl"),
                 "inputs_sha256": sha256(target), "overlapping_lines": audit["overlapping_lines"]}
-    frozen = json.loads((HERE / "frozen.json").read_text())
-    if any(manifest[key] != frozen[key] for key in ("songs_sha256", "inputs_sha256", "prompts", "task_counts")):
-        raise ValueError("The v1 benchmark is immutable; song/input hashes do not match frozen.json")
+    frozen = json.loads(frozen_path(version).read_text())
+    if any(manifest[key] != frozen[key] for key in ("songs", "songs_sha256", "inputs_sha256", "prompts", "task_counts")):
+        raise ValueError(f"The {benchmark} benchmark is immutable; song/input hashes do not match {frozen_path(version).name}")
     write_json(out / "benchmark.json", manifest)
     if audit["overlapping_lines"]:
         raise ValueError(f"Benchmark contamination: {audit['overlapping_lines']} overlapping lines")
@@ -278,6 +325,12 @@ def freeze(out):
 
 if __name__ == "__main__":
     import argparse
+    import sys
+    sys.path.insert(0, str(HERE.parent))
+    from gate.build import freeze
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True)
-    print(json.dumps(freeze(parser.parse_args().out), indent=2))
+    parser.add_argument("--benchmark", choices=("v1", "v2"), default="v1")
+    args = parser.parse_args()
+    print(json.dumps(freeze(args.out, args.benchmark), indent=2))
