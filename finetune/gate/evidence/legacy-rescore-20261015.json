@@ -1,0 +1,127 @@
+{
+  "base_head": "9e30638a0f84888e4d9328962f18be9b0f66a896",
+  "gate_source_sha256": {
+    "__init__.py": "438b77bacf3794c496ec12cdf4596b7d0294f1d9c8e1b5c2233eb9958621d969",
+    "backend.py": "682921540776dc54257b3958424823f93fa9823d2b2a838b88f90689afefc561",
+    "build.py": "c21bd64fbd10cc410d40d26a8da4836157ef24e86a5c232eef17f0bf8c9a5cdf",
+    "cloud_lane.py": "139b026faa649bb1b0d684d48e7be470e34bd2aefec3b3ff97442b9da6fa5c7e",
+    "cloud_worker.py": "fa4d03dfe5178fd99b0e2782aea7e93959aa880a3a07d7d70c146a80deb24958",
+    "cxlib.py": "a99f2889358102d7687dfbe8cf1a07bc9d405752fea8c859d1d2fa55b0394adb",
+    "generate.py": "8c913e5d240d36d58fdec434058458b12094e8f27b2a814c07d416915fbb2c46",
+    "judge.py": "3aa251f5ea2b432ec209da55d201198ec1d7e793598d6b5b1bd01b57fa455ad6",
+    "metrics.py": "c0cf2b14bce60c00210a7f9be1ef86731c00c768e04b6ba9945a7098abe75230",
+    "phonetics.py": "49dce5a9214ff137cd5d8a1fb432430ab6bc23212f5bd9a9c5545013279272bb",
+    "probe_host.py": "e1b7622078813f9a8a1fa4f89fe42ae842bd32d6d799e4909909b051b1425d69",
+    "recheck.py": "08b3ccbdfc602e90d6716961ecd3a4f296ae8f3e883b355c98271fba0d0bdde6",
+    "report.py": "1b5f379567bd4236a1c0a132c9f0673bee11a07676e6495caf218894305194e5",
+    "run_gate.py": "271daa5303a59e21b6b16302cb99e37abbe49719929aada1a4f04c03872fa137",
+    "test_backend.py": "a641b6f425d84063b9cc1c54b69e58ffeb4ea153f929c902d3cf1ecaa2e328b2",
+    "test_cloud.py": "9c96c089da44f19aa37aee03545b296f0866ae5f45651a2f62e9ff318c319267",
+    "test_dev.py": "24f9ab3d5e29a5ce7232e3c080026b598839627cc505da95b8c6f84704a5cc77",
+    "test_gate.py": "ce80f162d1820449ba58d9c5bd0fe89f9c337483e3827f28509b4439795a784f",
+    "test_incumbent.py": "30db5099b920a973e587725dab5453af36085097d80c52e1541f9699d1a9cccd",
+    "test_recheck.py": "4bf4a13a5ae6490393cbac74ab59baf580d979cf18b320ed8269cf3698c0bc80",
+    "test_resume.py": "560e721e64dea982332586d2e40ac0bbeef14493818aa3e7f3152360c01d0f93"
+  },
+  "host_probe_sha256": "0bd529058a7c426d3892f143bb62c8169c1ae057e32b4c8981fee9a9d1b2abe6",
+  "legacy_backend": {
+    "kind": "metal",
+    "build_info": "b11429-d81235049",
+    "binary_sha256": "cbd72c3d3579820bf117263fa565bf482f08a4edd803c491a8eff734aa7401be",
+    "legacy": true
+  },
+  "tests": {
+    "command": "python3 -m unittest discover -s gate -t .",
+    "cwd": "finetune",
+    "passed": 45,
+    "log_sha256": "059b5468520db7cda34839f68b895cc1c7c7b07b26c3715100a5ae778f917f26"
+  },
+  "inference": "NOT RUN",
+  "gcp_compute": "NOT RUN",
+  "runs": [
+    {
+      "run": "rhymeai-gate-v1/null-noise",
+      "before_verdict": "FAIL",
+      "after_verdict": "FAIL",
+      "before_gates": {
+        "G1": true,
+        "G2": false,
+        "G3": false,
+        "G4": false,
+        "G5": false,
+        "G6": false
+      },
+      "after_gates": {
+        "G1": true,
+        "G2": true,
+        "G3": false,
+        "G4": true,
+        "G5": true,
+        "G6": true
+      },
+      "historical_gate_changes": {
+        "G2": {
+          "saved": false,
+          "current": true
+        },
+        "G4": {
+          "saved": false,
+          "current": true
+        },
+        "G5": {
+          "saved": false,
+          "current": true
+        },
+        "G6": {
+          "saved": false,
+          "current": true
+        }
+      },
+      "pre_pr108_baseline": "a4deaf08fabea4b7e6c7fd3d96a6aa2f9d2c475c",
+      "matches_pre_pr108_gates_and_scopes": true,
+      "source_files_unchanged": 124,
+      "copied_bindings_unchanged": true,
+      "binding_sha256": {
+        "candidate": "27d0a3f1cb6e55107b5cef393ad833547c9ef9ee5298409cf9014884155d3af4",
+        "incumbent": "8bed503af0d2bdd9f9cc02795a6a90c6a4cf0a63e9b5d780fc8f3c5a650967b2"
+      },
+      "before_summary_sha256": "dc3299a9fdce8aceadd0d644c223d3637192599a3b7e78eb45c27e496f935e62",
+      "after_summary_sha256": "a766c342781a8a977b090a709f90c54af14338f1ab5ab02d49eabe55d04caf13",
+      "report_sha256": "267169a8c6c112077c0f2bfdcae54589ed96bb373ea5374c0bf6ce56527ed189"
+    },
+    {
+      "run": "rhymeai-round3b/frozen-gate",
+      "before_verdict": "FAIL",
+      "after_verdict": "FAIL",
+      "before_gates": {
+        "G1": true,
+        "G2": false,
+        "G3": true,
+        "G4": true,
+        "G5": false,
+        "G6": false
+      },
+      "after_gates": {
+        "G1": true,
+        "G2": false,
+        "G3": true,
+        "G4": true,
+        "G5": false,
+        "G6": false
+      },
+      "historical_gate_changes": {},
+      "pre_pr108_baseline": "a4deaf08fabea4b7e6c7fd3d96a6aa2f9d2c475c",
+      "matches_pre_pr108_gates_and_scopes": true,
+      "source_files_unchanged": 84,
+      "copied_bindings_unchanged": true,
+      "binding_sha256": {
+        "candidate": "7436e28d1872f2bf9b87600ca78abc771af747f179ecfcaf281f44d214fdc92e",
+        "incumbent": "8bed503af0d2bdd9f9cc02795a6a90c6a4cf0a63e9b5d780fc8f3c5a650967b2"
+      },
+      "before_summary_sha256": "75fd94bb101f3ca51c4a70fee103ba9282128f5b853bab95583e45b1b3f9c818",
+      "after_summary_sha256": "c89d60334ad5fcaa6e21b62edcd15084b70796511cf469526793a79dc512f4be",
+      "report_sha256": "ec0e373f95b353a168fd4b935283b53df4925d8212da244415e3924fcbb327a4"
+    }
+  ],
+  "limitation": "Legacy Metal use is inferred from recorded host evidence; old logs do not directly observe offload. Null-noise historical component-gate changes also occur on pre-PR108 a4deaf0; both overall verdicts remain FAIL."
+}

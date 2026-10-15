@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .build import DEV_VERSION, HERE, REPO, read_jsonl, sha256, text_hash, write_json
-from .backend import require_backend, require_same_backend, server_backend, tunnel_port, verify_remote
+from .backend import read_binding, require_backend, require_same_backend, server_backend, tunnel_port, verify_remote
 from eval.prompts import GEMMA4, app_prompt
 
 INCUMBENT = Path("/Volumes/Untitled/models/rhymeai/students-v21-20261006/E2B/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf")
@@ -130,7 +130,7 @@ def generate(out, model, path, seed_offset=0, *, server_url=None, remote_proof=N
     if model == "incumbent" and binding["model_sha256"] not in SHIPPED_INCUMBENT_SHA256:
         raise ValueError("Incumbent must be a shipped catalog GGUF (v2.1 E2B or E4B)")
     target = out / f"binding-{model}.json"
-    existing = json.loads(target.read_text()) if target.exists() else None
+    existing = read_binding(out, model) if target.exists() else None
     if existing and {k: v for k, v in existing.items() if k not in ("backend", "remote_model_sha256")} != binding:
         raise ValueError("Refusing to mix runs with different source, sampler, prompts or model")
     if existing is None:
@@ -139,21 +139,27 @@ def generate(out, model, path, seed_offset=0, *, server_url=None, remote_proof=N
     expected = len(json.loads((out / "prompts.json").read_text())) * 3
     replay = out / f"replay-{model}.jsonl"
     complete = replay.exists() and len(read_jsonl(replay)) == expected
-    other = out / f"binding-{'incumbent' if model == 'candidate' else 'candidate'}.json"
+    other_role = "incumbent" if model == "candidate" else "candidate"
+    other = out / f"binding-{other_role}.json"
 
     def bind():
         require_backend(binding.get("backend"))
-        if existing is not None and existing != binding:
-            raise ValueError("Refusing to mix backend/build or remote model bindings; regenerate captures")
+        if existing is not None:
+            require_same_backend({model: binding, "existing": existing})
+            if existing.get("remote_model_sha256") != binding.get("remote_model_sha256"):
+                raise ValueError("Refusing to mix backend/build or remote model bindings; regenerate captures")
+            if existing["backend"].get("legacy"):
+                binding["backend"] = existing["backend"]
         if other.exists():
-            require_same_backend({model: binding, "other": json.loads(other.read_text())})
-        write_json(target, binding)
-        write_json(out / "sampler.json", SAMPLER)
+            require_same_backend({model: binding, other_role: read_binding(out, other_role)})
+        if not complete:
+            write_json(target, binding)
+            write_json(out / "sampler.json", SAMPLER)
 
     if not server_url and complete:
-        binding["backend"] = require_backend((existing or {}).get("backend"))
-        bind()
-        return binding
+        if other.exists():
+            require_same_backend({model: existing, other_role: read_binding(out, other_role)})
+        return existing
     evidence = out / "evidence"
     evidence.mkdir(exist_ok=True)
     if server_url:
@@ -228,7 +234,11 @@ def local_server(out, model, path):
                 time.sleep(1)
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/props", timeout=10) as response:
                 props = json.load(response)
-                write_json(evidence / f"props-{model}.json", props)
+                props_path = evidence / f"props-{model}.json"
+                if props_path.exists():
+                    # A resumed legacy binding still cites the original props bytes.
+                    props_path = evidence / f"props-{model}-{stamp}.json"
+                write_json(props_path, props)
             backend = server_backend(props, Path(log.name).read_text(), sha256(binary))
             yield port, props, backend
         finally:

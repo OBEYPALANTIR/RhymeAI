@@ -62,8 +62,18 @@ creates no firewall rule. Existing project SSH access is used.
 
 Candidate and incumbent must have identical backend/build bindings, including
 for judging and offline reporting. Cloud runs regenerate both arms on CUDA;
-Mac captures and legacy captures without backend evidence cannot be reused or
-silently rebound. Kotlin replay, prompt/template checks, seeds and sampling stay
+Mac captures cannot pair with CUDA. Legacy Metal bindings are inferred at read
+time from saved `/props`, provenance and launch commands plus the recorded
+`gate/evidence/host-llama-probe-20261015.json`. The probe records the installed
+binary hash, version, Metal device and historical gate GPU flags; it does not
+claim that the old verbosity-3 logs observed GPU offload. Missing or conflicting
+evidence fails closed. Both build and binary hash must match even when one arm
+is legacy. Reports retain `legacy: true` and hashed `inferred_from` evidence;
+completed captures are not rebound on disk. A continued legacy run retains that
+inference marker, and new runs always bind the observed backend.
+`python3 -m gate.probe_host --commit <source-sha> --out <new-probe.json>` (from
+`finetune/`) records a host probe using only `--version` and `--list-devices`;
+repeat `--commit` for each historical gate source. Kotlin replay, prompt/template checks, seeds and sampling stay
 the same. CUDA results do not prove Metal or physical Android performance.
 
 For a small, unjudged smoke, supply a tiny `--dev-songs` JSONL and

@@ -10,7 +10,7 @@ from .build import DEV_VERSION, FROZEN_VERSION, HERE, SEEDS, read_jsonl, sha256,
 from .metrics import (LEVEL_MARGIN, REPETITION_MARGIN, not_worse, paired, preference, preference_pass,
                       template_pairs, yield_pass)
 from .generate import SAMPLER
-from .backend import require_same_backend
+from .backend import read_binding, require_same_backend
 from .judge import judged_counts
 
 
@@ -109,7 +109,7 @@ def report(out):
     if manifest["version"] not in (DEV_VERSION, FROZEN_VERSION):
         raise ValueError("Unknown evaluation mode")
     dev = manifest["version"] == DEV_VERSION
-    bindings = {role: json.loads((out / f"binding-{role}.json").read_text()) for role in ("candidate", "incumbent")}
+    bindings = {role: read_binding(out, role) for role in ("candidate", "incumbent")}
     require_same_backend(bindings)
     seed_pairings = {str(s): {role: s + b.get("sampler_seed_offset", 0) for role, b in bindings.items()} for s in SEEDS}
     prompt_rows = json.loads((out / "prompts.json").read_text())

@@ -12,7 +12,7 @@ from .generate import SAMPLER
 from .judge import judged_counts, make_pairs, selected_prompts
 from .report import report
 from .run_gate import main
-from .test_resume import BACKEND
+from .test_resume import BACKEND, legacy_evidence
 
 
 def dev_songs():
@@ -180,6 +180,19 @@ class DevEvaluationTest(unittest.TestCase):
         self.assertEqual(summary["verdict"], "DEV")
         self.assertEqual(summary["judged_prompt_counts_per_cell"]["suggestions/Simple/PERFECT"], 1)
         self.assertIn("DEV EVALUATION - not an adoption verdict", (out / "report.md").read_text())
+
+        # The saved legacy arm must pair and report against a fresh arm without a rebind.
+        target = out / "binding-incumbent.json"
+        binding = json.loads(target.read_text())
+        del binding["backend"]
+        write_json(target, binding)
+        before = target.read_bytes()
+        probe = legacy_evidence(out, "incumbent")
+        with patch("gate.backend.HOST_PROBE", probe, create=True):
+            self.assertEqual(make_pairs(out), pairs)
+            self.assertEqual(report(out), "DEV")
+        self.assertEqual(target.read_bytes(), before)
+        self.assertIn('"legacy": true', (out / "report.md").read_text())
 
 
 if __name__ == "__main__":
