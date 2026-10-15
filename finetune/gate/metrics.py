@@ -58,10 +58,12 @@ def preference(rows):
 
 
 # Non-inferiority margins (heuristic): 2 x the disjoint-seed null's pooled 95% CI half-width (shipped
-# v2.1 against itself), rounded up to 0.5 pp (0.05 pp for repetition), floor 1 pp. Not a validated
+# v2.1 against itself), rounded up to 0.5 pp with a 1 pp floor, except repetition: 0.05 pp, no floor. Not a validated
 # null-pass rate; see GATE.md "Calibration". bound=False checks point estimates (G6).
 FULL_SIX_MARGIN, RETRY_MARGIN, LEVEL_MARGIN, REPETITION_MARGIN = .01, .065, .055, .0025
 REWRITE_MARGINS = {"rewrite_passage": .085, "rewrite_word": .035, "synonyms": .01}
+MARGINS = {"full_six": FULL_SIX_MARGIN, "retry": RETRY_MARGIN, "level_pass": LEVEL_MARGIN,
+           "template_repetition": REPETITION_MARGIN, **REWRITE_MARGINS}
 
 
 def _lower(metric, bound):
@@ -72,12 +74,13 @@ def _upper(metric, bound):
     return metric["ci95"][1] if bound else metric["delta"]
 
 
-def yield_pass(metrics, candidate_errors, bound=True):
+def yield_pass(metrics, candidate_errors, bound=True, margins=None):
+    margins = MARGINS if margins is None else margins
     required = [metrics.get(key) for key in ("full_six", "retry", "rewrite_passage", "rewrite_word", "synonyms")]
     return (all(m is not None for m in required) and candidate_errors == 0
-            and _lower(metrics["full_six"], bound) >= -FULL_SIX_MARGIN - 1e-12
-            and _upper(metrics["retry"], bound) <= RETRY_MARGIN + 1e-12
-            and all(_lower(metrics[k], bound) >= -margin - 1e-12 for k, margin in REWRITE_MARGINS.items()))
+            and _lower(metrics["full_six"], bound) >= -margins["full_six"] - 1e-12
+            and _upper(metrics["retry"], bound) <= margins["retry"] + 1e-12
+            and all(_lower(metrics[k], bound) >= -margins[k] - 1e-12 for k in REWRITE_MARGINS))
 
 
 def preference_pass(groups, distinct_prompts):

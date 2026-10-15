@@ -10,7 +10,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from .build import DEV_VERSION, HERE, REPO, read_jsonl, sha256, text_hash, write_json
+from .build import DEV_VERSION, REPO, frozen_path, read_jsonl, sha256, text_hash, write_json
 from eval.prompts import GEMMA4, app_prompt
 
 INCUMBENT = Path("/Volumes/Untitled/models/rhymeai/students-v21-20261006/E2B/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf")
@@ -98,9 +98,10 @@ def freeze_prompts(out):
         raise ValueError("Kotlin prompt bytes changed; frozen benchmark cannot be silently updated")
     write_json(target, rows)
     manifest = json.loads((out / "benchmark.json").read_text())
-    frozen = json.loads((HERE / "frozen.json").read_text())
-    if manifest["version"] != DEV_VERSION and sha256(target) != frozen["prompts_sha256"]:
-        raise ValueError("Prompt builders no longer match the frozen v1 benchmark; do not silently refresh it")
+    if manifest["version"] != DEV_VERSION:
+        frozen = json.loads(frozen_path(manifest["version"]).read_text())
+        if sha256(target) != frozen["prompts_sha256"]:
+            raise ValueError(f"Prompt builders no longer match {manifest['version']}; do not silently refresh it")
     gradle(out, "parity")
     if not all(r["frozen_byte_parity"] for r in read_jsonl(out / "parity.jsonl")):
         raise ValueError("Kotlin byte parity was not proved")

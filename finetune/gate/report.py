@@ -6,11 +6,11 @@ from collections import Counter
 from pathlib import Path
 
 from . import cxlib
-from .build import DEV_VERSION, FROZEN_VERSION, HERE, SEEDS, read_jsonl, sha256, text_hash, write_json
-from .metrics import (LEVEL_MARGIN, REPETITION_MARGIN, not_worse, paired, preference, preference_pass,
+from .build import DEV_VERSION, FROZEN_VERSION, V2_VERSION, HERE, SEEDS, frozen_path, read_jsonl, sha256, text_hash, write_json
+from .metrics import (MARGINS, not_worse, paired, preference, preference_pass,
                       template_pairs, yield_pass)
 from .generate import SAMPLER
-from .judge import judged_counts
+from .judge import judged_counts, make_pairs
 
 
 def audit_generation(out, role, rows):
@@ -62,7 +62,8 @@ def graded(out, prompts, role):
     return {(r["id"], r["seed"]): r for r in rows}
 
 
-def summarize(rows, judgments):
+def summarize(rows, judgments, margins=None):
+    margins = MARGINS if margins is None else margins
     suggestions = [r for r in rows if r["task"] == "suggestions"]
     metrics = {"full_six": paired(suggestions, "full_six", "one"), "retry": paired(suggestions, "retry", "one"),
                "level_pass": paired(suggestions, "level_pass", "shown_count"),
@@ -74,16 +75,16 @@ def summarize(rows, judgments):
     for axis in ("level", "rhyme_type"):
         for value in sorted({j[axis] for j in judgments if j["task"] == "suggestions"}):
             groups[f"{axis}:{value}"] = preference([j for j in judgments if j["task"] == "suggestions" and j[axis] == value])
-    gates = {"G2": yield_pass(metrics, errors["candidate"]),
+    gates = {"G2": yield_pass(metrics, errors["candidate"], margins=margins),
              "G3": preference_pass(groups, len({j["id"] for j in judgments})),
-             "G4": not_worse(metrics["level_pass"], LEVEL_MARGIN),
-             "G5": not_worse(metrics["template_repetition"], REPETITION_MARGIN, False)}
+             "G4": not_worse(metrics["level_pass"], margins["level_pass"]),
+             "G5": not_worse(metrics["template_repetition"], margins["template_repetition"], False)}
     # Per-seed agreement for G6: point estimates only, since one seed's CIs are too wide to bound.
     net = groups["all"]["net_preference"]
-    consistent = {"G2": yield_pass(metrics, errors["candidate"], bound=False),
+    consistent = {"G2": yield_pass(metrics, errors["candidate"], bound=False, margins=margins),
                   "G3": net is not None and net["delta"] > 0,
-                  "G4": not_worse(metrics["level_pass"], LEVEL_MARGIN, bound=False),
-                  "G5": not_worse(metrics["template_repetition"], REPETITION_MARGIN, False, bound=False)}
+                  "G4": not_worse(metrics["level_pass"], margins["level_pass"], bound=False),
+                  "G5": not_worse(metrics["template_repetition"], margins["template_repetition"], False, bound=False)}
     return {"gates": gates, "consistent": consistent, "metrics": metrics, "suggestion_errors": errors, "preference": groups,
             "suggestion_categories": {role: dict(Counter(r[role]["category"] for r in suggestions)) for role in errors}}
 
@@ -105,9 +106,11 @@ def metric_text(metric):
 def report(out):
     out = Path(out)
     manifest = json.loads((out / "benchmark.json").read_text())
-    if manifest["version"] not in (DEV_VERSION, FROZEN_VERSION):
+    if manifest["version"] not in (DEV_VERSION, FROZEN_VERSION, V2_VERSION):
         raise ValueError("Unknown evaluation mode")
     dev = manifest["version"] == DEV_VERSION
+    frozen = None if dev else json.loads(frozen_path(manifest["version"]).read_text())
+    margins = frozen["margins"] if manifest["version"] == V2_VERSION else MARGINS
     bindings = {role: json.loads((out / f"binding-{role}.json").read_text()) for role in ("candidate", "incumbent")}
     seed_pairings = {str(s): {role: s + b.get("sampler_seed_offset", 0) for role, b in bindings.items()} for s in SEEDS}
     prompt_rows = json.loads((out / "prompts.json").read_text())
@@ -117,7 +120,10 @@ def report(out):
                  **{role: results[role][p["id"], seed] for role in results}) for p in prompt_rows for seed in SEEDS]
     pairs = {p["pair_id"]: p for p in read_jsonl(out / "pairs.jsonl")}
     raw_judgments = read_jsonl(out / "judgments.jsonl")
-    if len(raw_judgments) != (len(pairs) if dev else 450) or {j["pair_id"] for j in raw_judgments} != pairs.keys():
+    if manifest["version"] == V2_VERSION and read_jsonl(out / "pairs.jsonl") != make_pairs(out):
+        raise ValueError("V2 judged pairs differ from the frozen selection or captured outputs")
+    expected_judgments = len(pairs) if dev else (810 if manifest["version"] == V2_VERSION else 450)
+    if len(raw_judgments) != expected_judgments or {j["pair_id"] for j in raw_judgments} != pairs.keys():
         raise ValueError("Missing, extra or duplicate blinded judgments")
     judgments = []
     for judgment in raw_judgments:
@@ -125,20 +131,21 @@ def report(out):
         winner = judgment["winner"]
         outcome = p["left_model" if winner == "L" else "right_model"] if winner in ("L", "R") else winner
         judgments.append(dict(p, outcome=outcome))
-    scopes = {"pooled": summarize(rows, judgments)}
+    scopes = {"pooled": summarize(rows, judgments, margins)}
     for seed in SEEDS:
-        scopes[str(seed)] = summarize([r for r in rows if r["seed"] == seed], [j for j in judgments if j["seed"] == seed])
+        scopes[str(seed)] = summarize([r for r in rows if r["seed"] == seed], [j for j in judgments if j["seed"] == seed], margins)
     parity = read_jsonl(out / "parity.jsonl")
     overlap = json.loads((out / "overlap-final.json").read_text())
     counts = Counter(p["task"] for p in prompt_rows)
-    frozen = json.loads((HERE / "frozen.json").read_text())
-    corpus_valid = (manifest["songs"] == 40 and counts == {"suggestions": 320, "rewrite_passage": 60, "rewrite_word": 60, "synonyms": 40})
+    corpus_valid = (not dev and manifest["songs"] == frozen["songs"] and counts == frozen["task_counts"]
+                    and manifest["inputs_sha256"] == frozen["inputs_sha256"]
+                    and manifest["songs_sha256"] == frozen["songs_sha256"])
     if dev:
         corpus_valid = (manifest["songs"] == len(read_jsonl(out / "benchmark-songs.jsonl"))
                         and counts == manifest["task_counts"] and len(prompts) == manifest["prompts"]
                         and overlap.get("frozen_benchmark_sha256") == sha256(HERE / "benchmark-songs.jsonl"))
     g1 = (corpus_valid
-          and len(parity) == (manifest["prompts"] if dev else 480) and {p["id"] for p in parity} == prompts.keys()
+          and len(parity) == (manifest["prompts"] if dev else frozen["prompts"]) and {p["id"] for p in parity} == prompts.keys()
           and all(p["frozen_byte_parity"] and p["prompt_sha256"] == prompts[p["id"]]["prompt_sha256"] for p in parity)
           and overlap["overlapping_lines"] == 0
           and sha256(out / "benchmark-songs.jsonl") == manifest["songs_sha256"]
@@ -148,6 +155,7 @@ def report(out):
     gates, verdict = gate_verdict(g1, scopes, dev)
     judge = json.loads((out / "judge-provenance.json").read_text())
     lines = ["# DEV EVALUATION - not an adoption verdict" if dev else f"# Frozen model gate: {verdict}", "",
+             f"Benchmark version: {manifest['version']}.", "",
              "Candidate / incumbent; all differences are candidate minus incumbent.", "",
              "| Gate | Verdict |", "|---|---|"]
     lines.extend(f"| {gate} | {'PASS' if passed else 'FAIL'} |" for gate, passed in gates.items())
@@ -156,7 +164,7 @@ def report(out):
                   "G3 is mandatory; cxlib cannot rescue a preference failure. G6 requires every seed's point estimates to agree: positive net preference and G2/G4/G5 within their margins.", "",
                   f"Pairing slots and actual first-pass sampler seeds: {seed_pairings}. Retries add 10000 to the corresponding arm's seed.", "",
                   f"G1: {manifest['songs']} {'DEV' if dev else 'new original'} drafts; {counts['suggestions']} suggestions, {counts['rewrite_passage']} passage rewrites, {counts['rewrite_word']} word rewrites, {counts['synonyms']} synonym requests.",
-                  f"Kotlin prompt-byte parity: {len(parity)}/{manifest['prompts'] if dev else 480}. Overlapping 8-gram lines: {overlap['overlapping_lines']} across {len(overlap['files'])} files"
+                  f"Kotlin prompt-byte parity: {len(parity)}/{manifest['prompts']}. Overlapping 8-gram lines: {overlap['overlapping_lines']} across {len(overlap['files'])} files"
                   + (f" in {len(overlap['pools'])} training pools." if "pools" in overlap else f"; v4 present: {overlap['v4_present']} (pre-glob audit)."),
                   "See benchmark.json, parity.jsonl, inputs.json, prompts.json and overlap-final.json for hashes and inventory.", "",
                   "95% paired percentile intervals use 20,000 bootstrap resamples of whole songs (seed 20261014), retaining all tasks, prompts, lines and sampler seeds inside each song cluster.",
@@ -172,8 +180,8 @@ def report(out):
             lines.append(f"| {key} | {p['wins']} / {p['losses']} / {p['ties']} | {p['sign_p']:.6g} | {metric_text(p['net_preference'])} |")
         lines.append("")
     selected_ids = {p["id"] for p in pairs.values()}
-    cell_counts = judged_counts([prompts[p] for p in sorted(selected_ids)]) if dev else {}
-    if dev:
+    cell_counts = judged_counts([prompts[p] for p in sorted(selected_ids)])
+    if dev or manifest["version"] == V2_VERSION:
         lines += ["## Judged prompts per cell (each seed, both positions)", "", "| Cell | Distinct prompts |", "|---|---:|"]
         lines += [f"| {cell} | {count} |" for cell, count in cell_counts.items()]
         lines.append("")
@@ -186,6 +194,7 @@ def report(out):
         lines.extend(["", f"{role}: `{binding['model_path']}`", f"SHA-256: `{binding['model_sha256']}`."])
     (out / "report.md").write_text("\n".join(lines) + "\n")
     write_json(out / "summary.json", {"verdict": verdict, "gates": gates, "scopes": scopes, "judge": judge,
-                                      "seed_pairings": seed_pairings,
-                                      **({"mode": DEV_VERSION, "judged_prompt_counts_per_cell": cell_counts} if dev else {})})
+                                      "benchmark_version": manifest["version"], "margins": margins,
+                                      "seed_pairings": seed_pairings, "judged_prompt_counts_per_cell": cell_counts,
+                                      **({"mode": DEV_VERSION} if dev else {})})
     return verdict
