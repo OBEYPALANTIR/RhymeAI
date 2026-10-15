@@ -43,7 +43,8 @@ def require_same_backend(bindings):
 
 
 def verify_remote(proof, props, model_sha256, model_bytes):
-    if not proof or proof.get("model_sha256") != model_sha256 or proof.get("model_bytes") != model_bytes:
+    if (not proof or proof.get("model_sha256") != model_sha256 or proof.get("model_bytes") != model_bytes
+            or proof.get("gcs_readback_sha256") != model_sha256 or not proof.get("gcs_generation")):
         raise ValueError("A verified remote model SHA-256 matching the bound GGUF is required")
     backend = require_backend(proof.get("backend"))
     if (not proof.get("verified_at") or not proof.get("pid") or not proof.get("instance_id")

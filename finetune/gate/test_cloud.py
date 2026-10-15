@@ -14,6 +14,7 @@ CUDA = {"kind": "cuda", "build_info": "b1-123456789", "binary_sha256": "1" * 64}
 
 def proof_fixture():
     proof = {"model_sha256": "2" * 64, "model_bytes": 42, "model_path": "/content/models/test.gguf",
+             "gcs_readback_sha256": "2" * 64, "gcs_generation": "123",
              "model_alias": "hash-and-launch-nonce", "pid": 123, "instance_id": "456", "verified_at": "2026-10-15",
              "backend": CUDA}
     props = {"model_path": proof["model_path"], "model_alias": proof["model_alias"], "build_info": CUDA["build_info"],
@@ -40,7 +41,8 @@ class RemoteBindingTest(unittest.TestCase):
     def test_remote_hash_is_bound_to_expected_bytes_and_live_props(self):
         proof, props = proof_fixture()
         self.assertEqual(verify_remote(proof, props, "2" * 64, 42), CUDA)
-        for change in ({"model_sha256": "3" * 64}, {"model_bytes": 43}, {"verified_at": None}, {"backend": None}):
+        for change in ({"model_sha256": "3" * 64}, {"gcs_readback_sha256": None}, {"gcs_generation": None},
+                       {"model_bytes": 43}, {"verified_at": None}, {"backend": None}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 verify_remote(dict(proof, **change), props, "2" * 64, 42)
         for change in ({"model_path": "/different.gguf"}, {"model_alias": "old-launch"}, {"build_info": "new-build"}, {"total_slots": 2}):

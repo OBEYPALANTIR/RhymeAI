@@ -3,7 +3,6 @@
 import argparse
 import datetime as dt
 import fcntl
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -77,16 +76,13 @@ def upload_model(path, bucket, evidence):
         if not any(s in found.stderr.lower() for s in ("not found", "matched no objects", "404")):
             raise RuntimeError(found.stderr)
         gcloud("storage", "cp", path, uri)
-    # Read actual GCS bytes without staging another model on the Mac.
-    with (evidence / f"upload-{digest}.log").open("w") as log:
-        process = subprocess.Popen(["gcloud", "storage", "cat", uri, "--project=" + PROJECT],
-                                   stdout=subprocess.PIPE, stderr=log)
-        with process.stdout:
-            actual = hashlib.file_digest(process.stdout, "sha256").hexdigest()
-        if process.wait() or actual != digest:
-            raise ValueError("GCS model readback SHA-256 mismatch; object was not overwritten")
-    record = {"uri": uri, "bytes": path.stat().st_size, "local_path": str(path), "sha256": digest,
-              "gcs_sha256": actual, "reused": found.returncode == 0}
+    obj = cloud_json("storage", "objects", "describe", uri)
+    if int(obj["size"]) != path.stat().st_size:
+        raise ValueError("GCS model size mismatch; object was not overwritten")
+    # The VM hashes the actual readback before serving; pin the object against replacement.
+    record = {"uri": uri + "#" + str(obj["generation"]), "bytes": path.stat().st_size,
+              "local_path": str(path), "sha256": digest, "gcs_generation": str(obj["generation"]),
+              "sha256_readback": "required on VM before serving", "reused": found.returncode == 0}
     write_json(evidence / f"upload-{digest}.json", record)
     return record
 

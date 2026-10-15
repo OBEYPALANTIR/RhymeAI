@@ -110,6 +110,7 @@ def select(config, digest):
             raise ValueError("Remote server did not use the pinned CUDA backend")
         backend.update({k: ready[k] for k in ("llama_cpp_commit", "cache_sha256", "gpu")})
         current = {"model_sha256": digest, "model_bytes": model.stat().st_size, "model_path": str(model),
+                   "gcs_readback_sha256": digest, "gcs_generation": record["gcs_generation"], "gcs_uri": record["uri"],
                    "model_alias": alias, "pid": server.pid, "backend": backend, "command": command, "log": str(log),
                    "instance_id": metadata("instance/id")}
     except BaseException:

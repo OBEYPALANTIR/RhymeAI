@@ -34,8 +34,9 @@ other workers' servers untouched and terminates only its own server.
 
 `cloud_lane.py` uses the existing private `rhymeai-training` bucket and pinned
 llama.cpp `049326a00025d00b08cc188ed716b681e984a3f8` CUDA sm89 cache. Uploads are
-content-addressed, read back for SHA-256 verification, and checked again on the
-VM. Models must be on the mounted external drive; no local weight copy is made.
+content-addressed and pinned to a GCS object generation. The VM downloads that
+exact generation and verifies its SHA-256 against the external-drive source
+before serving. Models must be on the mounted external drive; no local copy is made.
 It tries Spot L4 capacity across the five quota regions, then on-demand L4.
 
 ```sh
