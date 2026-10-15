@@ -1,5 +1,5 @@
 {
-  "observed_at": "2026-10-15T02:55:31.209933+00:00",
+  "observed_at": "2026-10-15T06:41:32.119039+00:00",
   "binary_path": "/opt/homebrew/bin/llama-server",
   "binary_realpath": "/opt/homebrew/Cellar/llama.cpp/0.6.0_1/bin/llama-server",
   "binary_sha256": "cbd72c3d3579820bf117263fa565bf482f08a4edd803c491a8eff734aa7401be",
@@ -45,6 +45,10 @@
       "n_gpu_layers": 99
     },
     "3116c281522880c4de7ba6f54d5a2fa2009ee2a5": {
+      "source_sha256": "fe25748a1e2143a95130149634b8dd667f8c5a4f4288199e4c8cb5533e71278c",
+      "n_gpu_layers": 99
+    },
+    "4dd2115e46f0b6564542d68d5171e80280183fb5": {
       "source_sha256": "fe25748a1e2143a95130149634b8dd667f8c5a4f4288199e4c8cb5533e71278c",
       "n_gpu_layers": 99
     }
