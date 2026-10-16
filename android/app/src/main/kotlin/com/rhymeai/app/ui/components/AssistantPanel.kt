@@ -22,6 +22,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -52,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -59,10 +62,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -477,30 +485,80 @@ fun AssistantPanel(
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
-            // Suggestions
-            if (viewModel.suggestions.isNotEmpty()) {
+            // Suggestions. Slots open as skeleton cards the moment a request
+            // starts; each one cross-fades into its card as that line streams
+            // in, and any slot still empty when generation stops collapses.
+            val isWriting = viewModel.isLoading
+            val slotCount = SuggestionPlaceholders.slotCount(isWriting, viewModel.suggestions.size)
+            // AnimatedVisibility keeps the section composed through its exit, so
+            // a request that ends with no lines still plays the 160ms collapse
+            // instead of vanishing with its slots.
+            AnimatedVisibility(
+                visible = slotCount > 0,
+                enter = if (animationsEnabled) {
+                    fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) +
+                        expandVertically(DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
+                } else {
+                    EnterTransition.None
+                },
+                exit = if (animationsEnabled) {
+                    fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
+                        shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                } else {
+                    ExitTransition.None
+                }
+            ) {
                 Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                    Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                    ) {
+                        Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                        if (isWriting) {
+                            val writingLabel = stringResource(R.string.assistant_suggestions_writing_a11y)
+                            Text(
+                                stringResource(R.string.assistant_suggestions_writing),
+                                fontSize = 12.sp,
+                                color = subtleColor,
+                                modifier = Modifier
+                                    .testTag("suggestionsWriting")
+                                    .semantics {
+                                        liveRegion = LiveRegionMode.Polite
+                                        contentDescription = writingLabel
+                                    }
+                            )
+                        }
+                    }
                     Text(
                         stringResource(R.string.assistant_suggestions_caveat),
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic
                     )
-                    viewModel.suggestions.forEach { suggestedLine ->
-                        SuggestionCard(
-                            suggestion = suggestedLine.text,
-                            rhymeTier = suggestedLine.rhymeTier,
-                            isHook = suggestedLine.isHook,
-                            highlightRhyme = viewModel.isHighlightEnabled,
-                            showProsody = viewModel.isStressPreviewEnabled,
-                            onKeep = { viewModel.keepAlternate(suggestedLine.text) },
-                            isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
-                            onUse = {
-                                viewModel.insertSuggestion(suggestedLine.text)
-                                onSuggestionInserted()
+                    // Keep at least the reserved slots in the tree so an empty
+                    // one can play its collapse instead of vanishing.
+                    for (slot in 0 until maxOf(slotCount, SuggestionPlaceholders.VISIBLE_SLOTS)) {
+                        key(slot) {
+                            SuggestionSlot(
+                                line = viewModel.suggestions.getOrNull(slot),
+                                pending = isWriting && slot < SuggestionPlaceholders.VISIBLE_SLOTS,
+                                skeletonVariant = slot
+                            ) { suggestedLine ->
+                                SuggestionCard(
+                                    suggestion = suggestedLine.text,
+                                    rhymeTier = suggestedLine.rhymeTier,
+                                    isHook = suggestedLine.isHook,
+                                    highlightRhyme = viewModel.isHighlightEnabled,
+                                    showProsody = viewModel.isStressPreviewEnabled,
+                                    onKeep = { viewModel.keepAlternate(suggestedLine.text) },
+                                    isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
+                                    onUse = {
+                                        viewModel.insertSuggestion(suggestedLine.text)
+                                        onSuggestionInserted()
+                                    }
+                                )
                             }
-                        )
+                        }
                     }
                 }
             }
@@ -599,46 +657,70 @@ fun AssistantPanel(
         val setupModel = !viewModel.isLoading &&
             viewModel.selectedProvider == com.rhymeai.app.service.AIProvider.LOCAL &&
             !viewModel.localReady
-        Button(
-            onClick = {
-                when {
-                    setupModel -> onModelSetup()
-                    viewModel.isLoading -> viewModel.cancelSuggestions()
-                    else -> viewModel.getSuggestions()
-                }
-            },
-            enabled = setupModel || viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
+        // When a request runs to the end of its stream with at least one line,
+        // the spinner bursts into ink: the panel's one celebratory beat. The
+        // view model counts those completions, so Stop, Settings changes and
+        // errors never burst.
+        var spinnerCenter by remember { mutableStateOf<Offset?>(null) }
+        var barCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.sm)
-                .height(DesignTokens.Touch.minTarget)
-                .testTag("assistantPrimaryAction"),
-            shape = RoundedCornerShape(DesignTokens.Radius.lg),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colorScheme.primary,
-                contentColor = colorScheme.onPrimary,
-                disabledContainerColor = colorScheme.surfaceVariant,
-                disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-            )
+                .onGloballyPositioned { barCoordinates = it }
         ) {
-            if (viewModel.isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
-                    color = colorScheme.onPrimary,
-                    strokeWidth = 2.dp
-                )
-                Spacer(Modifier.width(8.dp))
-            } else if (!setupModel) {
-                Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-            }
-            Text(
-                when {
-                    setupModel -> stringResource(R.string.assistant_set_up_model)
-                    viewModel.isLoading -> stringResource(R.string.assistant_stop)
-                    else -> stringResource(R.string.assistant_suggest_next_line)
+            Button(
+                onClick = {
+                    when {
+                        setupModel -> onModelSetup()
+                        viewModel.isLoading -> viewModel.cancelSuggestions()
+                        else -> viewModel.getSuggestions()
+                    }
                 },
-                fontWeight = FontWeight.Medium
+                enabled = setupModel || viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.sm)
+                    .height(DesignTokens.Touch.minTarget)
+                    .testTag("assistantPrimaryAction"),
+                shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary,
+                    disabledContainerColor = colorScheme.surfaceVariant,
+                    disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                if (viewModel.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(DesignTokens.Indicator.spinnerMd)
+                            .onGloballyPositioned { spinner ->
+                                barCoordinates?.let { bar ->
+                                    spinnerCenter = bar.localPositionOf(spinner, Offset(spinner.size.width / 2f, spinner.size.height / 2f))
+                                }
+                            },
+                        color = colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(8.dp))
+                } else if (!setupModel) {
+                    Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    when {
+                        setupModel -> stringResource(R.string.assistant_set_up_model)
+                        viewModel.isLoading -> stringResource(R.string.assistant_stop)
+                        else -> stringResource(R.string.assistant_suggest_next_line)
+                    },
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            InkBurst(
+                trigger = viewModel.completedSuggestionRequests,
+                origin = spinnerCenter,
+                color = colorScheme.onSurface,
+                modifier = Modifier.matchParentSize()
             )
         }
     }

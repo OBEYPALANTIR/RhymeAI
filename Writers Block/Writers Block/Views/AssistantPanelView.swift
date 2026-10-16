@@ -8,6 +8,8 @@ struct AssistantPanelView: View {
     @State private var showModelSetup = false
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
+    @State private var inkBurstStart: Date?
+    @State private var spinnerCenter: CGPoint = .zero
     @AppStorage("assistant.targetLineStressExpanded") private var stressDetailExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
@@ -170,6 +172,10 @@ struct AssistantPanelView: View {
                 if viewModel.isLoading {
                     ProgressView()
                         .tint(appearance.palette.onAction)
+                        .background(GeometryReader { proxy in
+                            let frame = proxy.frame(in: .named(Self.suggestBarSpace))
+                            Color.clear.preference(key: SpinnerCenterPreferenceKey.self, value: CGPoint(x: frame.midX, y: frame.midY))
+                        })
                     Text("Stop")
                 } else {
                     Image(systemName: "sparkles")
@@ -186,6 +192,20 @@ struct AssistantPanelView: View {
         }
         .disabled(suggestionDisabled)
         .buttonStyle(.rhymePress)
+        .coordinateSpace(name: Self.suggestBarSpace)
+        .onPreferenceChange(SpinnerCenterPreferenceKey.self) { center in
+            if let center { spinnerCenter = center }
+        }
+        .overlay {
+            // The ink may fly past the button, so its canvas is one reach
+            // larger on every side and the origin shifts to match.
+            InkBurstView(
+                startedAt: inkBurstStart,
+                origin: CGPoint(x: spinnerCenter.x + InkBurstMotion.reach, y: spinnerCenter.y + InkBurstMotion.reach),
+                ink: appearance.palette.primaryInk
+            )
+            .padding(-InkBurstMotion.reach)
+        }
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm + bottomInset)
@@ -194,8 +214,17 @@ struct AssistantPanelView: View {
         .rhymeAnimation(RhymeAITokens.Motion.state, value: bottomInset)
     }
 
+    private static let suggestBarSpace = "assistantSuggestBar"
+
     private func panelControls(rhymeContext: RhymeContext) -> some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+        // Slots open as skeleton rows the moment a request starts; each one
+        // cross-fades into its card as that line streams in, and the section
+        // fades out on the dismiss tier if generation ends with no lines.
+        let arrived = viewModel.suggestions.count
+        let placeholderCount = SuggestionPlaceholders.count(isLoading: viewModel.isLoading, arrived: arrived)
+        let showsSuggestions = arrived > 0 || placeholderCount > 0
+
+        return VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             // MARK: - Context & Theme
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                 HStack(spacing: RhymeAITokens.Spacing.xs) {
@@ -438,11 +467,22 @@ struct AssistantPanelView: View {
             }
 
             // MARK: - Suggestions
-            if !viewModel.suggestions.isEmpty {
+            if showsSuggestions {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                    Text("Suggestions")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Spacing.xs) {
+                        Text("Suggestions")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+
+                        if viewModel.isLoading {
+                            Text("Writing…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary.opacity(0.8))
+                                .accessibilityLabel(Self.writingAnnouncement)
+                                .accessibilityIdentifier("suggestionsWriting")
+                                .transition(.opacity)
+                        }
+                    }
 
                     Text("AI-generated · review before use")
                         .font(.caption.italic())
@@ -462,13 +502,50 @@ struct AssistantPanelView: View {
                             onKeep: { viewModel.keepAlternate(suggestion.text) },
                             isKept: viewModel.companion.alternates.contains(where: { $0.text == suggestion.text.trimmingCharacters(in: .whitespacesAndNewlines) })
                         )
+                        .transition(.opacity)
+                    }
+
+                    // Identified by slot so a skeleton stays put while the
+                    // slots above it fill, and only the one being filled fades.
+                    ForEach(arrived..<(arrived + placeholderCount), id: \.self) { slot in
+                        SuggestionSkeletonRow(variant: slot)
+                            .transition(.opacity)
                     }
                 }
+                .rhymeAnimation(RhymeAITokens.Motion.state, value: arrived)
+                // Writing starts on the state tier; when it stops, any slot
+                // still empty leaves on the dismiss tier.
+                .rhymeAnimation(viewModel.isLoading ? RhymeAITokens.Motion.state : RhymeAITokens.Motion.dismiss, value: viewModel.isLoading)
+                .transition(.opacity)
             }
             }
             .id(Self.resultsAnchor)
+            .rhymeAnimation(RhymeAITokens.Motion.dismiss, value: showsSuggestions)
+            // A caption inserted into the hierarchy is not read on its own, so
+            // tell VoiceOver when writing starts, as the Word Inspector does.
+            .onChange(of: viewModel.isLoading) { _, isLoading in
+                guard isLoading else { return }
+                AccessibilityNotification.Announcement(Self.writingAnnouncement).post()
+            }
+            // The view model counts requests that ran to the end of their stream
+            // with at least one line, so Stop, Settings changes and errors never
+            // burst, and kept partial lines stay where they are.
+            .onChange(of: viewModel.completedSuggestionRequests) { _, _ in
+                guard !reduceMotion else { return }
+                // Writing finished with something to show: the spinner bursts
+                // into ink, the panel's one celebratory beat.
+                let start = Date.now
+                inkBurstStart = start
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(InkBurstMotion.duration))
+                    // A newer burst may have started meanwhile; only clear this one.
+                    if inkBurstStart == start { inkBurstStart = nil }
+                }
+            }
         }
     }
+
+    private static let writingAnnouncement = "Writing suggestions"
 
     /// Stress pattern and IPA are reference detail: collapsed until asked
     /// for, and the choice is remembered.
@@ -543,13 +620,58 @@ struct AssistantPanelView: View {
     }
 }
 
+/// The shape of a `SuggestionCardView` with nothing written in it yet: the
+/// same surface, radius and padding, two lines scribbling themselves in where
+/// the serif line will go, a badge block and an action block. Under Reduce
+/// Motion the first line is drawn and the second stops part way. Hidden from VoiceOver,
+/// which hears "Writing suggestions" from the header.
 private struct SuggestionSkeletonRow: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var variant: Int = 0
+    @State private var started = Date()
+
     var body: some View {
-        RoundedRectangle(cornerRadius: RhymeAITokens.Radius.lg, style: .continuous)
-            .fill(Color.secondary.opacity(0.18))
-            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
-            .opacity(0.6)
-            .accessibilityHidden(true)
+        let widths = SuggestionScribbleMotion.lineWidths(for: variant)
+        TimelineView(.animation(paused: reduceMotion)) { context in
+            let lines = reduceMotion
+                ? SuggestionScribbleMotion.staticLines
+                : SuggestionScribbleMotion.lines(elapsed: context.date.timeIntervalSince(started))
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+                HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
+                    VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                        scribble(fraction: widths.first, progress: lines.first)
+                        scribble(fraction: widths.second, progress: lines.second)
+                    }
+                    .padding(.top, RhymeAITokens.Spacing.xxs)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    RoundedRectangle(cornerRadius: RhymeAITokens.Radius.xs, style: .continuous)
+                        .fill(appearance.palette.raisedSurface)
+                        .frame(width: 28, height: 22)
+                }
+
+                RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
+                    .fill(appearance.palette.raisedSurface)
+                    .frame(width: 92, height: 32)
+            }
+        }
+        .padding(RhymeAITokens.Spacing.lg)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, fallbackOpacity: 0.06)
+        .accessibilityHidden(true)
+    }
+
+    /// One line of the scribble: the UnBlock wave tiled across `fraction` of the
+    /// text column, drawn from the left up to `progress`.
+    private func scribble(fraction: CGFloat, progress: Double) -> some View {
+        GeometryReader { proxy in
+            ScribbleLineShape()
+                .trim(from: 0, to: progress)
+                .stroke(appearance.palette.outlineStrong, style: StrokeStyle(lineWidth: SuggestionScribbleMotion.strokeWidth, lineCap: .round, lineJoin: .round))
+                .frame(width: proxy.size.width * fraction, height: SuggestionScribbleMotion.lineHeight)
+        }
+        .frame(height: SuggestionScribbleMotion.lineHeight)
     }
 }
 

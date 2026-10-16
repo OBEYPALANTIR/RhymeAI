@@ -291,6 +291,7 @@ motion:
   spring-settle: "iOS response 420ms, damping 0.80; Android damping 0.80, low stiffness"
   spring-expressive: "iOS response 400ms, damping 0.76; Android damping 0.76, stiffness 247"
   press-scale: 0.98
+  ink-burst: "480ms ease-out cubic; the Assistant's one celebratory beat"
   purpose:
     phi-ladder: "iOS fast, standard, and settle tiers use a golden-ratio ladder: 160ms, 260ms, 420ms. Android shares 160ms and 260ms and settles with a spring."
     feedback-dismiss: "160ms for press feedback, save-status changes, and dismissals."
@@ -404,6 +405,14 @@ components:
     textColor: "{colors.on-surface}"
     borderColor: "{colors.outline-strong}"
     rounded: "{rounded.lg}"
+  suggestion-skeleton:
+    slots: 3
+    scribbleInk: "{colors.outline-strong}"
+    blockColor: "{colors.surface-container-high}"
+    scribble: "the UnBlock wave tiled at 34px, 1.6px round stroke, in a 10px band; two lines at 78/46, 64/38, 72/52 percent of the text column"
+    loop: "both lines written over 1300ms (first 63 percent, then the second), held 350ms, then wiped and written again; under reduced motion the first line is drawn and the second stops 60 percent along"
+    arrival: "cross-fade 260ms state tier in place; size settles on the standard spring (Android) or the state animation (iOS)"
+    collapse: "160ms dismiss tier for a slot still empty when generation stops"
   rewrite-chip-bar-ios:
     backgroundColor: "{colors.surface}"
     borderColor: "{colors.outline}"
@@ -689,6 +698,8 @@ Reduced motion is handled in code. On iOS, animations go through `rhymeAnimation
 
 Avoid decorative hover effects and staggered choreography unless they make state or motion origin clearer.
 
+Loading states that wait on a stream (the Assistant's suggestions) reserve their slots up front and let each real arrival cross-fade into place on the state tier; the placeholder lines scribbling themselves in stand in for a spinner, and hold one frame under reduced motion. See "Suggestions as they load" under Components. The one celebratory exception is the 480ms ink burst when writing finishes ("Ink burst" under Components).
+
 ## Shapes
 
 The shape language is soft but not bubbly. iOS rounded rectangles use the continuous corner style, with two exceptions noted under Known inconsistencies. Radii differ by platform, and the same token name does not mean the same value:
@@ -728,6 +739,10 @@ Values below are the shipped ones. iOS values are in points, Android values in d
 **Assistant panel.** A dense operational surface on the canvas colour. iOS compact: a 44pt drag area with a 52×4pt grabber at 45% opacity, labelled "Dismiss Assistant", then directly beneath it a 44pt title row with "Assistant" at the leading edge, a 44pt close button, and a bottom divider; there is no navigation bar. iOS regular: a 56pt header row with "Assistant" and a 44pt hide button. Scrolling contents in order: Context & Theme, Target Line with a monospaced syllable badge, a collapsible Rhyme Options row (scheme menu, rhyme-density segmented control, complexity slider), model readiness, then any error and Suggestions with an "AI-generated · review before use" note. When the Stress + IPA setting is on, the Target Line card shows the quoted line and keeps the stress pattern and IPA behind a "Show stress pattern" disclosure that is collapsed by default and remembers its state. The one primary button ("Suggest Next Line", or a spinner and "Stop" while generating; 44pt minimum, 12pt radius, action fill) is pinned to the bottom of the panel on the canvas colour under a top divider, in both the compact sheet and the regular-width column; the scroll view ends at the bar, so nothing is hidden behind it, the bar rides above the keyboard, and the panel scrolls to the results when a suggestion or error arrives. Feature labels that have help text carry a 44pt help button labelled "<feature> help". Android has a 64dp handle area and the same named sections (Context & Theme, Target Line, Rhyme Options with Rhyme Scheme, Rhyme Density and Complexity, a local-model readiness line, "Suggest Next Line", and Suggestions with the same note), built from Material sliders and the sliding segmented control; its exact spacing and control sizes were not compared with iOS. On both platforms Whole Song Context is on by default (an unset preference reads as on; a saved off is kept). Context & Theme stays editable in both modes: a written theme is sent with every suggestion request, alongside the full lyric when Whole Song Context is on. The complexity caption reads "Plain language, no wordplay" (Simple), "Balanced vocabulary, natural phrasing" (Moderate, the default) or "Advanced vocabulary, wordplay, intricate rhymes" (Complex).
 
 **Suggestion card.** iOS: surface fill, 1px outline, 12pt radius, 24pt padding; the line in serif body text, a monospaced syllable count badge, an optional tier badge, then "Use line" (semibold) and "Keep for later" / "Kept", each at least 44pt tall; actions stack at accessibility sizes. Android: outlined card, 12dp radius, 48dp minimum height, serif line, tonal "Use" button.
+
+**Suggestions as they load.** Pressing Suggest Next Line opens three slots under the Suggestions header at once, each drawn as a skeleton card: the card's own surface, outline, radius and padding, with two lines scribbling themselves in, as if by a pencil, where the serif line will go, a 28×22 badge block, and a 92×32 action block. The lines are the UnBlock underline's zigzag tiled at 34 px in a 10 px band, stroked 1.6 px round in the outline-strong ink, at 78/46, 64/38 and 72/52 percent of the text column so the three cards read as three different lines. One loop writes the first line, then the second, over 1.3 s, holds for 350 ms with both drawn, then wipes the card and writes again. Under Reduce Motion, or with Android animations off, the card holds one frame: first line drawn, second stopped 60 percent along. The header gains a "Writing…" caption that assistive technology hears as "Writing suggestions"; the skeletons themselves are hidden from it. Lines stream in one at a time and each takes the next slot: the skeleton cross-fades into the card in place on the 260ms state tier, and the slot's height settles on the standard spring on Android and the state animation on iOS. Lines four to six append below with the same fade. When generation stops, any slot still empty collapses on the 160ms dismiss tier, so a two-line answer leaves no ghosts. This is not staggered choreography: every arrival is a real event, and the motion tells the writer which slot just filled. Reference boards: the "Suggestions Loading Motion" canvas in Claude Design.
+
+**Ink burst.** When writing ends with at least one line, the spinner in the primary button bursts: fourteen dots of on-surface ink (black on Ink and Paper, light on Graphite) leave the spinner's centre on an ease-out cubic, drop slightly as they go as if wet, and never pass a 44 px reach, shrink to 40 percent and fade out over the last third of 480 ms, while a 6 px blot at the centre collapses; the ink is allowed to fly past the button, and the label fades to Suggest Next Line underneath. It is the panel's one celebratory beat and the only motion in the Assistant allowed to be decorative. It fires only when a request runs to the end of its stream with at least one line: Stop, a Settings change that cancels the request, errors and empty answers do not burst, and it is skipped under Reduce Motion or with Android animations off.
 
 **Rewrite chip bar.** Appears at the bottom of the editor for a lyric selection (iOS: while text is selected and no rewrite, inspector, assistant sheet, or Focus mode is active; Android: while a rewrite range is pending and no assistant sheet, modal, active rewrite, or Focus mode is in the way). iOS: a 52pt-radius bordered capsule, 8pt padding, at most 360pt wide, holding a "Look up word" magnifier (44×44pt) and caption-weight chips at least 44pt tall. Android: a 22dp-radius bar on the high container colour with 28dp-radius, 48dp-tall chips. The rewrite review bar that follows uses the same capsule on iOS (22pt radius when showing an error or at accessibility sizes) with Retry/Apply at least 72×44pt and a "Regenerate rewrite" icon button.
 

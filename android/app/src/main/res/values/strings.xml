@@ -18,6 +18,8 @@
     <!-- AssistantPanel -->
     <string name="assistant_suggestions_header">Suggestions</string>
     <string name="assistant_suggestions_caveat">AI-generated · review before use</string>
+    <string name="assistant_suggestions_writing">Writing…</string>
+    <string name="assistant_suggestions_writing_a11y">Writing suggestions</string>
     <string name="assistant_suggest_next_line">Suggest Next Line</string>
     <string name="assistant_stop">Stop</string>
     <string name="assistant_set_up_model">Set up model</string>
