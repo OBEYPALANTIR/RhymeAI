@@ -75,6 +75,15 @@ struct AIService {
     }
 
     private static let suggestionCount = 6
+    /// Local rule (PARITY.md): fewer than `suggestionCount` survivors retries once; fewer than this after that is an error.
+    private static let minimumSuggestionCount = 3
+
+    /// Dedupe keys and counts shared by the local path's first and retry pass.
+    struct LineStreamState {
+        var seen = Set<String>()
+        var accepted = 0
+        var emitted = 0
+    }
     private static let localRewriteAttempts = 2
     /// On-device whole-song context budget, shared with Android
     /// `localLyricsContext` (see PARITY.md): text up to head + tail characters
@@ -164,33 +173,17 @@ struct AIService {
                 cursorLineIndex: cursorLineIndex
             )
             let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
-
-            // Gemma engine: route through downloaded GGUF model.
+            let generate: () async throws -> String
             if Self.shouldUseGemma() {
-                let parsed = try await callGGUFSuggestions(
-                    prompt: localPrompt,
-                    lyrics: lyrics,
-                    limit: Self.suggestionCount
-                )
-                guard let filter else { return parsed }
-                let ranked = filter.rank(parsed, want: Self.suggestionCount)
-                if ranked.isEmpty, !parsed.isEmpty {
-                    throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
-                }
-                return try requireSuggestionCount(ranked)
+                // Gemma engine: route through downloaded GGUF model.
+                generate = { try await callGGUF(prompt: localPrompt) }
+            } else if #available(iOS 26.0, *) {
+                // Apple Intelligence fallback.
+                generate = { try await callLocal(prompt: localPrompt) }
+            } else {
+                throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
             }
-
-            // Apple Intelligence fallback.
-            if #available(iOS 26.0, *) {
-                let parsed = try await callLocal(prompt: localPrompt, lyrics: lyrics, limit: Self.suggestionCount)
-                guard let filter else { return parsed }
-                let ranked = filter.rank(parsed, want: Self.suggestionCount)
-                if ranked.isEmpty, !parsed.isEmpty {
-                    throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
-                }
-                return try requireSuggestionCount(ranked)
-            }
-            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
+            return try await localSuggestionLines(generate: generate, lyrics: lyrics, filter: filter, rhymeType: rhymeType)
         }
 
         guard !apiKey.isEmpty else {
@@ -260,22 +253,20 @@ struct AIService {
                             useWholeSongContext: useWholeSongContext,
                             cursorLineIndex: cursorLineIndex
                         )
-                        let tokens: AsyncThrowingStream<String, Error>
+                        let makeTokens: () -> AsyncThrowingStream<String, Error>
                         if Self.shouldUseGemma(), let path = Self.firstGGUFPath() {
-                            tokens = Self.streamGGUFChunks(prompt: prompt, filePath: path, runner: Self.ggufRunner)
+                            makeTokens = { Self.streamGGUFChunks(prompt: prompt, filePath: path, runner: Self.ggufRunner) }
                         } else if #available(iOS 26.0, *) {
-                            tokens = streamAppleLocalChunks(prompt: prompt)
+                            makeTokens = { streamAppleLocalChunks(prompt: prompt) }
                         } else {
                             throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
                         }
-                        try await emitLines(
-                            from: tokens,
+                        try await emitLocalLines(
+                            tokens: makeTokens,
                             into: continuation,
-                            filter: RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType),
-                            rhymeType: rhymeType,
-                            excludedKeys: existingSuggestionKeys(in: lyrics),
-                            rejectsLocalArtifacts: true,
-                            requiresExactCount: true
+                            lyrics: lyrics,
+                            targetRhymeLine: targetRhymeLine,
+                            rhymeType: rhymeType
                         )
                         continuation.finish()
                         return
@@ -327,6 +318,46 @@ struct AIService {
         }
     }
 
+    /// Local streaming rule: `tokens` is invoked once more for the retry pass.
+    private func emitLocalLines(
+        tokens makeTokens: () -> AsyncThrowingStream<String, Error>,
+        into continuation: AsyncThrowingStream<String, Error>.Continuation,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType
+    ) async throws {
+        let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
+        let excludedKeys = existingSuggestionKeys(in: lyrics)
+        var state = try await emitLines(
+            from: makeTokens(), into: continuation, filter: filter, rhymeType: rhymeType,
+            excludedKeys: excludedKeys, rejectsLocalArtifacts: true
+        )
+        // Retry once: GGUFModelService draws a fresh random seed per generate call.
+        if state.emitted < Self.suggestionCount {
+            do {
+                state = try await emitLines(
+                    from: makeTokens(), into: continuation, filter: filter, rhymeType: rhymeType,
+                    excludedKeys: excludedKeys, rejectsLocalArtifacts: true, state: state
+                )
+            } catch {
+                // A failed optional retry keeps the first pass once it already met the minimum.
+                if error is CancellationError || Task.isCancelled || state.emitted < Self.minimumSuggestionCount { throw error }
+            }
+        }
+        try Self.requireMinimumLocalSuggestions(survivors: state.emitted, accepted: state.accepted, filter: filter, rhymeType: rhymeType)
+    }
+
+    private static func requireMinimumLocalSuggestions(survivors: Int, accepted: Int, filter: RhymeLineFilter?, rhymeType: RhymeType) throws {
+        guard survivors < minimumSuggestionCount else { return }
+        if filter != nil, accepted > 0, survivors == 0 {
+            throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
+        }
+        throw AIServiceError.incompleteResponse(expected: suggestionCount, actual: survivors)
+    }
+
+    /// Local (`rejectsLocalArtifacts`) streams return their state for the retry pass and
+    /// leave the count rule to `emitLocalLines`; cloud streams fail here when nothing matched.
+    @discardableResult
     private func emitLines(
         from tokens: AsyncThrowingStream<String, Error>,
         into continuation: AsyncThrowingStream<String, Error>.Continuation,
@@ -334,18 +365,18 @@ struct AIService {
         rhymeType: RhymeType? = nil,
         excludedKeys: Set<String> = [],
         rejectsLocalArtifacts: Bool = false,
-        requiresExactCount: Bool = false
-    ) async throws {
+        state: LineStreamState = LineStreamState()
+    ) async throws -> LineStreamState {
         var buffer = ""
-        var seen = Set<String>()
-        var emitted = 0
-        var accepted = 0
+        var state = state
         let rawLimit = filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
+        // The raw-line budget is per generation; a retry pass gets a fresh one.
+        var passAccepted = 0
 
         streamLoop: for try await chunk in tokens {
             try Task.checkCancellation()
             buffer += chunk
-            while (requiresExactCount || accepted < rawLimit), let newlineIdx = buffer.firstIndex(of: "\n") {
+            while passAccepted < rawLimit, let newlineIdx = buffer.firstIndex(of: "\n") {
                 let rawLine = String(buffer[..<newlineIdx])
                 buffer = String(buffer[buffer.index(after: newlineIdx)...])
                 if rejectsLocalArtifacts, SynonymSanitizer.containsMarkupOrControl(rawLine) {
@@ -355,44 +386,40 @@ struct AIService {
                 let key = normalizeSuggestionKey(cleaned)
                 guard !key.isEmpty,
                       !excludedKeys.contains(key),
-                      seen.insert(key).inserted else { continue }
-                accepted += 1
-                if filter?.tier(of: cleaned) != 0, emitted < Self.suggestionCount {
+                      state.seen.insert(key).inserted else { continue }
+                state.accepted += 1
+                passAccepted += 1
+                if filter?.tier(of: cleaned) != 0, state.emitted < Self.suggestionCount {
                     continuation.yield(cleaned)
-                    emitted += 1
+                    state.emitted += 1
                 }
-                if !requiresExactCount, emitted >= Self.suggestionCount { break streamLoop }
+                if state.emitted >= Self.suggestionCount { break streamLoop }
             }
-            if !requiresExactCount, accepted >= rawLimit { break }
+            if passAccepted >= rawLimit { break }
         }
         try Task.checkCancellation()
 
-        if requiresExactCount || (emitted < Self.suggestionCount && accepted < rawLimit) {
+        if state.emitted < Self.suggestionCount && passAccepted < rawLimit {
             let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
             if rejectsLocalArtifacts, SynonymSanitizer.containsMarkupOrControl(remaining) {
                 throw AIServiceError.decodingError
             }
             if !remaining.isEmpty, let cleaned = rejectsLocalArtifacts ? validatedLocalSuggestionLine(remaining) : cleanSuggestionLine(remaining) {
                 let key = normalizeSuggestionKey(cleaned)
-                if !key.isEmpty, !excludedKeys.contains(key), seen.insert(key).inserted {
-                    accepted += 1
-                    if filter?.tier(of: cleaned) != 0, emitted < Self.suggestionCount {
+                if !key.isEmpty, !excludedKeys.contains(key), state.seen.insert(key).inserted {
+                    state.accepted += 1
+                    if filter?.tier(of: cleaned) != 0, state.emitted < Self.suggestionCount {
                         continuation.yield(cleaned)
-                        emitted += 1
+                        state.emitted += 1
                     }
                 }
             }
         }
 
-        if filter != nil, accepted > 0, emitted == 0, let rhymeType {
+        if !rejectsLocalArtifacts, filter != nil, state.accepted > 0, state.emitted == 0, let rhymeType {
             throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
         }
-        if requiresExactCount, accepted > Self.suggestionCount {
-            throw AIServiceError.incompleteResponse(expected: Self.suggestionCount, actual: accepted)
-        }
-        if requiresExactCount, emitted != Self.suggestionCount {
-            throw AIServiceError.incompleteResponse(expected: Self.suggestionCount, actual: emitted)
-        }
+        return state
     }
 
     private func streamCloudTokens(
@@ -533,41 +560,63 @@ struct AIService {
         return cleaned
     }
 
-    private func validatedLocalSuggestions(
+    /// Batch local rule: `generate` is invoked once more for the retry pass; the first pass's ranking stays first.
+    func localSuggestionLines(
+        generate: () async throws -> String,
+        lyrics: String,
+        filter: RhymeLineFilter?,
+        rhymeType: RhymeType
+    ) async throws -> [String] {
+        var state = LineStreamState()
+        var lines = try rankedLocalSuggestions(try await generate(), lyrics: lyrics, filter: filter, state: &state)
+        // Retry once: each local generate call draws a fresh seed (GGUF) or session (Apple Intelligence).
+        if lines.count < Self.suggestionCount {
+            try Task.checkCancellation()
+            do {
+                lines += try rankedLocalSuggestions(try await generate(), lyrics: lyrics, filter: filter, state: &state)
+                    .prefix(Self.suggestionCount - lines.count)
+            } catch {
+                // A failed optional retry keeps the first pass once it already met the minimum.
+                if error is CancellationError || Task.isCancelled || lines.count < Self.minimumSuggestionCount { throw error }
+            }
+        }
+        try Self.requireMinimumLocalSuggestions(survivors: lines.count, accepted: state.accepted, filter: filter, rhymeType: rhymeType)
+        return lines
+    }
+
+    /// One local response: sanitized, filtered and ranked to at most `suggestionCount`; `state` dedupes across passes.
+    private func rankedLocalSuggestions(
         _ raw: String,
         lyrics: String,
-        limit: Int
+        filter: RhymeLineFilter?,
+        state: inout LineStreamState
     ) throws -> [String] {
         guard !SynonymSanitizer.containsMarkupOrControl(raw) else {
             throw AIServiceError.decodingError
         }
         let excludedKeys = existingSuggestionKeys(in: lyrics)
-        var seen = Set<String>()
-        let suggestions = raw.components(separatedBy: .newlines).compactMap { line -> String? in
-            guard let cleaned = validatedLocalSuggestionLine(line) else { return nil }
+        var seen = state.seen
+        // Same per-generation raw budget as the streaming path (`emitLines` rawLimit).
+        let rawLimit = filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
+        var suggestions: [String] = []
+        for line in raw.components(separatedBy: .newlines) where suggestions.count < rawLimit {
+            guard let cleaned = validatedLocalSuggestionLine(line) else { continue }
             let key = normalizeSuggestionKey(cleaned)
             guard !key.isEmpty,
                   !excludedKeys.contains(key),
-                  seen.insert(key).inserted else { return nil }
-            return cleaned
+                  seen.insert(key).inserted else { continue }
+            suggestions.append(cleaned)
         }
-        return try requireSuggestionCount(suggestions, expected: limit)
+        state.seen = seen
+        state.accepted += suggestions.count
+        guard let filter else { return suggestions }
+        return filter.rank(suggestions, want: Self.suggestionCount)
     }
 
     private func existingSuggestionKeys(in lyrics: String) -> Set<String> {
         Set(lyrics.components(separatedBy: .newlines)
             .map(normalizeSuggestionKey)
             .filter { !$0.isEmpty })
-    }
-
-    private func requireSuggestionCount(
-        _ suggestions: [String],
-        expected: Int = Self.suggestionCount
-    ) throws -> [String] {
-        guard suggestions.count == expected else {
-            throw AIServiceError.incompleteResponse(expected: expected, actual: suggestions.count)
-        }
-        return suggestions
     }
 
     private func normalizeSuggestionKey(_ text: String) -> String {
@@ -1288,7 +1337,7 @@ struct AIService {
     }
 
     @available(iOS 26.0, *)
-    private func callLocal(prompt: String, lyrics: String, limit: Int) async throws -> [String] {
+    private func callLocal(prompt: String) async throws -> String {
         let model = SystemLanguageModel.default
         guard model.isAvailable else {
             throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
@@ -1307,7 +1356,7 @@ struct AIService {
             throw Self.mapLocalGenerationError(error)
         }
         try Task.checkCancellation()
-        return try validatedLocalSuggestions(content, lyrics: lyrics, limit: limit)
+        return content
     }
 
     static func localSnapshotDelta(previous: String, current: String) throws -> String {
@@ -1431,12 +1480,6 @@ struct AIService {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
-    }
-
-    /// Route a suggestion prompt through Gemma and parse the result.
-    private func callGGUFSuggestions(prompt: String, lyrics: String, limit: Int) async throws -> [String] {
-        let raw = try await callGGUF(prompt: prompt)
-        return try validatedLocalSuggestions(raw, lyrics: lyrics, limit: limit)
     }
 
     private func callGGUFRewrite(
@@ -1615,30 +1658,38 @@ struct AIService {
         )
     }
 
+    /// `retryChunks` feeds the retry pass (an empty response when nil); `retryError` makes that pass
+    /// throw after its chunks; `retryCalls` reports whether it ran.
     func validatedLocalSuggestionStreamForTest(
         chunks: [String],
+        retryChunks: [String]? = nil,
+        retryError: Error? = nil,
         lyrics: String,
         targetRhymeLine: String? = nil,
-        rhymeType: RhymeType = .perfect
+        rhymeType: RhymeType = .perfect,
+        retryCalls: ((Int) -> Void)? = nil
     ) -> AsyncThrowingStream<String, Error> {
-        let tokens = AsyncThrowingStream<String, Error> { continuation in
-            for chunk in chunks {
-                continuation.yield(chunk)
-            }
-            continuation.finish()
-        }
-        return AsyncThrowingStream { continuation in
+        AsyncThrowingStream { continuation in
             let task = Task {
+                var attempts = [chunks, retryChunks ?? []]
+                var calls = 0
                 do {
-                    try await emitLines(
-                        from: tokens,
+                    try await emitLocalLines(
+                        tokens: {
+                            calls += 1
+                            let chunks = attempts.removeFirst()
+                            let error = calls > 1 ? retryError : nil
+                            return AsyncThrowingStream<String, Error> { continuation in
+                                for chunk in chunks { continuation.yield(chunk) }
+                                continuation.finish(throwing: error)
+                            }
+                        },
                         into: continuation,
-                        filter: RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType),
-                        rhymeType: rhymeType,
-                        excludedKeys: existingSuggestionKeys(in: lyrics),
-                        rejectsLocalArtifacts: true,
-                        requiresExactCount: true
+                        lyrics: lyrics,
+                        targetRhymeLine: targetRhymeLine,
+                        rhymeType: rhymeType
                     )
+                    retryCalls?(calls)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

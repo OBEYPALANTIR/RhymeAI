@@ -1,0 +1,57 @@
+{
+  "observed_at": "2026-10-15T06:41:32.119039+00:00",
+  "binary_path": "/opt/homebrew/bin/llama-server",
+  "binary_realpath": "/opt/homebrew/Cellar/llama.cpp/0.6.0_1/bin/llama-server",
+  "binary_sha256": "cbd72c3d3579820bf117263fa565bf482f08a4edd803c491a8eff734aa7401be",
+  "binary_mtime_ns": 1791753413717016025,
+  "version_output": "version: 0.6.0 (build 11429, commit d81235049)\nbuilt with AppleClang 21.0.0.21000334 for Darwin arm64\n",
+  "list_devices_output": "Available devices:\n  BLAS: Accelerate (0 MiB, 0 MiB free)\n  MTL0: Apple M3 Max (38338 MiB, 38338 MiB free)\n",
+  "build_info": "b11429-d81235049",
+  "gate_commits": {
+    "ca1a98031476842c7a8b880840dccd1716706b74": {
+      "source_sha256": "19c037da1facfb2995ed5e2828d7fe4882e8cbe48c0a61e4429b6897711b2003",
+      "n_gpu_layers": 99
+    },
+    "7439d75c28acc96775cf4c04a8c0f69fff47951f": {
+      "source_sha256": "0a07fcc76281d422cf0a02fbbc9532834549c72a18f4e0f43ad845ee650e73b3",
+      "n_gpu_layers": 99
+    },
+    "29030c7a6c41de2d04a8ff02037d667fdb9d2a81": {
+      "source_sha256": "0a07fcc76281d422cf0a02fbbc9532834549c72a18f4e0f43ad845ee650e73b3",
+      "n_gpu_layers": 99
+    },
+    "5ca132b94fd26607d91b87d2aaeb82751973789d": {
+      "source_sha256": "6268a0d4486ca94fe8e6052a4cc1918c3a8d6d31f392ddb52fceea189abf0b40",
+      "n_gpu_layers": 99
+    },
+    "1c3661376684c1686655ea93bebd6ca2b6261839": {
+      "source_sha256": "0a07fcc76281d422cf0a02fbbc9532834549c72a18f4e0f43ad845ee650e73b3",
+      "n_gpu_layers": 99
+    },
+    "8097e1bdef015228e9174ce38cb98660c04d2234": {
+      "source_sha256": "0a07fcc76281d422cf0a02fbbc9532834549c72a18f4e0f43ad845ee650e73b3",
+      "n_gpu_layers": 99
+    },
+    "1def96dd1d815ba78174b75e401bd38d656c4736": {
+      "source_sha256": "19c037da1facfb2995ed5e2828d7fe4882e8cbe48c0a61e4429b6897711b2003",
+      "n_gpu_layers": 99
+    },
+    "01f3323a6943192a28a9c67d5d4605178febd154": {
+      "source_sha256": "4e4032b97ca21f26a03721beb10c4f13c993be67c431f99d351a99de0ec1fcf6",
+      "n_gpu_layers": 99
+    },
+    "a4deaf08fabea4b7e6c7fd3d96a6aa2f9d2c475c": {
+      "source_sha256": "0a07fcc76281d422cf0a02fbbc9532834549c72a18f4e0f43ad845ee650e73b3",
+      "n_gpu_layers": 99
+    },
+    "3116c281522880c4de7ba6f54d5a2fa2009ee2a5": {
+      "source_sha256": "fe25748a1e2143a95130149634b8dd667f8c5a4f4288199e4c8cb5533e71278c",
+      "n_gpu_layers": 99
+    },
+    "4dd2115e46f0b6564542d68d5171e80280183fb5": {
+      "source_sha256": "fe25748a1e2143a95130149634b8dd667f8c5a4f4288199e4c8cb5533e71278c",
+      "n_gpu_layers": 99
+    }
+  },
+  "limitation": "Host evidence infers legacy Metal use; verbosity-3 capture logs did not observe GPU offload."
+}
