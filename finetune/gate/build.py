@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import re
 import time
 from collections import Counter
@@ -89,6 +90,22 @@ def overlapping_lines(songs, pool):
     return sorted(hits)
 
 
+def pool_files(root):
+    """Every file under a pool, following symlinked directories (Path.rglob does not, so a pool
+    whose data lives on another volume would be audited as empty) and visiting each real
+    directory once so a symlink cycle cannot loop."""
+    visited = set()
+    for directory, subdirectories, files in os.walk(root, followlinks=True):
+        real = os.path.realpath(directory)
+        if real in visited:
+            subdirectories[:] = []
+            continue
+        visited.add(real)
+        subdirectories.sort()
+        for name in sorted(files):
+            yield Path(directory) / name
+
+
 def audit_overlap(songs, include_frozen=False, benchmark="v1"):
     roots = [ARTIFACTS / "2026-10-07/rhymeai-teacher-data-v3",
              ARTIFACTS / "2026-10-08/rhymeai-colab-package-levels"]
@@ -100,7 +117,7 @@ def audit_overlap(songs, include_frozen=False, benchmark="v1"):
     paths = set()
     for root in roots:
         # Include Python string pools as well as contexts, outputs and packaged splits.
-        paths.update(p for p in root.rglob("*") if p.suffix in (".jsonl", ".json", ".py") and p.is_file())
+        paths.update(p for p in pool_files(root) if p.suffix in (".jsonl", ".json", ".py") and p.is_file())
     paths.update([REPO / "finetune/data/seed_songs.py", REPO / "finetune/eval/cases.py"])
     if include_frozen:
         paths.add(HERE / "benchmark-songs.jsonl")
