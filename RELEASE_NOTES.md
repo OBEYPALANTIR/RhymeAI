@@ -1,5 +1,14 @@
 # Release Notes
 
+## Pending rewrite highlight is still and monochrome (iOS and Android)
+
+While a Harder Rhyme, Punch Up or other rewrite is being written, the selected
+lyric now keeps a plain highlight in the appearance's selection colour with a
+thin outline, the same tint as an ordinary selection. The moving indigo band on
+iOS and the green outline on Android are gone; the rewrite bar at the bottom
+still shows that the rewrite is in progress. A failed rewrite keeps its red
+highlight.
+
 ## Pending next-line suggestions follow the selected rhyme scheme (iOS and Android)
 
 Suggest Next Line now works out the rhyme for the line it is about to add, not

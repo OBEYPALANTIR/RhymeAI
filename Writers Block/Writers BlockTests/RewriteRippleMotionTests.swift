@@ -84,22 +84,47 @@ struct RewriteRippleMotionTests {
     }
 
     @Test @MainActor
-    func detachedHighlightOverlayStopsItsDisplayLink() {
+    func loadingHighlightIsStillAndKeepsThePaletteColours() {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
         let textView = UITextView(frame: window.bounds)
         let overlay = RewriteHighlightOverlayView(frame: textView.bounds)
         window.addSubview(textView)
         RewriteHighlightOverlayLayout.install(overlay, in: textView)
 
+        let colors = RewriteHighlightColors.pending(palette: AppAppearanceStyle.ink.palette)
         overlay.configure(
             rects: [CGRect(x: 10, y: 10, width: 120, height: 24)],
             isLoading: true,
-            isError: false
+            colors: colors
         )
-        #expect(overlay.isRippleAnimating)
 
-        overlay.removeFromSuperview()
-        #expect(!overlay.isRippleAnimating)
+        #expect(overlay.layer.animationKeys() == nil)
+        #expect(overlay.colors == colors)
+    }
+
+    @Test
+    func pendingRewriteUsesTheAppearanceSelectionAndOutline() {
+        for style in [AppAppearanceStyle.ink, .paper, .graphite] {
+            let palette = style.palette
+            let pending = RewriteHighlightColors.pending(palette: palette)
+            #expect(pending.fill == UIColor(palette.selectionTint).withAlphaComponent(RewriteHighlightColors.pendingFillOpacity))
+            #expect(pending.stroke == UIColor(palette.outlineStrong).withAlphaComponent(RewriteHighlightColors.pendingStrokeOpacity))
+
+            let failed = RewriteHighlightColors.error(palette: palette)
+            #expect(failed.fill == UIColor(palette.error).withAlphaComponent(RewriteHighlightColors.errorFillOpacity))
+        }
+    }
+
+    @Test
+    func highlightKindPicksItsColours() {
+        let palette = AppAppearanceStyle.ink.palette
+        let loading = LyricsRewriteHighlight(range: NSRange(location: 0, length: 4), isLoading: true, isError: false, isInsertion: false)
+        let failed = LyricsRewriteHighlight(range: NSRange(location: 0, length: 4), isLoading: false, isError: true, isInsertion: false)
+        let inserted = LyricsRewriteHighlight(range: NSRange(location: 0, length: 4), isLoading: false, isError: false, isInsertion: true)
+
+        #expect(RewriteHighlightColors.forHighlight(loading, palette: palette) == .pending(palette: palette))
+        #expect(RewriteHighlightColors.forHighlight(failed, palette: palette) == .error(palette: palette))
+        #expect(RewriteHighlightColors.forHighlight(inserted, palette: palette) == .insertion(palette: palette))
     }
 
     @Test @MainActor

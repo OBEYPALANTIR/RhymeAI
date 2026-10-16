@@ -169,6 +169,7 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.outlineStrongColorFor
 import com.rhymeai.app.ui.theme.selectionColorFor
 import com.rhymeai.app.ui.theme.editorSyllableCountColor
 import com.rhymeai.app.ui.theme.editorWordCountColor
@@ -1061,18 +1062,20 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     state = RewriteHighlightState(
                                         range = if (focusMode) null else rewriteHighlightRange
                                     ),
-                                    colors = RewriteHighlightColors(
-                                        fill = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
-                                            colorScheme.error.copy(alpha = 0.22f)
-                                        } else {
-                                            colorScheme.primary.copy(alpha = 0.20f)
-                                        },
-                                        stroke = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
-                                            colorScheme.error.copy(alpha = 0.70f)
-                                        } else {
-                                            colorScheme.tertiary.copy(alpha = 0.78f)
-                                        }
-                                    )
+                                    // The editor's own selection tint and strong outline: nothing on
+                                    // the text moves while a rewrite is in flight, the rewrite bar
+                                    // carries the loading state. Drawn behind the text, so opaque is fine.
+                                    colors = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
+                                        RewriteHighlightColors(
+                                            fill = colorScheme.error.copy(alpha = 0.22f),
+                                            stroke = colorScheme.error.copy(alpha = 0.70f)
+                                        )
+                                    } else {
+                                        RewriteHighlightColors(
+                                            fill = selectionColorFor(LocalAppAppearance.current),
+                                            stroke = outlineStrongColorFor(LocalAppAppearance.current)
+                                        )
+                                    }
                                 )
                                 .syllableUnderlines(
                                     spans = syllableUnderlineSpans,
