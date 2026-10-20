@@ -196,6 +196,21 @@ class DevEvaluationTest(unittest.TestCase):
         self.assertEqual(target.read_bytes(), before)
         self.assertIn('"legacy": true', (out / "report.md").read_text())
 
+        # Offline re-reporting must retain metrics while describing paid credits honestly.
+        previous = json.loads((out / "summary.json").read_text())
+        paid = dict(previous["judge"], judge_credit_budget=100, credits_spent=12.5,
+                    cost_basis="Paid ChatGPT credits; measured native balance deltas")
+        del paid["incremental_api_cost_usd"]
+        write_json(out / "judge-provenance.json", paid)
+        with patch("gate.backend.HOST_PROBE", probe, create=True):
+            self.assertEqual(report(out), "DEV")
+        observed = json.loads((out / "summary.json").read_text())
+        self.assertEqual(observed, dict(previous, judge=paid))
+        rendered = (out / "report.md").read_text()
+        self.assertIn("Judge credits spent: 12.5 / 100", rendered)
+        self.assertNotIn("Incremental judge API cost", rendered)
+        self.assertNotIn("Included ChatGPT subscription", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
