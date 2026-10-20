@@ -14,16 +14,19 @@ import kotlinx.coroutines.flow.flow
  * consumes it exactly as it consumes a real stream, so what gets exercised is
  * the Assistant's production loading, arrival and cancellation UI.
  *
- * Launch a debug build with it armed:
+ * Launch the isolated QA debug build with it armed (`-S` stops a running copy
+ * first, so the extras reach a fresh activity):
  * ```
- * adb shell am start -n com.rhymeai.app/.MainActivity \
+ * ./gradlew :app:installDebug -PisolatedMotionQaApp=true
+ * adb shell am start -S -n com.rhymeai.app.motionqa/com.rhymeai.app.MainActivity \
  *   --ez com.rhymeai.app.SCRIPTED_SUGGESTIONS true \
  *   --el com.rhymeai.app.SCRIPTED_SUGGESTIONS_HOLD_MS 3000 \
  *   --el com.rhymeai.app.SCRIPTED_SUGGESTIONS_INTERVAL_MS 1000 \
  *   --ei com.rhymeai.app.SCRIPTED_SUGGESTIONS_COUNT 5
  * ```
  * The three timing extras are optional and default to the values shown; a
- * count of 0 exercises the empty-answer path.
+ * count of 0 exercises the empty-answer path. The stream changes no provider,
+ * key or setting; it only answers Suggest Next Line for that process.
  */
 class ScriptedSuggestionStream(
     val holdMillis: Long = DEFAULT_HOLD_MILLIS,
