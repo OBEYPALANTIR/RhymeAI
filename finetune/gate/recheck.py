@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .build import REPO, read_jsonl, sha256, write_json
 from .generate import SAMPLER, SHIPPED_INCUMBENT_SHA256, gradle, select_incumbent, source_binding
-from .judge import make_pairs
+from .judge import credit_budget, make_pairs
 from .report import report
 from .backend import read_binding, require_same_backend
 
@@ -43,10 +43,15 @@ def verify_unchanged(out, hashes):
             raise ValueError(f"Offline recheck input bytes changed: {name}")
 
 
-def recheck(out):
+def recheck(out, judge_credit_budget=0):
+    budget = credit_budget(judge_credit_budget)
     out = Path(out).resolve(strict=True)
     with (out / "run.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if budget:
+            judge = json.loads((out / "judge-provenance.json").read_text())
+            if not judge.get("accounting_complete", True) or judge.get("credits_spent", 0) > budget:
+                raise ValueError("Saved judge spending is incomplete or exceeds the recheck credit budget")
         archive = out / "evidence" / f"recheck-{time.time_ns()}"
         before, stage = archive / "before", archive / "replayed"
         before.mkdir(parents=True)
@@ -152,4 +157,7 @@ def recheck(out):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
-    recheck(parser.parse_args().out)
+    parser.add_argument("--judge-credit-budget", type=credit_budget, default=0,
+                        help="Optional ceiling check on saved judge spending; offline recheck never makes judge calls")
+    args = parser.parse_args()
+    recheck(args.out, judge_credit_budget=args.judge_credit_budget)

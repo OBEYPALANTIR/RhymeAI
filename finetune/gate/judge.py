@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 import select
 import subprocess
 import time
 from collections import Counter
+from decimal import Decimal
 from pathlib import Path
 
 from eval.run_naturalness import JUDGE_PROMPT, consolidate
@@ -106,6 +108,103 @@ def account_usage():
             process.wait()
 
 
+def credit_budget(value):
+    value = float(value)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("Judge credit budget must be finite and nonnegative")
+    return value
+
+
+def credit_accounting(directory, budget):
+    """Reconstruct spend from durable billing records, including failed batches."""
+    budget = credit_budget(budget)
+    binding_path = directory / "credit-budget.json"
+    binding = json.loads(binding_path.read_text()) if binding_path.exists() else {}
+    if binding and binding["judge_credit_budget"] != budget:
+        raise ValueError("Judge credit budget changed; preserve the original budget")
+    fingerprint = binding.get("account_fingerprint")
+    spent, largest = Decimal(0), Decimal(0)
+    batches, errors = [], []
+    for path in sorted(directory.glob("*.billing.json")):
+        billing = json.loads(path.read_text())
+        before, after = billing["before"], billing.get("after")
+        fingerprint = fingerprint or before["account_fingerprint"]
+        record = {"batch": path.name.removesuffix(".billing.json"), "before": before, "after": after,
+                  "credit_delta": None, "credits_spent": None}
+        for observation in (before, after):
+            if observation is None:
+                errors.append(f"Missing post-batch billing: {path.name}")
+                continue
+            if observation["account_fingerprint"] != fingerprint:
+                errors.append(f"Judge account fingerprint changed: {path.name}")
+            if not math.isfinite(observation["credits"]) or observation["credits"] < 0:
+                errors.append(f"Invalid native credit balance: {path.name}")
+            if "judge_credit_budget" in billing and not observation.get("plan"):
+                errors.append(f"Missing billing plan: {path.name}")
+        if after is not None:
+            delta = Decimal(str(before["credits"])) - Decimal(str(after["credits"]))
+            if not delta.is_finite():
+                errors.append(f"Invalid credit delta: {path.name}")
+            else:
+                debit = max(Decimal(0), delta)
+                spent += debit
+                largest = max(largest, debit)
+                record.update(credit_delta=float(delta), credits_spent=float(debit))
+                if delta < 0:
+                    errors.append(f"Credit balance increased; exact spend is unknown: {path.name}")
+        batches.append(record)
+    return {"judge_credit_budget": budget, "credits_spent": float(spent), "largest_batch_delta": float(largest),
+            "account_fingerprint": fingerprint, "batches": batches, "billing_errors": errors,
+            "accounting_complete": not errors}
+
+
+def start_credit_batch(directory, name, before, budget):
+    if (directory / f"{name}.billing.json").exists():
+        raise RuntimeError("Existing judge billing must not be overwritten; reconcile the failed batch")
+    state = credit_accounting(directory, budget)
+    if state["billing_errors"]:
+        raise RuntimeError("; ".join(state["billing_errors"]))
+    if state["account_fingerprint"] not in (None, before["account_fingerprint"]):
+        raise RuntimeError("Judge account fingerprint changed before batch")
+    balance = before["credits"]
+    if not math.isfinite(balance) or balance <= 0 or not before.get("plan"):
+        raise RuntimeError("Paid judge needs a finite positive balance and recorded plan")
+    spent, largest = (Decimal(str(state[key])) for key in ("credits_spent", "largest_batch_delta"))
+    if spent >= Decimal(str(budget)) or spent + largest > Decimal(str(budget)) or largest > Decimal(str(balance)):
+        raise RuntimeError("Judge credit budget cannot cover the largest observed batch; refusing to start")
+    binding_path = directory / "credit-budget.json"
+    if not binding_path.exists():
+        write_json(binding_path, {"judge_credit_budget": budget, "account_fingerprint": before["account_fingerprint"]})
+    # Persist the preflight before launching. An interrupted or unmetered batch blocks resumption.
+    write_json(directory / f"{name}.billing.json", {"before": before, "after": None, "credit_delta": None,
+               "credits_spent": None, "judge_credit_budget": budget, "spend_before_batch": float(spent),
+               "largest_batch_delta_before": float(largest)})
+
+
+def finish_credit_batch(directory, name, after, budget):
+    path = directory / f"{name}.billing.json"
+    billing = json.loads(path.read_text())
+    delta = Decimal(str(billing["before"]["credits"])) - Decimal(str(after["credits"]))
+    billing.update(after=after, credit_delta=float(delta) if delta.is_finite() else None,
+                   credits_spent=float(max(Decimal(0), delta)) if delta.is_finite() else None)
+    write_json(path, billing)
+    require_credit_accounting(directory, budget)
+
+
+def require_credit_accounting(directory, budget):
+    state = credit_accounting(directory, budget)
+    if state["billing_errors"]:
+        raise RuntimeError("; ".join(state["billing_errors"]))
+    if state["credits_spent"] > budget:
+        raise RuntimeError("Judge credit budget exceeded by completed batch; no further calls allowed")
+    return state
+
+
+def paid_cost_provenance(directory, budget):
+    return {**credit_accounting(directory, budget),
+            "cost_basis": "Paid ChatGPT credits; positive native balance deltas around batches, including concurrent account use; no USD conversion"}
+
+
 def selected_prompts(rows, dev=False, version=FROZEN_VERSION, rubric_version=NEXTLINE_RUBRIC):
     if rubric_version not in RUBRICS:
         raise ValueError("Unknown judge rubric version")
@@ -161,7 +260,8 @@ def make_pairs(out, rubric_version=None):
     return pairs
 
 
-def codex_batch(directory, pairs, swapped, name, rubric_version=NEXTLINE_RUBRIC):
+def codex_batch(directory, pairs, swapped, name, rubric_version=NEXTLINE_RUBRIC, judge_credit_budget=0):
+    budget = credit_budget(judge_credit_budget)
     rubric = RUBRICS[rubric_version]
     if rubric_version == NEXTLINE_RUBRIC and any(p["task"] != "suggestions" for p in pairs):
         raise ValueError("Next-line rubric requires suggestion pairs only")
@@ -183,9 +283,25 @@ def codex_batch(directory, pairs, swapped, name, rubric_version=NEXTLINE_RUBRIC)
                "subscription_auth": True, "incremental_api_cost_usd": 0.0}
     if rubric_version != LEGACY_RUBRIC:
         binding.update(rubric_version=rubric_version, rubric_sha256=text_hash(rubric))
+    ordinary_binding = dict(binding)
+    if budget:
+        binding.pop("incremental_api_cost_usd")
+        binding.update(judge_credit_budget=budget, billing_mode="paid-credits")
     binding_path = directory / f"{name}.binding.json"
-    if binding_path.exists() and json.loads(binding_path.read_text()) != binding:
-        raise ValueError("Judge resume binding mismatch")
+    if binding_path.exists():
+        previous = json.loads(binding_path.read_text())
+        if budget and previous == ordinary_binding:
+            if not result_path.exists() and not events_path.exists():
+                write_json(binding_path, binding)
+            elif not result_path.exists():
+                raise ValueError("Incomplete ordinary judge captures require billing reconciliation")
+            else:
+                # Completed included-allowance batches retain their exact original binding.
+                billing = json.loads((directory / f"{name}.billing.json").read_text())
+                if billing["before"]["credits"] != billing["after"]["credits"]:
+                    raise RuntimeError("Ordinary judge batch has unapproved credit spending")
+        elif previous != binding:
+            raise ValueError("Judge resume binding mismatch")
     if not binding_path.exists():
         if result_path.exists() or events_path.exists():
             raise ValueError("Existing judge captures have no original binding")
@@ -196,7 +312,9 @@ def codex_batch(directory, pairs, swapped, name, rubric_version=NEXTLINE_RUBRIC)
         if auth.returncode or "Logged in using ChatGPT" not in auth.stdout + auth.stderr:
             raise RuntimeError("Gate judge needs existing ChatGPT login; no API fallback is configured")
         before = account_usage()
-        if not before["ordinary_usage_allowed"]:
+        if budget:
+            start_credit_batch(directory, name, before, budget)
+        elif not before["ordinary_usage_allowed"]:
             raise RuntimeError("Included Codex allowance exhausted; paid judge cost must be established within the $25 budget")
         prompt_path.write_text(prompt)
         command = ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
@@ -205,10 +323,18 @@ def codex_batch(directory, pairs, swapped, name, rubric_version=NEXTLINE_RUBRIC)
         write_json(directory / f"{name}.command.json", command)
         write_json(exit_path, {"returncode": None})
         with events_path.open("w") as events, (directory / f"{name}.stderr.log").open("w") as errors:
-            proc = subprocess.run(command, input=prompt, text=True, stdout=events, stderr=errors, timeout=600)
+            if budget:
+                try:
+                    proc = subprocess.run(command, input=prompt, text=True, stdout=events, stderr=errors, timeout=600)
+                    write_json(exit_path, {"returncode": proc.returncode})
+                finally:
+                    finish_credit_batch(directory, name, account_usage(), budget)
+            else:
+                proc = subprocess.run(command, input=prompt, text=True, stdout=events, stderr=errors, timeout=600)
         write_json(exit_path, {"returncode": proc.returncode})
-        after = account_usage()
-        write_json(directory / f"{name}.billing.json", {"before": before, "after": after})
+        if not budget:
+            after = account_usage()
+            write_json(directory / f"{name}.billing.json", {"before": before, "after": after})
         if proc.returncode:
             raise RuntimeError(f"Independent judge failed; see {events_path} and {directory / (name + '.stderr.log')}")
     if not exit_path.exists() or json.loads(exit_path.read_text()).get("returncode") != 0:
@@ -218,7 +344,9 @@ def codex_batch(directory, pairs, swapped, name, rubric_version=NEXTLINE_RUBRIC)
     if not terminal or terminal[-1] != "turn.completed":
         raise RuntimeError(f"Judge batch has no successful terminal completion: {events_path}")
     billing = json.loads((directory / f"{name}.billing.json").read_text())
-    if (billing["before"]["account_fingerprint"] != billing["after"]["account_fingerprint"]
+    if budget:
+        require_credit_accounting(directory, budget)
+    elif (billing["before"]["account_fingerprint"] != billing["after"]["account_fingerprint"]
             or billing["before"]["credits"] != billing["after"]["credits"]):
         raise RuntimeError("Judge credit balance/account changed; resolve exact charge and $25 budget before continuing")
     result = json.loads(result_path.read_text())["judgments"]
@@ -232,7 +360,8 @@ def codex_batch(directory, pairs, swapped, name, rubric_version=NEXTLINE_RUBRIC)
     return result, usage
 
 
-def judge(out):
+def judge(out, judge_credit_budget=0):
+    budget = credit_budget(judge_credit_budget)
     provenance = out / "judge-provenance.json"
     if provenance.exists() and recorded_rubric(json.loads(provenance.read_text())) != NEXTLINE_RUBRIC:
         raise ValueError("Historical rubric is immutable; re-judge only in a separate copied run")
@@ -244,12 +373,22 @@ def judge(out):
     directory = out.parent / ("blind-judge-" + hashlib.sha256(str(out).encode()).hexdigest()[:12])
     verdicts = [{}, {}]
     usages = []
+    paid_provenance = {"model": JUDGE_MODEL, "provider": "OpenAI via Codex ChatGPT login",
+                       "rubric_version": NEXTLINE_RUBRIC, "rubric_sha256": text_hash(NEXTLINE_PROMPT),
+                       "blind_workspace": str(directory), "complete": False}
     for order in (0, 1):
         ordered = list(pairs)
         random.Random(921 + order).shuffle(ordered)
         for offset in range(0, len(ordered), 30):
             name = f"order-{order}-batch-{offset // 30:03d}"
-            result, usage = codex_batch(directory, ordered[offset:offset + 30], bool(order), name)
+            if budget:
+                try:
+                    result, usage = codex_batch(directory, ordered[offset:offset + 30], bool(order), name,
+                                               judge_credit_budget=budget)
+                finally:
+                    write_json(provenance, {**paid_provenance, **paid_cost_provenance(directory, budget)})
+            else:
+                result, usage = codex_batch(directory, ordered[offset:offset + 30], bool(order), name)
             verdicts[order].update({r["pair_id"]: r for r in result})
             usages.extend(usage)
             print(f"judge {name}: {len(result)} verdicts", flush=True)
@@ -262,7 +401,8 @@ def judge(out):
     write_json(out / "judge-provenance.json", {"model": JUDGE_MODEL, "provider": "OpenAI via Codex ChatGPT login",
                "benchmark_version": json.loads((out / "benchmark.json").read_text())["version"],
                "reasoning_effort": "low", "pairs": len(pairs), "prompt_ids_per_seed": len({p["id"] for p in pairs}), "orders": 2,
-               "incremental_api_cost_usd": 0.0, "cost_basis": "Included ChatGPT subscription; unchanged native credit balance around every batch",
+               **({**paid_cost_provenance(directory, budget), "complete": True} if budget else {
+                   "incremental_api_cost_usd": 0.0, "cost_basis": "Included ChatGPT subscription; unchanged native credit balance around every batch"}),
                "usage": {key: sum(u.get(key, 0) for u in usages) for key in {k for u in usages for k in u}},
                "blind_workspace": str(directory), "rubric_version": NEXTLINE_RUBRIC,
                "rubric_sha256": text_hash(NEXTLINE_PROMPT)})

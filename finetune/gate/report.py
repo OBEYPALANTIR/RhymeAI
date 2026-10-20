@@ -221,8 +221,10 @@ def report(out):
         lines += ["## Judged prompts per cell (each seed, both positions)", "", "| Cell | Distinct prompts |", "|---|---:|"]
         lines += [f"| {cell} | {count} |" for cell, count in cell_counts.items()]
         lines.append("")
+    cost = (f"Judge credits spent: {judge['credits_spent']:g} / {judge['judge_credit_budget']:g}."
+            if "judge_credit_budget" in judge else f"Incremental judge API cost: ${judge['incremental_api_cost_usd']:.2f}.")
     lines.extend(["## Provenance", "", f"Judge: {judge['model']}; {judge['provider']}; {len(selected_ids)} distinct prompts per seed, both positions.",
-                  f"Incremental judge API cost: ${judge['incremental_api_cost_usd']:.2f}. {judge['cost_basis']}. Token usage: {judge['usage']}.",
+                  f"{cost} {judge['cost_basis']}. Token usage: {judge['usage']}.",
                   "The template metric counts shown line pairs with identical first three content tokens, divided by all shown line pairs; lower is better.",
                   "This captures desktop llama-server inference through Android Kotlin builders, GenerationBoundary and validators. JNI execution and physical-device performance remain manual G7."])
     if nextline:

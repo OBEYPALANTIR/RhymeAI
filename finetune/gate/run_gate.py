@@ -16,6 +16,7 @@ if __package__ in (None, ""):
 from gate.build import DEV_VERSION, FROZEN_VERSION, V2_VERSION, REPO, SEEDS, audit_overlap, freeze, frozen_path, prepare_dev, read_jsonl, require_mode, write_json
 from gate.generate import freeze_prompts, generate, select_incumbent
 from gate.backend import tunnel_port
+from gate.judge import credit_budget
 
 
 def main():
@@ -32,6 +33,8 @@ def main():
     parser.add_argument("--server-url", help="Existing SSH tunnel, http://127.0.0.1:<port>; never starts a local server")
     parser.add_argument("--cloud-lane", type=Path, help="cloud_lane.py state; selects and SHA-verifies each arm on its VM")
     parser.add_argument("--dev-generation-only", action="store_true", help="DEV smoke: replay both arms offline, skip judging, no verdict")
+    parser.add_argument("--judge-credit-budget", type=credit_budget, default=0,
+                        help="Explicit ChatGPT credit budget across this run and resumes; 0 requires included allowance")
     args = parser.parse_args()
     if bool(args.server_url) != bool(args.cloud_lane):
         parser.error("--server-url and --cloud-lane are required together for verified remote inference")
@@ -106,7 +109,7 @@ def main():
             phase = "judge"
             write_json(out / "status.json", {"phase": phase, "complete": False})
             from gate.judge import judge
-            judge(out)
+            judge(out, judge_credit_budget=args.judge_credit_budget)
             judge_provenance = json.loads((out / "judge-provenance.json").read_text())
             phase = "report"
             overlap = audit_overlap(read_jsonl(out / "benchmark-songs.jsonl"), include_frozen=bool(args.dev_songs), benchmark=args.benchmark)
@@ -128,9 +131,16 @@ def main():
         except Exception as error:
             (out / "summary.json").unlink(missing_ok=True)
             write_json(out / "status.json", {"phase": phase, "complete": False, "error": str(error), "benchmark_version": version})
+            billing_note = ""
+            if args.judge_credit_budget and phase in ("judge", "report"):
+                path = out / "judge-provenance.json"
+                paid = json.loads(path.read_text()) if path.exists() else {}
+                billing_note = (f"\nJudge credits spent (recorded): {paid['credits_spent']:g}; "
+                                f"accounting complete: {paid['accounting_complete']}.\n"
+                                if "judge_credit_budget" in paid else "\nJudge credit accounting unavailable; cost is unknown.\n")
             (out / "report.md").write_text(f"# Gate incomplete\n\nBenchmark version: {version}.\n\nRunner failed during {phase}: {error}\n\n"
                                            + "\n".join(f"- G{i}: FAIL (incomplete evidence)" for i in range(1, 7))
-                                           + "\n- G7/G8: NOT RUN (manual).\n")
+                                           + "\n- G7/G8: NOT RUN (manual).\n" + billing_note)
             raise
 
 

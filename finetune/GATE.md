@@ -476,12 +476,32 @@ graded, and a dropped line is an error.
 The runner uses **gpt-6-astra**, low reasoning effort, through non-interactive
 `codex exec` using this Mac's existing ChatGPT subscription login. It refuses
 API-key login and checks native allowance and credit balance around each batch.
-An unavailable meter, exhausted allowance, changed account or credit debit stops
-the run so an unknown charge cannot be reported as zero. Incremental
+By default (`--judge-credit-budget 0`), an unavailable meter, exhausted allowance,
+changed account or credit debit stops the run. Incremental
 usage-billed API cost is **$0** when the native balance remains unchanged; the pre-existing
-subscription is not allocated to this run. Token usage is recorded. No paid
-fallback is configured; ask the coordinator before exceeding the $25 baseline
-budget.
+subscription is not allocated to this run. Token usage is recorded.
+
+An explicitly authorized positive `--judge-credit-budget <credits>` enables paid
+ChatGPT credits, including when ordinary allowance is exhausted, for frozen or
+DEV runs. The model remains gpt-6-astra; there is no model or authentication fallback.
+The budget is bound to the blind workspace and persists across resumes. Each
+batch saves native before/after balance, plan, fingerprint, signed balance delta,
+and positive debit. Failed calls are charged too; missing post-call billing,
+account changes, or balance increases stop the run for reconciliation. Existing
+completed zero-debit batches retain their original bindings.
+
+Before another batch starts, total recorded debits plus the largest observed
+batch debit must fit the budget. The first batch has no cost estimate, so use a
+small real probe before a long run: this admission check cannot guarantee a
+previously unseen batch cost. An actual overrun is recorded and stops further
+calls. Concurrent account spending during a batch is counted conservatively;
+spending between batches is outside this per-run meter and needs an account-wide
+balance check when enforcing a round-wide ceiling. Billing records and partial
+judge provenance survive a failed run. Paid provenance/reports state credits
+spent and do not assert a zero USD cost or an included-subscription cost basis.
+No credit-to-dollar conversion is assumed. `gate.recheck --judge-credit-budget`
+optionally checks saved spending against a ceiling; recheck remains offline and
+never purchases more judgments.
 
 The `nextline-v1` rubric is in `gate/judge.py`; the historical craft rubric and
 unchanged consolidation rule come from `eval/run_naturalness.py` (PR #97).
