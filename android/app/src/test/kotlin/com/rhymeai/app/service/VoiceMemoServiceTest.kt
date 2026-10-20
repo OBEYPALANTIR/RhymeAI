@@ -45,6 +45,16 @@ class VoiceMemoServiceTest {
     }
 
     @Test
+    fun parseTrashedNameSplitsTimestampAndOriginalName() {
+        assertEquals(1700L to "take.m4a", VoiceMemoService.parseTrashedName("1700__take.m4a"))
+        assertEquals(1700L to "a__b.m4a", VoiceMemoService.parseTrashedName("1700__a__b.m4a"))
+        assertEquals(null, VoiceMemoService.parseTrashedName("take.m4a"))
+        assertEquals(null, VoiceMemoService.parseTrashedName("__take.m4a"))
+        assertEquals(null, VoiceMemoService.parseTrashedName("abc__take.m4a"))
+        assertEquals(null, VoiceMemoService.parseTrashedName("1700__"))
+    }
+
+    @Test
     fun deleteMemoFileReturnsFalseWhenFileDeleteFails() {
         val dir = File(tempFolder.root, "voice-memos/proj-delete-failure")
         dir.mkdirs()

@@ -425,9 +425,22 @@ class VoiceMemoService(private val context: Context) {
         }
     }
 
+    /**
+     * Records a permanent recording deletion for Drive sync (projectId, original file
+     * name, deletedAt). Runs before the file is removed; a throw keeps the file in Trash.
+     */
+    var recordingDeletionRecorder: (suspend (String, String, Long) -> Unit)? = null
+
     /** Permanently delete a trashed recording. */
     suspend fun permanentlyDeleteTrashedMemo(trashed: TrashedVoiceMemo): Boolean {
         if (playingFile == trashed.file) stopPlayback()
+        try {
+            recordingDeletionRecorder?.invoke(trashed.projectId, trashed.originalName, System.currentTimeMillis())
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return false
+        }
         return withContext(Dispatchers.IO) {
             deleteMemoFile(trashed.file).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
         }.also { if (it) trashChangeEvents.tryEmit(Unit) }
@@ -515,11 +528,7 @@ class VoiceMemoService(private val context: Context) {
     // ---------------------------------------------------------------------------
 
     private fun trashedMemoFromFile(file: File, projectId: String): TrashedVoiceMemo? {
-        val separatorIndex = file.name.indexOf(TRASH_NAME_SEPARATOR)
-        if (separatorIndex <= 0) return null
-        val deletedAt = file.name.substring(0, separatorIndex).toLongOrNull() ?: return null
-        val originalName = file.name.substring(separatorIndex + TRASH_NAME_SEPARATOR.length)
-        if (originalName.isEmpty()) return null
+        val (deletedAt, originalName) = parseTrashedName(file.name) ?: return null
         return TrashedVoiceMemo(
             file = file,
             projectId = projectId,
@@ -569,6 +578,15 @@ class VoiceMemoService(private val context: Context) {
         private val LABEL_FORMAT = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
         /** Separates the deletion timestamp from the original name in trash filenames. */
         const val TRASH_NAME_SEPARATOR = "__"
+
+        /** Splits a trashed file name `<deletedAt>__<original>`; null when it is not one. */
+        internal fun parseTrashedName(name: String): Pair<Long, String>? {
+            val separatorIndex = name.indexOf(TRASH_NAME_SEPARATOR)
+            if (separatorIndex <= 0) return null
+            val deletedAt = name.substring(0, separatorIndex).toLongOrNull() ?: return null
+            val originalName = name.substring(separatorIndex + TRASH_NAME_SEPARATOR.length)
+            return if (originalName.isEmpty()) null else deletedAt to originalName
+        }
 
         fun formatMemoLabel(timestampMs: Long): String =
             LABEL_FORMAT.format(Date(timestampMs))

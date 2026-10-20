@@ -10,6 +10,7 @@ import com.rhymeai.app.data.model.SongWorkspace
 import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.data.recording.RecordingFiles
 import com.rhymeai.app.data.sync.snapshotLocalRecordingFiles
+import com.rhymeai.app.data.sync.recordingsAllowedForUpload
 import com.rhymeai.app.data.sync.SyncBlob
 import com.rhymeai.app.data.sync.RecordingManifestEntry
 import com.rhymeai.app.data.sync.RecordingSyncPlanner
@@ -905,6 +906,45 @@ class ProjectRepositoryTest {
             }
         } finally {
             firstScope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun permanentRecordingDeleteWritesFileTombstoneThatBlocksRestoreAndUpload() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-recording-tombstone").toFile()
+        val file = File(directory, "prefs.preferences_pb")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val recording = syncedRecording("song-1")
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = scope) { file }, testKeyStore()
+            )
+            // Invalid names fail before anything is written, so the file stays in Trash.
+            assertFailsWith<IllegalArgumentException> {
+                repository.recordRecordingDeletion("song-1", "../escape.m4a", 50L)
+            }
+            repository.recordRecordingDeletion("song-1", recording.fileName, 50L)
+
+            val base = repository.snapshotLocalSyncBase()
+            assertEquals(listOf(SyncDeletion("song-1", recording.fileName, 50L)), base.blob.deletions)
+
+            // The remote manifest still lists the recording; the merge drops it and no
+            // restore is planned, so the deleted take never comes back from Drive.
+            val merged = SyncMerger.merge(base.blob, SyncBlob(recordings = listOf(recording)))
+            assertEquals(emptyList(), merged.recordings)
+            assertEquals(emptyList(), RecordingSyncPlanner.planRestores(
+                local = emptyList(),
+                remoteManifest = merged.recordings,
+                remoteFilesByName = mapOf(recording.driveName to "drive-id")
+            ))
+            // A lingering local copy is never uploaded either.
+            assertEquals(emptyList(), recordingsAllowedForUpload(listOf(recording), base.blob.deletions, emptyList()))
+            // Another recording of the same song is untouched.
+            val other = recording.copy(fileName = "other.m4a", driveName = RecordingManifestEntry.driveNameFor("song-1", "other.m4a"))
+            assertEquals(listOf(other), SyncMerger.merge(base.blob, SyncBlob(recordings = listOf(other))).recordings)
+        } finally {
+            scope.cancel()
             directory.deleteRecursively()
         }
     }
