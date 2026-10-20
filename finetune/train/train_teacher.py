@@ -67,16 +67,29 @@ def balanced_subset(rows, per_task):
     return selected
 
 
+# The app's on-device envelope, byte for byte: GGUFModelService.gemmaPrompt
+# (gemma4 case) on iOS, mirrored by finetune/eval/prompts.GEMMA4. It has no
+# system turn and no thought channel, and the app never trims the prompt. The
+# app's llama.cpp adds one <bos>; every tokenizer call here passes
+# add_special_tokens=False, so the <bos> is written into the text instead.
+# Inlined because make_teacher_colab.py packages only this file.
+APP_USER = "<|turn>user\n"
+APP_MODEL = "<turn|>\n<|turn>model\n"
+APP_END = "<turn|>"
+
+
 def prompt_text(tokenizer, prompt):
-    return tokenizer.apply_chat_template([{"role": "user", "content": prompt}],
-                                        tokenize=False, add_generation_prompt=True,
-                                        enable_thinking=False)
+    return tokenizer.bos_token + APP_USER + prompt + APP_MODEL
 
 
 def supervised_row(tokenizer, row):
     prefix = prompt_text(tokenizer, row["prompt"])
-    answer = row["completion"] + "<turn|>\n"
+    # The app stops generating at <turn|>, so nothing after it is supervised.
+    answer = row["completion"] + APP_END
     prefix_ids = tokenizer.encode(prefix, add_special_tokens=False)
+    if prefix_ids[:1] != [tokenizer.bos_token_id] or prefix_ids.count(tokenizer.bos_token_id) != 1 \
+            or tokenizer.convert_tokens_to_ids("<|channel>") in prefix_ids:
+        raise ValueError("Prompt prefix is not <bos> + the app envelope")
     encoded = tokenizer(prefix + answer, add_special_tokens=False, truncation=False)
     ids = encoded["input_ids"]
     if ids[:len(prefix_ids)] != prefix_ids:
