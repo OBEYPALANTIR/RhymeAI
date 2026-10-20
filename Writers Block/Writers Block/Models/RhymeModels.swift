@@ -156,16 +156,6 @@ nonisolated struct RhymeContext: Sendable {
     /// enforce hook consistency on subsequent choruses. Nil when not applicable.
     let firstChorusLines: [String]?
 
-    static let empty = RhymeContext(
-        targetLine: nil,
-        currentLetter: "A",
-        stanzaLines: [],
-        currentLineIndex: 0,
-        currentSection: .unknown,
-        sectionOrdinal: 1,
-        firstChorusLines: nil
-    )
-
     /// The block's existing lines, without the row reserved for the new line.
     var existingStanzaLines: [String] {
         guard stanzaLines.indices.contains(currentLineIndex),
