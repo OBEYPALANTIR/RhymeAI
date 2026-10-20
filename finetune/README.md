@@ -25,6 +25,13 @@ Python 3 stdlib only — no pip dependencies.
   rejected-word retries, synonyms). All lyric contexts are original
   placeholder lyrics.
 - `eval/run_eval.py` — the CLI runner.
+- `eval/native-contract-v1.schema.json` + `eval/native-contract-cases-v1.json`
+  — the native-contract-v1 export shape and the frozen case manifest the
+  Android producers (`NativePromptContractExportTest`,
+  `LocalModelInstrumentedTest`) read. `eval/native_contract.py` validates the
+  exported JSON/JSONL: exact key sets, prompt hashes, sampler chain, seed and
+  evidence policy, and agreement with the manifest (and with the other
+  platform when `--require-pairs` is passed).
 
 ## Running a baseline
 
@@ -72,6 +79,10 @@ cd finetune
 python3 -m eval.prompts   # prints one fully templated prompt per task
 python3 -m eval.cases     # case counts + id uniqueness
 python3 finetune/eval/run_eval.py --help   # (from repo root)
+# validate a native export against the frozen manifest (from repo root)
+python3 finetune/eval/native_contract.py \
+  --manifest finetune/eval/native-contract-cases-v1.json \
+  android/app/build/native-contract-v1/android-input.jsonl
 ```
 
 ## ⚠️ Parity contract
