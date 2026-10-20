@@ -639,13 +639,18 @@ object ProsodyAnalyzer {
             prevVowel = isVowel
         }
 
-        if (w.endsWith("e") && !w.endsWith("le") && count > 1) count--
-        // Vowel+"les" is a silent e ("miles"); consonant+"les" is a syllabic le
-        // ("tables") and must keep its count. "les" words are excluded from the
-        // generic "es" rule so they are never decremented twice.
-        val endsInLes = w.endsWith("les")
-        if (endsInLes && w.length >= 4 && w[w.length - 4] in vowelLetters && count > 1) count--
-        if (!endsInLes && w.endsWith("es") && !w.endsWith("ses") && !w.endsWith("zes") && count > 1) count--
+        // Consonant+"le"/"les" is a spoken syllable ("table", "tables");
+        // vowel+"le"/"les" is a silent e ("mile", "miles"). Mirrors the
+        // syllabicLe predicate in iOS ProsodyAnalyzer.swift.
+        val syllabicLe = (w.endsWith("le") && w.length >= 3 && w[w.length - 3] !in vowelLetters) ||
+            (w.endsWith("les") && w.length >= 4 && w[w.length - 4] !in vowelLetters)
+        if (!syllabicLe) {
+            if (w.endsWith("e") && count > 1) {
+                count--
+            } else if (w.endsWith("es") && !w.endsWith("ses") && !w.endsWith("zes") && count > 1) {
+                count--
+            }
+        }
         if (w.endsWith("ed") && !w.endsWith("ted") && !w.endsWith("ded") && count > 1) count--
 
         return maxOf(count, 1)

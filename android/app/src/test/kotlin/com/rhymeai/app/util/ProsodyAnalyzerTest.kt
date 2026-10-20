@@ -60,6 +60,10 @@ class ProsodyAnalyzerTest {
         assertEquals(3, ProsodyAnalyzer.analyzeWord("examples", dictionary).syllableCount)
         assertEquals(1, ProsodyAnalyzer.analyzeWord("miles", dictionary).syllableCount)
         assertEquals(1, ProsodyAnalyzer.analyzeWord("makes", dictionary).syllableCount)
+        // Singular forms: "table" keeps its syllabic le, "mile"/"smile" drop the silent e.
+        assertEquals(2, ProsodyAnalyzer.analyzeWord("table", dictionary).syllableCount)
+        assertEquals(1, ProsodyAnalyzer.analyzeWord("mile", dictionary).syllableCount)
+        assertEquals(1, ProsodyAnalyzer.analyzeWord("smile", dictionary).syllableCount)
     }
 
     @Test
