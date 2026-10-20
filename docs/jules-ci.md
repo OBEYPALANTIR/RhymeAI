@@ -1,8 +1,8 @@
 # Jules CI repair
 
 The `Jules CI repair` workflow is disabled until repository variable
-`JULES_CI_ENABLED` is exactly `true`. It watches Android, iOS, Android APK,
-and Build Android APK failures. Only a current same-repository branch SHA,
+`JULES_CI_ENABLED` is exactly `true`. It watches Android, iOS, and Android APK
+failures. Only a current same-repository branch SHA,
 write-authorized original and rerun actors, and a started failing build/test
 step qualify. Forks, stale branches, Jules repairs, setup failures, and runs
 without failed steps are skipped. No application builds or devices are needed

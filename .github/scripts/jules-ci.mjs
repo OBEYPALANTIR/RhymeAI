@@ -5,7 +5,6 @@ export const workflows = new Map([
   ['Android', '.github/workflows/android.yml'],
   ['iOS', '.github/workflows/ios.yml'],
   ['Android APK', '.github/workflows/android-apk.yml'],
-  ['Build Android APK', '.github/workflows/build-apk.yml'],
 ]);
 export const markerName = 'Jules CI submission attempt';
 const isJules = value => /jules/i.test(value ?? '');
