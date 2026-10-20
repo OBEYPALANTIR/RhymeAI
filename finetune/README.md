@@ -79,11 +79,70 @@ cd finetune
 python3 -m eval.prompts   # prints one fully templated prompt per task
 python3 -m eval.cases     # case counts + id uniqueness
 python3 finetune/eval/run_eval.py --help   # (from repo root)
-# validate a native export against the frozen manifest (from repo root)
+```
+
+### Validating an Android native-contract export
+
+`eval/native_contract.py` accepts only records produced by the instrumented
+stage (`runtime.evidenceKind = "contractExport"`, a real RFC 3339
+`capturedAt`, the manifest's `modelSha256`, a producer commit that descends
+from the manifest's `baseSourceSha`). The JVM stage alone writes
+`evidenceKind = "contractInput"` with a current-catalog model hash and is
+rejected by design; it is the input to the instrumented stage, not evidence.
+
+Prerequisites (all existing tooling; nothing here downloads a model):
+
+- A GGUF whose SHA-256 equals `modelSha256` in
+  `eval/native-contract-cases-v1.json` (`059e7328…`, the E2B build the catalog
+  shipped before commit `2c67e15` moved E2B to v2; `GemmaDownloadsTest` keeps it
+  as `previousSha`). The current catalog E2B (`GemmaDownloads.kt`,
+  `902e5d83…`) does **not** match; an export from it fails
+  `model SHA differs from manifest` until the manifest is re-frozen, which is
+  an owner decision. Check the file first:
+  `shasum -a 256 /path/to/model.gguf`.
+- An empty, booted, disposable emulator in `ANDROID_SERIAL` (see the
+  local-model smoke in the root `README.md`); the debug app and its
+  `androidTest` APK installed on it, as `scripts/android-local-model-smoke.sh`
+  does. The export records the hash you pass in step 1, not the pushed file's
+  hash, so the `shasum` check above is what binds them.
+- The validator runs `git` against this checkout, so run step 1 and step 3 in
+  the same checkout and do not amend or rebase its `HEAD` in between.
+
+```sh
+# 1. JVM stage: render the 12 manifest cases through the production prompt
+#    builders (android/app/build/native-contract-v1/android-input.jsonl).
+cd android
+RHYME_NATIVE_MODEL_SHA256=059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626 \
+  ./gradlew :app:testDebugUnitTest \
+  --tests 'com.rhymeai.app.service.NativePromptContractExportTest.exportsSharedManifestThroughProductionBuilders'
+
+# 2. Instrumented stage: load the GGUF, format every case with the model's own
+#    chat template, stamp evidenceKind=contractExport and the capture time.
+adb -s "$ANDROID_SERIAL" push /path/to/model.gguf /data/local/tmp/rhymeai-model.gguf
+adb -s "$ANDROID_SERIAL" push app/build/native-contract-v1/android-input.jsonl /data/local/tmp/android-input.jsonl
+adb -s "$ANDROID_SERIAL" shell chmod 644 /data/local/tmp/rhymeai-model.gguf /data/local/tmp/android-input.jsonl
+adb -s "$ANDROID_SERIAL" shell am instrument -w \
+  -e class 'com.rhymeai.app.LocalModelInstrumentedTest#localGgufModelLoadsAndGeneratesText' \
+  -e localModelPath /data/local/tmp/rhymeai-model.gguf \
+  -e nativeContractInputPath /data/local/tmp/android-input.jsonl \
+  -e nativeContractCapturedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -e nativeContractTarget "$ANDROID_SERIAL" \
+  com.rhymeai.app.test/androidx.test.runner.AndroidJUnitRunner
+# Output defaults to the app cache (nativeContractOutputPath overrides it):
+adb -s "$ANDROID_SERIAL" exec-out run-as com.rhymeai.app cat cache/android-native-contract.jsonl \
+  > app/build/native-contract-v1/android-native-contract.jsonl
+cd ..
+
+# 3. Validate against the frozen manifest (from repo root).
 python3 finetune/eval/native_contract.py \
   --manifest finetune/eval/native-contract-cases-v1.json \
-  android/app/build/native-contract-v1/android-input.jsonl
+  android/app/build/native-contract-v1/android-native-contract.jsonl
 ```
+
+`--require-pairs` additionally demands a matching iOS export per case; no iOS
+producer exists yet, so leave it off for Android-only runs. Without
+`nativeContractCapturedAt` the export carries `capturedAt = "not-recorded"`
+and is rejected.
 
 ## ⚠️ Parity contract
 
