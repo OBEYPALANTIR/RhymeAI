@@ -154,6 +154,17 @@ struct RewriteRippleMotionTests {
     }
 
     @Test @MainActor
+    func rewriteHighlightRedrawsWhenTheAppearanceChanges() {
+        let parent = LyricsTextView(text: .constant("line"), onCursorChange: { _ in })
+        let coordinator = parent.makeCoordinator()
+        let highlight = LyricsRewriteHighlight(range: NSRange(location: 0, length: 4), isLoading: true, isError: false, isInsertion: false)
+
+        #expect(coordinator.shouldUpdateRewriteHighlight(textChanged: false, highlight: highlight, appearance: .ink))
+        #expect(!coordinator.shouldUpdateRewriteHighlight(textChanged: false, highlight: highlight, appearance: .ink))
+        #expect(coordinator.shouldUpdateRewriteHighlight(textChanged: false, highlight: highlight, appearance: .graphite))
+    }
+
+    @Test @MainActor
     func malformedSelectionRangeDoesNotOverflow() {
         let textStorage = NSTextStorage(string: "short")
         let layoutManager = NSLayoutManager()
