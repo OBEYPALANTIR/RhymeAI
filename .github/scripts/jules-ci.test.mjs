@@ -44,6 +44,7 @@ test('read-only preflight needs no Jules credentials and makes zero writes', asy
 for (const [scenario, change, reason] of [
   ['success', s => s.run.conclusion = 'success', 'not a completed failure'],
   ['unallowlisted', s => s.run.path = '.github/workflows/evil.yml', 'workflow not allowlisted'],
+  ['stale registered workflow', s => { s.run.name = 'Build Android APK'; s.run.path = '.github/workflows/build-apk.yml'; }, 'workflow not allowlisted'],
   ['fork', s => s.run.head_repository.full_name = 'outsider/repo', 'foreign repository'],
   ['stale SHA', s => s.moved = true, 'branch moved since failure'],
   ['no started step', s => s.jobs[0].steps = [], 'infrastructure failure or no started failing step'],

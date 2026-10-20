@@ -6,7 +6,7 @@ on:
       - '.github/scripts/jules-ci*'
       - '.github/workflows/jules-ci.yml'
   workflow_run:
-    workflows: [Android, iOS, Android APK, Build Android APK]
+    workflows: [Android, iOS, Android APK]
     types: [completed]
   workflow_dispatch:
     inputs:
