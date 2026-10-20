@@ -13,8 +13,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 
 /**
- * Returned suggestion lines on the streaming and batch paths admit only the
- * requested relation, as iOS `emitLines` and `RhymeLineFilter.rank` do.
+ * Returned suggestion lines on the streaming path admit only the requested
+ * relation, as iOS `emitLines` does.
  */
 class SuggestionRhymeFilterTest {
     private val dictionary = PronunciationDictionary.fromLines(
@@ -89,24 +89,5 @@ class SuggestionRhymeFilterTest {
 
         assertEquals(raw, streamed(raw, constraint = null).map { it.text })
         assertEquals(listOf(0, 0, 0), streamed(raw, constraint = null).map { it.rhymeTier })
-    }
-
-    @Test
-    fun batchSlantRequestKeepsSlantLinesBehindSixPerfectAndNearOnes() {
-        val raw = (perfectAndNear + listOf("Cold as stone", "Everything burned red")).joinToString("\n")
-        val lines = service.parseSuggestionList(raw, constraint(RhymeType.SLANT))
-
-        assertEquals(listOf("Cold as stone", "Everything burned red"), lines.map { it.text })
-        assertEquals(listOf(3, 3), lines.map { it.rhymeTier })
-    }
-
-    @Test
-    fun batchNearRequestKeepsOnlyNearLines() {
-        val raw = listOf("The window glowed", "Cold as stone", "Words I never wrote", "Walking through the night").joinToString("\n")
-
-        assertEquals(listOf("Words I never wrote"), service.parseSuggestionList(raw, constraint(RhymeType.NEAR)).map { it.text })
-        assertFailsWith<AIService.NoMatchingRhymesException> {
-            service.parseSuggestionList("The window glowed\nWalking through the night", constraint(RhymeType.NEAR))
-        }
     }
 }

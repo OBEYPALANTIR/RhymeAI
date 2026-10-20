@@ -541,6 +541,33 @@ WORD_BANK = {
     "restless": ["sleepless", "uneasy", "wired"],
     "flames": ["fire", "blazes", "embers"],
     "static": ["noise", "crackle", "buzz"],
+    # v2 expansion: widens the single-word-rewrite/synonym sample space (the
+    # v1 bank of 25 saturated the generator's dedup during top-up runs).
+    "light": ["glow", "gleam", "shine"],
+    "slow": ["lazy", "gentle", "creeping"],
+    "water": ["stream", "tide", "rain"],
+    "open": ["unlocked", "ajar", "bare"],
+    "night": ["dark", "evening", "midnight"],
+    "door": ["doorway", "gate", "entrance"],
+    "glass": ["pane", "crystal", "mirror"],
+    "hold": ["grip", "clutch", "keep"],
+    "rain": ["drizzle", "downpour", "shower"],
+    "window": ["pane", "casement", "glass"],
+    "morning": ["dawn", "daybreak", "sunrise"],
+    "sound": ["noise", "echo", "tone"],
+    "goodbye": ["farewell", "parting", "adieu"],
+    "heart": ["soul", "core", "chest"],
+    "mirror": ["glass", "reflection", "image"],
+    "story": ["tale", "legend", "history"],
+    "ride": ["drive", "cruise", "journey"],
+    "dark": ["black", "shadowed", "dim"],
+    "city": ["town", "streets", "metropolis"],
+    "home": ["house", "haven", "hearth"],
+    "hand": ["palm", "grip", "fist"],
+    "love": ["devotion", "affection", "passion"],
+    "watch": ["stare", "gaze", "guard"],
+    "turn": ["spin", "twist", "pivot"],
+    "keep": ["hold", "guard", "save"],
 }
 
 

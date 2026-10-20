@@ -3,8 +3,9 @@
 # PARITY
 Ports of the Android sources (do not let these drift):
   - android/.../util/ProsodyAnalyzer.kt   (normalizeWord, rhymeKeys, findRhymes,
-                                            syllable counting, PronunciationDictionary)
-  - android/.../util/RhymeConstraint.kt   (lineEndWord, candidateEndWords, rhymeTier)
+                                            rhymeRelation / tailRelation, syllable
+                                            counting, PronunciationDictionary)
+  - android/.../util/RhymeConstraint.kt   (lineEndWord, candidateEndWords, levelEndWords, rhymeTier)
   - android/.../util/WordFrequency.kt     (frequency-rank re-sort of rhyme pools)
   - android/.../util/SyllableCounter.kt   (dictionary-first with heuristic fallback)
   - android/.../service/AIService.kt      (output-cleaning regexes used as validators)
@@ -239,63 +240,278 @@ def rhyme_keys(word, max_depth=2, dictionary=None):
 # ---------------------------------------------------------------------------
 
 class RhymeMatches:
-    def __init__(self, perfect, near, multi):
+    """Exclusive pools: a word that is perfect under any pronunciation pair is
+    in neither near nor slant; near and slant never overlap."""
+
+    def __init__(self, perfect, near, multi, slant=()):
         self.perfect = perfect
         self.near = near
         self.multi = multi
+        self.slant = list(slant)
 
     @property
     def is_empty(self):
-        return not (self.perfect or self.near or self.multi)
+        return not (self.perfect or self.near or self.multi or self.slant)
 
 
 EMPTY_MATCHES = RhymeMatches([], [], [])
 
+# ProsodyAnalyzer.functionWords: stopwords plus grammatical words, ranked after
+# content words in near and slant lists.
+FUNCTION_WORDS = STOPWORDS | set("""
+me mine myself your yours yourself yourselves him himself hers herself itself us ours ourselves theirs themselves
+who whom whose which what whatever whoever whichever when whenever where wherever why how however whether
+while whereas though although because unless then than yet nor there here some any each every either neither
+both all such more most much many few less least into onto from upon unto via per among amongst toward
+towards during until till since despite except against between through within without across am been being
+having will would shall should can could may might must ought just very too also really quite rather else
+i'm you're he's she's it's we're they're i've you've we've they've i'd you'd he'd she'd we'd they'd i'll
+you'll he'll she'll we'll they'll isn't aren't wasn't weren't don't doesn't didn't won't wouldn't can't couldn't
+shouldn't that's there's what's who's let's ain't""".split())
+
+_INFLECTION_SUFFIXES = {"s", "es", "'s", "ed", "ing"}
+
+# Same family: plosives, fricatives (with affricates), nasals.
+_CONSONANT_FAMILIES = [
+    {"P", "B", "T", "D", "K", "G"},
+    {"F", "V", "TH", "DH", "S", "Z", "SH", "ZH", "CH", "JH"},
+    {"M", "N", "NG"},
+]
+
+# TailRelation.rank: lower is better.
+_RELATION_RANK = {"PERFECT": 0, "NEAR": 10, "SLANT": 20}
+
+
+def is_vowel_phone(phone):
+    return phone in VOWELS
+
+
+def is_function_word(word):
+    return word in FUNCTION_WORDS
+
+
+def is_inflection(word, base):
+    """ProsodyAnalyzer.isInflection: `word` is `base` plus an inflection."""
+    if not base or len(word) <= len(base):
+        return False
+    stems = [base, base[:-1]] if base.endswith("e") else [base]
+    return any(word.startswith(s) and word[len(s):] in _INFLECTION_SUFFIXES for s in stems)
+
+
+def is_spelled_as_word(word):
+    """Rejects abbreviations spelled without a vowel letter ("mr", "st")."""
+    return any(ch in "aeiouy" for ch in word)
+
+
+def rhyme_tail_for_phones(phones):
+    """ProsodyAnalyzer.rhymeTailForPhones: (vowel, coda) from the last stressed
+    vowel (or the last vowel when none is stressed); stress digits removed."""
+    vowel_indexes = [i for i, p in enumerate(phones) if base_phone(p) in VOWELS]
+    if not vowel_indexes:
+        return None
+    stressed = [i for i in vowel_indexes if (stress_for_phone(phones[i]) or 0) > 0]
+    index = (stressed or vowel_indexes)[-1]
+    return (base_phone(phones[index]), tuple(base_phone(p) for p in phones[index + 1:]))
+
+
+def _close_consonant(a, b):
+    return any(a in family and b in family for family in _CONSONANT_FAMILIES)
+
+
+def _close_coda_edit(lhs, rhs):
+    """One same-family consonant substitution, or one consonant added or dropped."""
+    if len(lhs) == len(rhs):
+        differences = [(a, b) for a, b in zip(lhs, rhs) if a != b]
+        if len(differences) != 1:
+            return False
+        a, b = differences[0]
+        return not is_vowel_phone(a) and not is_vowel_phone(b) and _close_consonant(a, b)
+    if abs(len(lhs) - len(rhs)) != 1:
+        return False
+    shorter, longer = (lhs, rhs) if len(lhs) < len(rhs) else (rhs, lhs)
+    return any(
+        not is_vowel_phone(longer[i]) and longer[:i] + longer[i + 1:] == shorter
+        for i in range(len(longer))
+    )
+
+
+def _adds_unstressed_syllable(lhs, rhs):
+    """The longer coda is the shorter plus exactly one more (unstressed) syllable."""
+    if len(lhs) == len(rhs):
+        return False
+    shorter, longer = (lhs, rhs) if len(lhs) < len(rhs) else (rhs, lhs)
+    if longer[:len(shorter)] != shorter:
+        return False
+    return sum(1 for p in longer[len(shorter):] if is_vowel_phone(p)) == 1
+
+
+def _is_stress_shift(lhs, rhs):
+    """One word's stressed tail is the other's unstressed ending ("free"/"happy")."""
+    lhs_full = (lhs[0],) + lhs[1]
+    rhs_full = (rhs[0],) + rhs[1]
+    return ((len(rhs[1]) >= len(lhs_full) and rhs[1][-len(lhs_full):] == lhs_full)
+            or (len(lhs[1]) >= len(rhs_full) and lhs[1][-len(rhs_full):] == rhs_full))
+
+
+def tail_relation(target, candidate):
+    """ProsodyAnalyzer.tailRelation on (vowel, coda) tails: ("NEAR", 1|2),
+    ("SLANT", 1) or None. Near: same stressed vowel and a close coda edit, an
+    extra unstressed syllable, or shifted stress. Slant: consonance (same coda,
+    different vowel) or assonance (same vowel and syllable shape). A vowel
+    before R is its own vowel."""
+    if target == candidate:
+        return None
+    if target[0] == candidate[0]:
+        target_r = bool(target[1]) and target[1][0] == "R"
+        candidate_r = bool(candidate[1]) and candidate[1][0] == "R"
+        if target_r == candidate_r:
+            target_rest = target[1][1:] if target_r else target[1]
+            candidate_rest = candidate[1][1:] if candidate_r else candidate[1]
+            if _close_coda_edit(target_rest, candidate_rest):
+                return ("NEAR", 1)
+            if _adds_unstressed_syllable(target_rest, candidate_rest):
+                return ("NEAR", 2)
+            if _is_stress_shift(target, candidate):
+                return ("NEAR", 2)
+            if ([p for p in target_rest if is_vowel_phone(p)]
+                    == [p for p in candidate_rest if is_vowel_phone(p)]):
+                return ("SLANT", 1)
+        return ("NEAR", 2) if _is_stress_shift(target, candidate) else None
+    if _is_stress_shift(target, candidate):
+        return ("NEAR", 2)
+    if target[1] and target[1] == candidate[1]:
+        return ("SLANT", 1)
+    return None
+
+
+def _rhyme_profile(phones):
+    """ProsodyAnalyzer.RhymeProfile for one pronunciation: (key, multi_key, tail)."""
+    keys = rhyme_keys_for_phones(phones, 2)
+    tail = rhyme_tail_for_phones(phones)
+    if not keys or tail is None:
+        return None
+    return (keys[0], keys[1] if len(keys) > 1 else None, tail)
+
+
+def _profiles(variants):
+    return [p for p in (_rhyme_profile(phones) for phones in variants) if p is not None]
+
+
+def best_relation(target_profiles, candidate_profiles):
+    """ProsodyAnalyzer.bestRelation: the closest relation over every target x
+    candidate pronunciation, Perfect > Near > Slant, as (type, tier) or None."""
+    best = None
+    for t_key, t_multi, t_tail in target_profiles:
+        for c_key, c_multi, c_tail in candidate_profiles:
+            if c_key == t_key or (t_multi is not None and c_multi == t_multi):
+                return ("PERFECT", 0)
+            relation = tail_relation(t_tail, c_tail)
+            if relation is None:
+                continue
+            if best is None or _RELATION_RANK[relation[0]] + relation[1] < _RELATION_RANK[best[0]] + best[1]:
+                best = relation
+    return best
+
+
+def rhyme_relation(candidate_word, target_word, dictionary=None):
+    """ProsodyAnalyzer.rhymeRelation: 'PERFECT' | 'NEAR' | 'SLANT' | None over
+    every pronunciation of both words; the same word is None."""
+    dictionary = dictionary or shared_dictionary()
+    candidate = normalize_word(candidate_word)
+    target = normalize_word(target_word)
+    if candidate == target:
+        return None
+    relation = best_relation(
+        _profiles(dictionary.pronunciations(target)),
+        _profiles(dictionary.pronunciations(candidate)),
+    )
+    return relation[0] if relation else None
+
+
 _index_built_for = None
 _perfect_by_key = {}
 _multi_by_key = {}
-_near_by_vowel = {}
+_profiles_by_word = {}
+_words_by_vowel = {}
+_words_by_coda = {}
+_words_by_weak_tail = {}
 
 
 def _ensure_index(dictionary):
-    global _index_built_for, _perfect_by_key, _multi_by_key, _near_by_vowel
+    """ProsodyAnalyzer.ensureIndex. Stopwords are left out of the perfect and
+    multi pools but keep their tails, as on Android."""
+    global _index_built_for, _perfect_by_key, _multi_by_key, _profiles_by_word
+    global _words_by_vowel, _words_by_coda, _words_by_weak_tail
     if _index_built_for is dictionary:
         return
     perfect_build = {}
     multi_build = {}
-    near_build = {}
+    profiles_build = {}
+    vowel_build = {}
+    coda_build = {}
+    weak_build = {}
     for word, variants in dictionary.entries.items():
-        if len(word) < 2 or word in STOPWORDS:
+        if len(word) < 2:
             continue
+        is_stopword = word in STOPWORDS
         seen_k0 = set()
         seen_k1 = set()
-        seen_vowel = set()
+        profiles = []
         for phones in variants:
             ks = rhyme_keys_for_phones(phones, 2)
             if not ks:
                 continue
             k0 = ks[0]
+            tail = rhyme_tail_for_phones(phones)
+            if tail is not None:
+                profiles.append((k0, ks[1] if len(ks) > 1 else None, tail))
+            if is_stopword:
+                continue
             if k0 not in seen_k0:
                 seen_k0.add(k0)
                 perfect_build.setdefault(k0, []).append(word)
-            v0 = k0.split(" ")[0] if k0 else ""
-            if v0 and v0 not in seen_vowel:
-                seen_vowel.add(v0)
-                near_build.setdefault(v0, []).append(word)
             if len(ks) < 2:
                 continue
             k1 = ks[1]
             if k1 not in seen_k1:
                 seen_k1.add(k1)
                 multi_build.setdefault(k1, []).append(word)
+        profiles_build[word] = profiles
+        seen_tails = set()
+        for _, _, tail in profiles:
+            if tail in seen_tails:
+                continue
+            seen_tails.add(tail)
+            vowel, coda = tail
+            vowel_build.setdefault(vowel, []).append(word)
+            if coda:
+                coda_build.setdefault(coda, []).append(word)
+            # Unstressed syllables after the stress ("happy" ends in an
+            # unstressed IY), for stress-shifted near rhymes.
+            for i, phone in enumerate(coda):
+                if is_vowel_phone(phone):
+                    weak_build.setdefault(coda[i:], []).append(word)
     _perfect_by_key = perfect_build
     _multi_by_key = multi_build
-    _near_by_vowel = near_build
+    _profiles_by_word = profiles_build
+    _words_by_vowel = vowel_build
+    _words_by_coda = coda_build
+    _words_by_weak_tail = weak_build
     _index_built_for = dictionary
+
+
+def _songwriter_order(relations, word_frequency):
+    """Content words before function words, closer relations first, then
+    common before rare, then spelling so ties are identical on every platform."""
+    return sorted(
+        relations,
+        key=lambda w: (1 if is_function_word(w) else 0, relations[w][1], word_frequency.rank_of(w), w),
+    )
 
 
 def find_rhymes(word, perfect_limit=60, near_limit=30, multi_limit=30,
                 dictionary=None, word_frequency=None):
+    """ProsodyAnalyzer.findRhymes: exclusive perfect / multi / near / slant pools."""
     dictionary = dictionary or shared_dictionary()
     word_frequency = word_frequency or shared_frequency()
     normalized = normalize_word(word)
@@ -309,31 +525,56 @@ def find_rhymes(word, perfect_limit=60, near_limit=30, multi_limit=30,
         return EMPTY_MATCHES
     k0 = keys[0]
     k1 = keys[1] if len(keys) > 1 else None
-    vowel0 = k0.split(" ")[0] if k0 else ""
-    if not vowel0.strip():
-        return EMPTY_MATCHES
 
     _ensure_index(dictionary)
     perfect_all = [w for w in _perfect_by_key.get(k0, []) if w != normalized]
+    perfect_set = set(perfect_all)
     if k1 is not None:
-        perfect_set_pre = set(perfect_all)
         multi_all = [
             w for w in _multi_by_key.get(k1, [])
-            if w != normalized and w not in perfect_set_pre
+            if w != normalized and w not in perfect_set
         ]
     else:
         multi_all = []
-    perfect_set = set(perfect_all)
-    multi_set = set(multi_all)
-    near_all = [
-        w for w in _near_by_vowel.get(vowel0, [])
-        if w != normalized and w not in perfect_set and w not in multi_set
-    ]
+    exclude = perfect_set | set(multi_all)
+
+    # Every pronunciation of the target, so "abuse" (/s/ and /z/) is
+    # classified the same way rhyme_relation verifies a returned line.
+    variants = dictionary.pronunciations(normalized)
+    target_profiles = _profiles(variants)
+    near = []
+    slant = []
+    if target_profiles and rhyme_tail_for_phones(variants[0]) is not None:
+        # Every word that can stand in a near or slant relation to any target
+        # pronunciation: the same stressed vowel, the same coda, or a
+        # stress-shifted tail.
+        pool = set()
+        for vowel, coda in {p[2] for p in target_profiles}:
+            pool.update(_words_by_vowel.get(vowel, ()))
+            if coda:
+                pool.update(_words_by_coda.get(coda, ()))
+            pool.update(_words_by_weak_tail.get((vowel,) + coda, ()))
+            for other in {p for p in coda if is_vowel_phone(p)}:
+                if other != vowel:
+                    pool.update(_words_by_vowel.get(other, ()))
+        # Each word takes its closest relation over every pronunciation pair;
+        # a word that is perfect under any pairing is in neither list.
+        best = {}
+        for candidate in pool:
+            if (candidate == normalized or candidate in exclude
+                    or is_inflection(candidate, normalized) or not is_spelled_as_word(candidate)):
+                continue
+            relation = best_relation(target_profiles, _profiles_by_word.get(candidate, []))
+            if relation is not None and relation[0] != "PERFECT":
+                best[candidate] = relation
+        near = _songwriter_order({w: r for w, r in best.items() if r[0] == "NEAR"}, word_frequency)
+        slant = _songwriter_order({w: r for w, r in best.items() if r[0] == "SLANT"}, word_frequency)
 
     return RhymeMatches(
         perfect=word_frequency.sort_by_frequency(perfect_all)[:perfect_limit],
-        near=word_frequency.sort_by_frequency(near_all)[:near_limit],
+        near=near[:near_limit],
         multi=word_frequency.sort_by_frequency(multi_all)[:multi_limit],
+        slant=slant[:near_limit],
     )
 
 
@@ -345,16 +586,43 @@ def line_end_word(line):
     return normalize_word(matches[-1])
 
 
-def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None):
-    """RhymeConstraint.candidateEndWords. rhyme_type: 'PERFECT'|'NEAR'|'SLANT'."""
+# RhymeConstraint.CANDIDATE_LIMIT: words the prompt lists as allowed endings.
+CANDIDATE_LIMIT = 12
+
+# RhymeConstraint.SIMPLE_MIN_MONOSYLLABLES: a Simple list keeps only
+# one-syllable words unless fewer than this many exist, in which case the
+# remaining words follow in their original order (some anchors, "arrival"
+# for one, have no one-syllable rhyme at all).
+SIMPLE_MIN_MONOSYLLABLES = 6
+
+
+def candidate_end_words(target_word, rhyme_type, limit=CANDIDATE_LIMIT, dictionary=None,
+                        complexity="MODERATE"):
+    """RhymeConstraint.candidateEndWords. rhyme_type: 'PERFECT'|'NEAR'|'SLANT';
+    complexity: 'SIMPLE'|'MODERATE'|'COMPLEX' (RhymeComplexity name)."""
+    dictionary = dictionary or shared_dictionary()
+    ordered = ordered_candidates(target_word, rhyme_type, dictionary=dictionary)
+    return level_end_words(ordered, complexity, limit, dictionary=dictionary)
+
+
+def ordered_candidates(target_word, rhyme_type, dictionary=None):
+    """RhymeConstraint.orderedCandidates: every word in the requested relation to
+    the target, ranked and deduplicated, before any level ordering or limit."""
     dictionary = dictionary or shared_dictionary()
     matches = find_rhymes(target_word, dictionary=dictionary)
     if matches.is_empty:
         return []
+    # Each mode returns only its named phonetic relation, as in the apps. Perfect
+    # keeps the exact and multisyllabic pools; Near and Slant are exclusive
+    # and already ranked by find_rhymes.
     if rhyme_type == "PERFECT":
         pools = [matches.perfect, matches.multi]
-    else:  # NEAR, SLANT
-        pools = [matches.perfect, matches.multi, matches.near]
+    elif rhyme_type == "NEAR":
+        pools = [matches.near]
+    elif rhyme_type == "SLANT":
+        pools = [matches.slant]
+    else:
+        raise ValueError("unknown rhyme type %r" % (rhyme_type,))
     normalized_target = normalize_word(target_word)
     ordered = []
     seen = set()
@@ -363,19 +631,44 @@ def candidate_end_words(target_word, rhyme_type, limit=12, dictionary=None):
             if word != normalized_target and word not in seen:
                 seen.add(word)
                 ordered.append(word)
-    return ordered[:limit]
+    return ordered
 
 
-def rhyme_tier(line, matches):
-    """RhymeConstraint.rhymeTier: 2 = perfect/multi, 1 = near, 0 = miss."""
+def level_end_words(ordered, complexity, limit, dictionary=None):
+    """RhymeConstraint.levelEndWords: the complexity level's view of a
+    relation's ranked candidates, cut to `limit`.
+
+    COMPLEX: words of two or more syllables first, then the rest; each group
+    keeps its frequency order (a stable partition). SIMPLE: one-syllable words
+    only, unless fewer than SIMPLE_MIN_MONOSYLLABLES exist, when the remaining
+    words follow in their original order. MODERATE: unchanged.
+    Syllables come from syllable_count_word, the same dictionary-first count
+    the apps' ProsodyAnalyzer uses.
+    """
+    if complexity == "MODERATE":
+        return list(ordered[:limit])
+    syllables = {w: syllable_count_word(w, dictionary=dictionary) for w in ordered}
+    if complexity == "COMPLEX":
+        multi = [w for w in ordered if syllables[w] >= 2]
+        rest = [w for w in ordered if syllables[w] < 2]
+        return (multi + rest)[:limit]
+    if complexity == "SIMPLE":
+        mono = [w for w in ordered if syllables[w] == 1]
+        if len(mono) >= SIMPLE_MIN_MONOSYLLABLES:
+            return mono[:limit]
+        rest = [w for w in ordered if syllables[w] != 1]
+        return (mono + rest)[:limit]
+    raise ValueError("unknown complexity %r" % (complexity,))
+
+
+def rhyme_tier(line, target_word, dictionary=None):
+    """RhymeConstraint.rhymeTier: 3 = slant, 2 = perfect/multi, 1 = near,
+    0 = miss, classified by rhyme_relation over every pronunciation."""
     end_word = line_end_word(line)
     if not end_word:
         return 0
-    if end_word in matches.perfect or end_word in matches.multi:
-        return 2
-    if end_word in matches.near:
-        return 1
-    return 0
+    return {"PERFECT": 2, "NEAR": 1, "SLANT": 3}.get(
+        rhyme_relation(end_word, target_word, dictionary=dictionary), 0)
 
 
 def is_perfect_rhyme(word_a, word_b, dictionary=None):

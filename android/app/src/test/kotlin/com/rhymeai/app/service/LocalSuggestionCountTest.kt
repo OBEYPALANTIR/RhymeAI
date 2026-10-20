@@ -18,7 +18,6 @@ import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class LocalSuggestionCountTest {
@@ -102,7 +101,7 @@ class LocalSuggestionCountTest {
         val displayed = mutableListOf<String>()
         val error = runCatching {
             service.validatedLocalSuggestionStream(
-                flowOf(*chunks.toTypedArray()), "Existing lyric", constraint.takeIf { constrained },
+                { flowOf(*chunks.toTypedArray()) }, "Existing lyric", constraint.takeIf { constrained },
                 onDecision = { decisions += it }
             ).collect { displayed += it.text }
         }.exceptionOrNull()
@@ -111,45 +110,26 @@ class LocalSuggestionCountTest {
         }
     }
 
-    private fun batch(name: String, raw: String, constrained: Boolean = false): Capture {
-        val decisions = mutableListOf<AIService.LocalSuggestionDecision>()
-        var displayed = emptyList<String>()
-        val error = runCatching {
-            displayed = service.validateLocalSuggestionResponse(
-                raw, "Existing lyric", constraint.takeIf { constrained }, onDecision = { decisions += it }
-            )
-        }.exceptionOrNull()
-        return Capture(decisions, displayed, error).also { persist(name, raw, listOf(raw), it, constrained) }
-    }
-
     @Test
-    fun sixValidLinesPassAndExcessValidLinesFailBeforeSuccess() = runBlocking {
+    fun sixValidLinesPassAndExcessValidLinesAreCappedAtSix() = runBlocking {
         val allRuns = mutableListOf<Pair<Int, Capture>>()
         for (constrained in listOf(false, true)) {
             for (count in listOf(6, 8)) {
                 val raw = lines.take(count).joinToString("\n")
-                val runs = listOf(
-                    stream("stream-$constrained-$count", listOf(raw), constrained),
-                    batch("batch-$constrained-$count", raw, constrained),
-                    batch("json-$constrained-$count", JsonArray(lines.take(count).map(::JsonPrimitive)).toString(), constrained)
-                )
-                allRuns += runs.map { count to it }
+                allRuns += count to stream("stream-$constrained-$count", listOf(raw), constrained)
             }
         }
         for ((count, capture) in allRuns) {
-            assertEquals(count, capture.decisions.count { it.disposition == "accepted" })
-            if (count == 6) {
-                assertEquals(null, capture.error)
-                assertEquals(6, capture.displayed.size)
-            } else {
-                assertNotNull(capture.error)
-                assertTrue(capture.displayed.size <= 6)
-            }
+            // The stream stops accepting at its limit.
+            assertTrue(capture.decisions.count { it.disposition == "accepted" } in 6..count)
+            assertEquals(null, capture.error)
+            assertEquals(6, capture.displayed.size)
+            assertTrue(lines.containsAll(capture.displayed))
         }
     }
 
     @Test
-    fun chunkBoundariesDuplicatesAndRejectedLinesDoNotChangeExactCount() = runBlocking {
+    fun chunkBoundariesDuplicatesAndRejectedLinesDoNotChangeDisplayedLines() = runBlocking {
         val raw = (listOf("Existing lyric", lines[0], lines[0], "", "Here are your suggestions:") + lines.drop(1)).joinToString("\n")
         // Keep all outcomes before asserting so a baseline failure cannot hide another partition.
         val runs = listOf(
@@ -158,8 +138,8 @@ class LocalSuggestionCountTest {
             stream("newline-chunks", raw.split("\n").map { "$it\n" })
         )
         for (capture in runs) {
-            assertNotNull(capture.error)
-            assertEquals(8, capture.decisions.count { it.disposition == "accepted" })
+            assertEquals(null, capture.error)
+            assertEquals(lines.take(6), capture.displayed)
             assertTrue(capture.decisions.any { it.disposition == "duplicate" })
             assertTrue(capture.decisions.any { it.disposition == "existing_lyric" })
             assertTrue(capture.decisions.any { it.disposition == "format" })
@@ -177,7 +157,7 @@ class LocalSuggestionCountTest {
         val decisions = mutableListOf<AIService.LocalSuggestionDecision>()
         val displayed = mutableListOf<String>()
         val error = runCatching {
-            service.validatedLocalSuggestionStream(flow {
+            service.validatedLocalSuggestionStream({ flow {
                 try {
                     for (line in lines) {
                         val chunk = "$line\n"
@@ -185,7 +165,7 @@ class LocalSuggestionCountTest {
                         emit(chunk)
                     }
                 } finally { upstreamReleased = true }
-            }, "", onDecision = { decisions += it }).take(1).collect { displayed += it.text }
+            } }, "", onDecision = { decisions += it }).take(1).collect { displayed += it.text }
         }.exceptionOrNull()
         persist("cancellation", chunks.joinToString(""), chunks, Capture(decisions, displayed, error))
         assertEquals(null, error)

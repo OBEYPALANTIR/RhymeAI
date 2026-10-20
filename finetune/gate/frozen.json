@@ -1,0 +1,2902 @@
+{
+  "version": "rhymeai-gate-v1",
+  "seeds": [
+    7000,
+    7001,
+    7002
+  ],
+  "songs": 40,
+  "prompts": 480,
+  "task_counts": {
+    "suggestions": 320,
+    "rewrite_passage": 60,
+    "rewrite_word": 60,
+    "synonyms": 40
+  },
+  "songs_sha256": "dfb33f37b3f93da3259b41ed3d914b80d23ba32af747fe60a5d12ad12cd316aa",
+  "inputs_sha256": "3311abcd1a327af69dd2aff75a38ba86b1ea272ebd2a047d166d195ba199a301",
+  "overlapping_lines": 0,
+  "prompts_sha256": "51a9220357d31731139ddcd8faab07dd8f6ebfe18a20ef709f532d69ff830b83",
+  "prompt_hashes": [
+    {
+      "id": "gate-song-01-suggest-0",
+      "inputs_sha256": "0098186559f4b85040036514a24860d88df7b04f7501d6376c64a7827d2befd3",
+      "prompt_sha256": "a83b0a6d196662699755b74829670173864cb2c35c0a93edaf9674a5ee865aa9",
+      "wrapped_prompt_sha256": "b798d70aa079d5e407bd58ee4d7f32895a480c3396fd1a05d50999e532fdd354"
+    },
+    {
+      "id": "gate-song-01-suggest-1",
+      "inputs_sha256": "42d431945cb2d3731683baccd73c606592479561351a1bd59e7bbce225c96502",
+      "prompt_sha256": "66ebfbbd782cd5a299b6411e5ea757ce945c283f5d517dd456ba16e1b4557fcc",
+      "wrapped_prompt_sha256": "b4da3a39789607c12f682747a3f34e67c073c2f5f4286178dcb50478dd78a45f"
+    },
+    {
+      "id": "gate-song-01-suggest-2",
+      "inputs_sha256": "1d39e2bfdc148043d71975ed4aaca98001b10ea3a99e85c65958d9de457c2a24",
+      "prompt_sha256": "00bbdc5cecd6382ea15fd3538b336ea6b4c748b5899f634f27d19af5eb87b7bb",
+      "wrapped_prompt_sha256": "72607c61361dcd2af2561369ca93b033d134200d248a6fa0e309c4f9ee91da96"
+    },
+    {
+      "id": "gate-song-01-suggest-3",
+      "inputs_sha256": "1e22aec36d6125fb1ef29df59d4df1fe1230d0cd99d807fe92a2a97f78ddced9",
+      "prompt_sha256": "e7ac6a6c85f0d55ba2a5f1b1f7f27c336fb6106c51856b576c4fffba2a261ca8",
+      "wrapped_prompt_sha256": "1f6e95759b7dfa2444adcaba5fb0f2bb0d7fe228a12a37740ec47ee22c015437"
+    },
+    {
+      "id": "gate-song-01-suggest-4",
+      "inputs_sha256": "39cd25f79685d816fe54fa8b1fcc8ebf406000d5200474efb1d74e48fc9c6622",
+      "prompt_sha256": "7f45c369f5c01ef061d9db1c46eaad439f82594d64bb4e7f5e23ee79a51074d0",
+      "wrapped_prompt_sha256": "33885f7f592693ba836438974399c702b17c8af0cf48b81eec065db1f2c41b9c"
+    },
+    {
+      "id": "gate-song-01-suggest-5",
+      "inputs_sha256": "1ecbc28be6ded0b89021efbe10c95e50bc0ac352905b918d3e4202f64f25a0a0",
+      "prompt_sha256": "d307fcb9f8a75ab1ce351fd58d3162e02ca0d60eb1537c261a2097e6066378cd",
+      "wrapped_prompt_sha256": "e981d22046e861db4b67a62525e5718f85969b54ca76308ebab78b094d4c1851"
+    },
+    {
+      "id": "gate-song-01-suggest-6",
+      "inputs_sha256": "499c18741753417c4b1e21c8d4f2e92cabc2b947e318b4f289985dd01cea19b7",
+      "prompt_sha256": "0b5a110a1eae2eb08d4e0f35e5c22804125562ee82fd937e4ff918dbaf84d1ee",
+      "wrapped_prompt_sha256": "f073a2f344fcfaabff1a61fd0663e81425f1f405304c1d9db31f3ee9690c87d6"
+    },
+    {
+      "id": "gate-song-01-suggest-7",
+      "inputs_sha256": "45744ae8d307db2e6deb8179195b62b63fde6d803e48b0f8ac6772cde62d65f8",
+      "prompt_sha256": "14c61200d4aaf10e1959111c52fbb4d1e882930d3a82064f4698e105c640e888",
+      "wrapped_prompt_sha256": "dce4051086bcc1f3b1332cee10340e52e117be3487683eac7ae77bf9f78e3b0d"
+    },
+    {
+      "id": "gate-song-01-rewrite_passage-REPHRASE",
+      "inputs_sha256": "5297954623c9a708496ff3a2ad34a1eec66d10023c73492a99d3d90b6fe302f8",
+      "prompt_sha256": "b0d6a33258048524acc7643dda26b7029ecbd055a0654fcfc5b5fd17e7dc8615",
+      "wrapped_prompt_sha256": "8e9c2042425da0c0eece2adf4fc6488633e50c8fc10c2934f4eb57a60a907c95"
+    },
+    {
+      "id": "gate-song-01-rewrite_word-REPHRASE",
+      "inputs_sha256": "cb40405392cd05298d164c005107aa0afc9f64b89d5d2f28f4fb5e080cf1a84b",
+      "prompt_sha256": "b0b9404776ea0ba5bff15f5c7a7d064a1955d6b5f2e24ff2ab4cc34263ac6869",
+      "wrapped_prompt_sha256": "65593eb1d0648b33a7db9db6998bb5e7f17729f889bedf54362fd5007ea0bf7f"
+    },
+    {
+      "id": "gate-song-01-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "ebbe159dd91513add929e81920678de17163c0e450cdffc47eb716c5cc62f243",
+      "prompt_sha256": "5875d7b8875cd465581d9d06551d6f9bae9d5d3fda3381b5f019a23e9eb08d9b",
+      "wrapped_prompt_sha256": "85189b02c4b1a9ab1711531ef9bdda862f56873c8d3ed038e92923912d729796"
+    },
+    {
+      "id": "gate-song-01-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "a699df52e2d4a3e749c6b25f196675de413808f583a9d9f8e31ce6d291590b4b",
+      "prompt_sha256": "88d8bdee7d2ff4e2cf6220df850d52d216464adc0ff8a67d692889de2214ddb6",
+      "wrapped_prompt_sha256": "79cbdef8ada3f0ba8ef2a95b642fdcf9450d93c54b1ec52eefed31eba4328780"
+    },
+    {
+      "id": "gate-song-01-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "840ff4895eae74ae4fba46a33a4658df6134fe6ffa5f6fd63c37b958aeb5bd93",
+      "prompt_sha256": "257709c674d09f883b8bde71e00db323f29704891f3184ce30baf17b679c12c3",
+      "wrapped_prompt_sha256": "74ed372319c24108b8cd3f54151132243e9eacc33b8a737728a7f3bc72095e55"
+    },
+    {
+      "id": "gate-song-01-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "2244e0111c8f49ea6c69fbc43dba38c41334934836f264f03f64fa808db7d814",
+      "prompt_sha256": "89d98eac4b9beb6df5e180eac0e97116cdd0e76d52030d2e9d19fa4685ab1ec4",
+      "wrapped_prompt_sha256": "c4b0b027532ccd8279c9cc5e3e2d7d161da65e3ebee1709eef52a0756921d015"
+    },
+    {
+      "id": "gate-song-01-synonyms",
+      "inputs_sha256": "e8ce49fe7898af02971da9c0011528a9cd1591fbcca941f27eb9cfd0be823e12",
+      "prompt_sha256": "9ae64ca6c5fbe1c93669c18072e1c8102375f88458ad0e4f349a6ef9451ff86d",
+      "wrapped_prompt_sha256": "4822b5323a5eb47b4b4e253a63eb8bf30850fab0d037ad0825868d68cf5257b3"
+    },
+    {
+      "id": "gate-song-02-suggest-0",
+      "inputs_sha256": "123b260b2e7fec403336d956d52e84309d5f23bdedc0765b0f0ae60b5e4c4e2a",
+      "prompt_sha256": "eca48b2f51778a7b95f1bdf01014fbf303a694c7ab3f8127e0c9144a779396d1",
+      "wrapped_prompt_sha256": "6282958ebe018c011fba79f2889838b61350912d90a0fdcd2628f531b0c6d312"
+    },
+    {
+      "id": "gate-song-02-suggest-1",
+      "inputs_sha256": "ebd142ce7470caa27b8488756daddc955b8021e8c1277cddc82963ccc8329037",
+      "prompt_sha256": "6653d0967832b8a570829c4c16f087c32e798ea10c1a19fafb555becccee3c4c",
+      "wrapped_prompt_sha256": "f43851b80b75dc06b0c18f4a2d60aeeb6fd9f99459110bad0358169b728287c9"
+    },
+    {
+      "id": "gate-song-02-suggest-2",
+      "inputs_sha256": "d9ac9027866e7364d6d9c1fd4087942c82730322589732e21a5baa2c70c5d7b0",
+      "prompt_sha256": "0f8c14e2472ce33c37f825c96119210f86d4fbbc49bce8e6f2166aeda47f3bbb",
+      "wrapped_prompt_sha256": "c58b56f7951501bffb40466830dff0ce1c6c5321c9e1d4e196ff16cdea7aa4a9"
+    },
+    {
+      "id": "gate-song-02-suggest-3",
+      "inputs_sha256": "af704a7ac75d0afe4c3e9f8720d357e0e4cf193f6f060bf650d1d14f584a0468",
+      "prompt_sha256": "d6d9622c47a49a6cb861d22c7b03bfa7abd8a002c69385789234e022ae5c1944",
+      "wrapped_prompt_sha256": "cdc0aebd7d23254f25f03e59180bb1d71953a30052649128b9f6fb2fffdf41a0"
+    },
+    {
+      "id": "gate-song-02-suggest-4",
+      "inputs_sha256": "5223a0beccaaad1271d39405c1dd0cfe5ece623d1ea4d78e4fea844e47cbe08e",
+      "prompt_sha256": "e6ad2ffe52636f8ea4bf7abd3a213c3a3cf81a26636e5cb0779f43e38a0ad96a",
+      "wrapped_prompt_sha256": "18b24c3032515da4813ab3a1556f6046646a54619bc5bad4e634ccf013f05364"
+    },
+    {
+      "id": "gate-song-02-suggest-5",
+      "inputs_sha256": "b466c5c6920a08192e63941df758acf2025bd921769effc7d4cad04f2deed38b",
+      "prompt_sha256": "719b94e80046b8c351373d7e2420873d8166a6073e0c287be48b896ca72d0521",
+      "wrapped_prompt_sha256": "a114772dd3c3d2a0910f3f101c163c9370449b9d23ab66898e45ef7ed551ab88"
+    },
+    {
+      "id": "gate-song-02-suggest-6",
+      "inputs_sha256": "48efd3b9ea5e43d6099e073282d7b0d4620738b0163b09a51d207ee6674345ca",
+      "prompt_sha256": "02971bbcc892104efaf2f2f215d6ad803a844214314d5c21dfb934a7d03f3afc",
+      "wrapped_prompt_sha256": "0b69c55724d1e8b5c55f3900f3a123a90095af965fdf3a6db9f4322a710fe452"
+    },
+    {
+      "id": "gate-song-02-suggest-7",
+      "inputs_sha256": "006f29383616455bbc64b2fd69437edba2f2567861267396b28eab548e21230d",
+      "prompt_sha256": "2b82b82c299a161db0051eef131b4262282fb0f5721443bb0f9e2d6fc85234fc",
+      "wrapped_prompt_sha256": "4dfe1728412228cc715e0c48d38b095b86eaac0a7856d1625668226dbbd9008b"
+    },
+    {
+      "id": "gate-song-02-rewrite_passage-REPHRASE",
+      "inputs_sha256": "f9250d0a217e61e7ee11ae47a3a394eabc0dd8f765f598cf63689687e2afe5c8",
+      "prompt_sha256": "f2e6415a716f7117cc133d616f612f1cef4c9ca1777b24977f504a57843534d4",
+      "wrapped_prompt_sha256": "8e8112862df7ca2c936a56e6507ab8d0486c618512e57834c812aa44f9f8251c"
+    },
+    {
+      "id": "gate-song-02-rewrite_word-REPHRASE",
+      "inputs_sha256": "e8b47c01c4b1bf00b296412c5837949f47f59a44d887b0b7948caf70da3f0078",
+      "prompt_sha256": "d60e4056240f19304d49e7ef751544681a7e3c78d9d6094cd37dc304864fa38c",
+      "wrapped_prompt_sha256": "4658537b50bce1e3dcc12741d3d66a85844c6d041bbd985c62bb74b677ff87d9"
+    },
+    {
+      "id": "gate-song-02-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "d896c882cba1c77eab083db2a65fad33a0661ac7f985a21f5cf7b062f5d80b5e",
+      "prompt_sha256": "72c224b97f8e9e3ae43bf9c50160aaa2c26da2252365b7046b4e916fa96886ce",
+      "wrapped_prompt_sha256": "ec930964b7dbaa56e0454a9cd8dcd92eed2fc64854464a09ffd71121c710fe18"
+    },
+    {
+      "id": "gate-song-02-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "4ef6f79e3cc7716a6ec89cb76a72f647402efc007384823d3cfa4d0b4c35b270",
+      "prompt_sha256": "591e8c123d70be8ade6a4f87362d5c51b7dd8ea2f246bc941f27819c9553a5f1",
+      "wrapped_prompt_sha256": "4503ae05f509b58a9f9aa2ab76bb4a0c1ed987f30a95321114331f7f7019c5d2"
+    },
+    {
+      "id": "gate-song-02-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "d061f06d0196dd5df68eb2b9477c27be4b0fb1005e217256fd1a31a2d08c69d0",
+      "prompt_sha256": "ecca30649efe00bb9895d6280f882c5fe7ba71376119456c6455f5009c0c7591",
+      "wrapped_prompt_sha256": "a5047f84ed587adfc8c84d8f4b5b47d3a2e8560335b95ae1d025e06e9dd364fb"
+    },
+    {
+      "id": "gate-song-02-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "50a4250cfb372f78a06b3a8ef3343e57e281fbcee7d15275f6ee50cf4656660f",
+      "prompt_sha256": "6cfd6e413626cce8bf3b9da5aa80ad3c0cfee355dc9be773cd83d3b79c3596b1",
+      "wrapped_prompt_sha256": "c4e6572dedaa6d2d29904e60fb2ba9c090ea987f406e65eef8876ab02e179405"
+    },
+    {
+      "id": "gate-song-02-synonyms",
+      "inputs_sha256": "15e03273e09463d0a82c516acf33b53aeaca8fafc97c02821057a8039b73401e",
+      "prompt_sha256": "ceef81f85d29363cb8baba5fe5612ec56316fb6fdb5a485dccf7b5267819f202",
+      "wrapped_prompt_sha256": "a72d3759ba23f882dda6dd3342926cd90cbc8567dc685825c1620d79aabf7982"
+    },
+    {
+      "id": "gate-song-03-suggest-0",
+      "inputs_sha256": "5f3e43d7f7222dac56f7cfd634a646566fcfc739f0fcce6c8dab3cefec3c3a5e",
+      "prompt_sha256": "91dbd851077a90cc50c39d0a435fafac588bb1ed713bb575d557ace3492e97be",
+      "wrapped_prompt_sha256": "08c93187da9c650f905029f5cace7735c07a9153a27b29e62e025fe6d323f80c"
+    },
+    {
+      "id": "gate-song-03-suggest-1",
+      "inputs_sha256": "b97bec161aeb176f53995e2314f54b98be8eba8b85d1ec0d26d690494a5c829f",
+      "prompt_sha256": "6d8999419a145332b4e9b5a2e769b57d4d503323d54df55f03b0edc0baa41271",
+      "wrapped_prompt_sha256": "b56c7febee28372dcdbe5961a25a687e05a02658b369cbd150087abefa4ad778"
+    },
+    {
+      "id": "gate-song-03-suggest-2",
+      "inputs_sha256": "2f7ef95419d218ec0c47b2156c98023d5edb359878af51c2bc82df7251d8a7d1",
+      "prompt_sha256": "d13307865b45ab95cdf0e184086109629a9b75e016a6f105863ac843ca65b725",
+      "wrapped_prompt_sha256": "bbc75d13152d80234d4fa1b9b84536ccb277320fc5f834c52151c430d6fb2709"
+    },
+    {
+      "id": "gate-song-03-suggest-3",
+      "inputs_sha256": "efb3ab98bb3f03d278d6ddb1c370fa13a9b1f7cd1daa881ca22332a0fb41c1ab",
+      "prompt_sha256": "b11cbccaf1176df64077cc4b604c439c504d7323699d7cd019be5cdbdfad7b15",
+      "wrapped_prompt_sha256": "67c7f8982b70ab9c09e51764f77fceac84c4e8af337b98c5cdf2eef99206d131"
+    },
+    {
+      "id": "gate-song-03-suggest-4",
+      "inputs_sha256": "daf1f0dda40b1e34e60e007464c3a0618469550b0bcf5cae079013916d3a2a3d",
+      "prompt_sha256": "49a9e8090abe97da4509d917da68821e270b7056839a578e668e3847f9706d13",
+      "wrapped_prompt_sha256": "ae060b8b5ff3961c50306c8c28f34e41c7db437b033648662351142e8a84ca5a"
+    },
+    {
+      "id": "gate-song-03-suggest-5",
+      "inputs_sha256": "dc9b7570a2d8fc8d72d181f9a2063726b5688443cfcec9492fc2d5b02d9a21c0",
+      "prompt_sha256": "3f0d1c69cedab13a243169d01692d59cf56253fa62e97b208ecde8ad8a890956",
+      "wrapped_prompt_sha256": "4b62f7508f83096206316c702d4dac831e41cbf68f74990a287923822a533b1f"
+    },
+    {
+      "id": "gate-song-03-suggest-6",
+      "inputs_sha256": "cfbdcc51edf6b8a4c9bbece145d77beb5ac626d2d8411662a54d1e34bb385e4f",
+      "prompt_sha256": "206a47e5bd96a75bcc84505a85553e8356b4e9d0e7a1f95e50a5ef2459dc1104",
+      "wrapped_prompt_sha256": "c6d618405160d6b26766f9878f854997de7771b269b21046d2681d96905c9cc6"
+    },
+    {
+      "id": "gate-song-03-suggest-7",
+      "inputs_sha256": "6e06a2dbf2499b23a90b65ca4dc0cca4a0b39e6b714fe6946508a79825bf8d6f",
+      "prompt_sha256": "3c571a2511c157a769b873ef2dd2453a7721ce844e34af6913ddbc2e4e4f081b",
+      "wrapped_prompt_sha256": "e28312309384c0c133af07dfc9ae0b4aae4ebbe040007ce9e570acb221758e14"
+    },
+    {
+      "id": "gate-song-03-rewrite_passage-REPHRASE",
+      "inputs_sha256": "4ab9ddcfcb9433e46cc5bca0c0065a871c335b2792664b5bb696a10a57cc7ca5",
+      "prompt_sha256": "8754968ab0bca565b4a15e74b8477ff79c2e95b78753f7e234d1deb0d442e1b8",
+      "wrapped_prompt_sha256": "774480b86724433c06c69780fae0b3a72510c95a5b3883392212be3732f7f2e7"
+    },
+    {
+      "id": "gate-song-03-rewrite_word-REPHRASE",
+      "inputs_sha256": "da4b6ccd85803f0c576555d0ef07497d147fdd676ddb733bd8a919acce733066",
+      "prompt_sha256": "cc1f77cabc286bdeba20e56cdb0320341e925ca0d3b70d74a29db4983ed939b6",
+      "wrapped_prompt_sha256": "f754a8c1c6a86e0b8841b40371e572cf0bcc7a4f43122274d08f50b7208210a7"
+    },
+    {
+      "id": "gate-song-03-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "0f16db9c1f448c29f86be62d25297e5ebd7646f82235bee5ed06bedfc480668f",
+      "prompt_sha256": "d4dae39f84a4cbb93f3553762e9597ed55fb307942acc7391ce5c244086c167e",
+      "wrapped_prompt_sha256": "49c438185b1318870af67180064aea098626d8d6e9caa1f91c4dbb1980ab4acc"
+    },
+    {
+      "id": "gate-song-03-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "cdb9556b418bf094655b38e87dc88d286947818033fea0dee14d80dc4f8abe28",
+      "prompt_sha256": "5917948a8177735bc80beaa2885099fd650e5043e2e5a41187a29b0a25814224",
+      "wrapped_prompt_sha256": "a89133167b2cd3217976d9faa6e84cb650c261d212306f32be7feef2adfb49b4"
+    },
+    {
+      "id": "gate-song-03-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "973836da4323b7d87537bdf125c0d2301842864b1c75e551117108f9c1f75601",
+      "prompt_sha256": "81bd03ec468553927ebc7576320e73c385202256b37c1fd6d2a3633751f72079",
+      "wrapped_prompt_sha256": "4cb3a090806ab7922e55f10e637eb4ae20b3b63da9648a90ee168d4305ff3a90"
+    },
+    {
+      "id": "gate-song-03-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "5d856ebf46e0404d46bd7c0f957b22917a93d89fb77dd5ff7c57c2e7f8a5de6e",
+      "prompt_sha256": "683c01f1b55c4e0e09e95980f802bb65e6394faf3136b972174f339df7ab642c",
+      "wrapped_prompt_sha256": "180abadbc630ebbb3447544b6f2b7e2726f733fe4b7bcc24829dfaebfd0fbf97"
+    },
+    {
+      "id": "gate-song-03-synonyms",
+      "inputs_sha256": "31e701308fcd720e6c1323f32dc4d7d7a912a449289b12214ed3e7fd002780b5",
+      "prompt_sha256": "96e48ae764719552f4d6ce4c5cf3a2873ab1fe4f3fa11585a32202ec8877cbfe",
+      "wrapped_prompt_sha256": "7c9b21e16b4de51c06d70df52c9eaae8c12c64a9efe38f6c1489208bdd359123"
+    },
+    {
+      "id": "gate-song-04-suggest-0",
+      "inputs_sha256": "2e550a7df0dd1f61fabaae660a72852ade4315c0bbaa7d7848d3f9008ae415a3",
+      "prompt_sha256": "82ccc5621c2c5108b632f150be8488eaf4adba2af052b08f61cdf3a60d90a051",
+      "wrapped_prompt_sha256": "f558101ecbf6d9e43bc4c647b5bfe7212c78827e5a0bfb40f9b707f77b93a579"
+    },
+    {
+      "id": "gate-song-04-suggest-1",
+      "inputs_sha256": "fd7dd68fa7a84b0f5aa49a21d6e604179b99d1694b4e6d995180371a93f042d3",
+      "prompt_sha256": "0add51070aba10661ac0de1efa4cc851323baa22ef142906d54aaac93eb4f840",
+      "wrapped_prompt_sha256": "8d24b987a2e2c3aa765d0abd137ce9be81cd526d9b3e4c4ef2947e181076edb9"
+    },
+    {
+      "id": "gate-song-04-suggest-2",
+      "inputs_sha256": "8d03e9ac80e06fb75b0ef94e123933ccb6cf2f5233ad9ebd3cd24af6e2e8ca9d",
+      "prompt_sha256": "daf38f6854c750d1f3a1f8abfd95376f9e744996b9167db96b3760e96fa9df22",
+      "wrapped_prompt_sha256": "54a53132ac988ba6a93c20c9566f1ff3bcf1641942e0291b045093b6d6e75df2"
+    },
+    {
+      "id": "gate-song-04-suggest-3",
+      "inputs_sha256": "69bf4365e64e41d005d5ee6e2ef1fdfc0798a0c3391aef0769e2ee8c99b0a616",
+      "prompt_sha256": "7a81d3baf32fc31d4b049e831a647d2ac4ceb1ec0df459822bbebd8eb20fc40e",
+      "wrapped_prompt_sha256": "97b75271208185151a5e82efd53b29d9f8138fc952533b63223fc5381aafd786"
+    },
+    {
+      "id": "gate-song-04-suggest-4",
+      "inputs_sha256": "da0c40ba1865bc243c848d32e7e7059eab139aa882aa2e1a9f4fa43c7a613a34",
+      "prompt_sha256": "4025b5a9c7d283708bcc73a8627ad23312705ffd04338dcbab4ea5abee5cd878",
+      "wrapped_prompt_sha256": "38580f1a28a2e7f95e26ab9a38ff8a61916d359dc0df94b507c43c0d0ef85f90"
+    },
+    {
+      "id": "gate-song-04-suggest-5",
+      "inputs_sha256": "2c3e58d18a4633359e34e83e95d93ef821d95bd4508dbe6f6cdf04327c96af62",
+      "prompt_sha256": "1f41a61ff6204579ca5b2bcc40c00f1517377dc52bbfc251fc00f432c3809854",
+      "wrapped_prompt_sha256": "f320180bab1e021f5e8eab6c46aa17754b720d6a593b09228f6ae9804a17ea30"
+    },
+    {
+      "id": "gate-song-04-suggest-6",
+      "inputs_sha256": "a6957a5c5ace5ef467c7bf4d3f9f8e0aecf818b3a5700d2c0867ef26ee0df1af",
+      "prompt_sha256": "a119e2f820193fafed880821e0d3a0dba382e77d6a7b2dd4981321ffcadd2feb",
+      "wrapped_prompt_sha256": "8b8cba1f4e353c61154a2b871b90150f4a05617c5222093cf21a3da893cbfb00"
+    },
+    {
+      "id": "gate-song-04-suggest-7",
+      "inputs_sha256": "270ae484998871c703136a0bb3d4efc3db0d661848db9eb4d4baf9d6e2f83a20",
+      "prompt_sha256": "96373d305cebd0e79dc0aa638cfd473ecfd276148b701da8a5e8822fde6cfe15",
+      "wrapped_prompt_sha256": "8b55a85de62b964fe24a9e55d4edffb1609b155e8402da14210842806d989a27"
+    },
+    {
+      "id": "gate-song-04-rewrite_passage-REPHRASE",
+      "inputs_sha256": "b461349e186b160dafe2f06ea929ac8c2ab32533867421a2f75c5546640949f1",
+      "prompt_sha256": "dd8f8d8a1dfcf6c840d068f180891fb272905b6569bf755992da7a13c6d4517b",
+      "wrapped_prompt_sha256": "9fcf23711c1273969ce379f9a3708a5b0d014edd1487b080145e53a5acd9b3dd"
+    },
+    {
+      "id": "gate-song-04-rewrite_word-REPHRASE",
+      "inputs_sha256": "14ec0af8f4a611907435274f25f4e6c911127f1c38a970c7794749e9f1f1c646",
+      "prompt_sha256": "4ad028b0b06557de0336d01815d1c84c261a0c876244f3c76a704bad9f55ad20",
+      "wrapped_prompt_sha256": "50c4203cf569a230f1b042a2ed5a1ecec9b663014a29728e6bef7fdbd6829c59"
+    },
+    {
+      "id": "gate-song-04-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "fcffe6647c950deac531ff9b55766c995e0d9aae4128a06944b8e8796d8fa6d9",
+      "prompt_sha256": "bb77ba17aeff5e5bd7395744b4c5ab85f34410229624b7c4c17e723391ab1fdc",
+      "wrapped_prompt_sha256": "c862b3e66aa486ce0953d8b2e60f22d68c468da2d0b2bb4768f74fb9069c3dea"
+    },
+    {
+      "id": "gate-song-04-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "3bb7529de8314af38286c33a1a1bdeb5158a1cfebb8392d7a1338ea9adbaa18b",
+      "prompt_sha256": "f8c094c02384bcf98ce99691281553eb802429f131a6bbc3a1be7917825f6038",
+      "wrapped_prompt_sha256": "0dfb56077481e037e794660afd76cf6dc52f94ed0366ef056d588639349eb77b"
+    },
+    {
+      "id": "gate-song-04-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "cf1a69274e54d53c049eccc7fd5a6a3a4f299c5238732c476ca4e47d645817b3",
+      "prompt_sha256": "2c370a4177d76b0de570e6e39d0f2277202b3c4b76b6501f757a7ad84f691e06",
+      "wrapped_prompt_sha256": "9a93d59a7f62ae3c2238a420ef34c95ed5ccbe1d4da419a60703dfbaa3f792aa"
+    },
+    {
+      "id": "gate-song-04-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "9c81e9567e26da8eecb4821b8e02acf77b97f85eb5beb88a54da9d7741e2f8c2",
+      "prompt_sha256": "c448ddd6e1c64ef178251ec214781323ea9254602eb5282817bf301e607b25de",
+      "wrapped_prompt_sha256": "0cafcb67fc0dc792ef9d2ba2bd8809bb78c264eb643cdcf6aae096ec840dc7ac"
+    },
+    {
+      "id": "gate-song-04-synonyms",
+      "inputs_sha256": "a6fee283c4df00bdfebd13b67a61cc7693c860ab09c69a1a899006d9d96d1d38",
+      "prompt_sha256": "be28d248ea643c974837e70c05403a72c4c180bde775c712bb6609435b912a91",
+      "wrapped_prompt_sha256": "884b955eda736dd8b423f0174b4ab8017a9f75248bbbe85d7507a7398bd9aecf"
+    },
+    {
+      "id": "gate-song-05-suggest-0",
+      "inputs_sha256": "f8f5809b8e671376b6bc2cbd0b95150867504ba3c91a2b2c66397013bd405ae2",
+      "prompt_sha256": "8dee072f40068edad820da4969ac15fde6b228afcee0b9832dc6544e70a1c123",
+      "wrapped_prompt_sha256": "5a775bb811afb931cc7d89cea7afa26e7bc899b07c47dd67829b9d9f6acce8f3"
+    },
+    {
+      "id": "gate-song-05-suggest-1",
+      "inputs_sha256": "f1134d90e16d542c0c95ae5aa1643cd2fb830ece37517a8c2360718689274d12",
+      "prompt_sha256": "61de43a1de6a127fbab5b82409c119ba3850022129a1dc9817a998b7684416e4",
+      "wrapped_prompt_sha256": "8956f227f554206be86abcbd5d70fd1b8eea449be9794e66b23e5a33c67436f3"
+    },
+    {
+      "id": "gate-song-05-suggest-2",
+      "inputs_sha256": "c1e465733a928f74a82755f0c0644e276a403650d6a14701e490f410380f7586",
+      "prompt_sha256": "4538f1ef994e3aac77c1b21ea4f8be07813ce8dd2b123c143679d038bc058454",
+      "wrapped_prompt_sha256": "5254cc655f97d997fc96b3049f08b757a7d7edd58f0cbfcf6a1fcb64b7fbfbd0"
+    },
+    {
+      "id": "gate-song-05-suggest-3",
+      "inputs_sha256": "a2ef7f79ff2406519c7ab5287984846b316bcef204f52ff615abcb868ebbb67b",
+      "prompt_sha256": "aba0e5f5ca3d968bc71867731a7728ddbf3d580cfb9b71aae637a5f729695a1c",
+      "wrapped_prompt_sha256": "e82f0f9ff178ecd3afa51c91a506e4fcbcfe6d9f075a74a5ec069f391d7d0ec2"
+    },
+    {
+      "id": "gate-song-05-suggest-4",
+      "inputs_sha256": "d27bb747498bc20dc40ea68b8d984af33f105b41c9d7e2cc9d36d6db612bbcd6",
+      "prompt_sha256": "13e69a8b45dd9748df6761d7359975204990d2498336573f496f19f62db2d07f",
+      "wrapped_prompt_sha256": "6cecf490a49caef607af5d80be56bb836b60a49b2ae30e723586dbad8720297f"
+    },
+    {
+      "id": "gate-song-05-suggest-5",
+      "inputs_sha256": "e40c51e51d2eede7aae112fdb74adbd9750c1504ba905cdad2d5982d4e545ec4",
+      "prompt_sha256": "7c2ff108256040f2bae91ee4afd8973b9485936e85df4d8a6e9808e2006b06e7",
+      "wrapped_prompt_sha256": "e94aedf0ded0ed13fc6bee314bef43c002c7a15626ad16a45cbb2f6a9af3d70d"
+    },
+    {
+      "id": "gate-song-05-suggest-6",
+      "inputs_sha256": "a216a698e593a202ecce2c879c110bbf31f5bd466ccc2ef0771386633de109d4",
+      "prompt_sha256": "b32cdaee4bd282817955e3b381a754a0c3e551ad2637509852f1cbc7dc62f51c",
+      "wrapped_prompt_sha256": "1982b3031acc34ef0fece915607def02b9a47ed489ad2f82b17b019af1760d79"
+    },
+    {
+      "id": "gate-song-05-suggest-7",
+      "inputs_sha256": "eb3e17cdccde76103bca88428eabaa1a011adaa67aa71e58cd05e686c693ca91",
+      "prompt_sha256": "332ddf046b9c57af4590863d8fdd507cb1560359cd0956ea52da0612cad70772",
+      "wrapped_prompt_sha256": "3fa3bd89d08a6cd92a622b0d63e9234612978ec6c45c9381b773d35cc7f6aa0d"
+    },
+    {
+      "id": "gate-song-05-rewrite_passage-REPHRASE",
+      "inputs_sha256": "4d78be6c7bd061b0504c73ff6c62063874a9d5abeb891c690d1dc7542c78d0d8",
+      "prompt_sha256": "6e54b9253fa2eba9b48078741ad2e6acca750046d9aec8874bab16f5db884f10",
+      "wrapped_prompt_sha256": "38e0498c7aa500a23c79484a56e634b3733f5654cf5355c04acf4fb3f959283e"
+    },
+    {
+      "id": "gate-song-05-rewrite_word-REPHRASE",
+      "inputs_sha256": "d2b3df315b9060969f049cfc631e8e6aaac105a6a5d24095deb32dc71e2c32b3",
+      "prompt_sha256": "0324c9b85532b44bc0c6cde7af521d4f1f6051a1f219693de97adba0e62c7286",
+      "wrapped_prompt_sha256": "abdb83f7a6a89c5a61af2cd6038d7857fccc96277baf64a0c5d5c34ad3a23c88"
+    },
+    {
+      "id": "gate-song-05-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "c5dd34cb5e001d8e50b89f9089993769e30c93e5854348c61eecacf32d418d7e",
+      "prompt_sha256": "982f8fccd984e5fc182cb33cb527d229fe83bb52244ad6f61501199a2cc2821f",
+      "wrapped_prompt_sha256": "63053afbb36859051223832c3e9b712fc13f4c7abadef94158908bbf317620f5"
+    },
+    {
+      "id": "gate-song-05-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "8af5010f5daca44be41c3b30cfcfe57a689a66a632ab4176ce39221fe08a0cc3",
+      "prompt_sha256": "9a26d84c2914ffdfec1db24d982e92cf13ec98e3f06d421542b317b6a4c6cd59",
+      "wrapped_prompt_sha256": "9263ddaa4e839c9aeef1cb41b8454b2064514295692b5556f9c7367dac4efe59"
+    },
+    {
+      "id": "gate-song-05-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "b5f79d3e914df2cf9e23be7a022a644e7424db364ba00544e3ad7dcfdce5877e",
+      "prompt_sha256": "da461f60c2bbf2d9c2cb5e92140ab2269879cb93346158e0eaa3acac524d536a",
+      "wrapped_prompt_sha256": "fd80b43f4ace89b19456c207bfd91c4b496c6d8bc3a4201e44e1d322c2549070"
+    },
+    {
+      "id": "gate-song-05-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "58846e55400ed99ab1f769d9b725915fa07ef902852038c1b2e33efc86e07fde",
+      "prompt_sha256": "3b625f1034165de97de21d5d1e45274c0a22d61a18d2452773206b38de7e01c0",
+      "wrapped_prompt_sha256": "22de6f4a185ea2e6cb036ad25b073c81dc53f68a448cd6996e07237f85f69dc6"
+    },
+    {
+      "id": "gate-song-05-synonyms",
+      "inputs_sha256": "580b2cb1c7d3294a8f67f41f71bc80a21fbe0cac5845d9fca4ca010beb252a51",
+      "prompt_sha256": "8870269dbdda50a020c0dae2cbe7a60506d4747987cc0c614c86240f172f9175",
+      "wrapped_prompt_sha256": "13552f3aa36120b1ed83cd92f954ca0328e9dc58bec1390ef5d2e37f1bbd4f24"
+    },
+    {
+      "id": "gate-song-06-suggest-0",
+      "inputs_sha256": "98d985f57c7d51964301af1a423068d910621be7523d9912dce669bd89a9925c",
+      "prompt_sha256": "2a398dd072b56ed468ecad2e4a2d662bcf684c886c37998acb55849c3ecd51b5",
+      "wrapped_prompt_sha256": "8e324f2914d7813dd38ade0a22a08f7fa000a69ae79120ad6b725f3fe60b1c5a"
+    },
+    {
+      "id": "gate-song-06-suggest-1",
+      "inputs_sha256": "ff36d381d5e3cc86d3c6331e7676c4271a340bc6b7a09dee78a7b02792bb39b0",
+      "prompt_sha256": "8bd61fc980f3406ecafd4d685cd1dd5aae741fa8fac24fb4de3753dcc91c040e",
+      "wrapped_prompt_sha256": "dd868d5b1af4465d41ca7e6beb2442c17b1c85fc592eaa84fcff2628209ecff2"
+    },
+    {
+      "id": "gate-song-06-suggest-2",
+      "inputs_sha256": "bf120378d4fe528cfc2b9495abafa445933c228040b726b4842d86ce305dbb4d",
+      "prompt_sha256": "7ef134fabacdabf06f28e4b11d496fa67932911a46bbbbf1eece0f6203560a1a",
+      "wrapped_prompt_sha256": "416ed79cbfdee947d7926ca4cdc60b214fb145588e4f2feb9680962ca44e3f71"
+    },
+    {
+      "id": "gate-song-06-suggest-3",
+      "inputs_sha256": "c9376dba7535349a176f33bf8b9e31bd8aa8d5ce93316e4588093e9aa4eee667",
+      "prompt_sha256": "1c9f5a64355e1a131b6a78f4094124b97c6e5d6e9a257637de96b66844c8c3db",
+      "wrapped_prompt_sha256": "116c94732f1740f97fe73cdd9c0c91bb67c014e29a13dfaddfc165ef04bea028"
+    },
+    {
+      "id": "gate-song-06-suggest-4",
+      "inputs_sha256": "a4871f61be141e279de281dde30c368e97ab4de709367b424fbf65cee4de784b",
+      "prompt_sha256": "646bddd9c7ff53477d5577db77a65a14f7edee1dc906a6ceb130703278c36f0b",
+      "wrapped_prompt_sha256": "534ed7361845f4f528bb1fd923d94761fc26a6c5ea6b562768545684596356f2"
+    },
+    {
+      "id": "gate-song-06-suggest-5",
+      "inputs_sha256": "d90da7371cc81241cee300dc7f239031ccacbb9f6153e989724b4fefb3d81e6b",
+      "prompt_sha256": "aa671f18d74771125af88bee89f682648812ddb7d1ce02ac6891d9a3aac4c78b",
+      "wrapped_prompt_sha256": "230ee579dfe743ee4b9a4049dc76ad7945b11a077d7b0204c138a32e30b1a5c5"
+    },
+    {
+      "id": "gate-song-06-suggest-6",
+      "inputs_sha256": "f92e4b02baa5f7cab7544440fd402f16cc5285fe6ca8ca997ca534fdd2647d12",
+      "prompt_sha256": "5fcd46a7cf346fa4128471636bcafd7ed4b5697f0fc6c62e8b3c519224054988",
+      "wrapped_prompt_sha256": "36aa8155d362da40013a0f8674193799ef43d6aa5e8a61b020e958fc0dd0a961"
+    },
+    {
+      "id": "gate-song-06-suggest-7",
+      "inputs_sha256": "03b6cd234172cc303f39bdc0627474cbcdfa40557802a5cbf1b516c07b977733",
+      "prompt_sha256": "749579a0b80cb6f9bc7253ab3523fb7d254643aab690a03c88f00002fe61b5ae",
+      "wrapped_prompt_sha256": "e9b342624f99fa0abc6c60178628a3074d28a09d3d3b819ef6e9f123b3715248"
+    },
+    {
+      "id": "gate-song-06-rewrite_passage-REPHRASE",
+      "inputs_sha256": "9234cadb08779dfc581948fa4cd551149668c45f3076a8a5662e4c59bbcf0fae",
+      "prompt_sha256": "19c28c05b4a4056f90ba92c68275aa3890ef410f433f8f8fc0fe7048ed3f6a50",
+      "wrapped_prompt_sha256": "dccb6838a5a8cd39f88ab77199aaf08bad457b867e82ff43b2005392cb5eb9ef"
+    },
+    {
+      "id": "gate-song-06-rewrite_word-REPHRASE",
+      "inputs_sha256": "6d12d64f98ed35ad8c72436ab86126d1087bfb4b30710e5be09872fde9a4d5af",
+      "prompt_sha256": "4cffd9099122a676bb1e462c92880db8e3c7ddbdf6521690cba263f1894d7b3c",
+      "wrapped_prompt_sha256": "2543915c86272d8b32375b4121bde66734f251a6f45897e51525e28b5e2302fa"
+    },
+    {
+      "id": "gate-song-06-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "8bf336d596715db37ed7d40692fa4ede29e39ff3412b6e24eb2b12b76550f279",
+      "prompt_sha256": "aab4bf5cb6a6edca30ed0a386fd360e9f67b12206bb43fea7de54fe2786d1900",
+      "wrapped_prompt_sha256": "b2ebe52c57312f13509f8e0fcb809547c9208911f294aa93762ffd9b60d95332"
+    },
+    {
+      "id": "gate-song-06-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "fe7b49b4614d8d8b7c05dc10aac8d6b9b8543662d7b13dd944b10580a7380fc5",
+      "prompt_sha256": "20bef5ec6e1585e6623fdad098139ae96b942c2abc6bd3db5d8f635320179ae0",
+      "wrapped_prompt_sha256": "48f3961a6013237cf8e91b17838456ad09c13d0b48b05d7c316b6020f48bc804"
+    },
+    {
+      "id": "gate-song-06-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "e5a41167a8240ccfbcaf1184fe44b19b02c70d9febfa9f29218d06d315b79ae0",
+      "prompt_sha256": "6c8b19eeb96257c645462596db334650504398eeb91696351c9883dba5016625",
+      "wrapped_prompt_sha256": "800a40ed38119df5a5f27fb452b8a39571612b945e06a800cccacf1e03644eb8"
+    },
+    {
+      "id": "gate-song-06-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "2057869ca660147ca2ed8b511976bc1ffd5cfbe21101296546c9811bed02b928",
+      "prompt_sha256": "badf565d58966661b0e06fd27d064bec0247d0e054724e632a4ef9e9f73f934c",
+      "wrapped_prompt_sha256": "a80deb0c13a8054b58075c8fdd54669630ad1bd8391e41df78f3a65101e2c6a2"
+    },
+    {
+      "id": "gate-song-06-synonyms",
+      "inputs_sha256": "63dc77f94ea45319d594b9b5b66c84ac647ff76272c3402e10bf669fcf2b4f8b",
+      "prompt_sha256": "1a32ded0cc25e9ad5721a6d141c558f8d11851b5890efa8b9567cddfd7438cee",
+      "wrapped_prompt_sha256": "ecd6f0a8f7bf07f5f55c5975703d9711dcc9cf68f1230c94f26c90d8925b285d"
+    },
+    {
+      "id": "gate-song-07-suggest-0",
+      "inputs_sha256": "04d3700767299cd8145136d313f9d6e93c9acd8d3fab29b336c88a845116b47e",
+      "prompt_sha256": "1d31f3ee36426d07c8b2011d8c6a11a7ab512882f591d0ed0ca9ed608eef6afa",
+      "wrapped_prompt_sha256": "dc87dc77ecc426b993f5c8f818dac438ec59d88a73aa8eaaddc8189418d2474a"
+    },
+    {
+      "id": "gate-song-07-suggest-1",
+      "inputs_sha256": "d37ec589e600eb9d4d5a67d8672348c1d4f7084fa0baf90baeb82ce2c58d44f8",
+      "prompt_sha256": "b2c23a62e607aa3ed1b501f80d9daba51c33a148864b3b849f6fd23024d96876",
+      "wrapped_prompt_sha256": "881c20544dbea925618bc1df26ef387fe34cbdd478ec832b64994e001af3caf7"
+    },
+    {
+      "id": "gate-song-07-suggest-2",
+      "inputs_sha256": "910696df5317d02cb54a0f89c502b96ba35512bb1f1d151f40d2e064e4d75e93",
+      "prompt_sha256": "f9f510cd22e91bd1fa41d524b808fa80215110a30e80f843dc72846179efaca5",
+      "wrapped_prompt_sha256": "811e92115f234061b459c04c5f2928f11ea5a2a535cee9dcf58be2f21d61d0a6"
+    },
+    {
+      "id": "gate-song-07-suggest-3",
+      "inputs_sha256": "064f8291460dd890b38a4d560f017bebb287bd640ee3e9e86c10beb72a9c9080",
+      "prompt_sha256": "7cc119ea016b198d4e98d443496602fa1cb4d6b602619109d626a2e7cfc953b2",
+      "wrapped_prompt_sha256": "825d8a5ba14b8c963fe35e15915170db222cefb2dce76ad6f06594d43fe0cd10"
+    },
+    {
+      "id": "gate-song-07-suggest-4",
+      "inputs_sha256": "c280f8f394978f5ccf0bfcff7ac0bbb3c8e821efeabc0fe2db6170db87baf493",
+      "prompt_sha256": "9f6a9a54c89855141e10560b7e5ccc927d53a0f8df331f44bfeb513c81006b4c",
+      "wrapped_prompt_sha256": "4786ef0a2d82a1434082948a0a015112bb655011b6bb2ec602ff82177178babc"
+    },
+    {
+      "id": "gate-song-07-suggest-5",
+      "inputs_sha256": "01308f6d7c861ede5f1fca6f13bdd9f9abd380580c8a7d7004907d11f051c4b7",
+      "prompt_sha256": "68fc172eb4495e2ec99cf8aa017c865bac14cbc33477df87647054c4a6bf387e",
+      "wrapped_prompt_sha256": "4c071b86405b724c94805daa8629ee7bf6ccf1fe0a32599d5408112185bd848f"
+    },
+    {
+      "id": "gate-song-07-suggest-6",
+      "inputs_sha256": "b092364219de99ee8fb5be3a6bd6308506d3549e4be80c07a6c914292491a07e",
+      "prompt_sha256": "f26fa438d2005e806c6a6a8d2bb180eae1cf6d82b45acc92205b5532ef1610d3",
+      "wrapped_prompt_sha256": "90c515375edf6d5d09863316b1d7087caf3782d7f231944704ec44b3756ab257"
+    },
+    {
+      "id": "gate-song-07-suggest-7",
+      "inputs_sha256": "c277067d212c0ee807ba2e57ccb9e175306d918bb6b9512c253537a66ae07e6a",
+      "prompt_sha256": "633f826db2ae0ec4878d5cd829b2558b0948daf2a63aaf471af0d2ad609074d2",
+      "wrapped_prompt_sha256": "ae9d2f5b5be29184f5dd65ee4af76305fb7c3a6385bda93a728c93d95d7d0247"
+    },
+    {
+      "id": "gate-song-07-rewrite_passage-REPHRASE",
+      "inputs_sha256": "ed347dafbdfd8cde6a6a71a99fae09ebc472925b695fcbbeb271f7b1302241c9",
+      "prompt_sha256": "3c234594ded34366a34d4e2abf5a2ede27fef457ed1ff8a68fa50df9d6710ebe",
+      "wrapped_prompt_sha256": "1a35e398840e9a209077444439392934b2e5bfce32d44bb237b5e875a01876df"
+    },
+    {
+      "id": "gate-song-07-rewrite_word-REPHRASE",
+      "inputs_sha256": "e204132bff639cc73102e0b4358dd129aaf5347787136943c0725e367ef54429",
+      "prompt_sha256": "2055f2abdce156be4022020ed243a6371d7a4efd6ac98ea7481e4df539174d57",
+      "wrapped_prompt_sha256": "f0756ddb679a32d232400455eb9abc128c15cce68aa9a1ab312f846bfb644e16"
+    },
+    {
+      "id": "gate-song-07-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "9a2137e00704da9fc30dee6ca6f92d0734e8aac4ca6e101ca93fb2640bc9e662",
+      "prompt_sha256": "d397b2b121eccb54b57bc90facbfbeeb2818fac9a3d01045aec3a7dc1ff1aa0f",
+      "wrapped_prompt_sha256": "7ba7c35da22cb0f43fc59d2b2da05575e7114a6bef105bb48a53747935c6ce60"
+    },
+    {
+      "id": "gate-song-07-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "4957d5cc898e63c41bdcc4aeccfdc7cbf280a311531904ba35dc8e9fa6103e85",
+      "prompt_sha256": "ebe64b49d52705d3f127a6acb1ddd16a213cd2196c307da27c2f92d56e26d5be",
+      "wrapped_prompt_sha256": "55060b6b8283b0a8847e239f94225c841b6449e74825a75c80bd0d3b27b654ab"
+    },
+    {
+      "id": "gate-song-07-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "f790fe2fcdbe93510d6791050b4ea4c3f3ddd4593e2a9c11c0faa5d0d4efb317",
+      "prompt_sha256": "2551c2f7b1b559475c5ad5d2fda7f8bf84bcea94abe4e2910eb2022cf1ff3f78",
+      "wrapped_prompt_sha256": "a13fce8d543bad62997ad8160b2c45831a8ddc557339b22df531cb64b188eada"
+    },
+    {
+      "id": "gate-song-07-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "e2205b7de5cc73845795f737f2ab0b52103b2a5a96f7349ef86a2dcfde6cb2f6",
+      "prompt_sha256": "ed6cd99cea3c34c1b430ce71d34155a5a17a5d26cf46dc1c6b8a235af89a1a41",
+      "wrapped_prompt_sha256": "8c22021b431e2d02bc063a94c3fffdd91ecbb723ea6b2af8966aa0103b359831"
+    },
+    {
+      "id": "gate-song-07-synonyms",
+      "inputs_sha256": "90d4bc4180e943c073ecd340f3cdbfee5210d92fae55c637df5dd5a880b474bf",
+      "prompt_sha256": "d0ac27bd37c7311cca94885dbd187f52ef2cda5de1b7f5495a2ef490c6cfbf1b",
+      "wrapped_prompt_sha256": "6daaba8849461303a3e56285ae1f80ff818a8917054f6394be9fbb86b0b68f9e"
+    },
+    {
+      "id": "gate-song-08-suggest-0",
+      "inputs_sha256": "c1a30c41b3157752aa6b436971c9b777516a509219135c40b4ee127bb0426bb9",
+      "prompt_sha256": "be79c573aef6e79d68a67e5c6e1f59f5311ca8f66014b2d223bb5e3a6f26cc45",
+      "wrapped_prompt_sha256": "f6f2d72f017929d175ba8d914b7a2e18ba23d155199ad040b1c6254f040ddd1a"
+    },
+    {
+      "id": "gate-song-08-suggest-1",
+      "inputs_sha256": "96e54ead714a70e817b3e18eeaa1f72110b6dff8b28e5405759f459f79eaad00",
+      "prompt_sha256": "de4efc664c5b754d85dbabcee03e333be39d589588957833a796334b6b380ad3",
+      "wrapped_prompt_sha256": "1744b1aaecce35e5734b79296f8d7414fa852cddb7c93621f9adbe5bddf21ba0"
+    },
+    {
+      "id": "gate-song-08-suggest-2",
+      "inputs_sha256": "7de9dc8628e2d3cc9c7c55c025a246b4ad98ac5fead6e148d96a2b033986e40d",
+      "prompt_sha256": "2813794a082837f657cedb3fed3fafaa64af29d4ffb489a9a4ec47161264ff3c",
+      "wrapped_prompt_sha256": "a6ca4b8b4fab76b86a2813a6e22ece0d9d6fce3554d4491a2c6d07bbb6a424ab"
+    },
+    {
+      "id": "gate-song-08-suggest-3",
+      "inputs_sha256": "5e4fa575434e8e36cb21dd7e04eef04f94e9065b63c685ab5ee37fd245d46194",
+      "prompt_sha256": "783f60898ce0c85334c98360df266b1d95808d2743d1f5a57deb6cf1535911de",
+      "wrapped_prompt_sha256": "fd12ffa85d8851f7f285a9ff79f77eff6b7488a3b1c5224dc0ba0a0f7d86a7e0"
+    },
+    {
+      "id": "gate-song-08-suggest-4",
+      "inputs_sha256": "53a42814a2442f850b48abc1bb7e997d5fce879dd7f664ccf1b69665057c2f74",
+      "prompt_sha256": "3ed46384a35453a2993645b7bf1ce28dc2f113eaf869540590eb27e302605f19",
+      "wrapped_prompt_sha256": "915638e7df36c57b06e67588c8b1a8f3aac3af308ed35723183ed1b5447da7f5"
+    },
+    {
+      "id": "gate-song-08-suggest-5",
+      "inputs_sha256": "ea53cf828ef7f8814b4719e683c1ed765827f5d385291c75b04bb6d5a1eba260",
+      "prompt_sha256": "a44baafcf0d310c6dbee43b7d496dda67e1d19102053d3ee7009c55e0e42234f",
+      "wrapped_prompt_sha256": "5eef1a7d7431bc0925343db39fd97fecd46baf0c3356e0ca241ffce610abb370"
+    },
+    {
+      "id": "gate-song-08-suggest-6",
+      "inputs_sha256": "26117419edc55162dcbc8e7cd084dbdb9964fcc0aba3323d83bdb58f63582132",
+      "prompt_sha256": "89cf42d92231ad7f46abe1a14d494dc0d59072631aaa5135c0faadf42085c035",
+      "wrapped_prompt_sha256": "a186a204ae3fef5a23f223b8eaac0fdad7a8c0f582bc1b6cabd47ed3b0fe15ca"
+    },
+    {
+      "id": "gate-song-08-suggest-7",
+      "inputs_sha256": "fac67ac436f7088dc1be9a7a8a997cc0c97b0415e25ffed4225bdc5147846126",
+      "prompt_sha256": "a500ecae511f2d07cdd651e85c6284e219bd5e142140d4c74df08f5bd21479c9",
+      "wrapped_prompt_sha256": "f1a602f960309527df87e85a97751e8971aa64b2b665c742b999e8e5b4dbd045"
+    },
+    {
+      "id": "gate-song-08-rewrite_passage-REPHRASE",
+      "inputs_sha256": "54817f1694c27ab9c18170c35b4f2c78edadca923fe0e03f93d5ba7071eeac4e",
+      "prompt_sha256": "70b075f8e2d9f0ab6480042d5003530dd19d5f31ea36afe3aca0932920c83987",
+      "wrapped_prompt_sha256": "f996bc20ef5ffbd378372caff37dc2efa0148815a25cba0f144aacccb6ed6e87"
+    },
+    {
+      "id": "gate-song-08-rewrite_word-REPHRASE",
+      "inputs_sha256": "efad212d776e709b1d51ed4707a308b7776ef61dc1277fa827faa3d4a0ece848",
+      "prompt_sha256": "a4230a99ff0e517ef5b3254ebd36ebe63fc9ec2d557949ee234265ff501ba04f",
+      "wrapped_prompt_sha256": "5e3074ed383b40154838c871f49c249911df151bf211ccb881b6583f1bf8dbd3"
+    },
+    {
+      "id": "gate-song-08-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "2b19bba98d93ec9748e6801138ab177f3da852f1940466e767369a2687511352",
+      "prompt_sha256": "90a20344bfba25e55bb3b86a9d04b3f5e5da3abcab7feb9b4505c25bfe12f50b",
+      "wrapped_prompt_sha256": "11cad32b3d4581cf274d9a62988ecac4ad558f2df7247bf62102faf5f9f38d26"
+    },
+    {
+      "id": "gate-song-08-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "4a8691da9d42553a61fb4967cc1e98fc9834ab289274183ab74fd812bf3447fb",
+      "prompt_sha256": "26c23e09040492d2bc3252290b9d60c8fde6dede0f91b8e05157569b778139ad",
+      "wrapped_prompt_sha256": "affbe25e18d4e3a0682ddd46749e84ad674c8aa06bc272b1bbc817941b6cfa7a"
+    },
+    {
+      "id": "gate-song-08-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "d5bda9caeb1f72b4bb9177ad3d869c1becf44a63a957cb82bfbdea9394871fe3",
+      "prompt_sha256": "f75e56abbb16c60c02ccbf810add53521da91cc81f499c0d391f0f51ae199a8a",
+      "wrapped_prompt_sha256": "3df513ca561ee8cf391453d6c8d86fac79f4717b2d507ab564622dc61b47b990"
+    },
+    {
+      "id": "gate-song-08-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "040968b48f405c670da11940b6b88356fec112140f10fb2bb674cad57d31759b",
+      "prompt_sha256": "8ddb20bb327df9f85638916546f20b7a75fa49c131070630f2ce7c4a005bef62",
+      "wrapped_prompt_sha256": "70d70e3e82320b91cec793eec312fb305041aeaf189788434da4134485bd0c3a"
+    },
+    {
+      "id": "gate-song-08-synonyms",
+      "inputs_sha256": "f2ae974b5a36af5f8ad61ff58904a4662ca698983d2a561b52162513e607c352",
+      "prompt_sha256": "054337415d8493cf5ee8f7c0fecf9cd3394185bb50e13d98a5ab2bfeedd4aea4",
+      "wrapped_prompt_sha256": "dedbab866784210842c0163ee1e5b332178f92552da25feb54bbd5ce9abbce50"
+    },
+    {
+      "id": "gate-song-09-suggest-0",
+      "inputs_sha256": "51d4911ff08289db07b314912a4717c334d59da1ec43066be4cdb5d1186d2ff4",
+      "prompt_sha256": "1f4ed5ec85e20f464907711f1bdadb43ca6273385a7feb47cff294c19ae3a703",
+      "wrapped_prompt_sha256": "b6f1aa32aeb2a36b00a3e22121fa5b36844ce206316e3b9c662fe375481f97ac"
+    },
+    {
+      "id": "gate-song-09-suggest-1",
+      "inputs_sha256": "d64e0b605c970661686690b2485df6858b552d5b1e4a2d51e92c8b0c43ad5ce8",
+      "prompt_sha256": "06af180ede6bb24d8e1643e7dd55dfeffce434aa3e5de82e71bc7a812128f3f6",
+      "wrapped_prompt_sha256": "24705eba178cdfce12e4d3dfffa9ed0378032f30e6de040b4317c220632bd4c0"
+    },
+    {
+      "id": "gate-song-09-suggest-2",
+      "inputs_sha256": "9adadd065ab88c997762fd085826e45f38ececbfbe25cad6c4b177fbaeb199c7",
+      "prompt_sha256": "da37fea4f27eb533039dec96ab33632d9f7492e550ca1516d626724621a7f865",
+      "wrapped_prompt_sha256": "96bc2f88537b70d295fda50be9abf44bc238f46afc0ce6a53c7d73d216db6f01"
+    },
+    {
+      "id": "gate-song-09-suggest-3",
+      "inputs_sha256": "c1f68a572ec03dbee64175956982f445127fce9f3f04f18a71843941a4ce9cee",
+      "prompt_sha256": "4d20c983ec25777422b2bf867941d14a258900067902f81c88db8b4649dae371",
+      "wrapped_prompt_sha256": "fd18da3486a84da05f0d4b8da509c75fd0c6acf88c5c9bbbc4015e11cd69296e"
+    },
+    {
+      "id": "gate-song-09-suggest-4",
+      "inputs_sha256": "6d0a8ff123f2dc680727ccd1817cdf3c1407d1050cfa8d5ad5483df341a31b4a",
+      "prompt_sha256": "f0c5ee10a4c4c6449d958b5c6762314d249c00857d4b1a4e2c0803dbe29df77d",
+      "wrapped_prompt_sha256": "fa274b123effa55bc95f921811c20208c68770391a898cb53fd225b921aa5bea"
+    },
+    {
+      "id": "gate-song-09-suggest-5",
+      "inputs_sha256": "02ee9869e991599358396b0e98f07e494dbdedcc7e0a722375248a317113fdef",
+      "prompt_sha256": "edf845bfa538370ea61f8775a54c73770294d1ed6df47b26c4a25492eacf4671",
+      "wrapped_prompt_sha256": "502ac4c2a73ad62b7bfb228504500d71bb833e07faba4722d4947f08072fd9fa"
+    },
+    {
+      "id": "gate-song-09-suggest-6",
+      "inputs_sha256": "0cc978fa3ddd0e138be7723b09c2514907a3d2fe20ae709e0b708ab6ee0eaa3c",
+      "prompt_sha256": "fd78bf408afbf9495d1cfeb4f3ef50a5cba430fc993c39175945535912fe86cd",
+      "wrapped_prompt_sha256": "32b975cee9b1a605e29a688a469e7d75f2f73a0152c309cd74edada46cd4e104"
+    },
+    {
+      "id": "gate-song-09-suggest-7",
+      "inputs_sha256": "98d9b3c9f96bad225284570db26901bbd3a0e8213241b000d762be0544757b9b",
+      "prompt_sha256": "fdef8d9eb8ebc7ba85396ea3ff4f80e5ad13256e25427927eca93f5f2498635a",
+      "wrapped_prompt_sha256": "bd324d0e6b57fcff18145b027dfb3b8d3706f26e200b3029acd11c741b29c8eb"
+    },
+    {
+      "id": "gate-song-09-rewrite_passage-REPHRASE",
+      "inputs_sha256": "af97b959b8a44f0266d41f3fa153ab8c442076ad3bb14828b7c9b0772ee6dabc",
+      "prompt_sha256": "0ce49dc4d6b6819184876a229059c096cf0826aa0be924d5027ae54684657767",
+      "wrapped_prompt_sha256": "424b5dc962d0b7156b9282a3da5ff990482e0ad4b45d4755f46b85be4232c616"
+    },
+    {
+      "id": "gate-song-09-rewrite_word-REPHRASE",
+      "inputs_sha256": "81c3954ad464a6a896678e2045582d07060240f56fdf4d96fd8989a56184a4ff",
+      "prompt_sha256": "40e161a775e93f5b676ded150e190e846077f536a73d34f16113096e9639646c",
+      "wrapped_prompt_sha256": "0bbe52cbb780dbde0584a2dfc9c86688369ba93a94556fbeee3a6745a2729eb5"
+    },
+    {
+      "id": "gate-song-09-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "a19c74465430b3d7a87d1d50324aba66f40fce7ceb62f8b339c4d3b8f32f5bb7",
+      "prompt_sha256": "f20241cbe620936dc5bda006412359dbe1d9ef5799e914ccd7be452591fc4e27",
+      "wrapped_prompt_sha256": "7cfc30e964101518aaaffdcfcdbf8916e48d5fd7ce7f91f6977832a9bfdb14ff"
+    },
+    {
+      "id": "gate-song-09-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "00fee534eb2f5fba4c100085a9692c861aedcf6312b12e1bf9f0b9efb98e3a83",
+      "prompt_sha256": "8c50fa654f29fb893611e53e2f29d400cd3d586c63aec6e296e8e57150c9b6c0",
+      "wrapped_prompt_sha256": "9a8a7c60e4d2cfbd50dcb9edd02e63ee52fe372da6e409b2d84b046b40c4b94f"
+    },
+    {
+      "id": "gate-song-09-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "1436716dfd89649429eee70ae4fc35fbca4efff1ddc67b7bda14aa0372d20854",
+      "prompt_sha256": "d52bc3d8f6011369219558c35f5280f8643cb21d0bbd87a8cf0d98e445b6197b",
+      "wrapped_prompt_sha256": "b6a0e1a307a66f4faac5eea5d2e09f4166fa441d0fbacebb49b64ddcf9257cd1"
+    },
+    {
+      "id": "gate-song-09-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "577c153ab0926f42bf93cb3c648a6c4d1d09732e180aa89304d407db3bef9c2e",
+      "prompt_sha256": "843e3657094df981b5126459f5bba710b67316fe5e9bef9801706dc0a2bc8e52",
+      "wrapped_prompt_sha256": "01773625d094b0002246bc6c2091d1b7ab6f0b0ec4342dfe852066bbd9d5b14b"
+    },
+    {
+      "id": "gate-song-09-synonyms",
+      "inputs_sha256": "66fdd51b58586eaf2a8729b65b3a9a92897b3b9ee78398b573aa6488b1005cc2",
+      "prompt_sha256": "c7a0df15db5d32ca067628f268ea81c452d46e3a5a7a531328f928d3432433c7",
+      "wrapped_prompt_sha256": "821eab9441e1767ae730a4d32f63ecca6a7b48c3731430ff7f3995a9235ce84b"
+    },
+    {
+      "id": "gate-song-10-suggest-0",
+      "inputs_sha256": "5bd5ee9412730e8c7c5b2024c37b1384b03711899941e6e5b412237308207e2a",
+      "prompt_sha256": "2e13c583b12ff8d6ab0c3e6d9a18cd2effd1e8eaac84e6f0b86fba828b9ca77e",
+      "wrapped_prompt_sha256": "7a26c1e111dd19c765a43a672a975e3b935588ac7596be82b5f178edfbb1b1bd"
+    },
+    {
+      "id": "gate-song-10-suggest-1",
+      "inputs_sha256": "3b8f11a6f02c967ebf2a1fe4200f0a1322dd37cb6d04dc2bb37539e820e1ee57",
+      "prompt_sha256": "9db956dd11791b6e725362ecab2905e9de9e77dca919cd6f6eaf2978e57184a5",
+      "wrapped_prompt_sha256": "e29597882f1aa974cc5613cea2b5c2ac1646033622697f212a851ce7be9882aa"
+    },
+    {
+      "id": "gate-song-10-suggest-2",
+      "inputs_sha256": "d71bc99606bd8ed4996f96debc8b1f8464773f926a1de6ffe50254bdee5e8d97",
+      "prompt_sha256": "f24f9fa234151d46603dcbc79e3f0d9846e800b101b400a10791a23d9adb794f",
+      "wrapped_prompt_sha256": "c9414f3ade5bfc36dc87f3b036172ea03764dc4566ffb396b6520aab6570b7ff"
+    },
+    {
+      "id": "gate-song-10-suggest-3",
+      "inputs_sha256": "af7448b513ead9a4ac3e559779f7eac3a65d2e8185155985837f197e2229f430",
+      "prompt_sha256": "4ffb3a57cf1b108154451369f538fd7546ca98272661835893ed8db3b6847a05",
+      "wrapped_prompt_sha256": "9bba7cf834b3c00d8d34863b36e0b3feaaf4df565ab251ee013643b9306ef6de"
+    },
+    {
+      "id": "gate-song-10-suggest-4",
+      "inputs_sha256": "ae63ece90a1d59714ace1b4aab884022045c59a51bc00eaf1b8db421c2023f95",
+      "prompt_sha256": "07c1287c1107dfed648455affb05a09f2722d5c97a73b294008299fd694a0662",
+      "wrapped_prompt_sha256": "df25447f812ac43671a8741e6f2632824c2ec716fb64b5fbf4f900c2a2dc399d"
+    },
+    {
+      "id": "gate-song-10-suggest-5",
+      "inputs_sha256": "728c2b26072d1019c0936006a8d633eddf3042ab47487ea55da040fbbedaeebd",
+      "prompt_sha256": "307690a6c6fb374c5fc18121416af9a84d75123c0f106092d4f43746090d60b8",
+      "wrapped_prompt_sha256": "3e865b864390a4628333f8f92180127b4581e818f12cc1e0fce6d9a93d9b4979"
+    },
+    {
+      "id": "gate-song-10-suggest-6",
+      "inputs_sha256": "dee7681599d416d98f09ed0bd9b0fa8801e3671630383a08a02c168d59af121e",
+      "prompt_sha256": "3027d8bcaf02bdf2e5aaae808d8f133ecefd01828a1de1b8130cf5aa7e2f551b",
+      "wrapped_prompt_sha256": "00509899743194da2a5b95a70a4f516761f31b95561280ce0b30fe8006d60a30"
+    },
+    {
+      "id": "gate-song-10-suggest-7",
+      "inputs_sha256": "2b937171485f75495271fc3b79add74807fc826060a8a598eb6accdef337c9e6",
+      "prompt_sha256": "cd117ceb38363edfe1b3ab19d55af4b30d62cc86e28a4cbea4ef86f0be9776ca",
+      "wrapped_prompt_sha256": "ff20b81dfee9400e1c569ed7ac26d11aa1b385c573a87c982345ed38317fee36"
+    },
+    {
+      "id": "gate-song-10-rewrite_passage-REPHRASE",
+      "inputs_sha256": "c87f55039875764c0d34d63de16e6a35a457f92e46fc6df9afec458366f4b7e2",
+      "prompt_sha256": "e39488be799e7a35c3f32dc0be8440738df68147153c1ef2f23758e59ea6c97f",
+      "wrapped_prompt_sha256": "41a2d6c62d2ab1725d3ba468447436fcc2b52bb89c6c2789e632c1704ca8f520"
+    },
+    {
+      "id": "gate-song-10-rewrite_word-REPHRASE",
+      "inputs_sha256": "004f33c4ef2b2f1c5c22da44c65da515bd455d6436b020a14eb7b589e104c5a6",
+      "prompt_sha256": "1990b92696f2a1cf71e68a838ddd798b985ba979245ce4f0e4130fe569b19dfe",
+      "wrapped_prompt_sha256": "6a22ead7202bd07f04da99527f8dfb9a260c9d096951c5e92d687419105adb82"
+    },
+    {
+      "id": "gate-song-10-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "7d16618c2dc97f21cb3bd798e63aa8437ec3365f6746e41440d924729720bcb6",
+      "prompt_sha256": "94beeb388c5e41123c8d2832a0492d3d7a29c69b5708afbf97fdd52903a668c4",
+      "wrapped_prompt_sha256": "34c59948d21c8e841d56024b9604276b51e81fcdc3920f4f84201ed79c91b2b4"
+    },
+    {
+      "id": "gate-song-10-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "8198c3a9ccdd948af0de832aad1f3dfc7f9f6f62e233075210a6a0fa78d98117",
+      "prompt_sha256": "ea45e0f5cb56b437d9191ea96e870ba0b5e159cb09f6fcae496ded3dc14220e1",
+      "wrapped_prompt_sha256": "08c5a17ab6d08b0f20dfce0b79612be271ae94e51c4e2d36d987a3b7b64bdcf6"
+    },
+    {
+      "id": "gate-song-10-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "821484438af8c6fa8185bccd49564b0d3c8b32df594bc0a43b4b646940fe4dc3",
+      "prompt_sha256": "6a7ec58bd3df21bb4f3723deeb2539477700a5251bf80d4e84bf945fac61c2df",
+      "wrapped_prompt_sha256": "db478576ce07fbbc1745040df60ca817dec805be95371073b40faa65cc3f7bf7"
+    },
+    {
+      "id": "gate-song-10-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "4f6625345ad4ea481147c070c2c3655aada3ca41acc642e9f561aba9c3f8c5d5",
+      "prompt_sha256": "ee4427aa4765e3f966be7f3e0daee950d7f80ebef6035c7b1d74245a6fe632af",
+      "wrapped_prompt_sha256": "00b161b47af922f80df2338c79ab63fd8d8799cb509b5153e240114474917ec8"
+    },
+    {
+      "id": "gate-song-10-synonyms",
+      "inputs_sha256": "92678cf74dc2f2343366674b6dd16694abebb5c7e0cf1d81d5416495803f9445",
+      "prompt_sha256": "dfadb5d91448296e3049b95c7d8bf459bffcbb4347e18626851e0052f3f20caf",
+      "wrapped_prompt_sha256": "fb275dc27d530edd5e391e07b7346de31b769997d92510d4ab0645b0396a2c39"
+    },
+    {
+      "id": "gate-song-11-suggest-0",
+      "inputs_sha256": "d6e802cb65b524a3a52f8ef4dab766bfbffc6bc579de0ab569e02e24c99fff42",
+      "prompt_sha256": "51f8472a105b1177cdfc04c4322b67e3a20368b4186cfd3dcf295e8c6bf6cfd4",
+      "wrapped_prompt_sha256": "d29552892cebd3e9f467e0d9dd0398572b01a41fec68dc7c539e8c3e05e43ddc"
+    },
+    {
+      "id": "gate-song-11-suggest-1",
+      "inputs_sha256": "0bdb5ac4c189f484bc0a18ea873037b30e048f8c745d0df2a9c6d3819c817881",
+      "prompt_sha256": "9625df89d555f5ec2b38769005253a42f107f4bd0248dd619250b6126fa80551",
+      "wrapped_prompt_sha256": "94666672fe668da2950ab3a0f7269a97420d4afb8e10c7c1d3a3cd69f0c73707"
+    },
+    {
+      "id": "gate-song-11-suggest-2",
+      "inputs_sha256": "1283199cac4edccb35f214e5c09e13cfc3564a1a2fe013e63e68aae520a720bd",
+      "prompt_sha256": "15efcbf8cd29643878fce9edf55646491b91d9a6cdbfb3db90b7af28ab22e92f",
+      "wrapped_prompt_sha256": "1eaddd2d282dac7ba1a79e19e9223a22cbf956ed49aa51b04be6c0039986693e"
+    },
+    {
+      "id": "gate-song-11-suggest-3",
+      "inputs_sha256": "8060e2a931f85fb06dba7485a434f16ae81864889ba4a0e8da689b2dca542869",
+      "prompt_sha256": "1d246a5d1ee209f9259ad59bbb7163c2c074916daae6120940a65fbad1795006",
+      "wrapped_prompt_sha256": "5b1c219ffe7f9c5c1f5fae745be74e0cac80b6527889d3a0de54c95766bd56eb"
+    },
+    {
+      "id": "gate-song-11-suggest-4",
+      "inputs_sha256": "5be5f5be86ad7753eb9c74b5514217889e45c0e4e3571b971016a35b264da2a0",
+      "prompt_sha256": "b129fb38603f08ab9af55b64f1b6e69724c2b3cb85ff6ca690d4f4a14be445a1",
+      "wrapped_prompt_sha256": "acb4905cca4a0d3a2199a178a5799896f76adf2a6d9d27885aa615240ae3196d"
+    },
+    {
+      "id": "gate-song-11-suggest-5",
+      "inputs_sha256": "54aaf976daded57ee7e0c89deb438f3d74d2e84e7b9d0d4f436a6ace20816630",
+      "prompt_sha256": "ba14c9e4d6e1fa707ba98b60aaa5b2521d5b2ea3281200037e95bf15a0ef651e",
+      "wrapped_prompt_sha256": "421afc721ca0b916d1a2048c026e3cffbe38782edb9c79edab1699b80af01c17"
+    },
+    {
+      "id": "gate-song-11-suggest-6",
+      "inputs_sha256": "f145df8129fa68fc37a9de97373c770dd8a8eea6649fd1c2dbe8d5ca4f6370d4",
+      "prompt_sha256": "d74e3674e441e45f0d9d3311fa3dc60fc0091d9923523a6614ca03546b8c4e6d",
+      "wrapped_prompt_sha256": "3c4bbf741c113c04884a89140151fb3e6ccaddf7f540726025fd9589212e6850"
+    },
+    {
+      "id": "gate-song-11-suggest-7",
+      "inputs_sha256": "631ac942deb3b302458e5c19873befa81d599e667f35575536d8c5b63669b3ec",
+      "prompt_sha256": "0609df176078b9acee3b07fae8d6b080613f65cb76853d84e35c5576572f13b5",
+      "wrapped_prompt_sha256": "aaa48bf26adc0ca75ab34e42dc9749df0ffa464c16b2713c1cfbec4e22ecbcab"
+    },
+    {
+      "id": "gate-song-11-rewrite_passage-REPHRASE",
+      "inputs_sha256": "901fdf1ab7aa4f277efefacb583b1bc24aa4b2de244d37d5e42e43cbccbab0b7",
+      "prompt_sha256": "1867cf483101021adf93ef2221c47cb53a87ec08234f77e9c1965b0201e6675c",
+      "wrapped_prompt_sha256": "1c074e6d5e6bc48ebf21758a64de701a2f6a5b13bcd30e4d79a2debc9d875145"
+    },
+    {
+      "id": "gate-song-11-rewrite_word-REPHRASE",
+      "inputs_sha256": "f82477ca82f1be868f65a7dfe1e0d54ff6f07abe54d7061aa2e66e9460c0278b",
+      "prompt_sha256": "a3bd18eb75331a8cd90e8c1045e1b15bf9269ef2636fff51c07333a6a8f0efe7",
+      "wrapped_prompt_sha256": "40549fcc6e42c2546d00a57486c6ec4f638b9c77bf5d79e26e29baaaa3d20411"
+    },
+    {
+      "id": "gate-song-11-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "5229fa5474c6cd27a403c18104f4cc7c9228723a7f38bd7339d640a1a02a92cc",
+      "prompt_sha256": "be1c40b7a187a64527e6d45ba6d3fd8d4dde8700e12f24b65b8b44dddadddfe1",
+      "wrapped_prompt_sha256": "990f6aef7f5ab59a6c30ea86c9888c97fdb6db8d8fd03d27545aea87045544c4"
+    },
+    {
+      "id": "gate-song-11-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "cfc3e8a3b7197714efdfdb2b0c3f30d66693575dcd2f0035a38c16a724cfc4fd",
+      "prompt_sha256": "3c4d8112c9ad1989638ae77446eb6e8dd91c7e55381ada83d907fe5433cbf5b0",
+      "wrapped_prompt_sha256": "9fbad19b179911ab861b56d8a0d9bcd6624c7754a74750ebd3f01c614f3deadf"
+    },
+    {
+      "id": "gate-song-11-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "d28883cf18ae7596e1ee06e501ffc3fa56ca0e115a183de51e895ed99d89fa83",
+      "prompt_sha256": "ed0eb39c8d3c6557b1881417251abb6044f2bbe6951d166c40898ac8503180c8",
+      "wrapped_prompt_sha256": "1ffb3fd34921d72cd34dc0e44c70d6bb31685eb190d4ea8bca8707d1e142c2d4"
+    },
+    {
+      "id": "gate-song-11-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "087424e995fc61664efffbdc93b09a66a15017c6c04d095e5a231685b9f91836",
+      "prompt_sha256": "fd158cd9bc2699776e79d1ec7702bbae9df31d54e323d8b3d15c136299447088",
+      "wrapped_prompt_sha256": "55a00c074691545e12da67084ed6e8bcf2e559023b1cbd78d9f6762211de1b7b"
+    },
+    {
+      "id": "gate-song-11-synonyms",
+      "inputs_sha256": "55c9ddd4f544a540b8e3ba882192de7cba58a6437205690e73fb466d0e286050",
+      "prompt_sha256": "726a4811de3de2682230fdd7b2957b325899b767a536acbd74e32a33793bddaa",
+      "wrapped_prompt_sha256": "1a15abc2155a7f176d26a87df41d8d593c002a104cd92290921f6fa6daa4e7e8"
+    },
+    {
+      "id": "gate-song-12-suggest-0",
+      "inputs_sha256": "74a98702feb49d19db7bef6cc5a3a7403a515041d042872304a8f3c082f208d4",
+      "prompt_sha256": "a9f5e17d2cbfa70844f77084dc083082d9e774f6fbad14c16b31e973ba0f8b7f",
+      "wrapped_prompt_sha256": "df01c5512db49ab7e9b7ac5eac594fdb90b49efe9f78caa99cee56e4d05bbe44"
+    },
+    {
+      "id": "gate-song-12-suggest-1",
+      "inputs_sha256": "c9252c78197e6f4dab4f14e8ac411e0593b6250158716dcc46199d298ef45141",
+      "prompt_sha256": "30a06485d3b6952e435a8057017362a00a3bd5b7278c10281b1a3a53d912ca46",
+      "wrapped_prompt_sha256": "6a8dc20243adc1b50c2aae8430fef53acf5d590547d3a44324433cc0cc8c22ee"
+    },
+    {
+      "id": "gate-song-12-suggest-2",
+      "inputs_sha256": "86f9bb0854fe19d69242e78223098ed4e6aa98ef28760f166b77bd9b600389b1",
+      "prompt_sha256": "ca479967f41cc4a2a034bccd71a4acee932b3cc2e335bf8d1932e435b056e26a",
+      "wrapped_prompt_sha256": "21d65cabe4ffc0bf4c96d268721b2bfe1fef301eea8e45693fb7cb182ff2b35f"
+    },
+    {
+      "id": "gate-song-12-suggest-3",
+      "inputs_sha256": "a88cff869207a35c5ed720bc05ec5f34ac62213be0ecf82808a64c32821a6ded",
+      "prompt_sha256": "d7b77d917f31429bbaeee7b23f031d2a2a7e47b6f43e0f875574692a45a45acc",
+      "wrapped_prompt_sha256": "917412257cb1c0dbfc7183aba7d288f316130ed723bfbac2f6fe3c4394929ba9"
+    },
+    {
+      "id": "gate-song-12-suggest-4",
+      "inputs_sha256": "64541b0ecfb3a3c066841ad2aeaacccdc0a849d5d31eaca00485a5b834e9651d",
+      "prompt_sha256": "cadf5bc4566735c836590426c70517153d23e11b746f068a00b67552d5cf0908",
+      "wrapped_prompt_sha256": "ed284e0c97940b16cf3e54ded376eb88ef8ffb1eeb0254d034bacbab73861037"
+    },
+    {
+      "id": "gate-song-12-suggest-5",
+      "inputs_sha256": "550af9629ad417263d81a27c29df9e60f10f765381d251505f58bc31699837fd",
+      "prompt_sha256": "575ba779e6fa24b36c2d1692bf732592d772977bc6bdddff5b402456f10b73e1",
+      "wrapped_prompt_sha256": "fa82708ce83e77bcb1f95a3e4047081c2b7cce00a3b4384abc989d2708821002"
+    },
+    {
+      "id": "gate-song-12-suggest-6",
+      "inputs_sha256": "225bb7c0129299ea5d14f742c8d39cd07c2ca53f4fa87e5712916b4ae8d45f33",
+      "prompt_sha256": "f8aa3887855c587b98f671227f1837b3c7a988521f29b46ca7fbf202b7164b93",
+      "wrapped_prompt_sha256": "856da43dc3472989cb89ac79fb379a03df026cd0d255ee5f20a997b1f9b14052"
+    },
+    {
+      "id": "gate-song-12-suggest-7",
+      "inputs_sha256": "8e26e0f10dd390859f6065c3a79f52400823ca3cc2bba07004de08cc1d530382",
+      "prompt_sha256": "11bc52b89140e277c0e433114c2068f468c870969d7840bb8eff58a6f63615b4",
+      "wrapped_prompt_sha256": "ee5421524f9d18ea6a1aa3955dd916d73045469ed0967d15a79ffbfe01c3c552"
+    },
+    {
+      "id": "gate-song-12-rewrite_passage-REPHRASE",
+      "inputs_sha256": "f56a51b7dd3b12969b9f507b98945da89be2f79d7296c89b6bf1c25b93df31d6",
+      "prompt_sha256": "d2f456488357368866573244c01e97926b6478d46932c9da394876089fe05192",
+      "wrapped_prompt_sha256": "3c09dbac32b112ad82d76a1359877d4da30d231d7868d81ffba08baee0f0fbad"
+    },
+    {
+      "id": "gate-song-12-rewrite_word-REPHRASE",
+      "inputs_sha256": "87a98b4c8b424b53a5dce7d378135269faaff722805f6bb8211f5c6f794c3c04",
+      "prompt_sha256": "5ff273bd30b8619fc8981cd9e15d89a83b6ebf3eca997233e84877f08a994a93",
+      "wrapped_prompt_sha256": "54b868582205e968e0011675803b22d8923fe3b231be517aeb75375050cc92f4"
+    },
+    {
+      "id": "gate-song-12-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "a552e50c75922c829681f4c95425bc3cce934460112d23f240d2c44fab1dfbcd",
+      "prompt_sha256": "48d2dfaa0d3c10c4df117aef6721f6e63d34edf1a1f978a9aed993c55a915dbf",
+      "wrapped_prompt_sha256": "a2157bdc0501c8ead8fd7d5a3fc7c037baeb6257726170c5601e9538579aa90f"
+    },
+    {
+      "id": "gate-song-12-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "42ff43264fdbe85d378694772b6e7a462d93851ecb7b89588f5d1f051802e03e",
+      "prompt_sha256": "a04dfaae8ec722c568d9fa42611ef70269ad11bae13d844f2302d96221776507",
+      "wrapped_prompt_sha256": "b72a425ff06f16e73bcd73201b38a72a22efb628d78d5e77c3499740c4d32849"
+    },
+    {
+      "id": "gate-song-12-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "15bf5b3d672599ce10abc43a15c5136247396122793a3ad8455dfc41fcfdfeb5",
+      "prompt_sha256": "deac4cb935ef9df20991ccb0fddc49c0ce874ef1fcf80085b3254352bd6ba604",
+      "wrapped_prompt_sha256": "93c21c480dde26a47acafeb5fb2122e6c14f0a7ae4808284c80b2648f3bfe537"
+    },
+    {
+      "id": "gate-song-12-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "527bcfc84234fdf56921c352c500a3d787752ffc5ab57d54819ec60027f95d10",
+      "prompt_sha256": "057f55b20ddb507dc17f65e54f13bb61dbf2449e42b043cc61b748d18f2f83a6",
+      "wrapped_prompt_sha256": "501e2264fd32e794211eba8f6e71cc71b7f30f33de26c883758f69428b31e98c"
+    },
+    {
+      "id": "gate-song-12-synonyms",
+      "inputs_sha256": "018996511bfe196987c96abf3bd58d57888c23d37edf3472151b5d15eb15ffde",
+      "prompt_sha256": "6b8ea317b6c4b336f5efdda136cd0b035220b61394be3d0fc445b14dad71bb96",
+      "wrapped_prompt_sha256": "122f23f4ed79e50eac378df2f99921a3e5604de42b0fca25c5e7c44f1c4b00ea"
+    },
+    {
+      "id": "gate-song-13-suggest-0",
+      "inputs_sha256": "8f105641fe553cdcba61294aabc8f5535e1996c8c418c7342a4a031f4784f61b",
+      "prompt_sha256": "8187ea92d3e26cbbea78ee793ce7ce7c339bb0161508cff67b9fc2fa2263c66f",
+      "wrapped_prompt_sha256": "c58f0d16fd6fb9c04e0deac60902121ef8e38296458e8b5d7247c9fedf404bab"
+    },
+    {
+      "id": "gate-song-13-suggest-1",
+      "inputs_sha256": "840ec8641d105908ae915573cccd652da21d43d938292db7f53f415ad78e8a50",
+      "prompt_sha256": "7593286dc11677a0eafe1b205325baab4ce327b46ab50b53d004ab37d8036b46",
+      "wrapped_prompt_sha256": "2d838c2c82bdb66ec5dc9e7f0223670982776e5eb2fac3683a64dfa5f1c1c689"
+    },
+    {
+      "id": "gate-song-13-suggest-2",
+      "inputs_sha256": "14399a1e5e20b927299cb6a692e144b0346c364753281bd776ecc234cb34146c",
+      "prompt_sha256": "21af31b521d4f933ffea216ca85266e2daf2f9288e165a420d54f1522ebc8486",
+      "wrapped_prompt_sha256": "ba96fb797138b08620b32f176291907444ecd2f935e00151d617cdc18789b5b3"
+    },
+    {
+      "id": "gate-song-13-suggest-3",
+      "inputs_sha256": "9f48fd668b76b92fc43ae0f546080338375ba2ea32b547d45941628a6dfe0547",
+      "prompt_sha256": "eac8662a323572692744843be617631fefbe3075549724e02cd03a8dd8170e52",
+      "wrapped_prompt_sha256": "8339cacccf817940edbedd24f351c0ee6ccc68facdd087107755c9658d4b7905"
+    },
+    {
+      "id": "gate-song-13-suggest-4",
+      "inputs_sha256": "146fa4a44bb136b1638eea47e1426a59730f57b080bcb84dab6a58d1db0e837f",
+      "prompt_sha256": "430fb49f1d04559db14fcca6c70c36bd38d0028a3e889a92a1cb01f0c7e9b999",
+      "wrapped_prompt_sha256": "ee2de8dc081aa76a6cc707472612c20d8ee3d5a94e8e97c904f7face47ec5b9a"
+    },
+    {
+      "id": "gate-song-13-suggest-5",
+      "inputs_sha256": "f83f03673192b9c89692897b459f40294fcc961120409224e5f5d6580623d93e",
+      "prompt_sha256": "a6d03b0038b618715b34f488f7e5e9aeff78b5aa205e35e76b8ac0abb9825485",
+      "wrapped_prompt_sha256": "7f77835377e3b14b2aeb693af09b80a3b3d4ea312bb862631a8181cc72d860f6"
+    },
+    {
+      "id": "gate-song-13-suggest-6",
+      "inputs_sha256": "f67c0154f986f3df05920b7a6a3aa1012f236184cf5cf50a736ba0563d393fea",
+      "prompt_sha256": "0ecf096fd533b94360d399faee832c66f9294813a307cf1dd1a2afde3d7dac2d",
+      "wrapped_prompt_sha256": "737d6e1bab9378f073560da2738fcb3b04393dc18e9a0411ed3cc934a5a1d632"
+    },
+    {
+      "id": "gate-song-13-suggest-7",
+      "inputs_sha256": "970531ab18d845dd31cbbe423c25fba70547a9074823f9d7cdc13ba04ce63221",
+      "prompt_sha256": "ec5c45fd435dd7cf6e71dd222f4991b2e3d5a9dc1dbb2316112e03dbe52c4623",
+      "wrapped_prompt_sha256": "0f350118db6875e46af8dfadbc426ac3304919ecac4bf04c54db554370881d09"
+    },
+    {
+      "id": "gate-song-13-rewrite_passage-REPHRASE",
+      "inputs_sha256": "4269b2aff7706519bbec7ce8c1766438037a3ce16a5230374d2e3820b53a60d8",
+      "prompt_sha256": "0e2da4b3dfa1b46d93f22d03c47bc5a36adea9dc14a3d52d139550c46590522d",
+      "wrapped_prompt_sha256": "35f361cebd5b39f1f365f34401683e65d0a976c05c96dcc9cd3f545ff7b8a970"
+    },
+    {
+      "id": "gate-song-13-rewrite_word-REPHRASE",
+      "inputs_sha256": "2ea23472c723d4034390712a62c5ca16f33fe123a4480fcb7ceb0c3e71867d03",
+      "prompt_sha256": "f6353b9faeca3758b39c766c951c5d63e5e670edb44a93c90f8f05a52c6f3d38",
+      "wrapped_prompt_sha256": "6e712a3ff93e745a73dbc1cee9e4bdb486c954c6ed1ea7a692b78d82309c2082"
+    },
+    {
+      "id": "gate-song-13-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "b833928d387bc5d6c5e8d15d7da01ff7f5b40991ae65b048375f0ac57ac67fdf",
+      "prompt_sha256": "1f6b8d54ab0965b71b91fc9b11b83ea92ea50500e4f4c1ab101665c24579bc10",
+      "wrapped_prompt_sha256": "93e93b67b0c038d43ae192df4220464a9693afe2fea3adcd7085607b2708f493"
+    },
+    {
+      "id": "gate-song-13-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "b89dda43cd48884fd545e4f8839f404981ce5b4b5f1d4d1913f9ee1ebaeaad04",
+      "prompt_sha256": "c8c3f8e80aea29605594675aacdd7e4593774354ba5588fd3607c37824fcc374",
+      "wrapped_prompt_sha256": "dc516601de167095f58270481c0fc278210f92628e3cafbc42d5b9dae185862f"
+    },
+    {
+      "id": "gate-song-13-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "1ae48a5819b9b335993875c308296c42bab5f785f8ebfb5f8431e3c563c8822e",
+      "prompt_sha256": "053b725d5a5c2efe8fd4f832798f96093430182854f4f7bebd5b5e925770b6e9",
+      "wrapped_prompt_sha256": "85d7e57bafa2e15952d2cb1a28a64547b1528eb08cca0264f1dc3e3668a76ed2"
+    },
+    {
+      "id": "gate-song-13-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "f779ef1f8ebc3508dad8fae2524cbd5a93f54452bacd4784a4415d1629385afc",
+      "prompt_sha256": "2622d7181d43f3987b006b20c2bbd2411427a9ff3e18644502b42afc543a53a2",
+      "wrapped_prompt_sha256": "d835145e2e2d89ca955032c9ee30972066d7f5995086068ca866affc7bfb7486"
+    },
+    {
+      "id": "gate-song-13-synonyms",
+      "inputs_sha256": "6a46d0a6af33e60860470a9639f0445abdc448694056d725d3ff807abaed8211",
+      "prompt_sha256": "b3877d2f44c83292a0b99dd3639f08d6c64aba335656fc1e0d81bbbd85f7ede8",
+      "wrapped_prompt_sha256": "531ade26662a864d2f3ba2218bcf9e824c9a48959c39b37394cc5b8749d75bbf"
+    },
+    {
+      "id": "gate-song-14-suggest-0",
+      "inputs_sha256": "d52956059c2ec0ad47d483a6a03f36795a23ae2c333f882dd36c3b83a681b36a",
+      "prompt_sha256": "499356db9c8bd85cf39f747cc132d74c90f0c93b4d3d1af2eb974df4bdd588bd",
+      "wrapped_prompt_sha256": "0dfcea4b7119cc2865df67dcd1af041b49af1ac10f3ade56c29200137cde4602"
+    },
+    {
+      "id": "gate-song-14-suggest-1",
+      "inputs_sha256": "43faefdc75c8596f35b9cad332769b18b2ddd9fc6075f570f24b4a11049392b1",
+      "prompt_sha256": "a7d823de6fb10e48cb41eedabe19ad9a2ca0ea278328ba1b139a3296ce6eed76",
+      "wrapped_prompt_sha256": "85e19ddfbd92b61be47f59f4e4a1477cfa1c0e89cdcecdb3d1c33f82b0aa12ba"
+    },
+    {
+      "id": "gate-song-14-suggest-2",
+      "inputs_sha256": "b594a5c8f11c316b0702262188f5e654e9f6b720b8e1aae0ccaf784095c5593c",
+      "prompt_sha256": "abe045518c83dc594292f8bc03fb8fea7debd8d760ce8bcb29b39e753943b287",
+      "wrapped_prompt_sha256": "29554046d8acbcbbbc9cb51de4774334dc3f595d8a3c222c9d24a405fdc53e5a"
+    },
+    {
+      "id": "gate-song-14-suggest-3",
+      "inputs_sha256": "cc96518c8fa651c2d5a02675f15c10dd56c259a6a0edfc28f3bb32e78548a682",
+      "prompt_sha256": "b7c2b5eaba905f360e72f9dd8ff0211ea0562dfd1a096878d42466e33b0e962d",
+      "wrapped_prompt_sha256": "2ba402c189c0d8c619eab0f4254758e9944cc532ddf1d1a9981539e278a11116"
+    },
+    {
+      "id": "gate-song-14-suggest-4",
+      "inputs_sha256": "7e64010db1dba835b537e04c509a110547f0f185675e4c1342fee2ee5d1b74c3",
+      "prompt_sha256": "dbee28db3842475de9d059bc96bd5e30892d31bb4ea685bcded60df1bd3defcf",
+      "wrapped_prompt_sha256": "863334d9feea1acddc43aec7a9117a14b3df3a6b55a661e5382be1889314cb54"
+    },
+    {
+      "id": "gate-song-14-suggest-5",
+      "inputs_sha256": "c9d8c83dff66cc26632c472799288c4e623ae3abf6cc75d3302bbad6500c7877",
+      "prompt_sha256": "e2eb9d04ac9bad919a2e12955a4f823dc90bd25e0749d466c060a1614dae4ee8",
+      "wrapped_prompt_sha256": "43cca1495c5e29d9582f9787402bb41b989559bdd1a07c147d467497b311baba"
+    },
+    {
+      "id": "gate-song-14-suggest-6",
+      "inputs_sha256": "842d44e566e6acd7bef2cd803ed4b84ec58c0f956282eaf1989744fbeabc0f34",
+      "prompt_sha256": "bc9e33884ace95b1dc9a49efbef2a4afc82e6d1ae3404bc29823b37f5097856d",
+      "wrapped_prompt_sha256": "9613e97e7e70275a9286d65333c87c90a00c9ecffbee63d0fc9ea70c61160fe2"
+    },
+    {
+      "id": "gate-song-14-suggest-7",
+      "inputs_sha256": "f3b841a4ef06ea1b941071b8c411f405a66bd362bd24cc9eef8bc4fab9bd6a39",
+      "prompt_sha256": "13085a69a42aae0145a7deb2e76e6d6986de88ba3ea71f4846b2cc69ce6bfa35",
+      "wrapped_prompt_sha256": "883a93f15ba98f5f8643aa0fffe62a26f2a9c8f37d61001886b0f15ecb5ed803"
+    },
+    {
+      "id": "gate-song-14-rewrite_passage-REPHRASE",
+      "inputs_sha256": "88afe68d3823ee3bde3e7330e4c6d5129319ecdd78e5ef870b486433c0fac883",
+      "prompt_sha256": "d3b3e60faccea76e1b31666d4bfdad5eb4f42f1c7af9b07a30861dbc57997682",
+      "wrapped_prompt_sha256": "1374bbd2b802b94a61b25dca98f33eef17cc26d29e815dca45f2502ed6c590c7"
+    },
+    {
+      "id": "gate-song-14-rewrite_word-REPHRASE",
+      "inputs_sha256": "179ddbb51a639be9e0aa1feb27d3ad2fa7621f4ff196e1957e74278f564da2eb",
+      "prompt_sha256": "f35db228b092a770105076ae7aa344d62a1fe6350a8c94920eaa189f35fd18ef",
+      "wrapped_prompt_sha256": "3d89f32739280a3ce73ffe13901f08d463fdaba433a0be69370bb52ad7025da1"
+    },
+    {
+      "id": "gate-song-14-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "48d14749b68fadf5eba5cf4c6031c5a0df4e2e22659681688f5786368be59a63",
+      "prompt_sha256": "4c2047ce135659ffc50a952305261c26533acc6c05f350b27cc11b6c2b516c39",
+      "wrapped_prompt_sha256": "7c06c63af5f151a05b6fadcaf1cbfe690afdc5f4c8196e0c0f8baa495a2b2594"
+    },
+    {
+      "id": "gate-song-14-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "cb3c9f6e8bc6d9995ee9f676efb7c7fb03ce85bd169e95b9c89479bed735924b",
+      "prompt_sha256": "326341abe80a5a1ad4f447a3b137c4f1e5054abca79bc443cbf602f32639af87",
+      "wrapped_prompt_sha256": "c2051658fa7effe1c463ae69e5046d29d4772ed1707b2a538b9b675009230276"
+    },
+    {
+      "id": "gate-song-14-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "2f7601b5ea2cb535890d30b06a6c5ed0f161711f8b90a5cdc9cedcfcd7742784",
+      "prompt_sha256": "2bd8d3aaf9e4155c8a3bd83b93a60e7fc8c46257ee336a01def1eca579c9edf8",
+      "wrapped_prompt_sha256": "5c957333a9ebb6b0673738160d29fa2843df1eb3c2e9b4d95a335d947a4226c1"
+    },
+    {
+      "id": "gate-song-14-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "59cb0c55aa2c9b12c3bf5c3f1ec93ad69ccf81f77762f2b7049aea1fcc3849a4",
+      "prompt_sha256": "e1ab2883918cdd67b9b93dc9060f4d49548d7708b2b5499df4603d4d26a8c308",
+      "wrapped_prompt_sha256": "c379966d059dc7eb30432701a4f9982ba0d3d3f126e1da72950bbcccc707419d"
+    },
+    {
+      "id": "gate-song-14-synonyms",
+      "inputs_sha256": "7a89123b7fe4af69c613cc3c787e242dd9c4a86752d994019b3419459d7f931e",
+      "prompt_sha256": "152594cf155272d168fe5fc717d9b9b90cec65fd370c0d1e69493ffd9c5412d8",
+      "wrapped_prompt_sha256": "da1ef4bd2237d5725e177bdde76850c79933ee738f236e497a6b4bc87dde4012"
+    },
+    {
+      "id": "gate-song-15-suggest-0",
+      "inputs_sha256": "294460e537900e97fbf23767df75ea3bf959f4d4e17ab44ddfcc6ca7e936814f",
+      "prompt_sha256": "b9a0efd4b8efc1fe000423d2361c470da4944cca91ab0a3d99ed78636e30de61",
+      "wrapped_prompt_sha256": "e7bd033112907eea8b347337dde4099954f3e5d80e5b734b0adabf89fdfc83c9"
+    },
+    {
+      "id": "gate-song-15-suggest-1",
+      "inputs_sha256": "8a78f4b1e61f0034bf85714b9882c3e391cd314186be81f8fc401a65eb7a8243",
+      "prompt_sha256": "027b46abcba6a2e60902ff40c584d17d0a2ea95d0739f65fcbc29e4d2815cf8b",
+      "wrapped_prompt_sha256": "68f23852122fd676fcdf11313e4b5db46da599fe1fb875a40f8d67107c0b92d9"
+    },
+    {
+      "id": "gate-song-15-suggest-2",
+      "inputs_sha256": "8c718fc18de5bb588803cfde0a50e02e24e153a98e22c822b00ebe595954f4ba",
+      "prompt_sha256": "e17fbb394a21ed128d754114f092f4420a4cd11ab936a7219be2ccdefdb8dff5",
+      "wrapped_prompt_sha256": "dd904540bc9e00b16a8ae39aa9f505f482be94ba611f16065239f93cbd9e5da8"
+    },
+    {
+      "id": "gate-song-15-suggest-3",
+      "inputs_sha256": "eb3c46440b96d70f0d12a6b0e5561d7c0af48688d2b0db8b1a7f8be1faa64cac",
+      "prompt_sha256": "894c248dcd50a64195a4c70ebc8c64ebf94c8514b3123da81f1d08a48b751cf5",
+      "wrapped_prompt_sha256": "cc34a73e303a1acdc378085942990b780b7825d7fe5f81d2866fe0101e0d55a4"
+    },
+    {
+      "id": "gate-song-15-suggest-4",
+      "inputs_sha256": "121a2a55c3b45d866eda07afcfb47392af3042f6ecf2a1f6c8025f0ab2e73291",
+      "prompt_sha256": "b9d9b807b338c730f93b06e0de290962c00c9b35d0dddf4b9deb2d9a6f439db6",
+      "wrapped_prompt_sha256": "cf055224de930b8c89cbbcf001b4e35d2d708db66308d8cdaddc6122465a6dff"
+    },
+    {
+      "id": "gate-song-15-suggest-5",
+      "inputs_sha256": "019d28db5226257c9f31fd020c6dbd0bd53b2668744e166523f102d4b8f674a7",
+      "prompt_sha256": "8124b0b75e722f78e4de311f3829b2a9414095f43e16df7bf51c30818b377914",
+      "wrapped_prompt_sha256": "c0d243f21dd7d90ff93ecf1cd11da155efcdea3bec3e42d7a9ab806a723f339e"
+    },
+    {
+      "id": "gate-song-15-suggest-6",
+      "inputs_sha256": "1998bdbab865dc2a6965395d5b3f40736e58c647cfcef2f3d3e30cb531f0aea3",
+      "prompt_sha256": "96cc387b072e48b46b21f96e5653dcc5986c72c474fb71768e1ca54875996847",
+      "wrapped_prompt_sha256": "63ee945a41e3e2e356780310cfd62db243815f1b01175948c428a13618596670"
+    },
+    {
+      "id": "gate-song-15-suggest-7",
+      "inputs_sha256": "86d8f4c772621407e3fb3ebff6eb5334a3a3e1febaff7912c6c89a364665db35",
+      "prompt_sha256": "3523a06262cdc65ca15d690c7527004a55f08ba78567692822cfd37840b4d570",
+      "wrapped_prompt_sha256": "260b1e0cb07a20398eb896c40a244b5ffa4fc873640292235469ff33515a1e23"
+    },
+    {
+      "id": "gate-song-15-rewrite_passage-REPHRASE",
+      "inputs_sha256": "223bc259497252e0dcf2e58a3de4dc1f15c52ce1301a557418a1ca3346dd86a0",
+      "prompt_sha256": "e5817fc898400a82f6581c2c791eae19501a08b7c79c0a88f9b10aed55334ed1",
+      "wrapped_prompt_sha256": "4fe5023fb2bdae482af58b3fbac9ca060f0fc70dc6dcf0f6465450b9bfafb93c"
+    },
+    {
+      "id": "gate-song-15-rewrite_word-REPHRASE",
+      "inputs_sha256": "55b7e92b5e1b786193ac4a3ab927b52aa33d9ae6859d1a03001dfb00918386ba",
+      "prompt_sha256": "c06fda1f3bd2eae3065fa2b23d90ecf5dccbf5405eafd18bda1946eb8b81c28a",
+      "wrapped_prompt_sha256": "b8d1972c29fbdcc27075f49cfe4187f71748ee4993909401db10a5044f5fe10c"
+    },
+    {
+      "id": "gate-song-15-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "8df943067b40d4b64cdd4db62749a8a3c640b13cb93309b3e59d8153f33939f7",
+      "prompt_sha256": "7c03486c97bdd61f33dc5b97d981e30a78fd53c38dbeb830d07ab78cec05d08b",
+      "wrapped_prompt_sha256": "265bb50fef9c281c733887bdbf5cad906939e8381fd5cb4912755029f0f9237a"
+    },
+    {
+      "id": "gate-song-15-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "f3e6d440a070083923d2de376e8e39d12130ae737a584bec84484e920f596fab",
+      "prompt_sha256": "3b74cd62757b0548f1bac9d9255fee7af4e20db337a32543f4b07686cf574d67",
+      "wrapped_prompt_sha256": "50523158d459583e5e0c3559250f0a65edeb82bf8d6e3131bebf170d64806a60"
+    },
+    {
+      "id": "gate-song-15-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "55254bfb8131ba1bf8e77be1ed99b17ba64349fbfe5951e154f0827eecfb54c7",
+      "prompt_sha256": "6757caf1e955b6c164cc422139f633aa049934ce1e73eed9e14f0630513cc906",
+      "wrapped_prompt_sha256": "7e6269fa8787997005d8cc7ba07db34d26bd6c84564b9237ce32b25dbd2999a7"
+    },
+    {
+      "id": "gate-song-15-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "edd1468846f75f58c0fd707dbc68756ab4eabc6d9626e62d80e1c6ca31fa359b",
+      "prompt_sha256": "98b2623544da0bec9a8b5d9f4acf957f36183eb5cf98fbb5465153a1b73e3b0e",
+      "wrapped_prompt_sha256": "9c6ed46d2115d7cddf0e5fc3793bc2b57f1ca38b8c49d454cc2d09c0e9593d13"
+    },
+    {
+      "id": "gate-song-15-synonyms",
+      "inputs_sha256": "5fb8985bd5abc416d221429dcc24156dcbab988374d61d00bbdc58a72b7a023e",
+      "prompt_sha256": "d1f3060f69dbf174b3a580e5457f391a10a50d4a643ea2e9d33533a0609f8669",
+      "wrapped_prompt_sha256": "9a4d2fea2cd31d576aa08a8bb870bd0cfbd2cb18a8ccd0a22ee1ccc1f7d8e986"
+    },
+    {
+      "id": "gate-song-16-suggest-0",
+      "inputs_sha256": "a0a8aad07f77cd7467ee2b956a59227a2807ae2749b133fb8430f5c9709e577a",
+      "prompt_sha256": "a11aec7bd27748d2e23dd4000b774887bb31b6c7aab08230e8c2631227db4b41",
+      "wrapped_prompt_sha256": "9434da5ac526d3e1dca5de13c92ade00808127a1ca59b971b8454e9d578e8ff6"
+    },
+    {
+      "id": "gate-song-16-suggest-1",
+      "inputs_sha256": "e783e6fb433a762fc9d36a3fb3edfcfcc56cf0c11806de5afc3d961ccc48bf7e",
+      "prompt_sha256": "befdb35332c37aab8f091d5a289465e1af3f2d62867682724a04145de0463c78",
+      "wrapped_prompt_sha256": "79bf9149a78000af5076a46c8a6889fe0d25b1e5aeddef6e7cb96d586bf7db6c"
+    },
+    {
+      "id": "gate-song-16-suggest-2",
+      "inputs_sha256": "cac9f8da8833c735507cfd78200899ef7e50a5fb6c0b68936d0b7e3c716c5bf0",
+      "prompt_sha256": "eafecbb495199ee9060368d9070c05a6eb9a4cfff3179835b04f89c5893a4c7a",
+      "wrapped_prompt_sha256": "86467d3b99c7acdf2b824c67743ab7a0dadea8b659268de89d012a5e374f6da6"
+    },
+    {
+      "id": "gate-song-16-suggest-3",
+      "inputs_sha256": "7593b248c304245ead7ef3cb7e724d3d618406859c3fc46e63974fd0c3f183b8",
+      "prompt_sha256": "f1daaf38091bd8c07a7daeec072f1f521e873f9693d4671bc478a9538c137742",
+      "wrapped_prompt_sha256": "b73f3580bda77a35fa3aea535411136f363af381aa4d9bd1c247fd24b1560fed"
+    },
+    {
+      "id": "gate-song-16-suggest-4",
+      "inputs_sha256": "502cf4d8311e161777b439e7c85880deeef01dd1240a1c264d762adcdf223b00",
+      "prompt_sha256": "cbeeec44195916b6a75ef0a9e883659ce5dff5b08234b912f33ec2430c7bd978",
+      "wrapped_prompt_sha256": "c3168bae90e060d99c5d0fc6931d05ae879ab3012bd1a771512ff074924793b5"
+    },
+    {
+      "id": "gate-song-16-suggest-5",
+      "inputs_sha256": "c5f1bb2d843fe3a50622893a68d67afc6ac4f8d08ec1a25056154865f3228a8e",
+      "prompt_sha256": "4af056d1664b18a245dca2d275203beaebb95e38b348cc8540d47d8776ee8f9d",
+      "wrapped_prompt_sha256": "2f8027a2a0325edb6f3202763e651aedd45e80ac5dde3ce97b00e14f1bc04d7f"
+    },
+    {
+      "id": "gate-song-16-suggest-6",
+      "inputs_sha256": "4da45c69c7cda8b5a3e38019a162a76caa442aade76e788fa16888520e700c28",
+      "prompt_sha256": "f46f597130b8f4209d505c3ceb66f483dc8070d29b793599a8456c579895b16d",
+      "wrapped_prompt_sha256": "89c0e54d07b5df450c49c85f7d626d05d71834bd30ca88f3724077c7a2e48222"
+    },
+    {
+      "id": "gate-song-16-suggest-7",
+      "inputs_sha256": "d8bd5b78c76064d1c6584764d893068fa6e88f9ce1a71535476ed41d99c79996",
+      "prompt_sha256": "95da8439625665b3ca372ef270e64f7d1257db04448380cbe3e68e3ff2e0cba6",
+      "wrapped_prompt_sha256": "310eeb559d09cd3d7c26f853cf410311b388540b37ee3d608111fcda526779e7"
+    },
+    {
+      "id": "gate-song-16-rewrite_passage-REPHRASE",
+      "inputs_sha256": "530cea42fafbf6a20a5fbd66073c996e23c550c64aae608d3aa389a17cadac75",
+      "prompt_sha256": "9288e8a59742e34db891efe17b708dd4708d72799eea8323772e3af8bb39644d",
+      "wrapped_prompt_sha256": "52635b3f772b4da742a544643fb41a9fd82e5cb7769b49ab38ede3197bf0d99f"
+    },
+    {
+      "id": "gate-song-16-rewrite_word-REPHRASE",
+      "inputs_sha256": "6c372019a9760705d3ae422cf263984c110f27d47816aa69b54fc13a3409a6ba",
+      "prompt_sha256": "8ba7693b0f49b5d176941f94e8e562092f0c75e4e8fd4d0eedb9f151f20ae85c",
+      "wrapped_prompt_sha256": "7126fbf9679a79cefa1cee29bb88e617630b594061e48aaf57700d6461085ac1"
+    },
+    {
+      "id": "gate-song-16-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "7e2759b9f00ab9649bbf2321ca116b588131474f4b2c270e2c57f34c2eac3388",
+      "prompt_sha256": "ec36b9f1c344fcf3b4df71323f277ec777b9d69e7f73eee55376040641e71bd8",
+      "wrapped_prompt_sha256": "c09c23c0e45119d85d9b3f993dac807706d2e3b7a18ad3a1e89723bae3e082dc"
+    },
+    {
+      "id": "gate-song-16-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "dce53d108e12e67355ccbc29df6495dcc1413c0ee4ac0ad1fe44cd2a3f5ef32a",
+      "prompt_sha256": "98a5bea22d2274523a9b22570272f6cf6bf87200dd79cbaf6be33b83a908b2bf",
+      "wrapped_prompt_sha256": "6427218704dcafe44ee5ca0acbe27ce1880c307b2f4a11a5420316992e592ed4"
+    },
+    {
+      "id": "gate-song-16-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "56845aedf806deacff62f8e932621281852735ea372c71a09ffc3d2b70000a6b",
+      "prompt_sha256": "e0a52009c29788abe49f3484fd9a5408d7f054478057828e268025a56a8b9fde",
+      "wrapped_prompt_sha256": "15ec7432ccba7caff294b2b296a62b2d89a5c48a63bc31ed58b102d5c422cfa4"
+    },
+    {
+      "id": "gate-song-16-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "be3de0d0ac964b48569d1f77b87a4c58c929ea6d7057aa3db1e6beeadab0bf25",
+      "prompt_sha256": "51f91f6fb868817e7d31147a11517ddb6dec2df1381d0921b40479dbb303c760",
+      "wrapped_prompt_sha256": "3d5ebe75137fcd4948272b7e2f75b0751d9f613106ee56155d57c2745ee15d5c"
+    },
+    {
+      "id": "gate-song-16-synonyms",
+      "inputs_sha256": "ad8e04ed97ec5e23003d1cc22d3a33fc63681c63a97836dcb468fb222f7d8aec",
+      "prompt_sha256": "d2cb05ed3b2ded0c707986ebf7841f2b699627df48d1f7075fa1a448bbb74fe7",
+      "wrapped_prompt_sha256": "9a2bc977566466ab661c0541c461c0c30af0035e985623230908a159c610e3cb"
+    },
+    {
+      "id": "gate-song-17-suggest-0",
+      "inputs_sha256": "80811a2199cf424c17a71a17e256c515e5e090626545deb8e3d7d156e91d9a60",
+      "prompt_sha256": "556bbe161258f006142daddbf11f475fe9d07ee489323a0c23e107262966532d",
+      "wrapped_prompt_sha256": "6133b2ef4756a26e70c66000d6a93eb3f28fb31ee5b161ab1415e3772dbd9fd8"
+    },
+    {
+      "id": "gate-song-17-suggest-1",
+      "inputs_sha256": "bdd340582c709c0dc8e9b8c296bdfcf4ea093d3c604cbed559a16033977611c6",
+      "prompt_sha256": "e8b498d3c13c518bbf3b0ddc204077fb2734be706277ad1e3dc9fb4fc7cd8595",
+      "wrapped_prompt_sha256": "0189d1b0f1e676d6f67363ce5365e19127ef95b080c8cb270caac34a33b51a3b"
+    },
+    {
+      "id": "gate-song-17-suggest-2",
+      "inputs_sha256": "3043c51bb7fe2bb35430273c74b20156afa3cb5bf84a450628acc32918441d4d",
+      "prompt_sha256": "701cf468fdb1cba7a45fab7b62f906d488f8f27aea3b67462e0eb7044a59f33b",
+      "wrapped_prompt_sha256": "e995bd50ab2280b3f7af4f6e55b8f5f3a51f2cf54d03f2abc625e35dddccbd66"
+    },
+    {
+      "id": "gate-song-17-suggest-3",
+      "inputs_sha256": "535e3a38985ab335860dba16bd4062c924f2242d0723384d41aacf99a7cdfc68",
+      "prompt_sha256": "196ef160041567f0f36fbca4ad89273d67599701bf2d1dae468a9c584c7b7db3",
+      "wrapped_prompt_sha256": "d78400e87e16971c11019a2833dc71d006a92a0cd503c33e9bf05d06e649dddb"
+    },
+    {
+      "id": "gate-song-17-suggest-4",
+      "inputs_sha256": "5a5799c8b78f7351ecf524ad87213be2cf5aa8ac3c24e4ae213f665cc29a01bf",
+      "prompt_sha256": "268735516293bb7f1cbfd9b056cff7efb4c27de3ec58025e285d21da47f2e001",
+      "wrapped_prompt_sha256": "1fc24b6149509725f0a7a0431b9c63f7b0d627530fa4e978304922d66c2fdc0d"
+    },
+    {
+      "id": "gate-song-17-suggest-5",
+      "inputs_sha256": "5c88542acffe86b1822f989301eb7c6d9ea1f4413ddb46882ee8ded5ae9a0dc6",
+      "prompt_sha256": "bbe4c4384f93578a3590fb511809fcd2534909a40dbbf3ddb8de378c77aaa203",
+      "wrapped_prompt_sha256": "812d465257172f8bcc814da5abd9a8105fba081032fdc0a36c486eaccf3ba2a3"
+    },
+    {
+      "id": "gate-song-17-suggest-6",
+      "inputs_sha256": "342fec55ff7035ab3d4d19884b822a889dd72eb15830faa39910582315241029",
+      "prompt_sha256": "b134e423e2aecd115c8f73b13dc7a5963b17a0d641384b478d4edf1def551fb7",
+      "wrapped_prompt_sha256": "d7db4849052d9dcaad4365ca2b9cc1a89c6d1a9741185e60d4385b3ddce8ba3e"
+    },
+    {
+      "id": "gate-song-17-suggest-7",
+      "inputs_sha256": "d32804254badc291e44c6a6498d063a43d1dfcff2b0a83537c58d034e5cfcb5a",
+      "prompt_sha256": "01c1f985dbb41586c8684f6462f464fcefbd1df90dff750a058e3f182075e24e",
+      "wrapped_prompt_sha256": "2ef8c03609b63935a4e2820f2ea28f661ab7644180fb3cbf2149907833da6c87"
+    },
+    {
+      "id": "gate-song-17-rewrite_passage-REPHRASE",
+      "inputs_sha256": "26e87dd85f996eabd89b607756319e5a2871719bd770442d7e2c3b0996560a40",
+      "prompt_sha256": "8c623da491d461f00246f87109188db048a4a9d66632bea66e7c8fb0e5705112",
+      "wrapped_prompt_sha256": "c7f83885ef749e36657c21f87dc24f6d9a0ff23e65a04e5b279cbd2a62ca85f1"
+    },
+    {
+      "id": "gate-song-17-rewrite_word-REPHRASE",
+      "inputs_sha256": "a787e3937c69df0bcdf89ed4fe4e578b017a46e0ad6a49f4f5bedf0b20129a77",
+      "prompt_sha256": "7fa566286f87de32a16620ff3b2244188c89666da7479385992cfac6f5ed6260",
+      "wrapped_prompt_sha256": "b43726aec7d889454a69ec82402faee6d907d6ce6064c2d20eeb53ef70d8f385"
+    },
+    {
+      "id": "gate-song-17-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "4ba6cbf38019be26bd3833d660faa4ee99346e277e252203ca70295dc46ad928",
+      "prompt_sha256": "59efaf13f868c340df112c985a26eb684bb295a5259dc945eb2ded8e0bd17491",
+      "wrapped_prompt_sha256": "901a1c2764c0b6aa77a0cfac78e8b0792ad265765d329b95447aafcc659fecb6"
+    },
+    {
+      "id": "gate-song-17-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "0d2073b2d107cff9032314efaee5af8354f065d0c678493e266d95f4c7876086",
+      "prompt_sha256": "54678825d9621016ada064a730b43db3387e8c2479ef034744211e10e4223a98",
+      "wrapped_prompt_sha256": "c37204e79df1dae0c8397a3e68e4c208b47653525932fd1ddc55ec969fb9a8fc"
+    },
+    {
+      "id": "gate-song-17-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "ae5196ee806dce8e52e8b01ad394e8fcb6e639c39a09a22792e655d0718a85d2",
+      "prompt_sha256": "afdd812a5329106f1bfef3bf5759000118cf2f98c92d4f3d01622beeaae0aa42",
+      "wrapped_prompt_sha256": "935b939f8771477299d8bac5d16126f92090a02ce96ead825b066e31d4f47d69"
+    },
+    {
+      "id": "gate-song-17-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "38cdd6b39a10a926f1d9f30629f99d36f3874571dd7ce1c245e540a2d3370551",
+      "prompt_sha256": "2234598bde9357db1cd55e918f0e1915519b85a69c6a721aaa00c5454bfae1bc",
+      "wrapped_prompt_sha256": "cebcdb9f749d28abb8c2f3e5fe4b82f542ec3e1f66b4031dcd6b5eb8b867bab3"
+    },
+    {
+      "id": "gate-song-17-synonyms",
+      "inputs_sha256": "df1fbfdcb8d9f61633ed6d075f1004f565f565c7f204f58d321359c4d4521e31",
+      "prompt_sha256": "a7777de5a384b909ae80c478730adab427f32ab487b5e4347fa0f5c03622c857",
+      "wrapped_prompt_sha256": "3a34e6ea9ddadc0cade7d4e9089cd3ae066d6c1ef857f907045fd97c08820e7c"
+    },
+    {
+      "id": "gate-song-18-suggest-0",
+      "inputs_sha256": "04f7f4b6c6898c593a35120437f4d40327b5713e00e11b2eafdce30911041623",
+      "prompt_sha256": "aaeb2c2626c2922aa4ead4ac5525b91fbe8628977ac468d8c16cc12a1dc14252",
+      "wrapped_prompt_sha256": "0aaf0f042efcca891550144bd68046ee8969000058a2a54a25adece58787ccf1"
+    },
+    {
+      "id": "gate-song-18-suggest-1",
+      "inputs_sha256": "49fe698a9c00f1e5ccaf722539b44b226d31d4b44a334e5def0cb5a2efc6c01f",
+      "prompt_sha256": "8ec5a06dc3b90ac7186bf93d4b78c3d74b924cb20d9425643af2d6fa74712f93",
+      "wrapped_prompt_sha256": "45e7df52d77ac9f7df53007c72f0c2da7d86c97acfb0f0112d5169cf3a3ff1a8"
+    },
+    {
+      "id": "gate-song-18-suggest-2",
+      "inputs_sha256": "944a39b0075825a786c4fa6358d660507eb7f33fb1f5706eac9278e6556fa7ee",
+      "prompt_sha256": "ce6b1f0af912225f8bcba1d9f3f16315791474e49d5355bbbe07707102fffd76",
+      "wrapped_prompt_sha256": "f03b1665453f3735634c35fa96b9e30dcccc6f147192450734d3fc97cc3f09a2"
+    },
+    {
+      "id": "gate-song-18-suggest-3",
+      "inputs_sha256": "0ac37314738ae8d6a8c9ffec3dd4736d50af9f3bf7a4d86dfc8a076c173c93ac",
+      "prompt_sha256": "22cba7e00854d4085ae11e072107f3f2763802f0a08799b9a242864cf556425a",
+      "wrapped_prompt_sha256": "bb2320d3480df903bf19601aa3e492de7c6a2ce0ace4f633382bdba254f08f3a"
+    },
+    {
+      "id": "gate-song-18-suggest-4",
+      "inputs_sha256": "4ecbe549590d83f54cdc334ae1b7478ff7eff178f81f1dc3fc593c910bde9ec4",
+      "prompt_sha256": "ef749b5979cce4c618690c35d0ec601d84dab2fc3d943d3ff8f2a52b95ddeb3e",
+      "wrapped_prompt_sha256": "3605610923da004b5168b9f7c2ee3a9cf95643625c02da10d991a01c09b3e430"
+    },
+    {
+      "id": "gate-song-18-suggest-5",
+      "inputs_sha256": "1c13eec6a62182532b079aaefb3eca23102bfba689aa67597a3e8c2307efd590",
+      "prompt_sha256": "1dc8f702986a9af2dc09bceea771cc3ab5d390f67165c1a6d56eb130a874dcd0",
+      "wrapped_prompt_sha256": "453da38d1e9cda1bce0ff87513e68c7b258818af0449bb4b477fd5b5dfe58382"
+    },
+    {
+      "id": "gate-song-18-suggest-6",
+      "inputs_sha256": "06a655e850aa2580b01df9dd68b4f82f935ba03d0b9cd40de401225cf68136f7",
+      "prompt_sha256": "43dab98363cd5fb7f54b6898eac23886640ccbdf63d7ca78ec6973a95054d3b9",
+      "wrapped_prompt_sha256": "ca976ab2513cb553bc6bcd4d12014434a58b23ef782225c377656761b3cf32e4"
+    },
+    {
+      "id": "gate-song-18-suggest-7",
+      "inputs_sha256": "2565e9374f98e7d315738e0c9af4db271f0b599ad64156631cf1237b89895868",
+      "prompt_sha256": "b0b67db75d695db6da32499554af4d0237c638340c1f2ea688862e92038ffbf5",
+      "wrapped_prompt_sha256": "d77ad8a5a4db67399dc0f7a47cb8c8b33e4ac1e385b24bbcc50477f4b47a141d"
+    },
+    {
+      "id": "gate-song-18-rewrite_passage-REPHRASE",
+      "inputs_sha256": "889352a36688b6f3f22e1c5a1134dc209d8875c6aff473bc87186cd2f01dc1b5",
+      "prompt_sha256": "c0dbe1d74b41b1e2c006dddde36a6e0fd5832a6f7faefc290e00a5d0431bab0f",
+      "wrapped_prompt_sha256": "c6267fd681b656ffcb5e21228a0e688382643533e541d13d00dc1db7652e8ce1"
+    },
+    {
+      "id": "gate-song-18-rewrite_word-REPHRASE",
+      "inputs_sha256": "9a2fb5dc01efe6684bd502dccaadd7682ac2f1bab591c341b6a9f0eb8525d7d8",
+      "prompt_sha256": "dad639474e146892731e297cdec5f50471b454cdca9102273e621e03a4deb9a5",
+      "wrapped_prompt_sha256": "1fe8ee62d79246d454e0a3b6820ef1007d89497d572e781fdf48c35820700b8f"
+    },
+    {
+      "id": "gate-song-18-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "bf590c26fb887693e4d22893c480664c321a786349eb7b1fa0c056f693f68f66",
+      "prompt_sha256": "aed671f0835967db588b2383794e72cecb59e28929d4e31141b466d020c7a516",
+      "wrapped_prompt_sha256": "63149238339228dc8e9d79ed476dcfeb6836abecb79878782492d1c7f3256df6"
+    },
+    {
+      "id": "gate-song-18-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "091f2288e42e8e0710e874cf9411459bf2323d833d79abc8708df72d5b762b9e",
+      "prompt_sha256": "ed565b555cbeb9e4bcc7fb951c24c2eba1ca52513c1fda2e261bb0293a1048a1",
+      "wrapped_prompt_sha256": "16bb0d5bcfcbc2103fa60f51c197e639684867c7afaa00682da59bd07cc04862"
+    },
+    {
+      "id": "gate-song-18-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "b02b89902e6f12dbdb90e29e1655f4530f81ce3fdc3d4e6f9b795edf3f2673a3",
+      "prompt_sha256": "7c651c6ed6edce1f4db3260d3d8bba64211b838622bcc44651f32a8366683a50",
+      "wrapped_prompt_sha256": "328bce4ded53252aa3de7ea79882b401bf187adbe2d812d4f7fc57d87f0fbddd"
+    },
+    {
+      "id": "gate-song-18-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "49307a4ddc309ad3f4e647e850f35808e95d95d8597fd1f28ae94e0b00067629",
+      "prompt_sha256": "a2097b93b56f541da4fdac04eb0911fbd9091134aa89bd1094a1992b5868a878",
+      "wrapped_prompt_sha256": "a3af7f6f5c9a15e5e2c1e4f35f4dd25e85fd082ce3b149dbb0be00cc793ac95f"
+    },
+    {
+      "id": "gate-song-18-synonyms",
+      "inputs_sha256": "ca39bbf8a868ef4576c578ab6cbfd6cb17d22c3bb1c94c702b64ad2c913660a8",
+      "prompt_sha256": "543d3fa50cd40031a67d15ba2b4d91d4f9eecfaa7a2a7e21959d7a52e34af330",
+      "wrapped_prompt_sha256": "191c11fd311420033fc9159166f7f8dd85859fafaa9d1df34004d2b0bfa05602"
+    },
+    {
+      "id": "gate-song-19-suggest-0",
+      "inputs_sha256": "61ea26fdff0b8c9bdaf5cc797031021943f81d97a5d48fa3fd8cc810f8b3f8dd",
+      "prompt_sha256": "402a5c5258eaea6aa20338c6c44d167c7f7a93f525b2a4f5ce3f600647644ece",
+      "wrapped_prompt_sha256": "1748cbc660b9f714717e5a8f4f2ca5cb7facd21cef6c1e13b3cd38725fe6e978"
+    },
+    {
+      "id": "gate-song-19-suggest-1",
+      "inputs_sha256": "2574fce2e8929c13394ad43c4528712ee7da143064093e0a54b6b616478aa717",
+      "prompt_sha256": "039a042f83807fe39e61196a3225a2a3f44522f755e0362e8f7e2f3479141b43",
+      "wrapped_prompt_sha256": "7edcc994f22daa4467badef77d2b3b8ff1047a807ea33392cc6554984b1e96c9"
+    },
+    {
+      "id": "gate-song-19-suggest-2",
+      "inputs_sha256": "53b67023177d5dbba3e7d83007143b3d3bee8b3f44eff12a46906ff90f1cffc3",
+      "prompt_sha256": "e30e0736b5b6d2c659a8cd1de329317e26c141d70cae0f205e753f3e260b4422",
+      "wrapped_prompt_sha256": "544398ed18e30e934e58f6f4f1326628e93a7de4892a7d7c43cf75684d7f722f"
+    },
+    {
+      "id": "gate-song-19-suggest-3",
+      "inputs_sha256": "1edd93c016d94bc2e1f19239a693854165a6bdb039738e0d1f8ea78edd4db36d",
+      "prompt_sha256": "365e17ee3ec549b0c43a1b16bd6346624d77b7e29f94fd8c0b7b5792a2aeadc5",
+      "wrapped_prompt_sha256": "0cbc5c322c733b375853e7fc39e8d0dd4f0a01717f10388d9d2861c305ae7384"
+    },
+    {
+      "id": "gate-song-19-suggest-4",
+      "inputs_sha256": "5cc2207db19247cae9a288b6658c80cbb83fe94605dc17f054dd12a45452d584",
+      "prompt_sha256": "fbd42894cadf784f3f22b7a3d56bb8af5f089fc4a6be52194da4cff026d5b08f",
+      "wrapped_prompt_sha256": "bb4a9daf892c994920b38adb9dd20eeb93a8fdfb970fab5c3016d224d4a8bf69"
+    },
+    {
+      "id": "gate-song-19-suggest-5",
+      "inputs_sha256": "965b4fc43f1b899f0857ca9f50fac1b173c2c7c8b3ab5a52a3a657d2f8e704ca",
+      "prompt_sha256": "1ecb6af0d2f59b9b3b83a7208b6296f9806e18f06f904000126968c43fa89839",
+      "wrapped_prompt_sha256": "f243776f025b0bb0c7e8599a5f30fe8c2902dd768d16f505946b82d2368ff1fb"
+    },
+    {
+      "id": "gate-song-19-suggest-6",
+      "inputs_sha256": "3f3922b295e5c3fe183c28ad338286c7b4d3275e71c3624f878f5042574e1e2b",
+      "prompt_sha256": "75f56a99ec21ca66fd357a408e4d6c10143af4617be258e9658bd9dd27667643",
+      "wrapped_prompt_sha256": "612e5136eac2f66cfe9e6a170a7e74e66b885626fd3c7a244b84ede1d22a18d2"
+    },
+    {
+      "id": "gate-song-19-suggest-7",
+      "inputs_sha256": "790f66c00143b7462d703f66c78d27f46cb2eb6b37eb57f90e6f63f6004e615c",
+      "prompt_sha256": "d1f78ecb31a652c100720f4c3efbf980dc0d336b3704f10d9b580f1901f3022b",
+      "wrapped_prompt_sha256": "29a2adef66ae8b1b1dc6377ac2fbb0af7b031405fe5285131f3455932d8a6402"
+    },
+    {
+      "id": "gate-song-19-rewrite_passage-REPHRASE",
+      "inputs_sha256": "bb31509e8ebe5f825876b021470964d46ccf889e3e8d90c58de114db8b1ad13e",
+      "prompt_sha256": "67330831db2eee91229ebbd8a8f0e512d98689b4f6a760e6789563b6548e92fa",
+      "wrapped_prompt_sha256": "fe5aa56f28e4c9828ee0ef9b1a47762907f40d0f5f74271f2462a4cd6179f646"
+    },
+    {
+      "id": "gate-song-19-rewrite_word-REPHRASE",
+      "inputs_sha256": "615d53d3a6afb844aec8697d2072666721c2a6ec98778e8835c8eeb5c19f1411",
+      "prompt_sha256": "bb8588f9b2335bea331f1e23dbca41cb1212c3cf88ab3507de189f7819ca884f",
+      "wrapped_prompt_sha256": "65fac71eeea864c511286f1da005709c62a675cb86d024f6a677a1a2583c2576"
+    },
+    {
+      "id": "gate-song-19-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "55e197e37b2f622434a8e95309eafd62eb27c80de24dd2e1e23ae05778a9151c",
+      "prompt_sha256": "5f9734fd9d6bd86c86421cfa9c4d4f9221ab919337046f94f7b22e589ada15ac",
+      "wrapped_prompt_sha256": "475397b66e3fe0ee4a9fce9c96d13a7d86fa33eefadbdf9b987f6c6a43a7e768"
+    },
+    {
+      "id": "gate-song-19-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "f901e8a7892a17e1c431088c31437e0b3aad4861cea0e409ffd7de3211c6fc65",
+      "prompt_sha256": "330ea12e8cfa636fad3802569d1893d970ef4ea78da7d3bd03a2352b9829f69e",
+      "wrapped_prompt_sha256": "e12368a4c6b811f8cd926ccfb0a822ba6ba3ee502d49111d06a1264fc5a0beef"
+    },
+    {
+      "id": "gate-song-19-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "6361a8252d7e91e1366f85ba3fc4e057bc8f04eb682f128ffc51f6122c4b9a87",
+      "prompt_sha256": "89c59970d8ef348779554e486f9333c0f0f9cf7267514a814d1b3e40c1e0fd15",
+      "wrapped_prompt_sha256": "53b5845f297dcde02453c3965616d76dff624e554c4df42ecb9f77d632852e4f"
+    },
+    {
+      "id": "gate-song-19-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "7aaf219d25f960eacc93307273850435c5b7f5b7f64f756f52355b6a8393a672",
+      "prompt_sha256": "ea2707a5ec2dbdf8ff98ab9f4c2d4e7f929bcf4865c58097c58f9cff6a9bb7ea",
+      "wrapped_prompt_sha256": "ea9b8b75b75783fcd7eb038b91021779ae93b2b2e489a74e8cf40491dfa842f2"
+    },
+    {
+      "id": "gate-song-19-synonyms",
+      "inputs_sha256": "5376ef5d1998e7e135949c0ce75cdb20335f51ee9470e7ff5df1eaa7cb2405db",
+      "prompt_sha256": "011f3dd0dcc973da5e7461ed08c0468eb133288f6e23c732bd8d2a3ec696c28a",
+      "wrapped_prompt_sha256": "7be50919ff3e2b345ea0c82d415c9aca5537e093db1e65323003f255c46a29ce"
+    },
+    {
+      "id": "gate-song-20-suggest-0",
+      "inputs_sha256": "47c54ff22705c7fe1e41f261b5fda87e191a9089426b7dc2d1d420189c60d496",
+      "prompt_sha256": "cdc31eceeb5bc7b3cdbf8f091ee5432b5bfe90726227fd03f5e82865880f0be1",
+      "wrapped_prompt_sha256": "92a010aee1370ef7605360e407523b25e1c246de353a8f128b405d689c880430"
+    },
+    {
+      "id": "gate-song-20-suggest-1",
+      "inputs_sha256": "84079ee61885cccbd73625a073635c6fb9d7096732d4595f7a756d3a9c0f60d0",
+      "prompt_sha256": "867dd6added96989f15025b50582269b1c95e2e2e72e9de47029cad39790eaf7",
+      "wrapped_prompt_sha256": "73e2cbd35a0f47708bef974a5858cf8cd529990801d3605e20797500e7da3ddf"
+    },
+    {
+      "id": "gate-song-20-suggest-2",
+      "inputs_sha256": "88b6c9ef57b181283ff35d29397d8b758a72bbe1ade2831e17271e2166626ae5",
+      "prompt_sha256": "247c6a884a5020d3a269060feb01af93648eb7cced6139413e6d7a46e874df85",
+      "wrapped_prompt_sha256": "cbf04b78c53f81bab7a43ff99a5b6010579a357dc383ccb489b5b332cef41724"
+    },
+    {
+      "id": "gate-song-20-suggest-3",
+      "inputs_sha256": "2182ac542a1b1607eed0f949f172651008dfbf03cccdbf7ca6bf447c996f79d4",
+      "prompt_sha256": "cd26af638e5a9620d0dcbd7f16191ab9596c2e8bcaa58558964d71a465d5599a",
+      "wrapped_prompt_sha256": "b7a6a7ea4ece549d22b2ba97d0ee7de6adf9651c6f7752463901026e67f7aa03"
+    },
+    {
+      "id": "gate-song-20-suggest-4",
+      "inputs_sha256": "3ee31fc4becc42abeee1a0264cb466e12a6d7c880f977a7c77fb9d7a26d91221",
+      "prompt_sha256": "a430d7f673d585bc275c860f34a12f0ac2ce2733f39d0b9b582c2cc5b25677a8",
+      "wrapped_prompt_sha256": "1c53dd7c90437122bc9176d280dc1794a13e27dc6160e91847b83e8da03336dc"
+    },
+    {
+      "id": "gate-song-20-suggest-5",
+      "inputs_sha256": "e54818be1d79b3baa4a6b20c829584e331c6ad8e9b99393cf46cc4c703b4412a",
+      "prompt_sha256": "1af5aba9f57e699f9b7714d5dad8c6437036e0e9d600936b0f116c218995106e",
+      "wrapped_prompt_sha256": "d02f0080f5077626eed4b0eeda5a9833c57db4c510528c160ea99e20085bcdf4"
+    },
+    {
+      "id": "gate-song-20-suggest-6",
+      "inputs_sha256": "c6592617f46e05b3d723b4eac9b35249beeb7ae18792e583b535356976e53f91",
+      "prompt_sha256": "8446d84819f46b54ce1c204c54d8cd467a1e397d4f6d4a5f4c8954e819a64f36",
+      "wrapped_prompt_sha256": "83d9c3f0de7477f439c052b4058c15b495ab966de56a8698dffedce378c1e522"
+    },
+    {
+      "id": "gate-song-20-suggest-7",
+      "inputs_sha256": "f3bb483c78e4945deb01cdebb8feead7e93690ff382f8df5429846608e62b44a",
+      "prompt_sha256": "bed1db19eea3d72f5cf8eb5b0eeb06d7b58346ba6eefb488b4b1864f24d2846f",
+      "wrapped_prompt_sha256": "c585c63a8c1b6703eb51a09e699215bd582a7a15af4a2b225d37c495e871ab07"
+    },
+    {
+      "id": "gate-song-20-rewrite_passage-REPHRASE",
+      "inputs_sha256": "c40c84117e57a73f53f938bb404bbe0459db12443fa3c92826b90e8e9f3e4a92",
+      "prompt_sha256": "60a0ccf45ce674433a1c19573bb01a403f219a4e11588aaeb91852d4cef07ce4",
+      "wrapped_prompt_sha256": "404ed3122e4bc11d352a42b27270d5c7ecee1802be15e12761581f66c3f9cba6"
+    },
+    {
+      "id": "gate-song-20-rewrite_word-REPHRASE",
+      "inputs_sha256": "bcbd7235b49ea273df4290faf9f65f89dc3a003ad256296431b16f3a5cd65095",
+      "prompt_sha256": "13874e2e6d84b3f8011a3901671c9751c3f7e186b5a6b633c94fafe1f602cbca",
+      "wrapped_prompt_sha256": "f069a9d54e866fa655314e330af9ef6e2ae250d4ab32f3bcc019044db9b73a2c"
+    },
+    {
+      "id": "gate-song-20-rewrite_passage-PUNCH_UP",
+      "inputs_sha256": "852e98ec97771df8c0ffebcb5a9607a3a717162bf5380be49cb3a00fa44d0a4d",
+      "prompt_sha256": "ff68a76a63d9f69f63bbbfa40e76c9f96c707769244d93ae956cdabb59d696f8",
+      "wrapped_prompt_sha256": "22ea77d101e3e7350133a1ec822ec439f925b0c6761bc9108185e3f89fead0c9"
+    },
+    {
+      "id": "gate-song-20-rewrite_word-PUNCH_UP",
+      "inputs_sha256": "87458655c238f2119b61cf409e80106337863b19181354554fcd57048aaca108",
+      "prompt_sha256": "64ddbaf2de0dd3ecfa0de5fec37ee7c01c50d63ac3224458179b28b8128dac36",
+      "wrapped_prompt_sha256": "54ab76b240f70e80de2ccde345517844c35d47570bcba7f9f1af52f06e731d77"
+    },
+    {
+      "id": "gate-song-20-rewrite_passage-HARDER_RHYME",
+      "inputs_sha256": "066e2b3af6894d5cede7521bb67e3a1abaee1734aceb2f83178f13d776d85a7c",
+      "prompt_sha256": "d46d9728adbcdbb37ca5d8594fea2c746d978ec33aeaae34a8a9cd0876dadbfe",
+      "wrapped_prompt_sha256": "8f6fa31272c6ebb1198dc0ce8431084d77d869870e98f1a92649885d22aa7350"
+    },
+    {
+      "id": "gate-song-20-rewrite_word-HARDER_RHYME",
+      "inputs_sha256": "8c78f225504bc4ffccb48eeb9de2140050d9eb549649d8b5e3b6fde864a97611",
+      "prompt_sha256": "f5e72c72318036b729be4e04feccd2ab5cabe7e166d35af6491850c3ba19e581",
+      "wrapped_prompt_sha256": "22346a4e5e75d00050b085962ed4146fc3d64a8db2edb24e66046b83a3a8179e"
+    },
+    {
+      "id": "gate-song-20-synonyms",
+      "inputs_sha256": "5c39798238d2dfb628f644be269b592580feec59cfef8b05d0661a1d79d70b93",
+      "prompt_sha256": "0b8d0dbc3fd7daabab08bfa182762fe68e6c45c66766432ef8183295e34c8ab8",
+      "wrapped_prompt_sha256": "3589863b763e335e3896eb3e508d88409135a022b2e757b0e65df7f11b19c88a"
+    },
+    {
+      "id": "gate-song-21-suggest-0",
+      "inputs_sha256": "8720b90a538ab91d2f488709c9cfbd997567b2b0758ef753a4bf5bd2110f7adf",
+      "prompt_sha256": "1b908ee2c833203426ec3c24738febf42a1db165dee019e99595fec80ef1f813",
+      "wrapped_prompt_sha256": "05e2761d4b50b8c18aba58a2b9a4b9802d97e2cc19f835c5007665959896a32a"
+    },
+    {
+      "id": "gate-song-21-suggest-1",
+      "inputs_sha256": "69817dd4493ed61420db2e01712d97f4a88eb28969689753970797cfe4d7d7c2",
+      "prompt_sha256": "201cc70fb01c2636840a410f4cd7393be3c13b55ba3a08fc4e4ca53b55563c8f",
+      "wrapped_prompt_sha256": "1b8ad0634474242cbba3187c1136b295c196dc09d9aa72a26be0b05fef290ee1"
+    },
+    {
+      "id": "gate-song-21-suggest-2",
+      "inputs_sha256": "08c0c52c2c08b5d000dd8d05cbf3cf3f6cb1e36ac908bcfa8b76ffc6c954ba04",
+      "prompt_sha256": "32ccfde1df081a5ff0f31f617992df35a14d2909a008e28dc5371127cfe74082",
+      "wrapped_prompt_sha256": "b46aff3e38574ad3d453e73d2218bb8166d4940f48c0628c086368f4f2006bd3"
+    },
+    {
+      "id": "gate-song-21-suggest-3",
+      "inputs_sha256": "cf1d951a1e78798d848d3196082b40483efb6600a458b5bdf5ce9972045ec588",
+      "prompt_sha256": "7e31086f65007e2f1c9960e7836a505d912df935cca7b36479ad43ec0f38765c",
+      "wrapped_prompt_sha256": "db93067725f26dac67262c83e17ea6f5c5ff7af7edb564d0a0fe0f313ba62108"
+    },
+    {
+      "id": "gate-song-21-suggest-4",
+      "inputs_sha256": "7fd9673a091c612a5f1ebf72f905c79c5a94199802763fdfbad17cb9a678d6ea",
+      "prompt_sha256": "37437231eb4b80c711cf4ad0c5daccc930244d522acdc505c857e072a15a8348",
+      "wrapped_prompt_sha256": "d8e3b175b9e1f79ca5a961e0681b61785129e353cff0ecfea8acbbbe1f9f0139"
+    },
+    {
+      "id": "gate-song-21-suggest-5",
+      "inputs_sha256": "8965e329b249071106cf0265359fdae6ff972685f5d41397f9a38f11fd935c19",
+      "prompt_sha256": "f3065edd01d47a1a89d3d3ff39b7488f78794717e024c896c2c9e73881c034e7",
+      "wrapped_prompt_sha256": "75e152e6b855e2124826bbc554e238c6e1d51b727e584173a0234fcf13f305c7"
+    },
+    {
+      "id": "gate-song-21-suggest-6",
+      "inputs_sha256": "95fac277c149dc056e3059247a607b830fb46f9170a8d590cc208a5a615e7fc7",
+      "prompt_sha256": "d872f26bfdade1bbda6e9a0916900772fc51fff2d30e03e858143c1788a3aeca",
+      "wrapped_prompt_sha256": "62bba836544d9dfcfce9c1d28767a69366b8bf632edc37eca335f7995c2dabd0"
+    },
+    {
+      "id": "gate-song-21-suggest-7",
+      "inputs_sha256": "66e4d822d648f6ddb5e08dcce0ffa4383f8f8e8ef2dab1d61ee6ab118529dc87",
+      "prompt_sha256": "f8932b65c6786fb1b809db2bb674b9e839fad81bc2b3ce94b50c6b793378f79a",
+      "wrapped_prompt_sha256": "efc5ec85a2c75562065944866c444033b632e287920c70e124957981ff6544ff"
+    },
+    {
+      "id": "gate-song-21-synonyms",
+      "inputs_sha256": "602af9d5c01d0688a780ef46d6208316f7d4d6040cd7158a4cfb0fb3da5b2e3d",
+      "prompt_sha256": "4f8c074bca109b99631d9c5042f3298b6245cabba9509ff727e8790fbc5b2b76",
+      "wrapped_prompt_sha256": "2f4db9286ac99a22e613a0ed3bfe9a2432fd3ad259b307f927da9fe88992f791"
+    },
+    {
+      "id": "gate-song-22-suggest-0",
+      "inputs_sha256": "bbd3c18b6097c7ad4ad7ffddb164498ebbd0a71f08155ed100cdfc3d920a0c9a",
+      "prompt_sha256": "f4083b467920e2fc15c5102f714b9b3675fd2fce8e43c874c3d463d12c1a501c",
+      "wrapped_prompt_sha256": "94e56a609551e30d2010f604745bafe8cd6062c779c276b719eb3c2a7a214d0c"
+    },
+    {
+      "id": "gate-song-22-suggest-1",
+      "inputs_sha256": "1b3324753c0a3ca0ff14d5013c4885aa27724a0c366e2122d7a241744ec52896",
+      "prompt_sha256": "de3098e56fe6aaec9965e4d77dfca72fd886bff7b528d3c6a70d23e1e1b82a62",
+      "wrapped_prompt_sha256": "f1dc05a1fc2ecabafd075b351b25f4edf2381efe7e255ebc3d50d5affc8c066c"
+    },
+    {
+      "id": "gate-song-22-suggest-2",
+      "inputs_sha256": "f207e15b618990d28c645b37ef27e65a3a060ddda9762c3c6e405c4fee563d24",
+      "prompt_sha256": "1e9e578b869123a88b4997c5eb3a1699b6402846a366cfa82898eceb37bfa119",
+      "wrapped_prompt_sha256": "ae0e277d9c7f359b293bfc2d5ac950eb8e56c1df81f96ae18b98d8f836daa86b"
+    },
+    {
+      "id": "gate-song-22-suggest-3",
+      "inputs_sha256": "c2d4eb3416f09811ec21aed88d5a2c9260a0a9b81fafc993af9de517a82deea5",
+      "prompt_sha256": "6047c8cf42a34d1aa5ca4cfa78b35e8e38c70eb35f63f93df61c7b3f8eed59d7",
+      "wrapped_prompt_sha256": "ed6f6a87325286d501ebb0cebe9a32b19e0c58e8a2e19661300791dc4c7ead72"
+    },
+    {
+      "id": "gate-song-22-suggest-4",
+      "inputs_sha256": "c47bd19441d3e928e4afe9c3a020e1ed6bb871553f604e88a6f3b1d498b63cf0",
+      "prompt_sha256": "8783449ab5ac49d68ac03746814d2ab257330874cda139e05ca161bd6f993821",
+      "wrapped_prompt_sha256": "a4a3ca1668fccc58e1ee74adf8d4e08aeb4a0fee01d5e3b73ce234278b0ab615"
+    },
+    {
+      "id": "gate-song-22-suggest-5",
+      "inputs_sha256": "70e56d617563f25d9b54230a8444260e66913718470d1b4970b9bb1e000b5e4b",
+      "prompt_sha256": "9100a72db50c49497c1d65e3f738d430ec996117377d28e467fbe3389e24f16d",
+      "wrapped_prompt_sha256": "be4cabdbb0e9b7c25917fe996ba719f21b844af55ea7e5b0f1fff9482d67298b"
+    },
+    {
+      "id": "gate-song-22-suggest-6",
+      "inputs_sha256": "aef68778a197b8ab0b0379b7758260635fd5cae585b35aac51f18c4da49a682b",
+      "prompt_sha256": "b197d591461ceb5928b023d6abc3203ec4d3a6691adfb2cdcd27ac25523d9674",
+      "wrapped_prompt_sha256": "498fc06df65d3be9f97d3d3e73598000ed7d96bf924091ff356a4e668c956a30"
+    },
+    {
+      "id": "gate-song-22-suggest-7",
+      "inputs_sha256": "d2e261c6a44a1c4673e50d181255052309a10227e2cad7f1282428e0e54e83bd",
+      "prompt_sha256": "690070802c8565138733687ea7c8516f2fb1ed8154de6cb60bd1c0fa9f5397e0",
+      "wrapped_prompt_sha256": "97ac6ab1d80f0e32cd691d38589e476a93881252549fb38eb33d90458db4f6e3"
+    },
+    {
+      "id": "gate-song-22-synonyms",
+      "inputs_sha256": "156ad91d70080a61bc7b4f9fa3eb8de7216fea549753cd7a25cc81ff64564d19",
+      "prompt_sha256": "549c516c1f743dfebe1ec899aff193f97c6dd2292c3e990151cb8bc1848c66a1",
+      "wrapped_prompt_sha256": "e1e9b194ad76385ff2f0aeb02d15ab5a737090855e7e6c4dce202840e94c147e"
+    },
+    {
+      "id": "gate-song-23-suggest-0",
+      "inputs_sha256": "33f4848930725c6271018cf9865356906389b88d527e27cbfeeac31561aa0045",
+      "prompt_sha256": "2e87440a372fc4a81f2e01670d814c2fecefd6b2383cc180b777dddc5b2fc003",
+      "wrapped_prompt_sha256": "8478c4b09255436b12ace5add31c31620ae977ffaa2338a280ffd7c10a9658d9"
+    },
+    {
+      "id": "gate-song-23-suggest-1",
+      "inputs_sha256": "11739492bd3b8c455f3c9c9264aecf25d215c207e059e277a53359178dab2ac6",
+      "prompt_sha256": "1083abb2c7158a2f349ed69c943248562eb505e4c4451f327c5a2e81363e1c27",
+      "wrapped_prompt_sha256": "8daa4e9fec78c45f26eeb360e5ad12273fd43cec248a16c6d3a944978bd70ae8"
+    },
+    {
+      "id": "gate-song-23-suggest-2",
+      "inputs_sha256": "c551791431d99cba2b23a73f634724817f428d0fb6fbe81fb0b81f7e5cd29040",
+      "prompt_sha256": "5a2e66c4e8bf5b03beb927b78d7dad2a9767e14d0f451141aef40a01cca4668b",
+      "wrapped_prompt_sha256": "409ff30745484565af28058d0cbea8eb646f07ec2418c2ff83624a24f1d823ca"
+    },
+    {
+      "id": "gate-song-23-suggest-3",
+      "inputs_sha256": "f6ccacebadac04154ab7c09d250badf0d3685a936b6eb17b6628a249816c73b9",
+      "prompt_sha256": "5e3493bac449c92c105348e8693140d675eee5d9f6cc410ed1771260197d0d91",
+      "wrapped_prompt_sha256": "27950c5e365eeeda9c39e5a1a9ca89e16eee282c76048ac17e668da2bed15d56"
+    },
+    {
+      "id": "gate-song-23-suggest-4",
+      "inputs_sha256": "93b7b815763d8339e951864570a6c0f28a31b84da5535d8ffcf9f6dc45800e03",
+      "prompt_sha256": "12f155e626b514cb9bd2a27eaad3b607f7e00ed50fbeaba6ef76837227a7d22f",
+      "wrapped_prompt_sha256": "b7a27d1107a2b5051830e408dd9eb2fb4031e87479e3c33071ad1cf122f15df5"
+    },
+    {
+      "id": "gate-song-23-suggest-5",
+      "inputs_sha256": "5434c90ae72e100eb11b5ce5ecbef0c8fb5f286421f27dcde6b2388660b2a40c",
+      "prompt_sha256": "6ecd3c91cbdd69f670997903bfe2bc6b7f0272236f16f74b7bb33d8db0e8cc7f",
+      "wrapped_prompt_sha256": "1b48ec8e7042dfc51744ff8bbe8719fa2fb620a3c7b48d2ff911338883af1679"
+    },
+    {
+      "id": "gate-song-23-suggest-6",
+      "inputs_sha256": "6e106a719c40c83d5d2463ec675a414c6dff7727559884ea44451fed02e6ee93",
+      "prompt_sha256": "3ddf2082323931e6302170b73325f62ebd6d5bf1f78a73c5369460a859330b0b",
+      "wrapped_prompt_sha256": "71c5561ad457538e569f3f53f51d577a4069c47b9e254d4b439fef310821099c"
+    },
+    {
+      "id": "gate-song-23-suggest-7",
+      "inputs_sha256": "0f0dc29f3ce5c90567f36292f33ef9eacdebbc6d72100b3e566f9f51441e9429",
+      "prompt_sha256": "a17612f3d2c0b620d6dfe9623891c20c9e0ab0da30d74f56ddc96575c2bc88ab",
+      "wrapped_prompt_sha256": "e7541560f76d55a4975e50db5c3d94302efcfc31c38424194350d747842e8eb0"
+    },
+    {
+      "id": "gate-song-23-synonyms",
+      "inputs_sha256": "72b77b238dfbc903440914b6d7c9e62aef35b97acbf4a3d6cc8a328912d328ce",
+      "prompt_sha256": "8ff615f8d94f71512a4cbc59b6034a58adfb8e08c6848c002c84f7ed93a4b4fb",
+      "wrapped_prompt_sha256": "df4f9a735fa29cfa235465f7fa6c5eafda5c74a669fa7e434fbd7714a6a4184a"
+    },
+    {
+      "id": "gate-song-24-suggest-0",
+      "inputs_sha256": "1e5e01ea86180dd18e67e6c4393770688d0d7eb5eef90c90d81951575dc2c658",
+      "prompt_sha256": "6c1fbb370b47fb16427c891719cad4777734582a76370836a4fa704fdfd0f847",
+      "wrapped_prompt_sha256": "982e15be3c0ae853f002b039bc0cfa975c406196f0178351356c85f82174c451"
+    },
+    {
+      "id": "gate-song-24-suggest-1",
+      "inputs_sha256": "26a3603bb0fae28d8fb82d5f954a229e66a9fc6254496a620dbf3aac11ccd4c8",
+      "prompt_sha256": "5853c8b8bd1d2e6705cf611feb53a5a7f68dddb6db5442df65bdebfd9475fe66",
+      "wrapped_prompt_sha256": "a95e5696b0c684af43b9d3fe9400da55be9948ba7dccd9651008ff3688bde7a1"
+    },
+    {
+      "id": "gate-song-24-suggest-2",
+      "inputs_sha256": "4bf0b5bf8c2d73be11da4a4111bb4a3da416631ef8f60b9f2365f9568393fd3a",
+      "prompt_sha256": "5ec0ad4dcdb5e5f04d3dc7672930140d182d985e1d7fb7ebf6d6a3b70a6f57e6",
+      "wrapped_prompt_sha256": "0e8e4d102f40bda24c06fb2947a991f39d3dbe0a7b1fea5cff51d0288283694c"
+    },
+    {
+      "id": "gate-song-24-suggest-3",
+      "inputs_sha256": "5faf486e2a95019e3d9bc703898b9134b32fddb0a73a57ae5ddcb937705fac39",
+      "prompt_sha256": "b2d03678f2f49392d712ffa7261f70f623e6a757bb7511997c01ec451045fd29",
+      "wrapped_prompt_sha256": "0cf1abe87d37cc7e990af29f9407c5b7443daae763eea8a4ae92a082bdb2100c"
+    },
+    {
+      "id": "gate-song-24-suggest-4",
+      "inputs_sha256": "3c128dea55517dc4f4397b37095d2acc9f26a013ade69e736d127de519073051",
+      "prompt_sha256": "6c6ed187a39b721275247174d2a492395da9060012969328c7f46e5cc1ca5b8f",
+      "wrapped_prompt_sha256": "29a288f47723241e1ac6a9f43382715590cfc15770f25eb3a39e09686b1b2b39"
+    },
+    {
+      "id": "gate-song-24-suggest-5",
+      "inputs_sha256": "23b806d68cc5aa46fee9ebfa3422919802a02d2f20a243f4b67d8c762817d9c2",
+      "prompt_sha256": "617111ea879173a8bef3b8b931af33e2b4e081f5d305b6aa70590f71b8c665b7",
+      "wrapped_prompt_sha256": "887099ebc8cacdac28330f85f99aac78618243e8100721c6da5febf22fd66f52"
+    },
+    {
+      "id": "gate-song-24-suggest-6",
+      "inputs_sha256": "775503670d45632829a602da3f5c73f8f11d4c7b61acf2b02b6b488319b91535",
+      "prompt_sha256": "449e6167a4b742ecd45ae903580e9be42d6825b29aeb24527767c1cfb4555169",
+      "wrapped_prompt_sha256": "e7b5310dc5a2737ce702ef666d84808d614b68b0c0334e3e1ee40769fafce29d"
+    },
+    {
+      "id": "gate-song-24-suggest-7",
+      "inputs_sha256": "4e463b6f3420f86e3e75ecff94c38e719316e1e6ca5559ebd50b5e6c9f37a4e0",
+      "prompt_sha256": "bfc49ed3829aefa1904bef151bf284d7f0aba8163eb601f018f8eb99dfc4988c",
+      "wrapped_prompt_sha256": "acddd2126ccb0b232b248e1a22716f04f84fd2c5e8d399c1a0a46d7b85eb8412"
+    },
+    {
+      "id": "gate-song-24-synonyms",
+      "inputs_sha256": "97fa8877c7c6d1c0b3906c302e29bc124b21c5aa64bb7d5f85afa37c6d29d6ea",
+      "prompt_sha256": "12120c6b5994a17634d2cc7e7bef9cd07e714c34c02b6b46e38de35e9bb1d622",
+      "wrapped_prompt_sha256": "046a90190e7eb3d917a667f0292e044aed18971a437de286340da1a9a84eff32"
+    },
+    {
+      "id": "gate-song-25-suggest-0",
+      "inputs_sha256": "40f5ad41c843ec57452efd449d5ea7ca105ce47e0d43fbe1aa7eabf2e237c111",
+      "prompt_sha256": "8dc19d8362aec677d8726d86eab4e94e16fd8419fe2e834566a7522dfd8f45db",
+      "wrapped_prompt_sha256": "8df2bbee93bd6c8d6e9a6cf41b07585a4820d328c0dc9487d427d8620460cdea"
+    },
+    {
+      "id": "gate-song-25-suggest-1",
+      "inputs_sha256": "e3562fc3682e0c6d0a28959e0eb382f407e78f8326c9db2c3bd2f2ce9eb38a3e",
+      "prompt_sha256": "25a99a2f217f50aed70f198f6a59d451f443e487130477248d6cdbcf88886dba",
+      "wrapped_prompt_sha256": "3659aff0d847c47c52b9cd4825460c54e904ac4851531e666dd0b6de75573ee2"
+    },
+    {
+      "id": "gate-song-25-suggest-2",
+      "inputs_sha256": "2ae87c865403118ec4123ee6a0fa1ea64bbe2a4331e54396a5090bf781d537aa",
+      "prompt_sha256": "75b187be28567fa242d7289b09b2aa62f47b67750de67caac27a418ef43a3f69",
+      "wrapped_prompt_sha256": "340a220bccd3b7eae57ad592d7febf3ca6950a46c84937e56910bbbb9e343c0c"
+    },
+    {
+      "id": "gate-song-25-suggest-3",
+      "inputs_sha256": "21ca1dc636cbf24222088fdd3d6a3d65f5cf4e6de2bbb96983743ffbc3cdc46f",
+      "prompt_sha256": "677b7ea3b0593ed1258c541642fe2b17946e7d7e07c7dfd906a2cdd7f590f1fa",
+      "wrapped_prompt_sha256": "c08e8c3ef38bf20eb13711f0cd821b40d05a49df88f91b0fada464f2210c34d7"
+    },
+    {
+      "id": "gate-song-25-suggest-4",
+      "inputs_sha256": "c4b7c47078e9030aa670988cc50ad944c7dc8e4942abb7a6e0f8617902d5a154",
+      "prompt_sha256": "f0070174dd99d9841cf7d470e72ef2ca26aa846c03a0b95193b3280208979298",
+      "wrapped_prompt_sha256": "dfa9ba0b78dba075a0febe810d7f5952fa253a3a0f7b79f29ee3d43b0ad402ab"
+    },
+    {
+      "id": "gate-song-25-suggest-5",
+      "inputs_sha256": "2cde80185f3e93311c298d94991529a7e1c4ef09c47913c517563b6f231e67d1",
+      "prompt_sha256": "0e5adbf45598a700c6a2956dc97c847aeb5967e576c4f618964cfb15816830a4",
+      "wrapped_prompt_sha256": "1a6bb261447ea2d8b131c61c42be1a04bc0f0eb957335d87278c3f1aabf91537"
+    },
+    {
+      "id": "gate-song-25-suggest-6",
+      "inputs_sha256": "7465154dcf667887b93b0f9d44a02f109ca082dcac732fc4289175b8113665d8",
+      "prompt_sha256": "d9ec6e938e4372ce2790c1565f6d10a8ff8ee0601442d7d20cc277b186c256d4",
+      "wrapped_prompt_sha256": "04ed38978dd98c9dab7eacff4c06d60d3bb05caeb546d2ce793c3cb1344409f2"
+    },
+    {
+      "id": "gate-song-25-suggest-7",
+      "inputs_sha256": "c763bfc72abac79eb8e909839e37ce8d64ab836f402c219a45944d69d2b72894",
+      "prompt_sha256": "db2bc1f2bfcef1ac0b4f4e266afbab00a91e82d49ab5fd2c0a37979957772648",
+      "wrapped_prompt_sha256": "cf0ef6baf0207e4df35a80970ce2bfe52dc857a2944d6c5bc4b82d5c63499c0e"
+    },
+    {
+      "id": "gate-song-25-synonyms",
+      "inputs_sha256": "8940d7a7ad0ef0c0509502486831479152e347608d9fb71453b2f2c653413273",
+      "prompt_sha256": "39aa933c5ab4311f369395ece939b6c9385580a112beb4615ab5537afc22ee5e",
+      "wrapped_prompt_sha256": "fcc334956417162042a73620e0b4894f39c901cde2841a92ec36ce4fed29672c"
+    },
+    {
+      "id": "gate-song-26-suggest-0",
+      "inputs_sha256": "a439f43ca3a79f5cb90cb1798f2bb92a97d0eeb4712708adffb974c5d158f3bb",
+      "prompt_sha256": "5d8c2081a3b8546b8cda144d1c0e86559f53e8ce5f3baed2b98a8d0248114812",
+      "wrapped_prompt_sha256": "497f7ab025372426b3d588e0bcbd35dec395d37c65bb5e6ce97b6f5c437714fb"
+    },
+    {
+      "id": "gate-song-26-suggest-1",
+      "inputs_sha256": "8b2a9d2f500d58e3dc66b8e2649f470bd0a34f2cb26957d452acbaef19128df4",
+      "prompt_sha256": "1a2496ddc6a343eacdfc71438950f27174d49d0f17c7489d29d51ff924029b10",
+      "wrapped_prompt_sha256": "ec91013981e4fe0e0515f57d8d3c93659e7693ea3ddf9591f2bcc8d61e7deb8e"
+    },
+    {
+      "id": "gate-song-26-suggest-2",
+      "inputs_sha256": "de008a3f434e73ab658056a0e9d3dc30552febf17ab38c4dfc2beeb126c5642e",
+      "prompt_sha256": "6758afd16bfed944a2bd4bac41bdd6b5bd6c049c03689da88997d4bfef93845a",
+      "wrapped_prompt_sha256": "f041ffa763ebe180b62328cdd6b766ebaf7a1bbaac0da84364c2e0d2d0fbfcc8"
+    },
+    {
+      "id": "gate-song-26-suggest-3",
+      "inputs_sha256": "acf2833a038c1f98344804c272f51e0708aa0e317b7e69e06cb9f938a5d64c9c",
+      "prompt_sha256": "f0f0f0706938dad4359e882cbf3b3d3a86596376d866c758d9668036459d8e56",
+      "wrapped_prompt_sha256": "e32e84851a76dec1d15a8bec04dabffded6aee384229e889b7e8653e143d018e"
+    },
+    {
+      "id": "gate-song-26-suggest-4",
+      "inputs_sha256": "5bb85e97e392cef8c7d57fe2de5d95f2eb410c2229a0fa1054d443ceb38e914c",
+      "prompt_sha256": "b4298736faaad5a7d6d4733fa7b6e97820c20b30a9529219bef300e0aef0ff01",
+      "wrapped_prompt_sha256": "724654651dd86e3a37357e18ce5b7afce53936767143ad37940cab78cb349167"
+    },
+    {
+      "id": "gate-song-26-suggest-5",
+      "inputs_sha256": "46bd68427a2367b9dca2bbc543946c940dfbbb4f624d5c37fd10fa157d21caec",
+      "prompt_sha256": "f7fe7754e1166a61f2ef6c8dd0cee0a5c6068d4abe57b9def8497a7ba11575bc",
+      "wrapped_prompt_sha256": "39e3fb7c5dbc7209b9d7222b44fdd8668bfa2dbc37d66aa73839df89976d3dd9"
+    },
+    {
+      "id": "gate-song-26-suggest-6",
+      "inputs_sha256": "f253234666a120856afb0a6478d206c4fa8517f16afa976eb77c6ac770adab6d",
+      "prompt_sha256": "6c8ab01c5a65f9204760870bc3d087847d183aab9700df406ae4a032645a2119",
+      "wrapped_prompt_sha256": "95598d772d4071afd8f9b4b15231cbfb8c5ce5f406967c46810a0feaa2be81e0"
+    },
+    {
+      "id": "gate-song-26-suggest-7",
+      "inputs_sha256": "9b9de310fa4f54aaa2f488dbb683e00cec7a7f13413e9cc550e68620efd23043",
+      "prompt_sha256": "2606d2b89840cbbfdb119152aae4fb24b2d73d49f4d55fb204a107310231a836",
+      "wrapped_prompt_sha256": "e723101bb16ab5f9eb3c1eeab9414f0936ca1b5a103391bf6f464b96984e9962"
+    },
+    {
+      "id": "gate-song-26-synonyms",
+      "inputs_sha256": "61043637057a3865ca1adc619fd3ebb72936441935192b566c0e3940913fcae9",
+      "prompt_sha256": "fc0f20f79744a65180bc3efb13a2ad256315d94b34203420c60ddba85a5a8cd3",
+      "wrapped_prompt_sha256": "c5f7be4d3526fb3b831afb98a549e26011da9377e4706534d5854d9eabd9cc5a"
+    },
+    {
+      "id": "gate-song-27-suggest-0",
+      "inputs_sha256": "49ad7ce9d76e03e286171af9d8755806a51c5c28281c2a725266a55e5c038b83",
+      "prompt_sha256": "56596a1295ccd1bdc772676cd5067b3199b12313d959cecedb9db2d8e9203925",
+      "wrapped_prompt_sha256": "e9728c03c71f965f47a61427949fecd534d752747fa7c7429e3645f600752812"
+    },
+    {
+      "id": "gate-song-27-suggest-1",
+      "inputs_sha256": "00c3ebe5eb3101a2750c30e6f1d32df2b9dac579c43d7d5f17ffbe4cccaacb9c",
+      "prompt_sha256": "8af4fa420186946973c048c6fd3e2513b112e4cb107d44e5a30d682f7e1aefa7",
+      "wrapped_prompt_sha256": "23f038eb918742a260f3da6763e041ee8c428eb8161dc60cb7b5f3297d53b65b"
+    },
+    {
+      "id": "gate-song-27-suggest-2",
+      "inputs_sha256": "6f7739c7c8fb9bcd09ede5b83c36729654adf2475f2dfc3117c65d7c8f4266e2",
+      "prompt_sha256": "c87b8a72c6cfa61b4ee57b911c5948c81e476a4a16fe4ab4dffeaff216f52f55",
+      "wrapped_prompt_sha256": "bdf3cd69246f4f5dd6345cff43d99f1d7f8b093f698e35d5f1ebeff4bc3197d5"
+    },
+    {
+      "id": "gate-song-27-suggest-3",
+      "inputs_sha256": "abdaf062a1137c2d6d200d5b909fa29804b91de1543f84132a1e189ab3347cfe",
+      "prompt_sha256": "779b625ae94e4b92fa10724f82ee5b5b31402bdd41981ff5dedae115773997b2",
+      "wrapped_prompt_sha256": "c85e56bc7c8d70e11b80f85ada8f1e855cd52788b52420b534786e8bfa0a449f"
+    },
+    {
+      "id": "gate-song-27-suggest-4",
+      "inputs_sha256": "ca9010d7dea8a4e8d1041bb21e2b541562f759ec476936a7601dd7ffb8c63949",
+      "prompt_sha256": "b3860b82c5b39369657a25c4fb0b08ed0513613c5ea0d00008bfdba7440f288f",
+      "wrapped_prompt_sha256": "c9390c17c364d71b2382b96e5e6f1dbcc89201fffb579b6fff7a7f5a5868f176"
+    },
+    {
+      "id": "gate-song-27-suggest-5",
+      "inputs_sha256": "b02765eaa3a4f4577ab44b5d7b6d593ecc3ba4955f7ac23faedf03185989ce32",
+      "prompt_sha256": "3e8355c3cb882c0ddf05d3358f017de2dbb4071aa8c721bd3543d997e0699445",
+      "wrapped_prompt_sha256": "4e398b41347700245362a0d097307f6b0e5962f1d9c7745ca81f186111ddc392"
+    },
+    {
+      "id": "gate-song-27-suggest-6",
+      "inputs_sha256": "1e95c7141921379b37c052b543af2efb68d80437dbc91aaa05097b0a4a96581e",
+      "prompt_sha256": "6e3ab86d92bcd1f68f129a6ebc7f5f9eb583bd2c430aa89a37301f1850f9053f",
+      "wrapped_prompt_sha256": "e7019eee6870eb60ff77183159d1f798f2b73178cb752d1c3b464987c64b4ebd"
+    },
+    {
+      "id": "gate-song-27-suggest-7",
+      "inputs_sha256": "ed49a07419824eb3f2015c0df3f85615b4a94429ee0c6391cd00b3a8fce19659",
+      "prompt_sha256": "34b2d9291d84db65268867796698593415a6653ed48e7e46c4b50e0dfbbaf4e5",
+      "wrapped_prompt_sha256": "14f8eecf54c93a97b0d76ad44679ecef5da691e254fb48d90a6e169a459ee1f5"
+    },
+    {
+      "id": "gate-song-27-synonyms",
+      "inputs_sha256": "166b199a56279a58318b1067e15f7390d3e2a8db7f44d87fb1ec4ed6927ae34c",
+      "prompt_sha256": "65c51193e4680675e32046aa96f2a7bac560c7065df67583f29afd1c6adf8cc1",
+      "wrapped_prompt_sha256": "76070631a7a258767020d6ee0525632691d914fad7279ce29e38c0f6d5787c4b"
+    },
+    {
+      "id": "gate-song-28-suggest-0",
+      "inputs_sha256": "0c55f9f81d6fa03cb941447890d9ff932550c33d55e9faac5ef1cac3b605e1cf",
+      "prompt_sha256": "001b3a9b464d9bca4c80017bc50d7899452eca4544da0871dcbff2cd45a65e34",
+      "wrapped_prompt_sha256": "67802f07d347cf419dfd2a54762af65c76541675bdc73db7bc475ee7645b1836"
+    },
+    {
+      "id": "gate-song-28-suggest-1",
+      "inputs_sha256": "c6cecbaa691e9ce1011e713fcca7401b002c312c19100d24f34ea04d63e60b61",
+      "prompt_sha256": "22fe353d5f7e1dfc371266a8cd92a8edeadda9606d82f6b1cb62f7f38527bed8",
+      "wrapped_prompt_sha256": "e815d59a27f6d94bba06734e27c47776b0b681581694a25309249e005ea726a9"
+    },
+    {
+      "id": "gate-song-28-suggest-2",
+      "inputs_sha256": "91ba122523de363ff8f4a7bba157a68ed9ee730c237f4932e70949c2746c1747",
+      "prompt_sha256": "e83669258f104bd10c6771cb5bc643a9ea4c3f706ad1b858adbacea77f0c878d",
+      "wrapped_prompt_sha256": "c4a5bc18edf15bf736140f599eef0b8fbefc14a4ef0461f8f7555d36d15c5877"
+    },
+    {
+      "id": "gate-song-28-suggest-3",
+      "inputs_sha256": "905fd74402073a0332b2d73631ee8bf31658900f0579345b78b65a71ffc8ddd2",
+      "prompt_sha256": "a2718fca6d14046fcfea8501937fcfe352b204c505d120175746da4dfe15fe95",
+      "wrapped_prompt_sha256": "961327604dbf96acf8dcd218fed10b463e253cd77f6002dca109d1861728c08c"
+    },
+    {
+      "id": "gate-song-28-suggest-4",
+      "inputs_sha256": "3e2fa60d7f19c07bdfcb32df9c8a2849acbe2ac4bbd90918a55d55d294c67070",
+      "prompt_sha256": "77ec29bd49a53602ffe62012af1e6d8c4c7bbf17fc7a1d0782278779ef016b31",
+      "wrapped_prompt_sha256": "0ddfa3e12921b31e8939c6ebc5815c2a7724327694cb631141d233bff16665ab"
+    },
+    {
+      "id": "gate-song-28-suggest-5",
+      "inputs_sha256": "cf289365db6d3caf333dbce23c2baabf663cb769c1a6b178914ccea2df8ba6a7",
+      "prompt_sha256": "50e204415c68548fb77a0e49dbcaf4bee4f52d7f0f6b4b29f5b2f32897d0f217",
+      "wrapped_prompt_sha256": "48ed52ee682f260b9d63b3c0b2cebbe4bff1a0238fab235794f0078d2f7c9907"
+    },
+    {
+      "id": "gate-song-28-suggest-6",
+      "inputs_sha256": "b29ff26121a6267676ca07a086652a8085deefc5230ed78b03d5e73439d7de18",
+      "prompt_sha256": "56757ee0dfaebec8d49856194b70224a67d1783dcd248d5fada21d80e1e41e8f",
+      "wrapped_prompt_sha256": "cb72c7e360b4ce24c306e24e4fbe700ef6b63306bde7110336a4951d489188d4"
+    },
+    {
+      "id": "gate-song-28-suggest-7",
+      "inputs_sha256": "61200955254ff97fd5c4927010fa5a8739d2f81166a3b3da64919045fcd80027",
+      "prompt_sha256": "8010a6ad5caaa928db9d39c79cdaccdfcd5e16d473e39a01fbe8386892beebf9",
+      "wrapped_prompt_sha256": "62e491aeb3b807563c3100e1b088150d18428c61c16ec8c45d81a279964bbce8"
+    },
+    {
+      "id": "gate-song-28-synonyms",
+      "inputs_sha256": "ee66ae1e93a21891e4b2cf8f94a3ad2070cba1d01709f4a50e1b29c3d5428f06",
+      "prompt_sha256": "1bc4c336a6903080b51dee2856334a51b66e466faa7f3b208a2a45e911cbf7a5",
+      "wrapped_prompt_sha256": "cbf8589e031aaabbaff5802e5262f589cb5da324275a1ee8fc2f04e4ea7f1ba7"
+    },
+    {
+      "id": "gate-song-29-suggest-0",
+      "inputs_sha256": "d38f9ad743fba54b62b2108c7577bc7dc5caa8b0f4be2d3ce3f75d863e262e6a",
+      "prompt_sha256": "a15577a5e4c67da6df51457737755ae1bda3c9f787b0ff2b68235c12272775db",
+      "wrapped_prompt_sha256": "ee1946a0c6878efb9fd609aa7a7b0edf677cd262f2febc79115a69354da9d738"
+    },
+    {
+      "id": "gate-song-29-suggest-1",
+      "inputs_sha256": "ff1b985517b9801f4f5f3a58641fc3ff22222ba50a5a11040b54e15ace99b510",
+      "prompt_sha256": "aa34af2f1074ae522d0447c7af650f8727a7c8fc0a6e7662c2e114dc457545e4",
+      "wrapped_prompt_sha256": "0847bad7f7722b2d188604dd20b5fe3dce713e36e86ee41428f85782542f3fef"
+    },
+    {
+      "id": "gate-song-29-suggest-2",
+      "inputs_sha256": "48fc8cc0252bb116dc35ea6755efbfd41acc61da0668ae1c3f3a1be33351a45c",
+      "prompt_sha256": "fd0c73b82dea30acc4a2ef663c7f8c22228bcb493f1e8155aeea26d8da06fe08",
+      "wrapped_prompt_sha256": "bd56c79f9dff04e1fef939871e61ff498edb0b0b8f6b4836255045fbf980528b"
+    },
+    {
+      "id": "gate-song-29-suggest-3",
+      "inputs_sha256": "7bd51d1fdf75caa6f68367669cc6a816d9419396d9a259368b92f4ed3bc55e76",
+      "prompt_sha256": "a037b109265cc9f99425ea84f596cbe998a58f52b17cc41e58b218387f51a041",
+      "wrapped_prompt_sha256": "0d725805844a61875c8c5d7e7ae5ded06ad64c221425ea42cb189005bfed775e"
+    },
+    {
+      "id": "gate-song-29-suggest-4",
+      "inputs_sha256": "7624e9359697c6631b5e45406bf13e6f89ba780f5800acab2504ef31bf7f6e9e",
+      "prompt_sha256": "99c0a8bbe94e82c0b9fb6d1f4cc4ee948f71b824ed30fa6621da8f3f8766e0a5",
+      "wrapped_prompt_sha256": "cd0e15dbc44336a7145a671357359e6f45f103ba73b808ad8002d5e23f16fea5"
+    },
+    {
+      "id": "gate-song-29-suggest-5",
+      "inputs_sha256": "4bd5fc5f612f0c63d9b1cceb3d6b75f16bd191145869b583446a1b9c2e1afea6",
+      "prompt_sha256": "c6f8f35f4afb193cfb12d03234a4514a013c55e145043c54a95b69354bee11c8",
+      "wrapped_prompt_sha256": "4db4137fa92eb5f6ac74cab19292402f8737fbcd4ae78575aa2ef44338e19832"
+    },
+    {
+      "id": "gate-song-29-suggest-6",
+      "inputs_sha256": "ef86a2d275276594d411b7e1df2bf996db1cfe2fb9a60916ff5bff540da27b3e",
+      "prompt_sha256": "a728a8ee3a706aafd3a71b6675d532d8b8b99cd5b2bf2bdad5c0518a293af67f",
+      "wrapped_prompt_sha256": "a05e59932a2634025c3dc045a26d35b71cae55e2cc1fd03dfff621d6a108a62d"
+    },
+    {
+      "id": "gate-song-29-suggest-7",
+      "inputs_sha256": "df5f7483fd6b70791e8387b109ef9c91f17288bcc963825c75bc3ba2bf44374c",
+      "prompt_sha256": "87aeb41b8a22a61ad4065156d5ed54a2696456b4f9001a451db6c2abcaea6da9",
+      "wrapped_prompt_sha256": "c8819669b2559c31b1d013d42cbdf6aa824314afc8a9797ab467d5a58dde0d26"
+    },
+    {
+      "id": "gate-song-29-synonyms",
+      "inputs_sha256": "f284283b6ba54d3573e3a3b38abbd04f247ab961bdb95b8d00cb9ca1f1c3a073",
+      "prompt_sha256": "0d9b018cf7e3a0e43d09c0124c6c0c61455c60e72deab667456bf9e1b259643d",
+      "wrapped_prompt_sha256": "952be47b0ce05ad5815e9c9d82116ab2afc0a6c7d457b431c5f0a800d2cfe809"
+    },
+    {
+      "id": "gate-song-30-suggest-0",
+      "inputs_sha256": "5fc056ba98060459b4316400e177446a1942d22e780e9409396c0db469fe1b66",
+      "prompt_sha256": "80066f5bce820a8e17ec7e08f8f5e43e10454ebc6610fdb03b8adf55a99a1d9b",
+      "wrapped_prompt_sha256": "14059bc408af3a1f8ac5822fcfd7a36c928c846804efd99cb5ec4092254ab383"
+    },
+    {
+      "id": "gate-song-30-suggest-1",
+      "inputs_sha256": "a5560824d81b0f72bb15e5e447bc64e6ba7b8a15b5739f37ec3223c327284ec9",
+      "prompt_sha256": "0a64f877ba0522efe6e38e0b8a5202d3d45dda0ebef7a7d918e20808908648d2",
+      "wrapped_prompt_sha256": "25891dc32c92488a4e61c420ad381905f8256c2ebaff54678ea9f6e6ff0dd910"
+    },
+    {
+      "id": "gate-song-30-suggest-2",
+      "inputs_sha256": "4e4b0d65d630ccea28f77969fe7a7ecdea9453ca5cdaf9e12cb2666911612c0c",
+      "prompt_sha256": "24e5f86ceacefd2af78b17bc1e99808926e115cc032659e63957d76d16ddae18",
+      "wrapped_prompt_sha256": "f499523155a77fdf73e871025749e5464a9ab9bfd139790a343ece92b59a0498"
+    },
+    {
+      "id": "gate-song-30-suggest-3",
+      "inputs_sha256": "1b2c76762ac9ab9071339f1cedd674ac1636f94d44867666cb9a97173907adf6",
+      "prompt_sha256": "18b6fd992a245ec4ae9aa47267a9c5117529cef5a4b773eee1cf38f0609565e1",
+      "wrapped_prompt_sha256": "9cd31d3035cb9ffc5fa2162060cb513b25ca3a76d9dc4c78ea40d4f8b8e44c7b"
+    },
+    {
+      "id": "gate-song-30-suggest-4",
+      "inputs_sha256": "dca069fe9f3aaced2b00a893aa799d58a2f638fbc63468cd14733458599f8d6d",
+      "prompt_sha256": "6669ac12097fa22b0d1d0a9d0dac6f6900b58d35ff6ac1f8d9e15bb9b2b48baf",
+      "wrapped_prompt_sha256": "0a73947c79090f78bd265150d9c225f15c4b004e5744c4e13741f217dfba7253"
+    },
+    {
+      "id": "gate-song-30-suggest-5",
+      "inputs_sha256": "5ae18a3aa4264ea829998591a68e033f75194b232a4ab0b83b22f06082e2c5e7",
+      "prompt_sha256": "244b1f04760f32d3711cf1dc620ec16ce4bd0e4cfc539a6ca27775617c7069bb",
+      "wrapped_prompt_sha256": "defdf718b3f7e96ecabeb9cfa7e452ca1c56270dd966b06fde6d6fad0a5f0f62"
+    },
+    {
+      "id": "gate-song-30-suggest-6",
+      "inputs_sha256": "48a153a1d2f1965c4581dca4178b1e5586faea5f0370c375af982aa8352a273c",
+      "prompt_sha256": "5ddb9cff17e9a0eb3283e6bf2a5a3c23f7a88f114d44f642fd0568522a0ec339",
+      "wrapped_prompt_sha256": "b75a7ee0827eee896297f64f07eda74c7c414c325c3b92e8f89510a0abde5761"
+    },
+    {
+      "id": "gate-song-30-suggest-7",
+      "inputs_sha256": "ec24e8a63d520c2e962dfd972c891c3af6a36980aa0afda490a3a4fa827974c8",
+      "prompt_sha256": "16cbd4dbdf51e88ea5f02cf9664e5a0d8e18e55dee34c7b3607570ba5dca0da4",
+      "wrapped_prompt_sha256": "1c23c9485f0ae02ce5fcfb924642ff474b920e6076f9459211350e89b71ce01b"
+    },
+    {
+      "id": "gate-song-30-synonyms",
+      "inputs_sha256": "e8b7535a6e802d0a335121f63df49fb736fb82cd2a2c9c84c649d83fe5581b7c",
+      "prompt_sha256": "1cbf8cd304b6c5d4021d35e447ff60efe9a2771ef87a0914d86048f5cfc0389e",
+      "wrapped_prompt_sha256": "45f38461e353f7ee7ea503aeb22553afa79f8ce0ad8ea9d88a8156df2ce49307"
+    },
+    {
+      "id": "gate-song-31-suggest-0",
+      "inputs_sha256": "8ce11be7a0e8a7767f584dd4460a63c0af330ede58ccaf46c4ccf6bc5c21a8be",
+      "prompt_sha256": "363c9db8788e38623455554a7c9a698cac5ffce8140a19228c1ca58d154b861a",
+      "wrapped_prompt_sha256": "c298be54dc5341f136ceaa7764cd3dec3f3b8619415252b13969bc64889b48bf"
+    },
+    {
+      "id": "gate-song-31-suggest-1",
+      "inputs_sha256": "ea295acf2854df6ea8fb77c5aaec53d43c515221d1d304e0e21923bcb59f4f3e",
+      "prompt_sha256": "1c474ec4bb9ea5ebf14ce2b3c4e7fa9eff7594763417c4e81ad96f57338f99b5",
+      "wrapped_prompt_sha256": "fb55d82fd0d45d386a5fcaffbc00ef5225c119e1ffddb0a17049d844bef49a87"
+    },
+    {
+      "id": "gate-song-31-suggest-2",
+      "inputs_sha256": "daa841aa4d3a5d9c2be20ac15d2a73382238d469084f5fa0c484879750c64914",
+      "prompt_sha256": "13c400ea614a1ce39398c59304a138146a788d607e7fdb3d14b63a65a1c25004",
+      "wrapped_prompt_sha256": "bf4549a04bcd37d9c2f53100c205fab00795db33a5030be3536e599568eedb1a"
+    },
+    {
+      "id": "gate-song-31-suggest-3",
+      "inputs_sha256": "752d0000b768c296533aba7d6346b48344972bb2157d70e33616d8e21b83f6a5",
+      "prompt_sha256": "25a17013c651e6b33a4a5bec7c858ef15d4e7105939d990ab5a9b9ebf938d0f9",
+      "wrapped_prompt_sha256": "31de8a967d420378563917f3b3946f62ccc4877dc4667441ea68806ada50bd77"
+    },
+    {
+      "id": "gate-song-31-suggest-4",
+      "inputs_sha256": "beff6a50b471434210b1b95044145285f53a2eb8e107a9ae41ed3597026690c7",
+      "prompt_sha256": "d2d54c1334efbb486ce43d8d64aa9f06d177eccd5d8b5fc564cfbeedba1560f9",
+      "wrapped_prompt_sha256": "c748671903d2c18d72c3b62d5b1767ed794992b0f3b1e8f6ce1cf11cd6b67930"
+    },
+    {
+      "id": "gate-song-31-suggest-5",
+      "inputs_sha256": "250c3d69bbda7ab531764edbc33b4ecbff3d81c4261bf56fc09352d118fa905d",
+      "prompt_sha256": "f07ff8ba8bebbd8ac6f95080e1365365912fb34d188e7236f3eea194c4a62ab5",
+      "wrapped_prompt_sha256": "f506538017e0502eb82004ae0c8eeb2275c2625473cfba13e7e2a15273dcac2b"
+    },
+    {
+      "id": "gate-song-31-suggest-6",
+      "inputs_sha256": "08f833a3e1074ad640b38cc8c55cf15669f869955342b96598b79b205010052b",
+      "prompt_sha256": "a0079243f01439243b4301d6d4ebe3bdf2c86751594f2d7711832fe315372bf4",
+      "wrapped_prompt_sha256": "0ed7c0d675b4e1a06a409a3ed2a003a42479d5fd311c82079d8deeb50895f682"
+    },
+    {
+      "id": "gate-song-31-suggest-7",
+      "inputs_sha256": "4bfaf56ee079c3d7d72fc7b9a96fde14d03c30e21c533b3d95f71b9a0aa2fc99",
+      "prompt_sha256": "8f08d891a031639faca393565b6ca900375508bf418b8975313c661586420f7a",
+      "wrapped_prompt_sha256": "df798d494438dd2d18791c58f1f7acbfe1782e340167fffba479cec1faf8e9c5"
+    },
+    {
+      "id": "gate-song-31-synonyms",
+      "inputs_sha256": "d1247b709b2a9d754f55d8ef13e2f96e70a1b8388c11a242a254510cc46b5ebe",
+      "prompt_sha256": "8e4ec9748d9ea91f0aec89d1134cee7f47db47294039a4c5b35ac0f29f784b34",
+      "wrapped_prompt_sha256": "3eef8372e67fdf6086fba8fc8024880f3e0abae6e16764ce6f35f21825bdfdb2"
+    },
+    {
+      "id": "gate-song-32-suggest-0",
+      "inputs_sha256": "6899ba253c31f5c57403676aa077d23c78b2bdd47c48d45e01e3065fe0841f7e",
+      "prompt_sha256": "fa54e54e3b78dbfa6fa62ced52338aeaecbb300a8d90558e04b59be3cd35394a",
+      "wrapped_prompt_sha256": "b9a6c4d89d1d442baa8620839f416d93a1a42af53ea732c088308eb53190ec36"
+    },
+    {
+      "id": "gate-song-32-suggest-1",
+      "inputs_sha256": "d5fc4466080c28ce3306e102a6b79602348034e564380e742c7e9c9b4f828b72",
+      "prompt_sha256": "c56005be00407b71f76931018d5633289c7a044a1e4f34a94bec615d16358e53",
+      "wrapped_prompt_sha256": "4850f7d7f56042d3a4a7d1c708c014b3321be5beb5f1557fd7feb4e85d0950ec"
+    },
+    {
+      "id": "gate-song-32-suggest-2",
+      "inputs_sha256": "64e066539b2bac1cf7d1e9b7fc8d53b0e6e473142c328b4b897413d24db2f504",
+      "prompt_sha256": "d715f4ac4e22a705b77ad2d0a97932a7d5158433e09a1ff8221cc334e826b4a9",
+      "wrapped_prompt_sha256": "3b201a4f0333b648a67a8a3633d86af2ce1ed9a38d08593b670c2764b27b52b5"
+    },
+    {
+      "id": "gate-song-32-suggest-3",
+      "inputs_sha256": "8d89dba8062ea8845b391834bcc1bd43b1f03d30729ea562bfeafc449ba34f0f",
+      "prompt_sha256": "e072535a80967480c7d7ed1417171a117c0eb7fb8e93b779568623c3e9414f03",
+      "wrapped_prompt_sha256": "2f6c988f1b66551f069f6325d689d76de9b54301724df035071a5cdc6d4bc73f"
+    },
+    {
+      "id": "gate-song-32-suggest-4",
+      "inputs_sha256": "5535830d3a22a4304e730cadb162111518d5e3ded24e09ea115067926951270c",
+      "prompt_sha256": "9f79bb731fc67b493a521091268271afcfc6d9a2d3d8157d5beb0b4f14b23b6b",
+      "wrapped_prompt_sha256": "3a29e6d3b60b781296e705d59fb5534aa79cff9756773b6fb80c696445742bd3"
+    },
+    {
+      "id": "gate-song-32-suggest-5",
+      "inputs_sha256": "affc632f1d2bbb1d734d59a3c9ee7e0c3284f7e9cea3df565022347e22582182",
+      "prompt_sha256": "9a351a290d8e49b0d26f0a77576f08bed4e119fb779db695806e744b507625b2",
+      "wrapped_prompt_sha256": "ee9c60764a70ed98a2a1ad692f80e5cf4c4c2e44c7883910483fd35cce75e5d8"
+    },
+    {
+      "id": "gate-song-32-suggest-6",
+      "inputs_sha256": "0e31e9150e23f314c14a3a617b909111a07ff5d558e5f5cf7fa480f5667ab66f",
+      "prompt_sha256": "e7dbf90821cbeab425a23cec6529035ca7e88454f62ce486cea25c4ceda06781",
+      "wrapped_prompt_sha256": "cf270bd6535e1fe94ce14a30560836fc1a53eabe6cbc7ff62428a4ee91535681"
+    },
+    {
+      "id": "gate-song-32-suggest-7",
+      "inputs_sha256": "b7ca056c448ab06ebf13fa08e397b83384a69482b177454b69187319c33f4612",
+      "prompt_sha256": "d2887bd2f1be1115a5effe63897ec365fc5ff445ddb5de555330b027b7f8ecbf",
+      "wrapped_prompt_sha256": "ba80d41923819a6015d8d1dfbaea471bb4593e31b6710d920a9e492c214a3eea"
+    },
+    {
+      "id": "gate-song-32-synonyms",
+      "inputs_sha256": "c2f49f4f6b49c7cf78809eb586617c80f5872ec7eedd1060de29ecae31db80a3",
+      "prompt_sha256": "54cc9f175112e80a4a076e586bd053bb2db92ae03fc0f35aa53f9281cd4ba058",
+      "wrapped_prompt_sha256": "934a35c620d62611045d6abb3299fc91095a0349bb7a0eab0f9147976fab29bf"
+    },
+    {
+      "id": "gate-song-33-suggest-0",
+      "inputs_sha256": "abf62f06ffa6bb2b0c7ba985d85d785ce900869c2f23b96c2b132cb80b919fe5",
+      "prompt_sha256": "cde8156ba2dc4f8568b5bb05b0f4391911cc28f201a3f4612c86b92402410a6b",
+      "wrapped_prompt_sha256": "5c1d1b6259df906e0a1f03a150ac17ba2d5f76efc8a8c7aa14da69e4d5e2da69"
+    },
+    {
+      "id": "gate-song-33-suggest-1",
+      "inputs_sha256": "0f6f1dff543fbfe231ac40d32521700d738b3944ebe9e2f4c58de5ad29dffecb",
+      "prompt_sha256": "0e20c1039d0ea7cac143da566b2cd3c57223aa9cfdbd1f1f6f4f070a08299d51",
+      "wrapped_prompt_sha256": "37dbfe50147a1329dceee944533965965e093cc476def96b7ee795dccee14264"
+    },
+    {
+      "id": "gate-song-33-suggest-2",
+      "inputs_sha256": "d2d23f80ff1a2019c1e1375b1f400ce8691311c7b64ae61234f3f28d900f40c5",
+      "prompt_sha256": "90da1f3fd72808235e8388491f8deda7cb83033007d46244a0203608d0591452",
+      "wrapped_prompt_sha256": "598fc3c06ff6f53d71bcf211de2c8817c2bc1161ab86a9590a37cd454fc49d3d"
+    },
+    {
+      "id": "gate-song-33-suggest-3",
+      "inputs_sha256": "0362fe7fa48d877f5638d85f544925325bba277454e4ce443c9cd0499f653df0",
+      "prompt_sha256": "7c30b4f3d8070df84d9125d9a948718154289cf4d1b6437d9a005827399eef64",
+      "wrapped_prompt_sha256": "219ae21befa7edb03215c8e26ada36fdabd9156a7372ce8647a89624bb62c31f"
+    },
+    {
+      "id": "gate-song-33-suggest-4",
+      "inputs_sha256": "e0b36553e082ac03fae1073b12cac18b70a4f922c04f607d43da1f043e345142",
+      "prompt_sha256": "e9fbc4c6d8e3f014cafd1d4759e77ffa4973567a4b52c1794668accd2616d22f",
+      "wrapped_prompt_sha256": "cdc4af0a3197f67c5a8c0e1255754b353e901eef4bce9d455b243142c104adf4"
+    },
+    {
+      "id": "gate-song-33-suggest-5",
+      "inputs_sha256": "00577a9fc31fe5be15d21d02bfa3f4abd5663b0ebf63aa9b59f4bc94d0253dd2",
+      "prompt_sha256": "050d27f08263335165c0052b5313498e258e535e981ee8cbc506e9dee0273cc4",
+      "wrapped_prompt_sha256": "c3017a95fd043403a20562f94925c505049e3e1fc5a50155e77275080c67bae3"
+    },
+    {
+      "id": "gate-song-33-suggest-6",
+      "inputs_sha256": "22ff6ca2aa49fd123d15461ef125e039621374042a2a86c02511aac7b6d20938",
+      "prompt_sha256": "d7a71875cb376f414ac978c0850288790a356b9d9521738a78ec2cbcd6ef7fc0",
+      "wrapped_prompt_sha256": "1f12ff6f7944dbae2d2d8bec24dc8a5ba72caf2668758a5a62cb0656584a6881"
+    },
+    {
+      "id": "gate-song-33-suggest-7",
+      "inputs_sha256": "d767b4749fdff41b61d8a1daf8d3f656edc996a4598abd798b128768d64f008f",
+      "prompt_sha256": "55b8ec700c99a9e9748752605a95759732e93960bac126559a392438a894f21c",
+      "wrapped_prompt_sha256": "cd9206848a84a6571ba5ca1b688b5ee218847fcca43091fa10fa305a6972a91a"
+    },
+    {
+      "id": "gate-song-33-synonyms",
+      "inputs_sha256": "b91e9688fc79b8227cccfce67b3a2bd5c3f323518b9b2e62bf418b04fa8a9b48",
+      "prompt_sha256": "bafcf88ab419f14e69b0c449027c39fdf8193d98bc79e6dd660b0ee6f4444e06",
+      "wrapped_prompt_sha256": "8dfc80788f2b9639d0cafe6b0822668e1935ec2150a86e549f14b93ff6427f86"
+    },
+    {
+      "id": "gate-song-34-suggest-0",
+      "inputs_sha256": "fcdd62d8f01a80509702ea9dc1755cfd92b7af199ea4005078ed40c1742f889f",
+      "prompt_sha256": "75a5dced5f2fb7da5617e14b70674145b19950f6b2b2fc3d97b21907aa78e7af",
+      "wrapped_prompt_sha256": "224287526902993aaa0fc4940898834a0419336050121788414db54108c8fe27"
+    },
+    {
+      "id": "gate-song-34-suggest-1",
+      "inputs_sha256": "d37323586e98994a7c07b91e41098268a1f7834284b9324789e36ef8ad13b0e5",
+      "prompt_sha256": "f28b3ee72af7be764d44b5384f956ccfb1169c7b1d081e02f7a8dbdd36637411",
+      "wrapped_prompt_sha256": "d2db1c5405f9880be6464f6c8dc1a5c4a1ba6cc0fdd791c3d86c974975823405"
+    },
+    {
+      "id": "gate-song-34-suggest-2",
+      "inputs_sha256": "d491d9668c470c02561bde250f677cb54e103a50417e2f251be04c436f85d01b",
+      "prompt_sha256": "bbe7ac493276a1f27863c6301aab364239db0c681e9c5f81a630458e4f2c07d4",
+      "wrapped_prompt_sha256": "9fc482a716686bfa5743fdfe5abe147c22b260a4c5b8acb54d5fcc475d741f1c"
+    },
+    {
+      "id": "gate-song-34-suggest-3",
+      "inputs_sha256": "cc93693ea84dfae6f19e518314acf96a7025820f8573e56ff26a4a49fde06f33",
+      "prompt_sha256": "52e87e2d90633368f5a16810b727295799707b51bc7b22465fbbfd5905790048",
+      "wrapped_prompt_sha256": "2f4d763917c8fc0a9fdcb4d6fbf0fb38db51dbba3e83b8c2042ecb53ae5a1457"
+    },
+    {
+      "id": "gate-song-34-suggest-4",
+      "inputs_sha256": "1d8bfc7fef98bd2a5077b1ffad152e7a91eb5f3fee74ebcaa0e7a4ebc7d980db",
+      "prompt_sha256": "86169dcd1846368190ee5fa00e52868dc4b476ed9aa3dcfacebc68c6f3d2b250",
+      "wrapped_prompt_sha256": "2d742e3828355b733a7643577f3eccc37214b6d9c7d4dc8dd7748d3005a62d13"
+    },
+    {
+      "id": "gate-song-34-suggest-5",
+      "inputs_sha256": "112bcd054aeed23763293756c29996b9881588d6a10c76cc66098576d79c8a89",
+      "prompt_sha256": "883391cc2643b28bf932feadaf9a1b56dfc999b038f986ca94cd29b5d2a068db",
+      "wrapped_prompt_sha256": "fb0ac877a74ea877affa32ac15f2ccc25635e54749c1acf235d650fe336a272a"
+    },
+    {
+      "id": "gate-song-34-suggest-6",
+      "inputs_sha256": "a093649fd7804ba7190803258183dd6a56d7ad84c103488d15f23f4ae0b92318",
+      "prompt_sha256": "e4d392e2f552a24f96b4a03c73e7bfd71a149051d2bfa356762afa5224e8f0ce",
+      "wrapped_prompt_sha256": "34e3bbbe4d1d33112b144946bbf24d2212c7724d6662db769e920fcf1e83f340"
+    },
+    {
+      "id": "gate-song-34-suggest-7",
+      "inputs_sha256": "71379369a5effd0edc272b2c50bf10ab7605e67c6dd384598931de4249a3f6a8",
+      "prompt_sha256": "9d7dae51627992b68ed880c60fe9a06b1c5c1ed2e884cb5ff0bf69d79d7cf70f",
+      "wrapped_prompt_sha256": "12ceaa2ec14d60932bec042e9d3c1939f035b28d2e05a1dab795db6e6cb264f3"
+    },
+    {
+      "id": "gate-song-34-synonyms",
+      "inputs_sha256": "6e9a9f415842ed1bc920a85aa3245f4fe1894729b756eb4567402f7a1ad593ba",
+      "prompt_sha256": "7c05a1cd524c8caf1512def483206f8ace87bc4375411cb06bc63ac35fc66231",
+      "wrapped_prompt_sha256": "85d724b7ac0452dc9668063f820debc1c93f5f10997352d9cee923ad943d8e55"
+    },
+    {
+      "id": "gate-song-35-suggest-0",
+      "inputs_sha256": "b69250ca284e51cfc313f31a90cc9dc7e573d827aa9b531f3ea9b5d419519c1a",
+      "prompt_sha256": "d96470d58b93e5f874f46db1407e34bf02b51336a3734ae4d912f810b92fbc2d",
+      "wrapped_prompt_sha256": "c00efaed6b027464fd597c0385ed48ee3cf7bb01cbbf9fa7074d3ed9f41e696c"
+    },
+    {
+      "id": "gate-song-35-suggest-1",
+      "inputs_sha256": "9be65f509ece0495a55a5f302129bd94623525684385471243e6477782431123",
+      "prompt_sha256": "8b7c434eebecd9677180eddd6d31d171e49edbddc6929a810aca3bd9e92d0321",
+      "wrapped_prompt_sha256": "81cbc5d86ccbb8862505ab7c701439b8b3b0d9d2af052fd36ce465a3c2968b5c"
+    },
+    {
+      "id": "gate-song-35-suggest-2",
+      "inputs_sha256": "ead7fbfeccfc56bf99d7b5923c8549c2afe9c9395c51c2206205a37141385663",
+      "prompt_sha256": "144a71d8547443f883004b38a635ae6d5433ce70e0d1255ad4edcb6385f83ed2",
+      "wrapped_prompt_sha256": "1852ba0a69ecc005533e88254429229b55a9b86530319a71aec1388029730175"
+    },
+    {
+      "id": "gate-song-35-suggest-3",
+      "inputs_sha256": "28fec8b582af35b7350a6e4f71078f21f35a7145678c58cbe2cfc83d7d0c1eab",
+      "prompt_sha256": "0c86872cbe651210cc3553f4de4870a2f198538adc954abca59d096b61be53da",
+      "wrapped_prompt_sha256": "4e7be5eef8eb3681e508df418eb32b636669a626a5eb2c0259d36b45ee6264fd"
+    },
+    {
+      "id": "gate-song-35-suggest-4",
+      "inputs_sha256": "bc81c5c204253952eefb5572e7a0da0fe7968f9d8dc50ccb9a6ba9f59e2f5599",
+      "prompt_sha256": "42b13100372a1314b79c60303f4b4cbf60ac778a9f604653a7d16efa2558a06f",
+      "wrapped_prompt_sha256": "7b362672b783d7fcb7c0fcd56926756f3017f18bf37f70b438a38a5a4dd3eb43"
+    },
+    {
+      "id": "gate-song-35-suggest-5",
+      "inputs_sha256": "be56ac3fb0c414271b9186cc100de7056203eb26685f26f225de21e973a3b127",
+      "prompt_sha256": "19f921e587b44a1959fff0edc32dbae7341ac06a311d9e425ce6701d6e9d3201",
+      "wrapped_prompt_sha256": "2bb551e4726acf6fb40c950fd9c2c56b2aad86cb6840615572f75ac74ea2b35d"
+    },
+    {
+      "id": "gate-song-35-suggest-6",
+      "inputs_sha256": "5f1124b1b31fd8a30a34166ad87481da6b6c0c822ef08ad76d4f99b6ea9b8f12",
+      "prompt_sha256": "0941df8c7714b91dae76defea00edf8b935c865b0f3fbeea50ce322e1d359a5a",
+      "wrapped_prompt_sha256": "22c4eb322ef31821266cdc946c54a7288d7259a3536f3a42028bb503b12b0a00"
+    },
+    {
+      "id": "gate-song-35-suggest-7",
+      "inputs_sha256": "20347440bb67452c9e21cc1461dfb02fa8ba58e78b218e8ed0efc9f7e9ce195e",
+      "prompt_sha256": "7c0baf31f07686f2f067b09b5dd546e6cc04a5d82ae0ee63a4e125889c1f041f",
+      "wrapped_prompt_sha256": "dac5bc99212d00ac7e2c6df6bd6220330628f6e83367d0319e4fd58f9c4affea"
+    },
+    {
+      "id": "gate-song-35-synonyms",
+      "inputs_sha256": "722f4a8b3b37fe38a4c6a11172cf07de62f0dbd865b9d1c8e88589cc64fe856b",
+      "prompt_sha256": "b7c3bd4848b9f4fee2cbd4f5fa499787036c8bc6c277585f8f84698b4d16d4e2",
+      "wrapped_prompt_sha256": "7bc877f237f1fa718388e2aa15a457f1971d6d48281c618d1043409c5b913127"
+    },
+    {
+      "id": "gate-song-36-suggest-0",
+      "inputs_sha256": "9ffa2c5bea32388ba8508ef18b7292c9aeaa8339d00896b0f36e1f7708b05774",
+      "prompt_sha256": "a6707619e519825b05fead9002285cb41638d56369797a82c0e3d10dfcb80e41",
+      "wrapped_prompt_sha256": "12180c8ac12082b6fcb726584dcd6341c575a1d590e71862a595428ac05b15ea"
+    },
+    {
+      "id": "gate-song-36-suggest-1",
+      "inputs_sha256": "b2236d67fc9e06eec44d638ae6716c9ecc1165cd5d049b7e59f564eb0618d964",
+      "prompt_sha256": "083e67c2be2aad17a906198bdddb90d8398387a241c07270c579b10d1dadf7b1",
+      "wrapped_prompt_sha256": "853d4f7e5433e722b8a81d336f400f016c31fae9b4afb70eb6ed775a6619e8a2"
+    },
+    {
+      "id": "gate-song-36-suggest-2",
+      "inputs_sha256": "382fd02a17d4e3105657924370c806b0def3664e76faf9a0ef1813b778dee341",
+      "prompt_sha256": "947cd6a310245778e89295c52672d8cf3934cd49cb942c0dc4616e96ab915504",
+      "wrapped_prompt_sha256": "d51b79c63b344f502b15cc3ca35b0aa8e69e2928976cd18412c1d0e8043600bb"
+    },
+    {
+      "id": "gate-song-36-suggest-3",
+      "inputs_sha256": "7b00f4121ce0b7fbdd8059baa9135485b3a00b084bf1e1e812288a3930128602",
+      "prompt_sha256": "7c8f76d61a16384a509bc48331c7037b5c6ca1ea0063ac767ac78e4f6f7725fa",
+      "wrapped_prompt_sha256": "4bd283fa23bb1e32d4a9cc9e0e0f000d68e0104ca1fd56de4eeb8d35e2cfb3f9"
+    },
+    {
+      "id": "gate-song-36-suggest-4",
+      "inputs_sha256": "01e661822845bae15b52478baa2a49d8627a7a35ec276b96c9d25d230838ef85",
+      "prompt_sha256": "70c8d13af2f30751019c1870d63fdc964777fc24b2a47335bb2a01a39875371d",
+      "wrapped_prompt_sha256": "296b6b4828c7055cd0147b3b4aba1c8ad647a35fefddea5305a62b5e18ee0807"
+    },
+    {
+      "id": "gate-song-36-suggest-5",
+      "inputs_sha256": "03c39250795aee9b0679c843597b48955652f9683d298da0619ebd21f4c327cb",
+      "prompt_sha256": "e94c583b272b420504051b96d443bb11df79a946bf627a9314bfbe324adbcf5f",
+      "wrapped_prompt_sha256": "f17f52945e9354996cf2f0d38277c0c7964399d659c313970bb7f1f0abad334f"
+    },
+    {
+      "id": "gate-song-36-suggest-6",
+      "inputs_sha256": "afc0805c2291c22d5c23c49178ae4056c11b52008f5834239f4e61dece4b6982",
+      "prompt_sha256": "238e0499ad5163e2b17a9c50677338f340ca048dbcbd7fc44df1486204c616d0",
+      "wrapped_prompt_sha256": "b0a1036b87f51fd4874f3259350d9665b94e4938f764b8bf4229309a7547bad2"
+    },
+    {
+      "id": "gate-song-36-suggest-7",
+      "inputs_sha256": "4c21a81f1a0cd0fb68c82eb9daab0d0de82b5d952727168ccb619d994f7b593f",
+      "prompt_sha256": "57f5a51c83582ec43659a735acd4b1bcc3c06ec8da774b97eb24d7d28e903791",
+      "wrapped_prompt_sha256": "474f886d8717d4efd48f890be8f3c9b5ae31f94c8a9a854da29f2c56e3b2353f"
+    },
+    {
+      "id": "gate-song-36-synonyms",
+      "inputs_sha256": "a53a8656c5ddd26cb1b6477cf221a2c831f4a508622e74515921c31587607761",
+      "prompt_sha256": "7f15d13e140ff416d42551c20bc26a9402956e5718ae051c331bb8a05c3b983c",
+      "wrapped_prompt_sha256": "3f77797e6c778df9da4e9c817ca7e6f05627c251b193837cc3541b84b6cdaf26"
+    },
+    {
+      "id": "gate-song-37-suggest-0",
+      "inputs_sha256": "5c55b1691206a2ce42ec7ead71dacbfe83b41135e2a8f7bf16f9e0f4518f3368",
+      "prompt_sha256": "e64430b30b59f9d0f08d952234087ca0f89c1a3fea7d4e511ff6cc9c5493d997",
+      "wrapped_prompt_sha256": "b9d0280b91136305aa2d5be107a1c89a2a41091c27edf2002791482960bcf64d"
+    },
+    {
+      "id": "gate-song-37-suggest-1",
+      "inputs_sha256": "1d7827da0db8d1c0def776f982aed349764fe0e814c22967cbe4344a29732830",
+      "prompt_sha256": "17f5ef1a86437d763020e5830a4d3eee31ad23f6aac4e41ff0e52b75432156bc",
+      "wrapped_prompt_sha256": "c4b20ebece180c3d21d599794f4409158e690ffc4b26aaf7640473688294a4e4"
+    },
+    {
+      "id": "gate-song-37-suggest-2",
+      "inputs_sha256": "744cbf0f07d28a6eed20c6e1b8af8ab0721efe4bf42a9595be154988851fbef0",
+      "prompt_sha256": "d556fccad287802427320b68fd730023e61d9d5e0289341a479685cab21c8314",
+      "wrapped_prompt_sha256": "dffd11a25a5b140f5303eca2603bf9a862013f42ecf7a62aab54c4c3c5c04705"
+    },
+    {
+      "id": "gate-song-37-suggest-3",
+      "inputs_sha256": "f89b0529f16822675a2be9e38b02875fe44630c7a0f1be7b3e1a14df11154674",
+      "prompt_sha256": "4d096d5bfa82d1384238a10524c4f2a69c2c362fefb6756fc7e5a640fa30fc11",
+      "wrapped_prompt_sha256": "8293ea97fac21c9a49bef4a50b093846ee7738c6cbee10a379333eda7e88d7a6"
+    },
+    {
+      "id": "gate-song-37-suggest-4",
+      "inputs_sha256": "23e7111f3e277558a4e4ab4dceab2176a6f7ec0f4b5bf0c158770783a5261122",
+      "prompt_sha256": "dc20eff33066aa83e7e4d2a1317e2eb94705a43847bc500405206f9e43cd0ce2",
+      "wrapped_prompt_sha256": "17849544b21265c21ad16973ea3ffaff0e3bc4bcb85cd41e6fca1b4dc82fe082"
+    },
+    {
+      "id": "gate-song-37-suggest-5",
+      "inputs_sha256": "8a10f3191850c4aa211e0b837d8ef2b770525572b1d67b2a573879ae9a6af276",
+      "prompt_sha256": "90de8af95159ddebfc0ac95915385e4352f3cf6f84e8bf0621b931559d02678e",
+      "wrapped_prompt_sha256": "8cc87072f050524b045a6b3f213039dc9d6720fff96285a84c220457e6116c42"
+    },
+    {
+      "id": "gate-song-37-suggest-6",
+      "inputs_sha256": "210ac49c2b8af17af72f40e4bb0e3bc01a6d4ef08c3ca842b0ab74719d583d9b",
+      "prompt_sha256": "bf3dd23a458430dd0552b6502c60093c36e3e67c9a0a5d7309650572ceaeae93",
+      "wrapped_prompt_sha256": "e3f362efbfdc366eabe6fa8beb867832a98791c296122ccc6dbce36225df819a"
+    },
+    {
+      "id": "gate-song-37-suggest-7",
+      "inputs_sha256": "bf3794f86ac59d2251fae43e54e2d46ee0231384b998f32f0da8b20468eac22c",
+      "prompt_sha256": "242b9d5721b6c77cfa8adc7f30ddeeff96066f13fe2753cb6c0afa49e260af6f",
+      "wrapped_prompt_sha256": "36e36634d7436ac5aa149e81edcd9c5a638533b32dd4fc83a1429182f2906e9d"
+    },
+    {
+      "id": "gate-song-37-synonyms",
+      "inputs_sha256": "da62cdae5de3e6987024f08dcd710a774a9d2a12b29d43dc65139588ef99dc28",
+      "prompt_sha256": "735efde2c54cb33341e4baf397ea4a274e7f0dfb342b65829750b4a5d3c84fca",
+      "wrapped_prompt_sha256": "76be24579b8673c3daba38e81d482ca721e84bcff50d05f64b3a4b5ec991cecd"
+    },
+    {
+      "id": "gate-song-38-suggest-0",
+      "inputs_sha256": "806d9885f232b035512ea92a1bc7656cf569ab91a4d03514db752a20777fad3e",
+      "prompt_sha256": "2777c2b6de7176dafaa09e0c3382af921696792c1eeca85197f5326127a8329a",
+      "wrapped_prompt_sha256": "b80c2e4ca37dcf8011a37a98c48699add68d8963806162e8f944167cdc081cf1"
+    },
+    {
+      "id": "gate-song-38-suggest-1",
+      "inputs_sha256": "67719b9adfb162ef2da79a16abb4e88cebc49719fc39c46220a272a3633693c3",
+      "prompt_sha256": "d929cb74e295acc4952fc3a502dfda6a3374bd8bd77109f3d511040b90ab419a",
+      "wrapped_prompt_sha256": "5f743b96ee33da55c72f88daa4f7748aa3bb003879ef584c3434ea2be7cea5dc"
+    },
+    {
+      "id": "gate-song-38-suggest-2",
+      "inputs_sha256": "8a5d35ee99d46b85f0047f70208abe4b79a3f857d2f18c02cc7bce4fb0361ac8",
+      "prompt_sha256": "6e5eaea8aa0a9b533e40a6a6a1da3964ac700217ac31bb3040f3539e5abaa829",
+      "wrapped_prompt_sha256": "004bc4bdd0d4586beb6902b61e5bcb63fc23a2e006f8ccb87301144826f156c6"
+    },
+    {
+      "id": "gate-song-38-suggest-3",
+      "inputs_sha256": "630b7b39a6397594268b4739391d2b9661a01596d21c3fa2495603ff9035ec26",
+      "prompt_sha256": "bc0452ba0c3bbf2e8461f0a56c6a1bbd4dd7ae6f0160d0679bb9bc3957de94c3",
+      "wrapped_prompt_sha256": "b3b0bd4095b54f5715061c01c0411704752805fd048a75cdd53e64a858d78a31"
+    },
+    {
+      "id": "gate-song-38-suggest-4",
+      "inputs_sha256": "68d706752ce8981e9f48b7fc3871744db61961fe4c3b4cfdcddec333ad9203dd",
+      "prompt_sha256": "7f5708120468df74d2e9facbb516dc320b769a99b2bdc8a01099b4d6970cd2dd",
+      "wrapped_prompt_sha256": "d30b284a912d592e4b40e7446d25753f60ed99014fc1265f61dcddee4d608370"
+    },
+    {
+      "id": "gate-song-38-suggest-5",
+      "inputs_sha256": "871e0db24d64f4254c4d317328fd9be9f09574c460c74792443b08eac964ea5d",
+      "prompt_sha256": "e3011d9b824a0a380f5e0bc33ff2ef37739fd2e84005b7fba5c227335e303755",
+      "wrapped_prompt_sha256": "8db5bd78574476ef66e39b2c90a5a32b9c33d35287425879417f0b6e24b0b4c0"
+    },
+    {
+      "id": "gate-song-38-suggest-6",
+      "inputs_sha256": "cca6a6aef53c1a7ca1dc07e43c10ac76c6fbda6c3d5c85e474d0cdc4eccbe187",
+      "prompt_sha256": "0e57641838a689b420e95e14db55776a549077a0f17f727ce6dae85c10d8b47a",
+      "wrapped_prompt_sha256": "ac35ce7e4e946433592c18db79b8cc8989f3743aa2c15d0cb9ecbf9cc247aee7"
+    },
+    {
+      "id": "gate-song-38-suggest-7",
+      "inputs_sha256": "8d3b29fbf16b41ebdff9f1bd0b1707027a8bda473079b0a4f9ecf592c44917e6",
+      "prompt_sha256": "b8aa768debf7b21c83c3a422e1094723bc81360fec3036f018ebda68af3be92b",
+      "wrapped_prompt_sha256": "da46f0d5ff7b15fc4e33ad3ea91130fd3d7f57e2b1ddce08069767fbec83fd9a"
+    },
+    {
+      "id": "gate-song-38-synonyms",
+      "inputs_sha256": "24af344b6a6834e0c5c96d07a6ba358d6bffb43a802131118693dade02bc979f",
+      "prompt_sha256": "c91168965c2393331dc7c51ea98ba03a1ac2a04f185fe1e164eb90c58a75e6f8",
+      "wrapped_prompt_sha256": "5f2e3a9a4451399672c232fcc92aaa27dcc3d2d80481efc651f0c8e3d849c367"
+    },
+    {
+      "id": "gate-song-39-suggest-0",
+      "inputs_sha256": "2bad59ae27c32322478320ef522072c3633fd859fec18808b8c3e8f37bbb32d3",
+      "prompt_sha256": "5bd1bb96db18092155bd6040cb566c2d8a9a854177078b8cf6ddd521b6bb2bda",
+      "wrapped_prompt_sha256": "20d34ce7c599488195c49d07f3892faa14c4d1c065d5d8ac83a99b873f0116f5"
+    },
+    {
+      "id": "gate-song-39-suggest-1",
+      "inputs_sha256": "496296c2809a31c0e21266d1b8254e65abc597a270e1889b62f6bee255f8b665",
+      "prompt_sha256": "b4cbb7c20b8045629ac7eb060c2eff41548a01d5c017a77937834504d5598846",
+      "wrapped_prompt_sha256": "1c42d8e1191ef73db41dbb0ff82ca0a2cfd9faca326fc9622616cda90501b387"
+    },
+    {
+      "id": "gate-song-39-suggest-2",
+      "inputs_sha256": "109015b75d017a3b0800d8d163114f8630450aa9bc88320d3e4caafb52f98d78",
+      "prompt_sha256": "076ce7357dd11e6df9176ec69d2421238576f0ebd807906ca78937c739f43d9c",
+      "wrapped_prompt_sha256": "511f09c26b90d34e5d51a3d5b0619218b0b7d6b4298a1081a2600d1f2ad7de79"
+    },
+    {
+      "id": "gate-song-39-suggest-3",
+      "inputs_sha256": "2c916b63ad249464dbf2e32680e22180f6e202cd5913252c342193dc2f6bdb44",
+      "prompt_sha256": "e3467a174ac1884d9c13619a7a70ff17d7d6d4a3f8ccba268ad1913ad0e6b389",
+      "wrapped_prompt_sha256": "1b6864ca498564fda01ccf932676ed2d86a621eabf048db099fe401e168d0178"
+    },
+    {
+      "id": "gate-song-39-suggest-4",
+      "inputs_sha256": "183da13fb0fe53e52f4086b34cc7970e34da93d3aaca4e76360f597e5fa798a6",
+      "prompt_sha256": "e179f6bcd96a9bec2d3d7a808199260e61e0a52e3f1e4c3879f867a0d8f8c2c0",
+      "wrapped_prompt_sha256": "a2954f45d3de98673c2ce2bd5477b1f6f1d9071fc02c7303d7b216fae06b5316"
+    },
+    {
+      "id": "gate-song-39-suggest-5",
+      "inputs_sha256": "fcb97e01e2d0c5217f0b632dbb7dde9b6554b1747eac937efab218e44e605894",
+      "prompt_sha256": "038e13ff9f135baf0ca57436100f9dd089747b5a84f86ab525f04cfd6aab0a08",
+      "wrapped_prompt_sha256": "a1e44c3ad0af6c76a2bab70ecba62b5d4e81bb79665d69a26e79800350832d39"
+    },
+    {
+      "id": "gate-song-39-suggest-6",
+      "inputs_sha256": "4c0ded146cc16635178ca97aa181824e25c9c94daafc6d80e769c8167916c20e",
+      "prompt_sha256": "c6baadef1be35c207cba0478c3ec6737a96a64a419a85e5a2a31d5337d9aa7be",
+      "wrapped_prompt_sha256": "9ed0c59ac5831def41748f12404f2e767093e7ddc8e0598809bfe50a1c14329e"
+    },
+    {
+      "id": "gate-song-39-suggest-7",
+      "inputs_sha256": "b559e771b0c8e4d643da5036e41e0f71a8ef7a0f819477258dba511d616c8db4",
+      "prompt_sha256": "9505ab3a6c7c4271e1228c73c2c732e4a82b608042ddc983e3f18b2bcd454362",
+      "wrapped_prompt_sha256": "d7e6350c49521646d51370940cff487d65aad5fe67f6a5c88826115e427e4233"
+    },
+    {
+      "id": "gate-song-39-synonyms",
+      "inputs_sha256": "ed0e7bdc79f5bf3c6c2225eec775b69b4ea1d92c7d8cbc3ab3c1298038f75f35",
+      "prompt_sha256": "9c41d5e0913e4dccdbfb67a46d76a9e3084ed9c570e0e56947996e6c75cd21e6",
+      "wrapped_prompt_sha256": "5d6d78abb830b43b8e542980db43271270086541e587acf68d05ecbed3633d79"
+    },
+    {
+      "id": "gate-song-40-suggest-0",
+      "inputs_sha256": "6d58de76c83eca1c8a319a3c8f32387df693ffd07950926f336dc5c36f133918",
+      "prompt_sha256": "e427323db3753fe40c7885030f4e58624d9127a0cffb7f36ab6dcf6285495c19",
+      "wrapped_prompt_sha256": "5b743163c7648ddf3b9cb0cc4f8dac55175985cf4f235a5135ebaaae4801b354"
+    },
+    {
+      "id": "gate-song-40-suggest-1",
+      "inputs_sha256": "1fb0fa04da894c8b79bc6a31443ff6e410b5eeef50fc9ae4f044b53ca746bbe2",
+      "prompt_sha256": "0fb2308313d52fd75c0bd8f32adafb4967da386dec7ca35d8f6e2fdd5cbf5766",
+      "wrapped_prompt_sha256": "6aaefe505c8d5b55a9fdb05d3b3dfcc29989bb3b3e7900f3297d54f9444a4df6"
+    },
+    {
+      "id": "gate-song-40-suggest-2",
+      "inputs_sha256": "2e5934f1e139b4e46cd62314d019d27bcd1671d75633eb0f0ad0bdd5a403a658",
+      "prompt_sha256": "83abc5278e82ba589f207ef33fb10c0af855a0d086feea78104d9332c66754fa",
+      "wrapped_prompt_sha256": "1e2fbae0fd53a0cfddcf2b00d6dcd4d81fe02e5ca93cb2b5ccf4863d4f3c3703"
+    },
+    {
+      "id": "gate-song-40-suggest-3",
+      "inputs_sha256": "a412c3bf5a321e18b61908308534daa0848d28930d5833f1600891bd89f935a5",
+      "prompt_sha256": "1b5ab227c4114577dc543bd27c7affa697b9ca96a2c8b4f07661e5c99116a987",
+      "wrapped_prompt_sha256": "0262a04fecbfaab3513dc99c0befa05bb9368f4cc25ef7fd9aab57b2cc802b5b"
+    },
+    {
+      "id": "gate-song-40-suggest-4",
+      "inputs_sha256": "464cf15879a125faa3bbffe45ba6b2be7bee6fb9b6de90931e7847c507f5b6c1",
+      "prompt_sha256": "0a436de7142a874cdf517f0585f461c2226b9d7b88ace5560d4ce83ee4c242f6",
+      "wrapped_prompt_sha256": "c6ce7e0579103b7152c61e406989b8bed5f89da50bdc3d92ac3519dcd9450041"
+    },
+    {
+      "id": "gate-song-40-suggest-5",
+      "inputs_sha256": "6e7ab7ab9468127f2543b40ab650d5b94ae06975d657e074185fd0633da6de7a",
+      "prompt_sha256": "ecbc4e6530cf92e6ddd929ae52fec38855e6f217ee88013744bf16cc51c2d76b",
+      "wrapped_prompt_sha256": "78ba4756a7358f6350304f21cc8a27a3a80250c4007e31af6ef84322c78998f0"
+    },
+    {
+      "id": "gate-song-40-suggest-6",
+      "inputs_sha256": "b436084b47ce542bff48c399eb8a0a19c5d6fffafa55d13f1570a673b5852424",
+      "prompt_sha256": "cd0165666d1dc7cb6af61a1888c13d3f731a7e31099b6cae7a52cd78fecebafb",
+      "wrapped_prompt_sha256": "e1dd8dfd989b420b4603f044d967f1f607d4c98e28833f7530a06c4d4bc72332"
+    },
+    {
+      "id": "gate-song-40-suggest-7",
+      "inputs_sha256": "ed2a469e6a8e9649bb2c6a9b4bf2b067a58cdfab76f69edb4ad57c6caf684adb",
+      "prompt_sha256": "e38a5106874fb81f64bfdd68f46235e8f15b1d13637206d81c61bd82324de0e5",
+      "wrapped_prompt_sha256": "c461324ad0e26510bd5ce6cd75a0b335d396939ef9ff69cec7c3f475ba8be4b6"
+    },
+    {
+      "id": "gate-song-40-synonyms",
+      "inputs_sha256": "8f1240cfa7d335b0b75687dddb49b45a0c1f8ec56c40bb1a60311d00442c9178",
+      "prompt_sha256": "1ed1da48d9f6f38b2c39225e90ccabf906138d6e03759502ded5c21a7867a8f0",
+      "wrapped_prompt_sha256": "130490128ea505e3db5a125185abb3298aff8f3badfb9750ec5901f44f33d808"
+    }
+  ]
+}

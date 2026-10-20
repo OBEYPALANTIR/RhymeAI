@@ -4,8 +4,8 @@ import Foundation
 ///
 /// LLMs see BPE tokens, not phonetics, so they rhyme unreliably. Instead of
 /// trusting the model, the pronunciation dictionary picks the allowed ending
-/// words up front, the prompt over-generates 2x, and these helpers verify,
-/// rank, and filter the results with the same deterministic analyzer the
+/// words up front, the prompt over-generates 2x, and these helpers verify
+/// and filter the results with the same deterministic analyzer the
 /// editor already uses. Must stay behaviorally in lockstep with the Android
 /// implementation.
 nonisolated enum RhymeConstraint {
@@ -28,14 +28,58 @@ nonisolated enum RhymeConstraint {
     ///
     /// Each requested relation has its own exclusive pool. Words within that
     /// pool are ranked by English frequency so common words surface first.
+    /// `complexity` shapes the list the prompt sends (see `levelEndWords`);
+    /// `.moderate` is the plain frequency order.
     static func candidateEndWords(
         targetWord: String,
         rhymeType: RhymeType,
         limit: Int = 12,
-        dictionary: PronunciationDictionary = .shared
+        dictionary: PronunciationDictionary = .shared,
+        complexity: RhymeComplexity = .moderate
     ) -> [String] {
         let matches = RhymeIndex.shared.find(word: targetWord, dictionary: dictionary)
-        return Array(orderedCandidates(matches, rhymeType: rhymeType, excluding: targetWord).prefix(limit))
+        let ordered = orderedCandidates(matches, rhymeType: rhymeType, excluding: targetWord)
+        return levelEndWords(ordered, complexity: complexity, limit: limit, dictionary: dictionary)
+    }
+
+    /// A Simple list keeps only one-syllable words unless fewer than this many
+    /// exist, in which case the remaining words follow in their original order
+    /// (some anchors, "arrival" for one, have no one-syllable rhyme at all).
+    static let simpleMinMonosyllables = 6
+
+    /// The complexity level's view of a relation's ranked candidates, cut to
+    /// `limit`. `.complex` puts words of two or more syllables first, then the
+    /// rest, each group keeping its frequency order (a stable partition).
+    /// `.simple` keeps one-syllable words only, unless fewer than
+    /// `simpleMinMonosyllables` exist, when the remaining words follow in
+    /// their original order. `.moderate` is unchanged. Syllables come from
+    /// `ProsodyAnalyzer.analyzeWord` with the same dictionary, so Android
+    /// (`RhymeConstraint.levelEndWords`) and the eval's
+    /// `scoring.level_end_words` build identical lists.
+    static func levelEndWords(
+        _ ordered: [String],
+        complexity: RhymeComplexity,
+        limit: Int,
+        dictionary: PronunciationDictionary = .shared
+    ) -> [String] {
+        guard complexity != .moderate else { return Array(ordered.prefix(limit)) }
+        let syllables = Dictionary(
+            ordered.map { ($0, ProsodyAnalyzer.analyzeWord($0, dictionary: dictionary).syllableCount) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        switch complexity {
+        case .complex:
+            let multi = ordered.filter { syllables[$0, default: 0] >= 2 }
+            let rest = ordered.filter { syllables[$0, default: 0] < 2 }
+            return Array((multi + rest).prefix(limit))
+        case .simple:
+            let mono = ordered.filter { syllables[$0, default: 0] == 1 }
+            if mono.count >= simpleMinMonosyllables { return Array(mono.prefix(limit)) }
+            let rest = ordered.filter { syllables[$0, default: 0] != 1 }
+            return Array((mono + rest).prefix(limit))
+        case .moderate:
+            return Array(ordered.prefix(limit))
+        }
     }
 
     /// 3 = slant rhyme, 2 = perfect/multi rhyme, 1 = near rhyme, 0 = miss.
@@ -57,39 +101,6 @@ nonisolated enum RhymeConstraint {
         case .near: return 1
         case .slant: return 3
         case nil: return 0
-        }
-    }
-
-    /// Dedupe, admit only the requested verified relation, then rank by
-    /// syllable distance to the target line and arrival order.
-    static func filterAndRank(
-        lines: [String],
-        targetLine: String,
-        rhymeType: RhymeType,
-        want: Int,
-        dictionary: PronunciationDictionary = .shared
-    ) -> [String] {
-        guard want > 0, !lines.isEmpty else { return [] }
-        guard let filter = RhymeLineFilter(targetLine: targetLine, rhymeType: rhymeType, dictionary: dictionary) else {
-            // Unknown target word: the prompt was never constrained, so
-            // there is nothing to verify against — keep arrival order.
-            return Array(dedupe(lines).prefix(want))
-        }
-        return filter.rank(lines, want: want)
-    }
-
-    /// Same normalization the suggestion stream uses for dedupe keys.
-    static func dedupeKey(_ line: String) -> String {
-        line.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .joined()
-    }
-
-    static func dedupe(_ lines: [String]) -> [String] {
-        var seen = Set<String>()
-        return lines.filter { line in
-            let key = dedupeKey(line)
-            return key.isEmpty || seen.insert(key).inserted
         }
     }
 
@@ -118,7 +129,6 @@ nonisolated enum RhymeConstraint {
 
 /// Per-request rhyme verifier.
 nonisolated struct RhymeLineFilter: Sendable {
-    private let targetSyllables: Int
     private let targetWord: String
     private let rhymeType: RhymeType
     private let dictionary: PronunciationDictionary
@@ -140,7 +150,6 @@ nonisolated struct RhymeLineFilter: Sendable {
         guard !RhymeConstraint.orderedCandidates(matches, rhymeType: rhymeType, excluding: targetWord).isEmpty else {
             return nil
         }
-        self.targetSyllables = SyllableCounter.countText(targetLine)
         self.targetWord = targetWord
         self.rhymeType = rhymeType
         self.dictionary = dictionary
@@ -160,30 +169,5 @@ nonisolated struct RhymeLineFilter: Sendable {
         case .slant:
             return tier == 3 ? tier : 0
         }
-    }
-
-    /// The filterAndRank ordering for the requested relation.
-    func rank(_ lines: [String], want: Int) -> [String] {
-        guard want > 0, !lines.isEmpty else { return [] }
-
-        var seen = Set<String>()
-        var scored: [(line: String, tier: Int, syllableDistance: Int, index: Int)] = []
-        for (index, line) in lines.enumerated() {
-            let key = RhymeConstraint.dedupeKey(line)
-            if !key.isEmpty, !seen.insert(key).inserted { continue }
-            scored.append((
-                line: line,
-                tier: tier(of: line),
-                syllableDistance: abs(SyllableCounter.countText(line) - targetSyllables),
-                index: index
-            ))
-        }
-
-        let rhyming = scored.filter { $0.tier > 0 }.sorted { a, b in
-            if a.tier != b.tier { return a.tier > b.tier }
-            if a.syllableDistance != b.syllableDistance { return a.syllableDistance < b.syllableDistance }
-            return a.index < b.index
-        }
-        return rhyming.prefix(want).map(\.line)
     }
 }

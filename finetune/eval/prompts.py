@@ -61,7 +61,7 @@ SONG_SECTIONS = {
     ),
     "UNKNOWN": (
         "Unmarked section",
-        "Section direction: no verse, chorus, or bridge header was detected. Fit the immediate stanza and surrounding lyric context.",
+        "Section direction: follow any explicit section label that is provided; otherwise fit the immediate stanza and surrounding lyric context.",
     ),
 }
 
@@ -76,7 +76,7 @@ RHYME_TYPES = {
 RHYME_COMPLEXITIES = {
     "SIMPLE": (
         "Simple",
-        "Use plain, simple, everyday language. No wordplay, puns, or clever twists. Use clear rhymes that are easy to hear.",
+        "Each line must be 4 to 7 plain, everyday words. Prefer one-syllable end words. No wordplay.",
     ),
     "MODERATE": (
         "Moderate",
@@ -84,7 +84,7 @@ RHYME_COMPLEXITIES = {
     ),
     "COMPLEX": (
         "Complex",
-        "Use advanced, rich vocabulary with clever wordplay and intricate rhymes: multi-syllable rhymes, internal rhymes, and double meanings.",
+        "Each line must be 8 to 12 words. End each line on a word of two or more syllables, or put an internal rhyme inside the line. Use vivid, specific, less common words and double meanings.",
     ),
 }
 
@@ -196,12 +196,16 @@ class SuggestionRhymeConstraint:
     chorus_end_words_ordered: tuple = ()
 
 
-_HEADER_LINE = re.compile(r"^\s*\[.+]\s*$")
+def _is_header_line(line: str) -> bool:
+    """SectionMap.headerTitle(line) != null: a bracketed or bare section header."""
+    trimmed = line.strip()
+    return bool(_BRACKETED_HEADER.match(line) or (trimmed and _BARE_HEADER.fullmatch(trimmed)))
 
 
 def first_chorus_end_words(lyrics: str) -> List[str]:
     """AIService.firstChorusEndWords — normalized end-words of the first CHORUS
-    section's lines, in document order (Kotlin builds a LinkedHashSet)."""
+    section's lyric lines (its header skipped, as SectionMap.headerTitle does on
+    Android), in document order (Kotlin builds a LinkedHashSet)."""
     refs = parse_section_map(lyrics)
     first_chorus = next((r for r in refs if r.type == "CHORUS"), None)
     if first_chorus is None:
@@ -209,7 +213,7 @@ def first_chorus_end_words(lyrics: str) -> List[str]:
     lines = lyrics.split("\n")
     seen = []
     for idx in first_chorus.line_range:
-        if idx >= len(lines):
+        if idx >= len(lines) or _is_header_line(lines[idx]):
             continue
         end = scoring.line_end_word(lines[idx])
         if end and end not in seen:
@@ -229,9 +233,16 @@ def first_chorus_lines(lyrics: str) -> List[str]:
         if idx >= len(lines):
             continue
         line = lines[idx]
-        if line.strip() and not _HEADER_LINE.match(line):
+        if line.strip() and not _is_header_line(line):
             result.append(line)
     return result
+
+
+def _rhyme_compatible(word: str, target_word: str, rhyme_type: str) -> bool:
+    """ProsodyAnalyzer.rhymeRelation(word, target) == rhymeType: the hook is
+    promoted only into a prompt for its own relation, so a perfect hook never
+    leads a Near or Slant list."""
+    return scoring.rhyme_relation(word, target_word) == rhyme_type
 
 
 def suggestion_rhyme_constraint(
@@ -239,14 +250,16 @@ def suggestion_rhyme_constraint(
     rhyme_type: str,
     section_ref: Optional[SectionRef] = None,
     chorus_end_words: Sequence[str] = (),
+    complexity: str = "MODERATE",
 ) -> Optional[SuggestionRhymeConstraint]:
-    """AIService.suggestionRhymeConstraint."""
+    """AIService.suggestionRhymeConstraint. `complexity` (RhymeComplexity name)
+    shapes the allowed end-word list: see scoring.level_end_words."""
     if target_rhyme_line is None or not target_rhyme_line.strip():
         return None
     target_word = scoring.line_end_word(target_rhyme_line)
     if not target_word:
         return None
-    candidates = scoring.candidate_end_words(target_word, rhyme_type)
+    candidates = scoring.candidate_end_words(target_word, rhyme_type, complexity=complexity)
     if not candidates:
         return None
 
@@ -255,11 +268,18 @@ def suggestion_rhyme_constraint(
     chorus_list = list(chorus_end_words)
     chorus_set = set(chorus_list)
 
-    # Chorus repeat (2nd+): promote first-chorus end-words to the front.
+    # Chorus repeat (2nd+): first-chorus end words in the requested rhyme relation
+    # to the target go first. The relation is verified directly
+    # (ProsodyAnalyzer.rhymeRelation on both apps and here), not by membership in the level's
+    # 12-word cut, so a hook the level ordering pushed past the limit is still
+    # promoted; the merged list is cut back to the limit. Hooks are not filtered
+    # through the level (chorus consistency wins).
     if section_type == "CHORUS" and ordinal >= 2 and chorus_list:
-        promoted = [w for w in chorus_list if w != target_word and w in candidates]
-        rest = [w for w in candidates if w not in promoted]
-        candidates = promoted + rest
+        promoted = [
+            w for w in chorus_list
+            if w != target_word and _rhyme_compatible(w, target_word, rhyme_type)
+        ]
+        candidates = (promoted + [w for w in candidates if w not in promoted])[: scoring.CANDIDATE_LIMIT]
 
     # Verse and bridge: exclude the chorus's end-words unless that empties it.
     if section_type in ("VERSE", "BRIDGE") and chorus_list:
@@ -687,11 +707,13 @@ def build_rewrite_prompt(
             "- No quotes, no markdown, no labels, no commentary."
         ) % (selection, rejected_rule)
     else:
+        line_count = len(re.split(r"\r\n|\r|\n", selection))
         output_rules = (
             "- Output the rewritten passage only.\n"
+            "- Return exactly %d %s.\n"
             "- Preserve line breaks if the selection has multiple lines.\n"
             "- No quotes, no markdown, no labels, no commentary."
-        )
+        ) % (line_count, "line" if line_count == 1 else "lines")
 
     if selected_line is not None:
         selected_line_block = 'Line containing the selected word:\n"""\n%s\n"""\n' % selected_line
@@ -780,7 +802,8 @@ def _self_test():
     section_ref = next(r for r in refs if r.type == "VERSE" and r.ordinal == 2)
     chorus_ends = first_chorus_end_words(lyrics)
     constraint = suggestion_rhyme_constraint(
-        target_line, "PERFECT", section_ref=section_ref, chorus_end_words=chorus_ends
+        target_line, "PERFECT", section_ref=section_ref, chorus_end_words=chorus_ends,
+        complexity="MODERATE",
     )
 
     print("=" * 72)

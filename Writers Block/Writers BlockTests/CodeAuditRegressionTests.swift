@@ -13,6 +13,11 @@ struct CodeAuditRegressionTests {
         #expect(ProsodyAnalyzer.analyzeWord("examples", dictionary: dict).syllableCount == 3)
         #expect(ProsodyAnalyzer.analyzeWord("miles", dictionary: dict).syllableCount == 1)
         #expect(ProsodyAnalyzer.analyzeWord("makes", dictionary: dict).syllableCount == 1)
+        // Singular forms: "table" keeps its syllabic le, "mile"/"smile" drop the silent e.
+        // Android ProsodyAnalyzerTest pins the same four-word set.
+        #expect(ProsodyAnalyzer.analyzeWord("table", dictionary: dict).syllableCount == 2)
+        #expect(ProsodyAnalyzer.analyzeWord("mile", dictionary: dict).syllableCount == 1)
+        #expect(ProsodyAnalyzer.analyzeWord("smile", dictionary: dict).syllableCount == 1)
     }
 
     @Test func rhymeContextHandlesEmojiBeforeCursor() {

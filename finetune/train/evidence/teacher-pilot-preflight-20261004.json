@@ -1,0 +1,60 @@
+{
+  "captured_at_utc": "2026-10-04T18:32:17Z",
+  "source_commit": "134bb6178ef4d71e6e466c1930cc10a43ac394d4",
+  "run_name": "gemma12b-teacher-20261004-d",
+  "evidence_source": "Unmodified environment, token-audit and status files read back from the private Colab run through Google Drive.",
+  "status": {
+    "status": "baseline_evaluation",
+    "model": "google/gemma-4-12B-it",
+    "revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+    "started_epoch": 1791138311.4346414,
+    "deadline_epoch": 1791159672.0314648,
+    "teacher_accepted": false
+  },
+  "environment": {
+    "versions": {
+      "torch": "2.11.0+cu130",
+      "transformers": "5.18.0",
+      "peft": "0.21.2",
+      "accelerate": "1.15.0",
+      "bitsandbytes": "0.50.2",
+      "huggingface-hub": "1.31.0"
+    },
+    "gpu": "NVIDIA A100-SXM4-80GB",
+    "gpu_memory_bytes": 85094825984,
+    "cuda": "13.0",
+    "script_sha256": "2e65de0124e32d481e833230ebe2e75be0ce4aaacce3b626190129b868f35aec"
+  },
+  "token_audit": {
+    "train": {
+      "rows": 6679,
+      "supervised_tokens_by_task": {
+        "rewrite_word": 6200,
+        "suggestions": 162024,
+        "synonyms": 9729,
+        "rewrite_passage": 17840
+      },
+      "max_tokens": 603,
+      "prompt_masked": true,
+      "truncated_rows": 0
+    },
+    "validation": {
+      "rows": 96,
+      "supervised_tokens_by_task": {
+        "rewrite_passage": 345,
+        "rewrite_word": 85,
+        "suggestions": 1322,
+        "synonyms": 334
+      },
+      "max_tokens": 526,
+      "prompt_masked": true,
+      "truncated_rows": 0
+    }
+  },
+  "limitations": [
+    "This snapshot proves tokenizer and environment preflight only.",
+    "Optimizer updates, checkpoint reload and candidate quality were not yet observed at capture time.",
+    "No private prompts or generated lyric responses are included."
+  ]
+}
+

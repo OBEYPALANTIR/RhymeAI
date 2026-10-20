@@ -10,7 +10,8 @@ final class LocalProviderSmokeTests: XCTestCase {
 
         for attempt in 1...maxAttempts {
             do {
-                let suggestions = try await service.getSuggestions(
+                var suggestions: [String] = []
+                for try await line in service.streamSuggestions(
                     provider: .local,
                     apiKey: "",
                     modelId: AIModel.localModel.id,
@@ -23,7 +24,9 @@ final class LocalProviderSmokeTests: XCTestCase {
                     currentSection: .verse,
                     complexity: .moderate,
                     useWholeSongContext: false
-                )
+                ) {
+                    suggestions.append(line)
+                }
                 XCTAssertFalse(suggestions.isEmpty, "Local provider returned no suggestions")
                 XCTAssertTrue(suggestions.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
                 return
@@ -224,7 +227,8 @@ final class ProviderLiveSmokeTests: XCTestCase {
         let model = try Self.model(for: provider)
         let lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
 
-        let suggestions = try await service.getSuggestions(
+        var suggestions: [String] = []
+        for try await line in service.streamSuggestions(
             provider: provider,
             apiKey: apiKey,
             modelId: model.id,
@@ -237,7 +241,9 @@ final class ProviderLiveSmokeTests: XCTestCase {
             currentSection: .verse,
             complexity: .moderate,
             useWholeSongContext: false
-        )
+        ) {
+            suggestions.append(line)
+        }
         XCTAssertFalse(suggestions.isEmpty, "\(provider.displayName) returned no suggestions for \(model.id)")
         XCTAssertTrue(suggestions.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
 
