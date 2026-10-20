@@ -895,6 +895,20 @@ def validate_rewrite_passage(raw_output, selection):
     return {"text": text, "violations": violations, "passed": not violations}
 
 
+def is_known_single_word(word, dictionary=None):
+    """AIService.isKnownSingleWord (Android) / LexicalWordValidator.isKnownSpelling
+    (iOS): both apps drop a local single-word result unless its lowercased
+    spelling is exactly the dictionary key and the CMU dictionary knows it."""
+    key = word.strip().lower()
+    return (
+        len(word) <= 32
+        and is_single_word(word)
+        and bool(key)
+        and key == normalize_word(word)
+        and bool((dictionary or shared_dictionary()).pronunciations(key))
+    )
+
+
 def validate_single_word_rewrite(raw_output, selection, rejected=()):
     """Format validation for a single-word rewrite response."""
     text = strip_model_output(raw_output)
@@ -905,6 +919,8 @@ def validate_single_word_rewrite(raw_output, selection, rejected=()):
         return {"word": "", "violations": violations, "passed": False}
     if not is_single_word(word):
         violations.append("not_exactly_one_word")
+    elif not is_known_single_word(word):
+        violations.append("unknown_word")
     original_key = normalize_suggestion_key(selection)
     candidate_key = normalize_suggestion_key(word)
     if candidate_key == original_key:
@@ -934,6 +950,8 @@ def validate_synonyms(raw_output, target_word, limit):
             line_violations.append("numbering_or_bullet")
         if not is_single_word(line):
             line_violations.append("not_single_word")
+        elif not is_known_single_word(line):
+            line_violations.append("unknown_word")
         key = normalize_suggestion_key(line)
         if key == target_key:
             line_violations.append("is_target_word")
