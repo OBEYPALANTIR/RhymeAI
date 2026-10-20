@@ -1,7 +1,9 @@
 package com.rhymeai.app.service
 
+import com.rhymeai.app.SuggestedLine
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.util.PronunciationDictionary
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -31,8 +33,13 @@ class AIServiceParsingTest {
         )
     )
 
+    private fun streamedLines(raw: String): List<String> = runBlocking {
+        val service = AIService()
+        flow<SuggestedLine> { with(service) { emitLinesFromTokens(flowOf(raw)) } }.toList().map { it.text }
+    }
+
     @Test
-    fun suggestionParserSanitizesProviderLineResponses() {
+    fun suggestionStreamSanitizesProviderLineResponses() {
         val raw = """
             1. "Yellow lights keep pulling me home"
             * Yellow lights keep pulling me home
@@ -48,26 +55,12 @@ class AIServiceParsingTest {
                 "Static in the choir of the road",
                 "I trade the dark for a borrowed glow"
             ),
-            AIService().parseSuggestionList(raw).map { it.text }
+            streamedLines(raw)
         )
     }
 
     @Test
-    fun suggestionParserAcceptsJsonArrayAndObjectWrappers() {
-        val service = AIService()
-
-        assertEquals(
-            listOf("First clean line", "Second clean line"),
-            service.parseSuggestionList("""["1. First clean line", "\"Second clean line\"", "First clean line"]""").map { it.text }
-        )
-        assertEquals(
-            listOf("First wrapped line", "Second wrapped line"),
-            service.parseSuggestionList("""{"suggestions":["- First wrapped line","2) Second wrapped line"]}""").map { it.text }
-        )
-    }
-
-    @Test
-    fun suggestionParserDropsLocalModelChatterForCloudCompatibility() {
+    fun suggestionStreamDropsLocalModelChatterForCloudCompatibility() {
         val raw = """
             Sure, here are six options:
             Here are the next-line suggestions:
@@ -79,7 +72,7 @@ class AIServiceParsingTest {
 
         assertEquals(
             listOf("Static in the choir of the road", "I trade the dark for a borrowed glow"),
-            AIService().parseSuggestionList(raw).map { it.text }
+            streamedLines(raw)
         )
     }
 
