@@ -30,9 +30,12 @@ enum UITestFlags {
     static let isolatedEditorDefaultsSuite = "RhymeAI.UITest.EditorDefaults"
 
     /// Where the editor keeps its settings. An in-memory UI-test launch keeps
-    /// provider, model, sharing-consent and editor-toggle settings in a suite
-    /// of its own, so a test run on a simulator in everyday use neither reads
-    /// nor rewrites the settings stored there.
+    /// the editor's provider, model, sharing-consent and editor-toggle
+    /// settings (and its legacy API-key migration) in a suite of its own, so a
+    /// test run does not read or rewrite those in the standard domain. The rest
+    /// of launch is not isolated: retired-preference cleanup, appearance, model
+    /// downloads and backup still use the standard domain and system keychain,
+    /// so run UI tests under a separate bundle ID or on a disposable simulator.
     static func editorDefaults(arguments: [String] = ProcessInfo.processInfo.arguments) -> UserDefaults {
         guard isEnabled(inMemoryStore, in: arguments) else { return .standard }
         return UserDefaults(suiteName: isolatedEditorDefaultsSuite) ?? .standard

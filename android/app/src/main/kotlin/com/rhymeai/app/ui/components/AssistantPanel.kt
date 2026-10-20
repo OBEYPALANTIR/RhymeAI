@@ -15,9 +15,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -25,6 +27,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -697,28 +700,61 @@ fun AssistantPanel(
                 disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
         ) {
-            if (viewModel.isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
-                    color = colorScheme.onPrimary,
-                    strokeWidth = 2.dp
-                )
-                Spacer(Modifier.width(8.dp))
-            } else if (!setupModel) {
-                Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-            }
-            Text(
-                when {
-                    setupModel -> stringResource(R.string.assistant_set_up_model)
-                    viewModel.isLoading -> stringResource(R.string.assistant_stop)
-                    else -> stringResource(R.string.assistant_suggest_next_line)
+            // The label cross-fades in place on the state tier whenever the
+            // button's action changes; with animations off the swap is instant.
+            AnimatedContent(
+                targetState = when {
+                    setupModel -> PrimaryAction.SET_UP_MODEL
+                    viewModel.isLoading -> PrimaryAction.STOP
+                    else -> PrimaryAction.SUGGEST
                 },
-                fontWeight = FontWeight.Medium
-            )
+                transitionSpec = {
+                    if (animationsEnabled) {
+                        (fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) togetherWith
+                            fadeOut(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)))
+                            .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring() })
+                    } else {
+                        (EnterTransition.None togetherWith ExitTransition.None)
+                            .using(SizeTransform(clip = false) { _, _ -> snap() })
+                    }
+                },
+                contentAlignment = Alignment.Center,
+                label = "assistantPrimaryAction"
+            ) { action ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    when (action) {
+                        PrimaryAction.STOP -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
+                                color = colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        PrimaryAction.SUGGEST -> {
+                            Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        PrimaryAction.SET_UP_MODEL -> Unit
+                    }
+                    Text(
+                        stringResource(
+                            when (action) {
+                                PrimaryAction.SET_UP_MODEL -> R.string.assistant_set_up_model
+                                PrimaryAction.STOP -> R.string.assistant_stop
+                                PrimaryAction.SUGGEST -> R.string.assistant_suggest_next_line
+                            }
+                        ),
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
         }
     }
 }
+
+/** What the Assistant's primary button does right now; its label cross-fades between them. */
+private enum class PrimaryAction { SET_UP_MODEL, STOP, SUGGEST }
 
 private fun RhymeType.shortLabel(): String = when (this) {
     RhymeType.PERFECT -> "Perfect"

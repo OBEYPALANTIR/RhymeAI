@@ -6,6 +6,12 @@ import XCTest
 /// or model. The ghosts are hidden from accessibility, so these tests follow
 /// the "Writing…" caption, the Stop button and the cards' "Use line" buttons,
 /// and attach screenshots of each state for review.
+///
+/// Launches the way `isolatedUITestApp` does, with the in-memory store first:
+/// songs stay in memory, API keys in an in-memory keychain, and the editor's
+/// settings in their own defaults suite (`UITestFlags.editorDefaults`). Other
+/// launch state still touches the standard domain, so run these under a
+/// separate bundle ID or on a disposable simulator.
 final class SuggestionLoadingUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -13,7 +19,7 @@ final class SuggestionLoadingUITests: XCTestCase {
 
     @MainActor
     func testScriptedRequestHoldsWritingThenFillsTheSlots() throws {
-        let app = scriptedSuggestionApp(hold: 2, interval: 0.6, count: 4)
+        let app = scriptedSuggestionApp(hold: 5, interval: 0.6, count: 4)
         app.launch()
         try runLoadingToResults(in: app, expectedLines: 4, screenshotPrefix: "default-size")
     }
@@ -21,7 +27,7 @@ final class SuggestionLoadingUITests: XCTestCase {
     @MainActor
     func testScriptedRequestAtAnAccessibilityTextSize() throws {
         let app = scriptedSuggestionApp(
-            hold: 2,
+            hold: 5,
             interval: 0.6,
             count: 4,
             extraArguments: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
@@ -40,7 +46,10 @@ final class SuggestionLoadingUITests: XCTestCase {
         suggest.tap()
         XCTAssertTrue(app.staticTexts["suggestionsWriting"].waitForExistence(timeout: 3))
 
-        app.buttons["Stop"].tap()
+        // The button's label cross-fades from Suggest Next Line to Stop.
+        let stop = app.buttons["Stop"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 3))
+        stop.tap()
 
         XCTAssertTrue(suggest.waitForExistence(timeout: 5))
         XCTAssertTrue(waitForAbsence(of: app.staticTexts["suggestionsWriting"], timeout: 3))
@@ -58,7 +67,7 @@ final class SuggestionLoadingUITests: XCTestCase {
 
         let writing = app.staticTexts["suggestionsWriting"]
         XCTAssertTrue(writing.waitForExistence(timeout: 3), "The Writing… caption should appear as soon as the request starts")
-        XCTAssertTrue(app.buttons["Stop"].exists)
+        XCTAssertTrue(app.buttons["Stop"].waitForExistence(timeout: 3), "The button should cross-fade to Stop")
         XCTAssertEqual(
             app.buttons.matching(identifier: "useSuggestionButton").count,
             0,

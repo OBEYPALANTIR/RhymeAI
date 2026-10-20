@@ -176,16 +176,25 @@ struct AssistantPanelView: View {
             }
         } label: {
             let isDisabled = suggestionDisabled
-            HStack {
+            // Stop and Suggest Next Line cross-fade in place on the state
+            // tier; under Reduce Motion the swap is instant.
+            ZStack {
                 if viewModel.isLoading {
-                    ProgressView()
-                        .tint(appearance.palette.onAction)
-                    Text("Stop")
+                    HStack {
+                        ProgressView()
+                            .tint(appearance.palette.onAction)
+                        Text("Stop")
+                    }
+                    .transition(.opacity)
                 } else {
-                    Image(systemName: "sparkles")
-                    Text("Suggest Next Line")
+                    HStack {
+                        Image(systemName: "sparkles")
+                        Text("Suggest Next Line")
+                    }
+                    .transition(.opacity)
                 }
             }
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.isLoading)
             .font(.body.weight(.semibold))
             .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity)
