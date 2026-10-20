@@ -148,6 +148,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
+import com.rhymeai.app.ScriptedSuggestionStream
 import com.rhymeai.app.SaveStatus
 import com.rhymeai.app.data.model.ExportFormat
 import com.rhymeai.app.data.model.RewriteAction
@@ -518,6 +519,15 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 activity?.intent?.getBooleanExtra(FAKE_RECORDING_EXTRA, false) == true
             ) {
                 memoService.seedRecordingForTesting()
+            }
+        }
+        // Debug builds only: UI tests and emulator QA can answer Suggest Next
+        // Line from a scripted stream (see ScriptedSuggestionStream).
+        LaunchedEffect(viewModel) {
+            if (!BuildConfig.DEBUG) return@LaunchedEffect
+            val intent = (context as? android.app.Activity)?.intent ?: return@LaunchedEffect
+            if (intent.getBooleanExtra(ScriptedSuggestionStream.EXTRA, false)) {
+                viewModel.enableScriptedSuggestionsForTesting(ScriptedSuggestionStream.fromIntent(intent))
             }
         }
         Column(

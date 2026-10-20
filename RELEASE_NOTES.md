@@ -1,15 +1,16 @@
 # Release Notes
 
-## Pending suggestions show where they will land while they are written (iOS and Android)
+## Suggestions hold their places while they are written (iOS and Android)
 
-Tapping Suggest Next Line now shows the Suggestions list straight away. Three
-placeholder cards hold the places the lines will fill, each with a short ink
-line that is written, held, and cleared, and the caption reads "Writing
-lines…". As each line arrives it fades into its place with a small rise, and
-one placeholder stays at the bottom until the model has finished or you tap
-Stop. The panel scrolls to the list as soon as writing starts. With Reduce
-Motion on (iOS) or animations removed (Android) the placeholders keep still
-and lines simply appear.
+Tapping Suggest Next Line now opens the Suggestions list straight away with
+three placeholder cards where the lines will go, each with a short ink line
+that is written, held and cleared, and a "Writing…" note beside the heading.
+Each line fades into its own place as it arrives, and the placeholders
+follow your text size, so the list only moves when a line runs onto a second
+line, at large text sizes too. Any place still empty when the model finishes or you tap Stop
+fades away. VoiceOver announces "Writing suggestions" and TalkBack reads the
+note. With Reduce Motion on (iOS) or animations removed (Android) the
+placeholders keep still and lines simply appear.
 
 ## Pending rewrite highlight is still and monochrome (iOS and Android)
 

@@ -53,8 +53,10 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -482,33 +484,84 @@ fun AssistantPanel(
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
-            // Suggestions. While a request streams, ghost cards hold the slots
-            // the lines will fill and each line arrives in place as it lands.
-            val placeholderCount = SuggestionPlaceholderMotion.placeholderCount(
-                suggestionCount = viewModel.suggestions.size,
-                isLoading = viewModel.isLoading
-            )
-            if (viewModel.suggestions.isNotEmpty() || placeholderCount > 0) {
-                // Children carry their own top spacing so a collapsed
-                // placeholder slot leaves no gap behind.
+            // Suggestions. Three slots open as ghost cards when a request
+            // starts; each arriving line takes the next slot in place, lines
+            // past the third append below, and any slot still empty when
+            // writing stops collapses.
+            val isWriting = viewModel.isLoading
+            val slotCount = SuggestionPlaceholderMotion.slotCount(viewModel.suggestions.size, isWriting)
+            // AnimatedVisibility keeps the section composed through its exit,
+            // so a request that ends with no lines still collapses on the
+            // dismiss tier instead of vanishing with its slots.
+            AnimatedVisibility(
+                visible = slotCount > 0,
+                enter = if (animationsEnabled) {
+                    fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) +
+                        expandVertically(DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
+                } else {
+                    EnterTransition.None
+                },
+                exit = if (animationsEnabled) {
+                    fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
+                        shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                } else {
+                    ExitTransition.None
+                }
+            ) {
+                // Children carry their own top spacing so a collapsing slot
+                // takes its gap with it.
                 Column {
-                    Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                    ) {
+                        Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                        if (isWriting) {
+                            val writingLabel = stringResource(R.string.assistant_suggestions_writing_a11y)
+                            Text(
+                                stringResource(R.string.assistant_suggestions_writing),
+                                fontSize = 12.sp,
+                                color = subtleColor,
+                                modifier = Modifier
+                                    .testTag("suggestionsWriting")
+                                    .semantics {
+                                        liveRegion = LiveRegionMode.Polite
+                                        contentDescription = writingLabel
+                                    }
+                            )
+                        }
+                    }
                     Text(
-                        if (viewModel.suggestions.isEmpty()) {
-                            stringResource(R.string.assistant_suggestions_writing)
-                        } else {
-                            stringResource(R.string.assistant_suggestions_caveat)
-                        },
+                        stringResource(R.string.assistant_suggestions_caveat),
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic,
-                        modifier = Modifier
-                            .padding(top = DesignTokens.Spacing.sm)
-                            .semantics { liveRegion = LiveRegionMode.Polite }
+                        modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
                     )
-                    viewModel.suggestions.forEachIndexed { index, suggestedLine ->
-                        key(index, suggestedLine.text) {
-                            SuggestionArrival(animationsEnabled = animationsEnabled) {
+                    // Slots there when the section is composed (the request
+                    // opening it, or the sheet reopened or rotated) appear
+                    // with it; slots opened later animate on their own.
+                    val slotsAtStart = remember { slotCount }
+                    // Every slot opened while the section is up stays composed,
+                    // so one emptied by the next request or left empty when
+                    // writing stops collapses instead of vanishing.
+                    val slotsOpened = remember { mutableIntStateOf(SuggestionPlaceholderMotion.RESERVED_SLOTS) }
+                    val slotsComposed = maxOf(slotsOpened.intValue, slotCount)
+                    SideEffect { slotsOpened.intValue = slotsComposed }
+                    for (slot in 0 until slotsComposed) {
+                        key(slot) {
+                            SuggestionSlot(
+                                line = viewModel.suggestions.getOrNull(slot),
+                                pending = isWriting && slot < SuggestionPlaceholderMotion.RESERVED_SLOTS,
+                                appearsWithSection = slot < slotsAtStart,
+                                modifier = Modifier.padding(top = DesignTokens.Spacing.sm),
+                                ghost = {
+                                    SuggestionPlaceholderCard(
+                                        slot = slot,
+                                        showProsody = viewModel.isStressPreviewEnabled
+                                    )
+                                }
+                            ) { suggestedLine ->
                                 SuggestionCard(
                                     suggestion = suggestedLine.text,
                                     rhymeTier = suggestedLine.rhymeTier,
@@ -520,32 +573,9 @@ fun AssistantPanel(
                                     onUse = {
                                         viewModel.insertSuggestion(suggestedLine.text)
                                         onSuggestionInserted()
-                                    },
-                                    modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
+                                    }
                                 )
                             }
-                        }
-                    }
-                    repeat(SuggestionPlaceholderMotion.INITIAL_ROWS) { row ->
-                        AnimatedVisibility(
-                            visible = row < placeholderCount,
-                            enter = if (animationsEnabled) {
-                                fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing))
-                            } else {
-                                EnterTransition.None
-                            },
-                            exit = if (animationsEnabled) {
-                                fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
-                                    shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
-                            } else {
-                                ExitTransition.None
-                            }
-                        ) {
-                            SuggestionPlaceholderCard(
-                                row = row,
-                                modifier = Modifier.padding(top = DesignTokens.Spacing.sm),
-                                showProsody = viewModel.isStressPreviewEnabled
-                            )
                         }
                     }
                 }
@@ -644,7 +674,7 @@ fun AssistantPanel(
 
         val setupModel = !viewModel.isLoading &&
             viewModel.selectedProvider == com.rhymeai.app.service.AIProvider.LOCAL &&
-            !viewModel.localReady
+            !viewModel.localSuggestionsReady
         Button(
             onClick = {
                 when {

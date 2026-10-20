@@ -518,6 +518,12 @@ final class EditorViewModel: ObservableObject {
 
         let providerRaw = defaults.string(forKey: "selectedProvider") ?? AIProvider.local.rawValue
         selectedProvider = AIProvider(rawValue: providerRaw) ?? .local
+        if UITestFlags.scriptedSuggestionsEnabled() {
+            // The scripted stream stands in for the on-device provider, which
+            // asks for no sharing consent, so a request runs straight through.
+            // Not persisted: the choice lasts only for this launch.
+            selectedProvider = .local
+        }
         let modelRaw = defaults.string(forKey: "selectedModel") ?? AIModel.default.rawValue
         if let savedModel = AIModel(rawValue: modelRaw), savedModel.provider == selectedProvider {
             selectedModel = savedModel
@@ -761,7 +767,9 @@ final class EditorViewModel: ObservableObject {
         errorMessage = nil
         suggestions = []
 
-        let stream = aiService.streamSuggestions(
+        // Debug UI tests and simulator QA can answer from a scripted stream
+        // (`--ui-test-scripted-suggestions`); everything below is unchanged.
+        let stream = scriptedSuggestionStreamForUITests() ?? aiService.streamSuggestions(
             provider: input.provider,
             apiKey: input.apiKey,
             modelId: input.modelID,
@@ -852,6 +860,18 @@ final class EditorViewModel: ObservableObject {
 
     func suggestionsRequestIDForTest() -> UUID? {
         suggestionsRequestID
+    }
+
+    /// Debug builds only: the deterministic stream UI tests and simulator QA
+    /// use in place of a provider, so the Assistant's real loading, arrival
+    /// and cancellation states can be held and replayed.
+    private func scriptedSuggestionStreamForUITests() -> AsyncThrowingStream<String, Error>? {
+        #if DEBUG
+        guard UITestFlags.scriptedSuggestionsEnabled() else { return nil }
+        return UITestFlags.scriptedSuggestionStream()
+        #else
+        return nil
+        #endif
     }
 
     func cancelSuggestions() {

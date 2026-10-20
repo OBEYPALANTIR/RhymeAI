@@ -103,7 +103,10 @@ struct Writers_BlockApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppAppearanceStyle.storageKey)
     private var appearanceRawValue = AppAppearanceStyle.ink.rawValue
-    @StateObject private var viewModel = EditorViewModel(backupService: BackupService.shared)
+    @StateObject private var viewModel = EditorViewModel(
+        backupService: BackupService.shared,
+        defaults: UITestFlags.editorDefaults()
+    )
     @StateObject private var persistenceState: AppPersistenceState
     @StateObject private var ggufDownloadManager = GGUFDownloadManager.shared
 

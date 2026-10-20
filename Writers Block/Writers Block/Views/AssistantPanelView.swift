@@ -8,6 +8,9 @@ struct AssistantPanelView: View {
     @State private var showModelSetup = false
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
+    /// When the current suggestion request started writing; the ghost cards
+    /// share it so their ink lines move together.
+    @State private var writingStartedAt = Date()
     @AppStorage("assistant.targetLineStressExpanded") private var stressDetailExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
@@ -142,9 +145,6 @@ struct AssistantPanelView: View {
             .onChange(of: viewModel.suggestions.isEmpty) { _, isEmpty in
                 if !isEmpty { revealResults(scroll) }
             }
-            .onChange(of: viewModel.isLoading) { _, isLoading in
-                if isLoading { revealResults(scroll) }
-            }
             .onChange(of: viewModel.errorMessage) { _, error in
                 if error != nil { revealResults(scroll) }
             }
@@ -158,10 +158,12 @@ struct AssistantPanelView: View {
     }
 
     private static let resultsAnchor = "assistantResults"
+    private static let writingAnnouncement = "Writing suggestions"
 
-    /// A streamed line fades in with an 8pt rise; opacity only under Reduce Motion.
-    private var suggestionArrival: AnyTransition {
-        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: SuggestionInkLineMotion.arrivalRise))
+    /// The Suggestions section is on screen while any slot is: a line that
+    /// arrived, or a ghost still waiting for one.
+    private var showsSuggestions: Bool {
+        SuggestionInkLineMotion.slotCount(arrived: viewModel.suggestions.count, isLoading: viewModel.isLoading) > 0
     }
 
     // MARK: - Suggest Button — turns into Stop while streaming
@@ -446,19 +448,33 @@ struct AssistantPanelView: View {
             }
 
             // MARK: - Suggestions
-            // While a request streams, ghost cards hold the slots the lines
-            // will fill and each line arrives in place as it lands.
+            // Three slots open as ghost cards when a request starts. Each
+            // arriving line takes the next slot in place, cross-fading out of
+            // its ghost; lines past the third append below, and any slot still
+            // empty when writing stops leaves on the dismiss tier.
+            let arrived = viewModel.suggestions.count
             let placeholderCount = SuggestionInkLineMotion.placeholderCount(
-                suggestionCount: viewModel.suggestions.count,
+                arrived: arrived,
                 isLoading: viewModel.isLoading
             )
-            if !viewModel.suggestions.isEmpty || placeholderCount > 0 {
+            if showsSuggestions {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                    Text("Suggestions")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Spacing.xs) {
+                        Text("Suggestions")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
 
-                    Text(viewModel.suggestions.isEmpty ? "Writing lines…" : "AI-generated · review before use")
+                        if viewModel.isLoading {
+                            Text("Writing…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary.opacity(0.8))
+                                .accessibilityLabel(Self.writingAnnouncement)
+                                .accessibilityIdentifier("suggestionsWriting")
+                                .transition(.opacity)
+                        }
+                    }
+
+                    Text("AI-generated · review before use")
                         .font(.caption.italic())
                         .foregroundStyle(.secondary.opacity(0.8))
 
@@ -476,22 +492,39 @@ struct AssistantPanelView: View {
                             onKeep: { viewModel.keepAlternate(suggestion.text) },
                             isKept: viewModel.companion.alternates.contains(where: { $0.text == suggestion.text.trimmingCharacters(in: .whitespacesAndNewlines) })
                         )
-                        .transition(suggestionArrival)
+                        .transition(.opacity)
                     }
 
-                    ForEach(0..<placeholderCount, id: \.self) { row in
-                        SuggestionPlaceholderCardView(row: row, showProsody: viewModel.isStressPreviewEnabled)
-                            .transition(.opacity)
+                    // Identified by slot, so a ghost stays put while the slots
+                    // above it fill and only the one being filled fades.
+                    ForEach(arrived..<(arrived + placeholderCount), id: \.self) { slot in
+                        SuggestionPlaceholderCardView(
+                            slot: slot,
+                            showProsody: viewModel.isStressPreviewEnabled,
+                            writingStartedAt: writingStartedAt
+                        )
+                        .transition(.opacity)
                     }
                 }
-                // Arrivals take the state tier; the trailing placeholder
-                // leaves on the dismiss tier when the stream closes. Both are
-                // opacity-only under Reduce Motion, so they stay animated.
-                .animation(RhymeAITokens.Motion.state, value: viewModel.suggestions.count)
-                .animation(RhymeAITokens.Motion.dismiss, value: placeholderCount)
+                .rhymeAnimation(RhymeAITokens.Motion.state, value: arrived)
+                // Writing starts on the state tier; when it stops, any slot
+                // still empty leaves on the dismiss tier.
+                .rhymeAnimation(viewModel.isLoading ? RhymeAITokens.Motion.state : RhymeAITokens.Motion.dismiss, value: viewModel.isLoading)
+                .transition(.opacity)
             }
             }
             .id(Self.resultsAnchor)
+            // The section opens on the state tier and, when a request ends
+            // with no lines, fades away on the dismiss tier.
+            .rhymeAnimation(viewModel.isLoading ? RhymeAITokens.Motion.state : RhymeAITokens.Motion.dismiss, value: showsSuggestions)
+            .onChange(of: viewModel.isLoading) { _, isLoading in
+                guard isLoading else { return }
+                writingStartedAt = .now
+                // A caption inserted into the hierarchy is not read on its own,
+                // so tell VoiceOver that writing has started, as the Word
+                // Inspector does for its results.
+                AccessibilityNotification.Announcement(Self.writingAnnouncement).post()
+            }
         }
     }
 

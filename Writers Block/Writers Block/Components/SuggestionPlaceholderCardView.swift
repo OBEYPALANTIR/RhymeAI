@@ -1,25 +1,25 @@
 import SwiftUI
 
-/// Timing for the "ink line" placeholders shown while next-line suggestions
-/// stream in. Each placeholder is the suggestion card at its real paddings
-/// whose text bar is written from the left, held, and faded, so the list
-/// reads as lines being written in the order they will arrive.
+/// Slot arithmetic and timing for the placeholders shown while next-line
+/// suggestions stream in. When a request starts, three slots open as ghost
+/// cards; each streamed line takes the next slot in place, lines past the
+/// third append below, and any slot still empty when the stream stops
+/// collapses. While a ghost waits, its text bar is written like an ink line,
+/// held, cleared and written again. Every step is one tier of the motion
+/// ladder, so none passes the 0.5s cap on utilitarian motion, and all the
+/// ghosts share one start so their lines write together.
 ///
 /// Android mirror: `SuggestionPlaceholderMotion` in
 /// `ui/components/SuggestionPlaceholderCard.kt`.
 enum SuggestionInkLineMotion {
-    /// Ghost rows shown before the first line lands.
-    static let initialRows = 3
+    /// Slots opened as ghost cards when a request starts.
+    static let reservedSlots = 3
 
-    /// The settle tier (0.42s) stretched by φ: the bar is written, not flashed.
-    static let drawDuration: TimeInterval = 0.68
+    static let drawDuration: TimeInterval = RhymeAITokens.Motion.settleDuration
     static let holdDuration: TimeInterval = RhymeAITokens.Motion.stateDuration
     static let fadeDuration: TimeInterval = RhymeAITokens.Motion.feedbackDuration
     static let restDuration: TimeInterval = RhymeAITokens.Motion.stateDuration
     static var cycleDuration: TimeInterval { drawDuration + holdDuration + fadeDuration + restDuration }
-
-    /// Rows start one state tier apart, top to bottom.
-    static let rowOffset: TimeInterval = RhymeAITokens.Motion.stateDuration
 
     static let restingInkOpacity: Double = 0.08
     static let strokeInkOpacity: Double = 0.34
@@ -29,24 +29,27 @@ enum SuggestionInkLineMotion {
     static let ghostSoftOpacity: Double = 0.06
 
     static let textBarFractions: [CGFloat] = [0.72, 0.56, 0.64]
-    static let arrivalRise: CGFloat = 8
 
-    /// How many ghost rows to show: three before anything arrives, one trailing
-    /// row while the stream is still open, none once it closes or is stopped.
-    static func placeholderCount(suggestionCount: Int, isLoading: Bool) -> Int {
+    /// Ghost cards still waiting for a line: the reserved slots the stream has
+    /// not filled yet, and none once it stops.
+    static func placeholderCount(arrived: Int, isLoading: Bool) -> Int {
         guard isLoading else { return 0 }
-        return suggestionCount == 0 ? initialRows : 1
+        return max(0, reservedSlots - arrived)
     }
 
-    static func textBarFraction(row: Int) -> CGFloat {
-        textBarFractions[max(0, row) % textBarFractions.count]
+    /// Slots to lay out: every line that has arrived plus the ghosts still waiting.
+    static func slotCount(arrived: Int, isLoading: Bool) -> Int {
+        arrived + placeholderCount(arrived: arrived, isLoading: isLoading)
     }
 
-    /// Position inside the cycle for a row, 0 until that row's offset has elapsed.
-    static func phase(elapsed: TimeInterval, row: Int) -> TimeInterval {
-        let shifted = elapsed - Double(max(0, row)) * rowOffset
-        guard shifted > 0 else { return 0 }
-        return shifted.truncatingRemainder(dividingBy: cycleDuration)
+    static func textBarFraction(slot: Int) -> CGFloat {
+        textBarFractions[max(0, slot) % textBarFractions.count]
+    }
+
+    /// Position inside the cycle, `elapsed` seconds after writing started.
+    static func phase(elapsed: TimeInterval) -> TimeInterval {
+        guard elapsed > 0 else { return 0 }
+        return elapsed.truncatingRemainder(dividingBy: cycleDuration)
     }
 
     /// Horizontal extent of the stroke, 0...1, eased while drawing.
@@ -66,63 +69,61 @@ enum SuggestionInkLineMotion {
     }
 }
 
-/// A ghost of `SuggestionCardView` that holds the slot a streamed line will
-/// fill. It mirrors the card's rows (one serif line, the stress-and-IPA
-/// preview when that is on, the action row, stacked at accessibility sizes
-/// as the card's `ViewThatFits` does) so the list moves as little as
-/// possible when the card lands; a line that wraps still grows the card.
-/// Hidden from VoiceOver; the "Writing lines…" caption above the list is
-/// what gets announced.
+/// A ghost of `SuggestionCardView` that holds a slot until its line arrives.
+/// Each row is held by hidden text in the card's own font, so the ghost grows
+/// with Dynamic Type exactly as the card does: one serif body line, the
+/// stress-and-IPA rows when that preview is on, the syllable badge, and the
+/// two actions in the same `ViewThatFits`, so they stack when the real buttons
+/// would. A suggestion that wraps to a second line still grows its card when
+/// it lands. Hidden from VoiceOver, which hears "Writing suggestions" when
+/// writing starts.
 struct SuggestionPlaceholderCardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var barHeight: CGFloat = 10
+    @ScaledMetric(relativeTo: .caption) private var softBarHeight: CGFloat = 8
+    @ScaledMetric(relativeTo: .subheadline) private var actionBarHeight: CGFloat = 20
 
-    let row: Int
+    let slot: Int
     /// Mirrors `SuggestionCardView.showProsody`: reserves the stress-and-IPA rows.
     var showProsody: Bool = false
-
-    @State private var start = Date()
+    /// When writing started; every ghost shares it so their lines move together.
+    var writingStartedAt: Date = .now
 
     var body: some View {
         let ink = appearance.palette.primaryInk
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                    textBar(ink: ink)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    lineSlot(ink: ink)
 
                     if showProsody {
                         // SuggestionProsodyPreviewView: two caption monospace lines.
                         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.hairline) {
-                            ghost(width: 72, height: 8, radius: 4, color: ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
-                                .frame(height: 16, alignment: .leading)
-                            ghost(width: 120, height: 8, radius: 4, color: ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
-                                .frame(height: 16, alignment: .leading)
+                            softRow(fraction: 0.4, ink: ink)
+                            softRow(fraction: 0.66, ink: ink)
                         }
+                        .font(.caption.monospaced())
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Syllable badge ghost.
-                ghost(width: 26, height: 22, radius: RhymeAITokens.Radius.xs, color: ink.opacity(SuggestionInkLineMotion.ghostOpacity))
+                // The syllable count badge, in its own font and padding.
+                Text(verbatim: "00")
+                    .font(.system(.caption, design: .monospaced))
+                    .padding(.horizontal, RhymeAITokens.Spacing.xs)
+                    .padding(.vertical, RhymeAITokens.Spacing.xs)
+                    .hidden()
+                    .background {
+                        RoundedRectangle(cornerRadius: RhymeAITokens.Radius.xs, style: .continuous)
+                            .fill(ink.opacity(SuggestionInkLineMotion.ghostOpacity))
+                    }
             }
 
-            // Action row ghosts: "Use line" and "Keep for later". The card's
-            // ViewThatFits stacks the real buttons at accessibility sizes.
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                    ghost(width: 92, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostOpacity))
-                        .frame(minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
-                    ghost(width: 112, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
-                        .frame(minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
-                }
-            } else {
-                HStack(spacing: RhymeAITokens.Spacing.md) {
-                    ghost(width: 92, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostOpacity))
-                    ghost(width: 112, height: 20, radius: 10, color: ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
-                }
-                .frame(minHeight: RhymeAITokens.Touch.minimum)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: RhymeAITokens.Spacing.md) { actionGhosts(ink: ink) }
+                    .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) { actionGhosts(ink: ink) }
             }
         }
         .padding(RhymeAITokens.Spacing.lg)
@@ -130,46 +131,86 @@ struct SuggestionPlaceholderCardView: View {
         .accessibilityHidden(true)
     }
 
-    private func ghost(width: CGFloat, height: CGFloat, radius: CGFloat, color: Color) -> some View {
-        RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .fill(color)
-            .frame(width: width, height: height)
+    /// The serif line, held by one hidden line of the card's font so the slot
+    /// is as tall as the line that will land in it; the ink bar is drawn over it.
+    private func lineSlot(ink: Color) -> some View {
+        Text(verbatim: "Placeholder")
+            .font(.system(.body, design: .serif))
+            .lineLimit(1)
+            .hidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) {
+                Group {
+                    if reduceMotion {
+                        Capsule()
+                            .fill(ink.opacity(SuggestionInkLineMotion.staticInkOpacity))
+                    } else {
+                        // 30 frames a second is plenty for a bar this size.
+                        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                            let phase = SuggestionInkLineMotion.phase(elapsed: context.date.timeIntervalSince(writingStartedAt))
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .fill(ink.opacity(SuggestionInkLineMotion.restingInkOpacity))
+                                Capsule()
+                                    .fill(ink.opacity(SuggestionInkLineMotion.strokeInkOpacity))
+                                    .scaleEffect(x: max(0.001, SuggestionInkLineMotion.strokeExtent(phase: phase)), anchor: .leading)
+                                    .opacity(SuggestionInkLineMotion.strokeOpacity(phase: phase))
+                            }
+                        }
+                    }
+                }
+                .frame(height: barHeight)
+                .scaleEffect(x: SuggestionInkLineMotion.textBarFraction(slot: slot), anchor: .leading)
+            }
     }
 
-    @ViewBuilder
-    private func textBar(ink: Color) -> some View {
-        let fraction = SuggestionInkLineMotion.textBarFraction(row: row)
-        Group {
-            if reduceMotion {
+    /// One caption line of the prosody preview, held by hidden text in the
+    /// enclosing font so it scales like the real row.
+    private func softRow(fraction: CGFloat, ink: Color) -> some View {
+        Text(verbatim: "/x/")
+            .lineLimit(1)
+            .hidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) {
                 Capsule()
-                    .fill(ink.opacity(SuggestionInkLineMotion.staticInkOpacity))
-                    .frame(height: 10)
-            } else {
-                TimelineView(.animation) { context in
-                    let phase = SuggestionInkLineMotion.phase(elapsed: context.date.timeIntervalSince(start), row: row)
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(ink.opacity(SuggestionInkLineMotion.restingInkOpacity))
-                        Capsule()
-                            .fill(ink.opacity(SuggestionInkLineMotion.strokeInkOpacity))
-                            .scaleEffect(x: SuggestionInkLineMotion.strokeExtent(phase: phase), anchor: .leading)
-                            .opacity(SuggestionInkLineMotion.strokeOpacity(phase: phase))
-                    }
-                    .frame(height: 10)
-                }
+                    .fill(ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
+                    .frame(height: softBarHeight)
+                    .scaleEffect(x: fraction, anchor: .leading)
             }
-        }
-        // Mirrors the serif body line box so an arriving card does not shift the list.
-        .scaleEffect(x: fraction, anchor: .leading)
-        .frame(height: 22)
+    }
+
+    /// "Use line" and "Keep for later", held by hidden labels in the buttons'
+    /// fonts and minimum height, so they measure and stack as the real ones do.
+    @ViewBuilder
+    private func actionGhosts(ink: Color) -> some View {
+        Label("Use line", systemImage: "plus")
+            .font(.subheadline.weight(.semibold))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .hidden()
+            .overlay {
+                Capsule()
+                    .fill(ink.opacity(SuggestionInkLineMotion.ghostOpacity))
+                    .frame(height: actionBarHeight)
+            }
+        Label("Keep for later", systemImage: "bookmark")
+            .font(.subheadline)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .hidden()
+            .overlay {
+                Capsule()
+                    .fill(ink.opacity(SuggestionInkLineMotion.ghostSoftOpacity))
+                    .frame(height: actionBarHeight)
+            }
     }
 }
 
 #Preview {
     VStack(spacing: RhymeAITokens.Spacing.xs) {
-        SuggestionPlaceholderCardView(row: 0)
-        SuggestionPlaceholderCardView(row: 1, showProsody: true)
-        SuggestionPlaceholderCardView(row: 2)
+        SuggestionPlaceholderCardView(slot: 0)
+        SuggestionPlaceholderCardView(slot: 1, showProsody: true)
+        SuggestionPlaceholderCardView(slot: 2)
     }
     .padding()
 }

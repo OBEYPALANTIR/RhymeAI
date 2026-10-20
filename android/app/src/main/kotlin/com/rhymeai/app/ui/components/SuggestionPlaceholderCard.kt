@@ -1,74 +1,90 @@
 package com.rhymeai.app.ui.components
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.StartOffset
-import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.rhymeai.app.SuggestedLine
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 
 /**
- * Timing for the "ink line" placeholders shown while next-line suggestions
- * stream in. Each placeholder is the suggestion card at its real paddings
- * whose text bar is written from the left, held, and faded, so the list
- * reads as lines being written in the order they will arrive.
+ * Slot arithmetic and timing for the placeholders shown while next-line
+ * suggestions stream in. When a request starts, three slots open as ghost
+ * cards; each streamed line takes the next slot in place, lines past the
+ * third append below, and any slot still empty when the stream stops
+ * collapses. While a ghost waits, its text bar is written like an ink line,
+ * held, cleared and written again. Every step is one tier of the motion
+ * ladder, so none passes the 500ms cap on utilitarian motion, and the ghosts
+ * of one request start together, so their lines write in step.
  *
  * iOS mirror: `SuggestionInkLineMotion` in
  * `Writers Block/Components/SuggestionPlaceholderCardView.swift`.
  */
 object SuggestionPlaceholderMotion {
-    /** Ghost rows shown before the first line lands. */
-    const val INITIAL_ROWS = 3
+    /** Slots opened as ghost cards when a request starts. */
+    const val RESERVED_SLOTS = 3
 
-    /** The settle tier (420ms) stretched by φ: the bar is written, not flashed. */
-    const val DRAW_MILLIS = 680
+    /** The iOS settle tier; Android settles with a spring and has no 420ms constant. */
+    const val DRAW_MILLIS = 420
     const val HOLD_MILLIS = DesignTokens.Motion.standardMillis
     const val FADE_MILLIS = DesignTokens.Motion.dismissMillis
     const val REST_MILLIS = DesignTokens.Motion.standardMillis
     const val CYCLE_MILLIS = DRAW_MILLIS + HOLD_MILLIS + FADE_MILLIS + REST_MILLIS
-
-    /** Rows start one state tier apart, top to bottom. */
-    const val ROW_OFFSET_MILLIS = DesignTokens.Motion.standardMillis
 
     const val RESTING_INK_ALPHA = 0.08f
     const val STROKE_INK_ALPHA = 0.34f
@@ -78,28 +94,19 @@ object SuggestionPlaceholderMotion {
     const val GHOST_SOFT_ALPHA = 0.06f
 
     val textBarFractions = listOf(0.72f, 0.56f, 0.64f)
-    val arrivalRise: Dp = 8.dp
 
-    /**
-     * How many ghost rows to show: three before anything arrives, one trailing
-     * row while the stream is still open, none once it closes or is stopped.
-     */
-    fun placeholderCount(suggestionCount: Int, isLoading: Boolean): Int = when {
-        !isLoading -> 0
-        suggestionCount == 0 -> INITIAL_ROWS
-        else -> 1
-    }
+    /** Ghost cards still waiting for a line: the reserved slots not filled yet, none once the stream stops. */
+    fun placeholderCount(arrived: Int, isLoading: Boolean): Int =
+        if (isLoading) (RESERVED_SLOTS - arrived).coerceAtLeast(0) else 0
 
-    fun textBarFraction(row: Int): Float = textBarFractions[row.coerceAtLeast(0) % textBarFractions.size]
+    /** Slots to lay out: every line that has arrived plus the ghosts still waiting. */
+    fun slotCount(arrived: Int, isLoading: Boolean): Int = arrived + placeholderCount(arrived, isLoading)
 
-    fun rowOffsetMillis(row: Int): Int = row.coerceAtLeast(0) * ROW_OFFSET_MILLIS
+    fun textBarFraction(slot: Int): Float = textBarFractions[slot.coerceAtLeast(0) % textBarFractions.size]
 
-    /** Position inside the cycle for a row, 0 until that row's offset has elapsed. */
-    fun phaseMillis(elapsedMillis: Long, row: Int): Int {
-        val shifted = elapsedMillis - rowOffsetMillis(row)
-        if (shifted <= 0) return 0
-        return (shifted % CYCLE_MILLIS).toInt()
-    }
+    /** Position inside the cycle, [elapsedMillis] after the ghost started writing. */
+    fun phaseMillis(elapsedMillis: Long): Int =
+        if (elapsedMillis <= 0) 0 else (elapsedMillis % CYCLE_MILLIS).toInt()
 
     /** Horizontal extent of the stroke, 0..1, on the standard curve while drawing. */
     fun strokeExtent(phaseMillis: Int): Float {
@@ -119,16 +126,82 @@ object SuggestionPlaceholderMotion {
 }
 
 /**
- * A ghost of [SuggestionCard] that holds the slot a streamed line will fill.
- * It mirrors the card's rows (one serif line, the stress-and-IPA preview when
- * that is on, the action row) so the list moves as little as possible when
- * the card lands; a line that wraps, or actions that wrap at large font
- * scales, still grow the card. Hidden from accessibility services; the
- * "Writing lines…" caption above the list is what TalkBack announces.
+ * One suggestion slot. It holds a ghost card while its line is being written,
+ * cross-fades into the real card when the line arrives, and collapses if
+ * writing stops before a line reached it. A slot composed together with its
+ * section ([appearsWithSection]: the request just opened it, or the sheet was
+ * reopened or rotated) appears with the section instead of animating on its
+ * own, so nothing that already landed replays. The arrival cross-fade uses the
+ * 260ms state tier, the collapse the 160ms dismiss tier, sizes settle on the
+ * standard spring, and everything snaps when animations are off. [modifier]
+ * applies inside the collapse, so spacing passed in collapses with the slot.
  */
 @Composable
+fun SuggestionSlot(
+    line: SuggestedLine?,
+    pending: Boolean,
+    appearsWithSection: Boolean,
+    ghost: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    card: @Composable (SuggestedLine) -> Unit
+) {
+    val animationsEnabled = LocalAnimationsEnabled.current
+    val visible = line != null || pending
+    val visibleState = remember { MutableTransitionState(appearsWithSection && visible) }
+    visibleState.targetState = visible
+
+    AnimatedVisibility(
+        visibleState = visibleState,
+        enter = if (animationsEnabled) {
+            fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) +
+                expandVertically(DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
+        } else {
+            EnterTransition.None
+        },
+        exit = if (animationsEnabled) {
+            fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
+                shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+        } else {
+            ExitTransition.None
+        }
+    ) {
+        AnimatedContent(
+            targetState = line,
+            modifier = modifier,
+            contentKey = { it != null },
+            transitionSpec = {
+                if (animationsEnabled) {
+                    // Both halves of the arrival share the state tier; the
+                    // dismiss tier is kept for slots that stay empty.
+                    (fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) togetherWith
+                        fadeOut(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)))
+                        .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring() })
+                } else {
+                    (EnterTransition.None togetherWith ExitTransition.None)
+                        .using(SizeTransform(clip = false) { _, _ -> snap() })
+                }
+            },
+            label = "suggestionSlot"
+        ) { target ->
+            if (target != null) card(target) else ghost()
+        }
+    }
+}
+
+/**
+ * A ghost of [SuggestionCard] that holds a slot until its line arrives. Each
+ * row is held by invisible text in the card's own style, so the ghost grows
+ * with the font scale exactly as the card does: one serif line, the
+ * stress-and-IPA rows when that preview is on, and the syllable badge. The
+ * card's two buttons sit in the same FlowRow, disabled and invisible, so the
+ * ghost wraps them where the real card would. A suggestion that wraps to a
+ * second line still grows its card when it lands. Hidden from accessibility
+ * services, which hear "Writing suggestions" from the section header.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 fun SuggestionPlaceholderCard(
-    row: Int,
+    slot: Int,
     modifier: Modifier = Modifier,
     /** Mirrors [SuggestionCard]'s `showProsody`: reserves the stress-and-IPA rows. */
     showProsody: Boolean = false
@@ -155,125 +228,147 @@ fun SuggestionPlaceholderCard(
                 .fillMaxWidth()
                 .padding(DesignTokens.Spacing.lg),
             verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
             ) {
-                // Mirrors the 20sp line box of the serif suggestion text.
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(20.dp),
-                    contentAlignment = Alignment.CenterStart
-                ) {
+                // The serif line, held by one invisible line of the card's style.
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                    HeldLine(fontFamily = FontFamily.Serif, fontSize = 14.sp, lineHeight = 20.sp)
                     InkLine(
-                        row = row,
                         ink = ink,
                         animationsEnabled = animationsEnabled,
-                        modifier = Modifier.fillMaxWidth(SuggestionPlaceholderMotion.textBarFraction(row))
+                        modifier = Modifier.fillMaxWidth(SuggestionPlaceholderMotion.textBarFraction(slot))
                     )
                 }
                 if (showProsody) {
-                    // ProsodyPreview: two 16sp monospace lines, 2dp apart.
+                    // ProsodyPreview: two monospace lines, 2dp apart.
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Box(Modifier.height(16.dp), contentAlignment = Alignment.CenterStart) {
-                            Ghost(width = 72.dp, height = 8.dp, radius = 4.dp, color = ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_SOFT_ALPHA))
-                        }
-                        Box(Modifier.height(16.dp), contentAlignment = Alignment.CenterStart) {
-                            Ghost(width = 120.dp, height = 8.dp, radius = 4.dp, color = ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_SOFT_ALPHA))
-                        }
+                        SoftRow(widthFraction = 0.4f, ink = ink)
+                        SoftRow(widthFraction = 0.66f, ink = ink)
                     }
                 }
             }
-            // Syllable badge ghost.
-            Ghost(width = 26.dp, height = 22.dp, radius = DesignTokens.Radius.xs, color = ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_ALPHA))
+            // The syllable count badge, in its own style and padding.
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(DesignTokens.Radius.xs))
+                    .background(ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_ALPHA))
+                    .padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
+            ) {
+                HeldLine(fontFamily = FontFamily.Monospace, fontSize = 12.sp, text = "00")
+            }
         }
-        // Action row ghosts: the tonal "Use line" pill and the "Keep for later" text.
-        Row(
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.xs)
-                .height(DesignTokens.Touch.minTarget),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.xs),
             horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
         ) {
-            Ghost(width = 96.dp, height = 40.dp, radius = 20.dp, color = ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_ALPHA))
-            Ghost(width = 108.dp, height = 20.dp, radius = 10.dp, color = ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_SOFT_ALPHA))
+            // The card's own buttons, disabled and invisible, so they measure
+            // and wrap exactly as the real ones do; only their ghosts are drawn.
+            FilledTonalButton(
+                onClick = {},
+                enabled = false,
+                modifier = Modifier
+                    .heightIn(min = DesignTokens.Touch.minTarget)
+                    .ghostPill(ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_ALPHA))
+                    .alpha(0f)
+            ) {
+                Text("Use line")
+            }
+            TextButton(
+                onClick = {},
+                enabled = false,
+                modifier = Modifier
+                    .heightIn(min = DesignTokens.Touch.minTarget)
+                    .ghostLabel(ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_SOFT_ALPHA))
+                    .alpha(0f)
+            ) {
+                Text("Keep for later")
+            }
         }
     }
 }
 
+/** One invisible line of text in a card row's own style: it holds that row's height at any font scale. */
 @Composable
-private fun Ghost(width: Dp, height: Dp, radius: Dp, color: Color) {
-    Box(
-        Modifier
-            .size(width = width, height = height)
-            .clip(RoundedCornerShape(radius))
-            .background(color)
+private fun HeldLine(
+    fontFamily: FontFamily,
+    fontSize: TextUnit,
+    text: String = "Placeholder",
+    lineHeight: TextUnit = TextUnit.Unspecified
+) {
+    Text(
+        text = text,
+        fontFamily = fontFamily,
+        fontSize = fontSize,
+        lineHeight = lineHeight,
+        maxLines = 1,
+        modifier = Modifier.alpha(0f)
     )
 }
 
+/** One monospace prosody line, held by invisible text in its style, with its ghost bar. */
 @Composable
-private fun InkLine(
-    row: Int,
-    ink: Color,
-    animationsEnabled: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val shape = RoundedCornerShape(50)
-    val restingAlpha = if (animationsEnabled) SuggestionPlaceholderMotion.RESTING_INK_ALPHA else SuggestionPlaceholderMotion.STATIC_INK_ALPHA
+private fun SoftRow(widthFraction: Float, ink: Color) {
+    val barHeight = with(LocalDensity.current) { 8.sp.toDp() }
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+        HeldLine(fontFamily = FontFamily.Monospace, fontSize = 12.sp, text = "/x/", lineHeight = 16.sp)
+        Box(
+            Modifier
+                .fillMaxWidth(widthFraction)
+                .height(barHeight)
+                .clip(RoundedCornerShape(50))
+                .background(ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_SOFT_ALPHA))
+        )
+    }
+}
+
+/**
+ * The ghost's text bar. While animations are on it is written from the left,
+ * held, faded and rested on a loop that starts with the ghost; the loop is
+ * read in the draw phase, so the bar redraws each frame without recomposing.
+ * With animations off the loop is never created and the bar holds still.
+ */
+@Composable
+private fun InkLine(ink: Color, animationsEnabled: Boolean, modifier: Modifier = Modifier) {
+    val barHeight = with(LocalDensity.current) { 9.sp.toDp() }
     Box(
         modifier
-            .height(9.dp)
-            .clip(shape)
-            .background(ink.copy(alpha = restingAlpha))
-    ) {
-        // An infinite transition is not time-scaled by the system animator
-        // setting the way a one-shot tween is, so it is skipped outright when
-        // the user has removed animations and the bar stays still.
-        if (animationsEnabled) {
-            val transition = rememberInfiniteTransition(label = "suggestionInkLine")
-            val startOffset = StartOffset(SuggestionPlaceholderMotion.rowOffsetMillis(row))
-            val strokeExtent by transition.animateFloat(
-                initialValue = 0f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = keyframes {
-                        durationMillis = SuggestionPlaceholderMotion.CYCLE_MILLIS
-                        0f at 0 using DesignTokens.Motion.standardEasing
-                        1f at SuggestionPlaceholderMotion.DRAW_MILLIS
-                        1f at SuggestionPlaceholderMotion.CYCLE_MILLIS
-                    },
-                    repeatMode = RepeatMode.Restart,
-                    initialStartOffset = startOffset
-                ),
-                label = "extent"
+            .height(barHeight)
+            .clip(RoundedCornerShape(50))
+            .background(
+                ink.copy(
+                    alpha = if (animationsEnabled) {
+                        SuggestionPlaceholderMotion.RESTING_INK_ALPHA
+                    } else {
+                        SuggestionPlaceholderMotion.STATIC_INK_ALPHA
+                    }
+                )
             )
-            val strokeAlpha by transition.animateFloat(
-                initialValue = 1f,
-                targetValue = 0f,
+    ) {
+        if (animationsEnabled) {
+            val loop = rememberInfiniteTransition(label = "suggestionInkLine")
+            val elapsed = loop.animateFloat(
+                initialValue = 0f,
+                targetValue = SuggestionPlaceholderMotion.CYCLE_MILLIS.toFloat(),
                 animationSpec = infiniteRepeatable(
-                    animation = keyframes {
-                        durationMillis = SuggestionPlaceholderMotion.CYCLE_MILLIS
-                        1f at 0
-                        1f at SuggestionPlaceholderMotion.DRAW_MILLIS + SuggestionPlaceholderMotion.HOLD_MILLIS using DesignTokens.Motion.exitEasing
-                        0f at SuggestionPlaceholderMotion.DRAW_MILLIS + SuggestionPlaceholderMotion.HOLD_MILLIS + SuggestionPlaceholderMotion.FADE_MILLIS
-                        0f at SuggestionPlaceholderMotion.CYCLE_MILLIS
-                    },
-                    repeatMode = RepeatMode.Restart,
-                    initialStartOffset = startOffset
+                    animation = tween(SuggestionPlaceholderMotion.CYCLE_MILLIS, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart
                 ),
-                label = "alpha"
+                label = "elapsed"
             )
             Box(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer {
-                        scaleX = strokeExtent
+                        val phase = SuggestionPlaceholderMotion.phaseMillis(elapsed.value.toLong())
+                        scaleX = SuggestionPlaceholderMotion.strokeExtent(phase)
+                        alpha = SuggestionPlaceholderMotion.strokeAlpha(phase)
                         transformOrigin = TransformOrigin(0f, 0.5f)
-                        alpha = strokeAlpha
                     }
                     .background(ink.copy(alpha = SuggestionPlaceholderMotion.STROKE_INK_ALPHA))
             )
@@ -281,27 +376,19 @@ private fun InkLine(
     }
 }
 
-/**
- * Enter motion for a streamed suggestion: a 260ms fade with an 8dp rise on
- * the standard spring, run once when the card first appears. Snaps when the
- * user has removed animations.
- */
-@Composable
-fun SuggestionArrival(
-    animationsEnabled: Boolean,
-    content: @Composable () -> Unit
-) {
-    val visibleState = remember { MutableTransitionState(!animationsEnabled).apply { targetState = true } }
-    val risePx = with(LocalDensity.current) { SuggestionPlaceholderMotion.arrivalRise.roundToPx() }
-    AnimatedVisibility(
-        visibleState = visibleState,
-        enter = if (animationsEnabled) {
-            fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) +
-                slideInVertically(DesignTokens.Motion.standardSpring(IntOffset.VisibilityThreshold)) { risePx }
-        } else {
-            EnterTransition.None
-        }
-    ) {
-        content()
-    }
+/** A pill filling the element: the ghost of the tonal "Use line" button. */
+private fun Modifier.ghostPill(color: Color): Modifier = drawBehind {
+    drawRoundRect(color = color, cornerRadius = CornerRadius(size.height / 2f))
+}
+
+/** A text-sized bar inside a text button: the ghost of "Keep for later". */
+private fun Modifier.ghostLabel(color: Color): Modifier = drawBehind {
+    val inset = 12.dp.toPx()
+    val barHeight = minOf(20.sp.toPx(), size.height)
+    drawRoundRect(
+        color = color,
+        topLeft = Offset(inset, (size.height - barHeight) / 2f),
+        size = Size((size.width - inset * 2f).coerceAtLeast(0f), barHeight),
+        cornerRadius = CornerRadius(barHeight / 2f)
+    )
 }
