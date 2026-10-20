@@ -40,9 +40,14 @@ Base weights stay on Colab's temporary disk. Source, data, logs, checkpoints,
 adapter and evaluation output are written to the private Drive folder.
 
 Training uses NF4 QLoRA, text projection adapters only, rank 16, learning rate
-2e-5, effective batch 16, and one epoch. Official non-thinking chat formatting
-is used for both training and generation. Only complete assistant answers and
-their turn terminators contribute to loss. Every row is checked for token
+2e-5, effective batch 16, and one epoch. Training and generation use the
+app's own Gemma 4 envelope, not the 12B chat template: one `<bos>`, then
+`<|turn>user\n{prompt}<turn|>\n<|turn>model\n`, with no system turn, no
+thought channel and no trimming of the prompt, exactly as
+`GGUFModelService.gemmaPrompt` renders it on device. Only complete assistant
+answers and their `<turn|>` terminators contribute to loss. The recorded
+2026-10-04 preflight evidence predates this envelope change and documents the
+template-based prefix of that run. Every row is checked for token
 boundary integrity; overlong examples fail rather than silently truncating.
 Prompt and padding labels are masked. Validation loss comes from a separate
 96-prompt balanced validation subset.
