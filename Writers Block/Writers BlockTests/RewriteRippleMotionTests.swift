@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 import Testing
 import UIKit
 @testable import Writers_Block
@@ -102,7 +103,7 @@ struct RewriteRippleMotionTests {
         #expect(overlay.colors == colors)
     }
 
-    @Test
+    @Test @MainActor
     func pendingRewriteUsesTheAppearanceSelectionAndOutline() {
         for style in [AppAppearanceStyle.ink, .paper, .graphite] {
             let palette = style.palette
@@ -115,7 +116,7 @@ struct RewriteRippleMotionTests {
         }
     }
 
-    @Test
+    @Test @MainActor
     func highlightKindPicksItsColours() {
         let palette = AppAppearanceStyle.ink.palette
         let loading = LyricsRewriteHighlight(range: NSRange(location: 0, length: 4), isLoading: true, isError: false, isInsertion: false)
