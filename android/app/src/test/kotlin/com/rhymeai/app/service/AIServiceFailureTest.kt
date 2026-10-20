@@ -17,28 +17,6 @@ import kotlin.test.assertFailsWith
 class AIServiceFailureTest {
 
     @Test
-    fun cloudSuggestionSurfacesNoKeyBeforeNetworkWork() = runBlocking {
-        val error = assertFailsWith<IllegalStateException> {
-            AIService().getSuggestions(
-                provider = AIProvider.GEMINI,
-                apiKey = "",
-                modelId = AIModel.DEFAULT.id,
-                theme = "",
-                lyrics = "one line",
-                targetRhymeLine = null,
-                rhymeType = RhymeType.PERFECT,
-                rhymeScheme = "AABB",
-                currentLetter = "A",
-                currentSection = SongSection.UNKNOWN,
-                complexity = RhymeComplexity.MODERATE,
-                useWholeSongContext = false
-            )
-        }
-
-        assertEquals("No API key set. Go to Settings to add your Gemini API key.", error.message)
-    }
-
-    @Test
     fun cloudStreamSurfacesNoKeyBeforeNetworkWork() = runBlocking {
         val error = assertFailsWith<IllegalStateException> {
             AIService().streamSuggestions(
@@ -93,22 +71,6 @@ class AIServiceFailureTest {
     fun localProviderSurfacesNoModelInsteadOfApiKeyError() = runBlocking {
         val service = AIService()
 
-        val suggestionError = assertFailsWith<IllegalStateException> {
-            service.getSuggestions(
-                provider = AIProvider.LOCAL,
-                apiKey = "",
-                modelId = AIModel.LOCAL_MODEL.id,
-                theme = "",
-                lyrics = "one line",
-                targetRhymeLine = null,
-                rhymeType = RhymeType.PERFECT,
-                rhymeScheme = "AABB",
-                currentLetter = "A",
-                currentSection = SongSection.UNKNOWN,
-                complexity = RhymeComplexity.MODERATE,
-                useWholeSongContext = false
-            )
-        }
         val streamError = assertFailsWith<IllegalStateException> {
             service.streamSuggestions(
                 provider = AIProvider.LOCAL,
@@ -147,7 +109,6 @@ class AIServiceFailureTest {
         }
 
         val expected = "No local model loaded. Go to Settings to load a model file."
-        assertEquals(expected, suggestionError.message)
         assertEquals(expected, streamError.message)
         assertEquals(expected, rewriteError.message)
         assertEquals(expected, synonymsError.message)

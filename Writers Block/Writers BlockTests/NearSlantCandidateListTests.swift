@@ -86,7 +86,7 @@ struct NearSlantCandidateListTests {
                 #expect(ProsodyAnalyzer.rhymeRelation(candidateWord: word, targetWord: anchor) == type,
                         "\(word) is listed as \(type) for \(anchor)")
                 let line = "I keep coming back to \(word)"
-                #expect(filter?.rank([line], want: 1) == [line], "the \(type) filter rejects \(word) for \(anchor)")
+                #expect(filter.map { $0.tier(of: line) != 0 } == true, "the \(type) filter rejects \(word) for \(anchor)")
             }
         }
     }

@@ -55,6 +55,108 @@ struct RhymeConstraintTests {
         }
     }
 
+    // Perfect rhymes of "road" with multisyllabic entries, for the level rule.
+    // Twelve entries, so the shared rhyme index cannot mistake it for
+    // `relationDictionary` (the index is keyed by word count).
+    private let levelDictionary = PronunciationDictionary.fromLines([
+        "road\tR OW1 D",
+        "explode\tIH0 K S P L OW1 D",
+        "glowed\tG L OW1 D",
+        "overload\tOW2 V ER0 L OW1 D",
+        "showed\tSH OW1 D",
+        "bestowed\tB IH0 S T OW1 D",
+        "rode\tR OW1 D",
+        "code\tK OW1 D",
+        "load\tL OW1 D",
+        "owed\tOW1 D",
+        "towed\tT OW1 D",
+        "episode\tEH1 P AH0 S OW2 D"
+    ])
+    private let levelOrder = [
+        "explode", "glowed", "overload", "showed", "bestowed", "rode", "code", "load", "owed", "towed", "episode"
+    ]
+
+    @Test func levelEndWordsKeepModerateAsTheGivenOrder() {
+        #expect(RhymeConstraint.levelEndWords(levelOrder, complexity: .moderate, limit: 12, dictionary: levelDictionary) == levelOrder)
+        #expect(RhymeConstraint.levelEndWords(levelOrder, complexity: .moderate, limit: 3, dictionary: levelDictionary) == ["explode", "glowed", "overload"])
+        // The default level is Moderate: the list the prompt sent before the level-aware rule.
+        let order = RhymeConstraint.candidateEndWords(targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary)
+        #expect(order == RhymeConstraint.candidateEndWords(targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary, complexity: .moderate))
+        #expect(Set(order) == Set(levelOrder))
+    }
+
+    @Test func levelEndWordsPutTwoOrMoreSyllableWordsFirstAtComplex() {
+        #expect(
+            RhymeConstraint.levelEndWords(levelOrder, complexity: .complex, limit: 12, dictionary: levelDictionary)
+                == ["explode", "overload", "bestowed", "episode", "glowed", "showed", "rode", "code", "load", "owed", "towed"]
+        )
+        #expect(
+            RhymeConstraint.levelEndWords(levelOrder, complexity: .complex, limit: 5, dictionary: levelDictionary)
+                == ["explode", "overload", "bestowed", "episode", "glowed"]
+        )
+        // Through candidateEndWords the groups keep whatever order the index gave them.
+        let complex = RhymeConstraint.candidateEndWords(
+            targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary, complexity: .complex
+        )
+        let moderate = RhymeConstraint.candidateEndWords(targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary)
+        #expect(complex.prefix(4).allSatisfy { ProsodyAnalyzer.analyzeWord($0, dictionary: levelDictionary).syllableCount >= 2 })
+        #expect(Array(complex.prefix(4)) == moderate.filter { ProsodyAnalyzer.analyzeWord($0, dictionary: levelDictionary).syllableCount >= 2 })
+        #expect(Array(complex.dropFirst(4)) == moderate.filter { ProsodyAnalyzer.analyzeWord($0, dictionary: levelDictionary).syllableCount == 1 })
+    }
+
+    @Test func levelEndWordsKeepOneSyllableWordsOnlyAtSimple() {
+        #expect(
+            RhymeConstraint.levelEndWords(levelOrder, complexity: .simple, limit: 12, dictionary: levelDictionary)
+                == ["glowed", "showed", "rode", "code", "load", "owed", "towed"]
+        )
+        let simple = RhymeConstraint.candidateEndWords(
+            targetWord: "road", rhymeType: .perfect, dictionary: levelDictionary, complexity: .simple
+        )
+        #expect(Set(simple) == ["glowed", "showed", "rode", "code", "load", "owed", "towed"])
+    }
+
+    @Test func levelEndWordsFallBackToTheRemainingWordsBelowSixAtSimple() {
+        let ordered = ["explode", "glowed", "overload", "showed", "bestowed"]
+        #expect(
+            RhymeConstraint.levelEndWords(ordered, complexity: .simple, limit: 12, dictionary: levelDictionary)
+                == ["glowed", "showed", "explode", "overload", "bestowed"]
+        )
+        #expect(
+            RhymeConstraint.levelEndWords(ordered, complexity: .simple, limit: 3, dictionary: levelDictionary)
+                == ["glowed", "showed", "explode"]
+        )
+        #expect(RhymeConstraint.simpleMinMonosyllables == 6)
+    }
+
+    /// The bundled dictionary follows the same rule the shared eval fixture
+    /// (shared/fixtures/complexity-end-words-v1.json) pins for Android.
+    @Test func bundledListsFollowTheLevelRule() {
+        func list(_ anchor: String, _ complexity: RhymeComplexity) -> [String] {
+            RhymeConstraint.candidateEndWords(targetWord: anchor, rhymeType: .perfect, complexity: complexity)
+        }
+        for anchor in ["home", "night", "road", "alone", "glow", "time"] {
+            let moderate = list(anchor, .moderate)
+            let complex = list(anchor, .complex)
+            let simple = list(anchor, .simple)
+            #expect(complex.count == 12 && simple.count == 12, "\(anchor)")
+            #expect(complex.allSatisfy { SyllableCounter.count($0) >= 2 }, "\(anchor) complex \(complex)")
+            #expect(simple.allSatisfy { SyllableCounter.count($0) == 1 }, "\(anchor) simple \(simple)")
+            #expect(moderate.filter { SyllableCounter.count($0) >= 2 } == complex.filter { moderate.contains($0) }, "\(anchor)")
+            #expect(moderate.filter { SyllableCounter.count($0) == 1 } == simple.filter { moderate.contains($0) }, "\(anchor)")
+        }
+        for anchor in ["world", "love"] {
+            let simple = list(anchor, .simple)
+            let mono = simple.filter { SyllableCounter.count($0) == 1 }
+            #expect((1...5).contains(mono.count), "\(anchor) \(simple)")
+            #expect(Array(simple.prefix(mono.count)) == mono, "\(anchor)")
+            #expect(simple.count == 12, "\(anchor)")
+        }
+        let arrival = list("arrival", .moderate)
+        #expect((1...5).contains(arrival.count), "\(arrival)")
+        #expect(list("arrival", .simple) == arrival)
+        #expect(list("arrival", .complex) == arrival)
+    }
+
     @Test func candidateEndWordsReturnEmptyForUnknownWords() {
         #expect(RhymeConstraint.candidateEndWords(targetWord: "zzzqxv", rhymeType: .perfect).isEmpty)
         #expect(RhymeConstraint.candidateEndWords(targetWord: "zzzqxv", rhymeType: .slant).isEmpty)
@@ -91,7 +193,7 @@ struct RhymeConstraintTests {
         ))
     }
 
-    @Test func filterAndRankAdmitsOnlyTheRequestedRelation() {
+    @Test func lineFilterAdmitsOnlyTheRequestedRelation() throws {
         let lines = [
             "The window glowed",
             "Words I never wrote",
@@ -100,20 +202,10 @@ struct RhymeConstraintTests {
             "Walking through the night"
         ]
 
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "Down the road",
-            rhymeType: .near,
-            want: 2,
-            dictionary: relationDictionary
-        ) == ["Words I never wrote"])
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "Down the road",
-            rhymeType: .slant,
-            want: 2,
-            dictionary: relationDictionary
-        ) == ["Cold as stone", "Everything burned red"])
+        let near = try #require(RhymeLineFilter(targetLine: "Down the road", rhymeType: .near, dictionary: relationDictionary))
+        let slant = try #require(RhymeLineFilter(targetLine: "Down the road", rhymeType: .slant, dictionary: relationDictionary))
+        #expect(lines.filter { near.tier(of: $0) != 0 } == ["Words I never wrote"])
+        #expect(lines.filter { slant.tier(of: $0) != 0 } == ["Cold as stone", "Everything burned red"])
     }
 
     @Test func rhymeTiersAndBadgesNameEveryRelationTruthfully() {
@@ -181,7 +273,7 @@ struct RhymeConstraintTests {
         #expect(RhymeConstraint.rhymeTier(line: "", targetWord: "night") == 0)
     }
 
-    @Test func filterAndRankClassifiesReturnedEndingsOutsidePromptCap() throws {
+    @Test func rhymeTierAndFilterClassifyReturnedEndingsOutsidePromptCap() throws {
         let words = (0..<61).map { "zz" + String(repeating: "a", count: $0 + 2) }
         let dictionary = PronunciationDictionary.fromLines(
             ["anchor\tR AY1 M"] + words.map { "\($0)\tR AY1 M" }
@@ -195,78 +287,14 @@ struct RhymeConstraintTests {
             targetWord: "anchor",
             dictionary: dictionary
         ) == 2)
-        #expect(RhymeConstraint.filterAndRank(
-            lines: [line],
+        let filter = try #require(RhymeLineFilter(
             targetLine: "Find the anchor",
             rhymeType: .perfect,
-            want: 1,
             dictionary: dictionary
-        ) == [line])
-    }
-
-    @Test func filterAndRankPrefersRhymingLinesRegardlessOfOrder() throws {
-        let rhymeWord = try #require(roundTripSafeCandidate(for: "night", rhymeType: .perfect))
-        let rhyming = "We chase the fading \(rhymeWord)"
-        let nonRhyming = "Nothing here can save us"
-
-        #expect(RhymeConstraint.filterAndRank(
-            lines: [nonRhyming, rhyming],
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 1
-        ) == [rhyming])
-        #expect(RhymeConstraint.filterAndRank(
-            lines: [rhyming, nonRhyming],
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 1
-        ) == [rhyming])
-    }
-
-    @Test func filterAndRankRejectsKnownNonRhymingLines() throws {
-        let rhymeWord = try #require(roundTripSafeCandidate(for: "night", rhymeType: .perfect))
-        let rhyming = "Out beyond the \(rhymeWord)"
-        let fillerA = "Nothing here can save us"
-        let fillerB = "The morning comes too soon"
-
-        let ranked = RhymeConstraint.filterAndRank(
-            lines: [fillerA, rhyming, fillerB],
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 3
-        )
-        #expect(ranked == [rhyming])
-    }
-
-    @Test func filterAndRankReturnsEmptyWhenKnownTargetHasNoMatchingSuggestion() {
-        let lines = ["The morning comes too soon", "Nothing here can save us"]
-
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 2
-        ).isEmpty)
-
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "Surrounded by the zzzqxv",
-            rhymeType: .perfect,
-            want: 1
-        ) == [lines[0]])
-    }
-
-    @Test func filterAndRankDedupesByNormalizedText() throws {
-        let rhymeWord = try #require(roundTripSafeCandidate(for: "night", rhymeType: .perfect))
-        let line = "We chase the \(rhymeWord)"
-        let shoutedDupe = "WE CHASE THE \(rhymeWord.uppercased())!!"
-
-        #expect(RhymeConstraint.filterAndRank(
-            lines: [line, shoutedDupe],
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 6
-        ) == [line])
+        ))
+        #expect(filter.tier(of: line) == 2)
+        // Unknown target word: the prompt was never constrained, so there is no filter.
+        #expect(RhymeLineFilter(targetLine: "Surrounded by the zzzqxv", rhymeType: .perfect) == nil)
     }
 
     @Test func constraintBlockAppearsOnlyForKnownTargetLines() {

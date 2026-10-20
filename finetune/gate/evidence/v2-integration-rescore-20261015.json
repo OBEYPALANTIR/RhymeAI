@@ -1,0 +1,241 @@
+{
+  "integration_parents": {
+    "main": "4dd2115e46f0b6564542d68d5171e80280183fb5",
+    "pr108": "a82fbb74628877203a8abbf2116292c662d7ed66"
+  },
+  "tested_source_sha256": {
+    "finetune/gate/backend.py": "9a3e85a3afbcc95eb174077cd6315ad241f93f620810278215f6ee5ca539c352",
+    "finetune/gate/generate.py": "5d96247c54bc5e26365046251c587b9ed8f4b7d155770c4c273d25fd5553d52a",
+    "finetune/gate/judge.py": "d1ae7d0be0e368851a70c1c9d2c098fc1613aabb0b339af003fba0e12a788368",
+    "finetune/gate/report.py": "a11cfc4bf3941497f096a6ad9288beb79bd9513172c543d435d010c70f8cf6fe",
+    "finetune/gate/run_gate.py": "387cb1a774182e4755c351b771d995490eddfe597b2da6a1cb58dd51cfc0b3ef",
+    "finetune/gate/metrics.py": "c1bbd9562daa6022c2819d855e5c5ec0fa856982ee94f692d2f3603a7e51b5cd",
+    "finetune/gate/frozen-v2.json": "cf7ff341d14b96b54ef31a2a518a8aaee984f3a13fab69c718c8e7bb23c73210",
+    "finetune/gate/test_backend.py": "2b3b1f9ed40d8d83d63ccad25f5bc6dec49e903843286d70c5d1e42c6a8a5899",
+    "finetune/gate/evidence/host-llama-probe-20261015.json": "6732dac83be632e59442631503674f926f4d7eb3ad269689169e4793979b7a14"
+  },
+  "tests": {
+    "gate": {
+      "passed": 58,
+      "skipped": 0,
+      "real_kotlin_exports": "copied saved exports, no new Kotlin execution"
+    },
+    "eval": {
+      "passed": 33,
+      "skipped": 0
+    }
+  },
+  "runs": [
+    {
+      "name": "v1-null-noise",
+      "saved_verdict": "FAIL",
+      "original_file_count": 124,
+      "saved_summary_sha256": "dc3299a9fdce8aceadd0d644c223d3637192599a3b7e78eb45c27e496f935e62",
+      "rescored_verdict": "FAIL",
+      "verdict_equal": true,
+      "saved_gates": {
+        "G1": true,
+        "G2": false,
+        "G3": false,
+        "G4": false,
+        "G5": false,
+        "G6": false
+      },
+      "rescored_gates": {
+        "G1": true,
+        "G2": true,
+        "G3": false,
+        "G4": true,
+        "G5": true,
+        "G6": true
+      },
+      "scopes_equal": false,
+      "benchmark_version": "rhymeai-gate-v1",
+      "margins": {
+        "full_six": 0.01,
+        "retry": 0.065,
+        "level_pass": 0.055,
+        "template_repetition": 0.0025,
+        "rewrite_passage": 0.085,
+        "rewrite_word": 0.035,
+        "synonyms": 0.01
+      },
+      "summary_sha256": "df4fd0c618f31000ed56a07e27b613bc30456dd1b70ebfa9a948f5e91c8a9e76",
+      "report_sha256": "4bcae3ef6b72adc87b28b666be34728767458e60e7074954f1f9d3a58bdcc34e",
+      "copied_bindings_unchanged": true
+    },
+    {
+      "name": "round3b-frozen-gate",
+      "saved_verdict": "FAIL",
+      "original_file_count": 84,
+      "saved_summary_sha256": "75fd94bb101f3ca51c4a70fee103ba9282128f5b853bab95583e45b1b3f9c818",
+      "rescored_verdict": "FAIL",
+      "verdict_equal": true,
+      "saved_gates": {
+        "G1": true,
+        "G2": false,
+        "G3": true,
+        "G4": true,
+        "G5": false,
+        "G6": false
+      },
+      "rescored_gates": {
+        "G1": true,
+        "G2": false,
+        "G3": true,
+        "G4": true,
+        "G5": false,
+        "G6": false
+      },
+      "scopes_equal": true,
+      "benchmark_version": "rhymeai-gate-v1",
+      "margins": {
+        "full_six": 0.01,
+        "retry": 0.065,
+        "level_pass": 0.055,
+        "template_repetition": 0.0025,
+        "rewrite_passage": 0.085,
+        "rewrite_word": 0.035,
+        "synonyms": 0.01
+      },
+      "summary_sha256": "5340c291109b9107a61ee5bde5471e6a10909aa95d25f7aae7838f1733bcfb0e",
+      "report_sha256": "dd40edfd5e192e319b4a6611a7bfffc557517ddca8f68f02cb0ada78e057ce20",
+      "copied_bindings_unchanged": true
+    },
+    {
+      "name": "null-noise",
+      "saved_verdict": "FAIL",
+      "original_file_count": 85,
+      "saved_summary_sha256": "8dd15f1e64cdc5d876c059611dcfad423971513df5fc26bf38f54a5ad2e5766e",
+      "rescored_verdict": "FAIL",
+      "verdict_equal": true,
+      "saved_gates": {
+        "G1": true,
+        "G2": true,
+        "G3": false,
+        "G4": true,
+        "G5": true,
+        "G6": false
+      },
+      "rescored_gates": {
+        "G1": true,
+        "G2": true,
+        "G3": false,
+        "G4": true,
+        "G5": true,
+        "G6": false
+      },
+      "scopes_equal": true,
+      "benchmark_version": "rhymeai-gate-v2",
+      "margins": {
+        "full_six": 0.01,
+        "retry": 0.06,
+        "level_pass": 0.05,
+        "template_repetition": 0.0025,
+        "rewrite_passage": 0.04,
+        "rewrite_word": 0.025,
+        "synonyms": 0.01
+      },
+      "summary_sha256": "149c7eb323a0f9ddf291b4b4e0eb5d4cc083f33d154ef8fc0fc898b808dc8778",
+      "report_sha256": "99e5a0b1c18149a2db87754d47b496c44f925dee9ecbe6fc0da3cdad9abd7750",
+      "copied_bindings_unchanged": true
+    },
+    {
+      "name": "null-identical",
+      "saved_verdict": "FAIL",
+      "original_file_count": 37,
+      "saved_summary_sha256": "eea29f3827255ff693e0e333b5d9d3489b4b70daaef1fb5dc6ed6229908fb4d5",
+      "rescored_verdict": "FAIL",
+      "verdict_equal": true,
+      "saved_gates": {
+        "G1": true,
+        "G2": true,
+        "G3": false,
+        "G4": true,
+        "G5": true,
+        "G6": false
+      },
+      "rescored_gates": {
+        "G1": true,
+        "G2": true,
+        "G3": false,
+        "G4": true,
+        "G5": true,
+        "G6": false
+      },
+      "scopes_equal": true,
+      "benchmark_version": "rhymeai-gate-v2",
+      "margins": {
+        "full_six": 0.01,
+        "retry": 0.06,
+        "level_pass": 0.05,
+        "template_repetition": 0.0025,
+        "rewrite_passage": 0.04,
+        "rewrite_word": 0.025,
+        "synonyms": 0.01
+      },
+      "summary_sha256": "8bde93576074528e5f703d0d1234eab1f8a84212b2b07f5fce7dc695d62c6a90",
+      "report_sha256": "0524b7838dece0e2c8f5c4d48291a0c524440b39e6dea4a11c9729157f6bc32d",
+      "copied_bindings_unchanged": true
+    }
+  ],
+  "original_files_unchanged": true,
+  "original_run_files_checked": 330,
+  "original_parity_files_checked": 14,
+  "copy_adjustment": "Only the copied null-identical capture-reuse.json source path points to the byte-verified copied null-noise; original and copied bindings are unchanged.",
+  "v2_backend_margin_check": {
+    "passed": true,
+    "local_kind": "metal",
+    "synthetic_kind": "cuda",
+    "margins": {
+      "full_six": 0.01,
+      "retry": 0.06,
+      "level_pass": 0.05,
+      "template_repetition": 0.0025,
+      "rewrite_passage": 0.04,
+      "rewrite_word": 0.025,
+      "synonyms": 0.01
+    },
+    "all_gates_and_scopes_equal": true,
+    "cuda_inference": "NOT RUN; synthetic metadata on disposable copied Metal captures"
+  },
+  "v1_null_preintegration_comparison": {
+    "baseline_source": "a82fbb74628877203a8abbf2116292c662d7ed66",
+    "verdict_equal": true,
+    "gates_equal": true,
+    "scopes_equal": true,
+    "verdict": "FAIL",
+    "gates": {
+      "G1": true,
+      "G2": true,
+      "G3": false,
+      "G4": true,
+      "G5": true,
+      "G6": true
+    },
+    "stdout": "FAIL",
+    "meaning": "The historical v1 null-noise component-gate drift predates this integration."
+  },
+  "independent_review": {
+    "verdict": "NON-BLOCKING / APPROVE",
+    "blockers": 0
+  },
+  "diff_check": {
+    "integration_against_a82fbb7": "PASS",
+    "against_main": "Existing trailing whitespace in preserved raw cloud-generation-candidate-20261015.log:2; that log is unchanged from a82fbb7."
+  },
+  "artifact_sha256": {
+    "rescore-proof.json": "44eea5bbb9e633b61105d086bdbc843c3a074a5926669c01bb67378f82e2ea84",
+    "original-snapshot.json": "3461185e2cd80de9ba2952eb7e2f6985dc1fba351fd8c08d0ac79f862722fdde",
+    "gate-tests.log": "1e4f0b42ec0ea0d9a081154a610befc2fd99af93693ba0e28e57c541e9220c7b",
+    "eval-tests.log": "0ef21a8f9fa22ea2552aa1514d5203fe5b43b71175e82271834c3eeb1781a236",
+    "pre-integration-v1-proof.json": "4bef1782acfadbea8112adb7dfacc49e64cf5e63361ebf3d03cfba9d3a89fd23"
+  },
+  "not_run": [
+    "inference",
+    "GCP compute",
+    "new llama-server",
+    "physical-device gates",
+    "PR merge"
+  ]
+}

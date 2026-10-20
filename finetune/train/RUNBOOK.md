@@ -1,5 +1,9 @@
 # finetune/train/ — Phase 3 LoRA Training Runbook
 
+For the scripted round-2 E2B reproduction on a bounded Google Cloud Spot A100 or L4,
+see [the GCP training path](gcp/README.md). It runs the frozen notebook headlessly,
+caches the pinned weights/CUDA build, and verifies GCS downloads on external storage.
+
 End-to-end procedure for fine-tuning the on-device Gemma 4 models
 (E2B + E4B) on the verified Phase 2 dataset, on a **rented GPU box**
 (RunPod / Lambda; one A100 or one RTX 4090 is plenty), then exporting and
@@ -189,6 +193,14 @@ Compare against `finetune/baseline-E2B.json` / `baseline-E4B.json`:
 format-pass rate and rhyme-compliance tiers per task are the headline
 numbers. Ship only if the tuned model beats baseline on format-pass without
 regressing rhyme misses.
+
+## Base-model bake-off (Qwen3.5-4B) — retired
+
+The July 2026 Qwen3.5-4B bake-off lost the naturalness A/B to tuned E4B
+(see `finetune/SCORECARD.md`), so its `--template qwen` plumbing and its
+export detour (`merge_qwen_lora.py`, `graft_mtp.py`) were dropped when the
+v3 pipeline was ported onto the Gemma 4 envelope. Both are in commit
+`3e54522` if the memory/license case is revisited.
 
 ## Cost estimate
 

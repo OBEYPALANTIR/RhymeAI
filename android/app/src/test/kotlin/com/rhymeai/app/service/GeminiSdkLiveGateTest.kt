@@ -60,7 +60,7 @@ class GeminiSdkLiveGateTest {
 
         liveGeminiModels.forEach { model ->
             val suggestions = withTimeout(60_000) {
-                service.getSuggestions(
+                service.streamSuggestions(
                     provider = AIProvider.GEMINI,
                     apiKey = apiKey,
                     modelId = model.id,
@@ -73,7 +73,7 @@ class GeminiSdkLiveGateTest {
                     currentSection = SongSection.VERSE,
                     complexity = RhymeComplexity.MODERATE,
                     useWholeSongContext = false
-                )
+                ).toList()
             }
             assertTrue(suggestions.isNotEmpty(), "Gemini returned no suggestions for ${model.id}")
             assertTrue(suggestions.all { it.text.isNotBlank() }, "Gemini returned blank suggestions for ${model.id}")
@@ -151,7 +151,7 @@ class GeminiSdkLiveGateTest {
         liveGeminiModels.forEach { model ->
             val error = assertFailsWith<RuntimeException> {
                 withTimeout(30_000) {
-                    service.getSuggestions(
+                    service.streamSuggestions(
                         provider = AIProvider.GEMINI,
                         apiKey = invalidKey,
                         modelId = model.id,
@@ -164,7 +164,7 @@ class GeminiSdkLiveGateTest {
                         currentSection = SongSection.UNKNOWN,
                         complexity = RhymeComplexity.MODERATE,
                         useWholeSongContext = false
-                    )
+                    ).toList()
                 }
             }
 

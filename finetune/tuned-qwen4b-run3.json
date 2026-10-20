@@ -1,0 +1,1396 @@
+{
+  "model": "finetune/train/out/gguf-qwen/qwen3.5-4B-rhymeai-Q4_K_M.gguf",
+  "template": "qwen",
+  "sampler": {
+    "ctx_size": 2048,
+    "temperature": 0.8,
+    "top_k": 40,
+    "top_p": 0.95,
+    "n_predict": 256,
+    "stop": [
+      "<|im_end|>"
+    ]
+  },
+  "case_count": 43,
+  "results": [
+    {
+      "id": "sugg_verse_perfect_simple",
+      "task": "suggestions",
+      "prompt_chars": 1712,
+      "latency_s": 1.015,
+      "tokens_predicted": 50,
+      "output": "The old porch swing feels empty though\nThe memory lingers for a while to know\nThe streetlights fade and start to go\nA feeling settles down quite low\nI watch the town drift far below\nI wonder what the future will show",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "per_line": [
+            {
+              "line": "The old porch swing feels empty though",
+              "end_word": "though",
+              "tier": "candidate"
+            },
+            {
+              "line": "The memory lingers for a while to know",
+              "end_word": "know",
+              "tier": "candidate"
+            },
+            {
+              "line": "The streetlights fade and start to go",
+              "end_word": "go",
+              "tier": "candidate"
+            },
+            {
+              "line": "A feeling settles down quite low",
+              "end_word": "low",
+              "tier": "candidate"
+            },
+            {
+              "line": "I watch the town drift far below",
+              "end_word": "below",
+              "tier": "candidate"
+            },
+            {
+              "line": "I wonder what the future will show",
+              "end_word": "show",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_perfect_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1699,
+      "latency_s": 1.029,
+      "tokens_predicted": 52,
+      "output": "The faded porch swing starts to swing slow\nA memory I can never let go\nThe distant mountains start to unfold a show\nA feeling I can't quite help but know\nThe turning point I can't deny though\nA chapter closed long time ago",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "per_line": [
+            {
+              "line": "The faded porch swing starts to swing slow",
+              "end_word": "slow",
+              "tier": "rhymes"
+            },
+            {
+              "line": "A memory I can never let go",
+              "end_word": "go",
+              "tier": "candidate"
+            },
+            {
+              "line": "The distant mountains start to unfold a show",
+              "end_word": "show",
+              "tier": "candidate"
+            },
+            {
+              "line": "A feeling I can't quite help but know",
+              "end_word": "know",
+              "tier": "candidate"
+            },
+            {
+              "line": "The turning point I can't deny though",
+              "end_word": "though",
+              "tier": "candidate"
+            },
+            {
+              "line": "A chapter closed long time ago",
+              "end_word": "ago",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 5,
+          "rhymes": 1,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_perfect_complex",
+      "task": "suggestions",
+      "prompt_chars": 1744,
+      "latency_s": 1.06,
+      "tokens_predicted": 54,
+      "output": "The faded porch light whispers secrets low,\nA memory I struggle to know,\nThe town's slow cadence starts to go,\nA silent promise I can't show,\nThe ache in my spirit, though,\nA chapter closed from long ago.",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "per_line": [
+            {
+              "line": "The faded porch light whispers secrets low,",
+              "end_word": "low",
+              "tier": "candidate"
+            },
+            {
+              "line": "A memory I struggle to know,",
+              "end_word": "know",
+              "tier": "candidate"
+            },
+            {
+              "line": "The town's slow cadence starts to go,",
+              "end_word": "go",
+              "tier": "candidate"
+            },
+            {
+              "line": "A silent promise I can't show,",
+              "end_word": "show",
+              "tier": "candidate"
+            },
+            {
+              "line": "The ache in my spirit, though,",
+              "end_word": "though",
+              "tier": "candidate"
+            },
+            {
+              "line": "A chapter closed from long ago.",
+              "end_word": "ago",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_new_sound_simple",
+      "task": "suggestions",
+      "prompt_chars": 1401,
+      "latency_s": 0.988,
+      "tokens_predicted": 54,
+      "output": "The porch swing swayed a lonely sway\nI watched the shadows start to creep away\nThe memories I held begin to fray\nI'll chase the feeling that the future bray\nThe painted signs are fading down the way\nA new beginning starts this morning day",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_new_sound_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1388,
+      "latency_s": 1.062,
+      "tokens_predicted": 60,
+      "output": "The faded map showed paths I used to know\nA distant sign where the highway starts to flow\nMy worn-out boots are ready for the show\nA quiet journey where I want to grow\nThe memories I leave behind will start to slow\nA brand new chapter waiting for me to bestow",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_new_sound_complex",
+      "task": "suggestions",
+      "prompt_chars": 1433,
+      "latency_s": 0.937,
+      "tokens_predicted": 51,
+      "output": "My memory's a fragile, fading map\nOf childhood dreams I can't quite map\nThe painted signs where shadows gently lap\nA promise whispered that my spirit cap\nThe distant sound of trains begins to snap\nBefore I finally make this journey snap",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "sugg_bridge_perfect_simple",
+      "task": "suggestions",
+      "prompt_chars": 1737,
+      "latency_s": 0.968,
+      "tokens_predicted": 46,
+      "output": "A different light is now shown\nA different path has been known\nWe will find a way to grow alone\nA feeling that is yet unknown\nWe find a strength of solid bone\nA steady rhythm, a gentle tone",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "A different light is now shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "A different path has been known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "We will find a way to grow alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            },
+            {
+              "line": "A feeling that is yet unknown",
+              "end_word": "unknown",
+              "tier": "candidate"
+            },
+            {
+              "line": "We find a strength of solid bone",
+              "end_word": "bone",
+              "tier": "candidate"
+            },
+            {
+              "line": "A steady rhythm, a gentle tone",
+              "end_word": "tone",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_bridge_perfect_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1724,
+      "latency_s": 1.052,
+      "tokens_predicted": 53,
+      "output": "Though shadows linger, futures still are known\nA silent signal on the dial tone\nWe search for solace, walking far alone\nA fragile truth that has been clearly shown\nWe find our footing in this frozen zone\nThis spirit's strength has always grown",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "Though shadows linger, futures still are known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "A silent signal on the dial tone",
+              "end_word": "tone",
+              "tier": "candidate"
+            },
+            {
+              "line": "We search for solace, walking far alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            },
+            {
+              "line": "A fragile truth that has been clearly shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "We find our footing in this frozen zone",
+              "end_word": "zone",
+              "tier": "candidate"
+            },
+            {
+              "line": "This spirit's strength has always grown",
+              "end_word": "grown",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_bridge_perfect_complex",
+      "task": "suggestions",
+      "prompt_chars": 1769,
+      "latency_s": 1.055,
+      "tokens_predicted": 53,
+      "output": "A fragile solace starts to be shown\nA whispered promise that's yet to be known\nA quiet vigil where shadows are grown\nA steady rhythm that finds its own tone\nA fragile resolve that will never be loan\nA steady spirit that's finally shown",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "A fragile solace starts to be shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "A whispered promise that's yet to be known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "A quiet vigil where shadows are grown",
+              "end_word": "grown",
+              "tier": "candidate"
+            },
+            {
+              "line": "A steady rhythm that finds its own tone",
+              "end_word": "tone",
+              "tier": "candidate"
+            },
+            {
+              "line": "A fragile resolve that will never be loan",
+              "end_word": "loan",
+              "tier": "candidate"
+            },
+            {
+              "line": "A steady spirit that's finally shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_repeat_simple",
+      "task": "suggestions",
+      "prompt_chars": 1939,
+      "latency_s": 1.06,
+      "tokens_predicted": 51,
+      "output": "The city burns with a vibrant fire\nWe chase the feeling, a sweet desire\nThe energy pulls us up so high higher\nWe need this moment, the whole entire\nWe push past limits, a new prior\nThe rhythm demands we always require",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "wire",
+          "per_line": [
+            {
+              "line": "The city burns with a vibrant fire",
+              "end_word": "fire",
+              "tier": "candidate"
+            },
+            {
+              "line": "We chase the feeling, a sweet desire",
+              "end_word": "desire",
+              "tier": "candidate"
+            },
+            {
+              "line": "The energy pulls us up so high higher",
+              "end_word": "higher",
+              "tier": "candidate"
+            },
+            {
+              "line": "We need this moment, the whole entire",
+              "end_word": "entire",
+              "tier": "candidate"
+            },
+            {
+              "line": "We push past limits, a new prior",
+              "end_word": "prior",
+              "tier": "candidate"
+            },
+            {
+              "line": "The rhythm demands we always require",
+              "end_word": "require",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_repeat_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1926,
+      "latency_s": 1.072,
+      "tokens_predicted": 47,
+      "output": "The city pulse keeps us burning higher\nChasing futures burning like a fire\nHolding onto this sweet new desire\nWhispers of the whole bright entire\nPast the secrets we hid prior\nGotta make this moment we require",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "wire",
+          "per_line": [
+            {
+              "line": "The city pulse keeps us burning higher",
+              "end_word": "higher",
+              "tier": "candidate"
+            },
+            {
+              "line": "Chasing futures burning like a fire",
+              "end_word": "fire",
+              "tier": "candidate"
+            },
+            {
+              "line": "Holding onto this sweet new desire",
+              "end_word": "desire",
+              "tier": "candidate"
+            },
+            {
+              "line": "Whispers of the whole bright entire",
+              "end_word": "entire",
+              "tier": "candidate"
+            },
+            {
+              "line": "Past the secrets we hid prior",
+              "end_word": "prior",
+              "tier": "candidate"
+            },
+            {
+              "line": "Gotta make this moment we require",
+              "end_word": "require",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_repeat_complex",
+      "task": "suggestions",
+      "prompt_chars": 1971,
+      "latency_s": 1.06,
+      "tokens_predicted": 51,
+      "output": "The synaptic currents make us feel higher\nThrough neon veins, a burning signal fire\nThis electric hunger fuels our deep desire\nThe urban rhythm claims us in its entire\nPast echoes fade, a memory prior\nOur soul demands a freedom we must acquire",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "wire",
+          "per_line": [
+            {
+              "line": "The synaptic currents make us feel higher",
+              "end_word": "higher",
+              "tier": "candidate"
+            },
+            {
+              "line": "Through neon veins, a burning signal fire",
+              "end_word": "fire",
+              "tier": "candidate"
+            },
+            {
+              "line": "This electric hunger fuels our deep desire",
+              "end_word": "desire",
+              "tier": "candidate"
+            },
+            {
+              "line": "The urban rhythm claims us in its entire",
+              "end_word": "entire",
+              "tier": "candidate"
+            },
+            {
+              "line": "Past echoes fade, a memory prior",
+              "end_word": "prior",
+              "tier": "candidate"
+            },
+            {
+              "line": "Our soul demands a freedom we must acquire",
+              "end_word": "acquire",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_first_perfect",
+      "task": "suggestions",
+      "prompt_chars": 1709,
+      "latency_s": 1.097,
+      "tokens_predicted": 58,
+      "output": "Find the strength to claim what's truly your own\nLet the spirit rise from the quiet zone\nWatch the wildness bloom, a beauty shown\nFeel the power that has always been known\nThrough the struggle, something new has grown\nLet your inner fire ring out on the phone",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "Find the strength to claim what's truly your own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Let the spirit rise from the quiet zone",
+              "end_word": "zone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Watch the wildness bloom, a beauty shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Feel the power that has always been known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "Through the struggle, something new has grown",
+              "end_word": "grown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Let your inner fire ring out on the phone",
+              "end_word": "phone",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_first_near",
+      "task": "suggestions",
+      "prompt_chars": 1719,
+      "latency_s": 1.019,
+      "tokens_predicted": 52,
+      "output": "Find your strength right where you have grown\nLet your spirit rise up and be shown\nEmbrace the fire that is only your own\nFind the wisdom that is always known\nMove beyond limits in this new zone\nLet your heart find its rightful bone",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "Find your strength right where you have grown",
+              "end_word": "grown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Let your spirit rise up and be shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Embrace the fire that is only your own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Find the wisdom that is always known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "Move beyond limits in this new zone",
+              "end_word": "zone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Let your heart find its rightful bone",
+              "end_word": "bone",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_unknown_perfect_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1488,
+      "latency_s": 1.005,
+      "tokens_predicted": 55,
+      "output": "The dark sky gathered all its heavy rain\nA low rumble echoed like the coming train\nThe pressure built a deep and sudden pain\nThe wind began its silent, rapid campaign\nThe earth felt shaken as the mountain train\nThe coming deluge could not be explained",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "strain",
+          "per_line": [
+            {
+              "line": "The dark sky gathered all its heavy rain",
+              "end_word": "rain",
+              "tier": "candidate"
+            },
+            {
+              "line": "A low rumble echoed like the coming train",
+              "end_word": "train",
+              "tier": "candidate"
+            },
+            {
+              "line": "The pressure built a deep and sudden pain",
+              "end_word": "pain",
+              "tier": "candidate"
+            },
+            {
+              "line": "The wind began its silent, rapid campaign",
+              "end_word": "campaign",
+              "tier": "candidate"
+            },
+            {
+              "line": "The earth felt shaken as the mountain train",
+              "end_word": "train",
+              "tier": "candidate"
+            },
+            {
+              "line": "The coming deluge could not be explained",
+              "end_word": "explained",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 5,
+          "rhymes": 0,
+          "miss": 1
+        }
+      }
+    },
+    {
+      "id": "sugg_unknown_perfect_complex",
+      "task": "suggestions",
+      "prompt_chars": 1533,
+      "latency_s": 1.036,
+      "tokens_predicted": 56,
+      "output": "The tempest's low frequency began to explain\nThe atmosphere prepared for deluge's main\nA primal surge of power sought to gain\nThe dark procession moving in a campaign\nThe winds began to gather in a swift train\nThe ocean's fury sought to overwhelm the brain",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "strain",
+          "per_line": [
+            {
+              "line": "The tempest's low frequency began to explain",
+              "end_word": "explain",
+              "tier": "candidate"
+            },
+            {
+              "line": "The atmosphere prepared for deluge's main",
+              "end_word": "main",
+              "tier": "candidate"
+            },
+            {
+              "line": "A primal surge of power sought to gain",
+              "end_word": "gain",
+              "tier": "candidate"
+            },
+            {
+              "line": "The dark procession moving in a campaign",
+              "end_word": "campaign",
+              "tier": "candidate"
+            },
+            {
+              "line": "The winds began to gather in a swift train",
+              "end_word": "train",
+              "tier": "candidate"
+            },
+            {
+              "line": "The ocean's fury sought to overwhelm the brain",
+              "end_word": "brain",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_unknown_new_sound_simple",
+      "task": "suggestions",
+      "prompt_chars": 1189,
+      "latency_s": 0.917,
+      "tokens_predicted": 52,
+      "output": "The wind is starting to blow very fast\nA heavy silence fills the quiet place\nThe sky turns dark like ink upon a map\nThe world prepares for something that will snap\nThe thunder sounds like giants calling out\nA sudden chill begins to take control",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "sugg_unknown_new_sound_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1180,
+      "latency_s": 0.891,
+      "tokens_predicted": 50,
+      "output": "A distant siren calls me through the haze\nA fragile memory starts to arise\nA sudden silence puts a weight on me\nA whispered promise starts to amaze\nA lonely journey I must now embrace\nA fragile truth I cannot quite erase",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "sugg_whole_song_constrained",
+      "task": "suggestions",
+      "prompt_chars": 1762,
+      "latency_s": 1.081,
+      "tokens_predicted": 55,
+      "output": "The engine sighs a memory I still know\nThe faded map just starts to softly go\nThe engine hums a secret I must show\nThe shadows lengthen though the morning low\nI feel the silence start to gently grow\nI wonder where the journey will show",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "per_line": [
+            {
+              "line": "The engine sighs a memory I still know",
+              "end_word": "know",
+              "tier": "candidate"
+            },
+            {
+              "line": "The faded map just starts to softly go",
+              "end_word": "go",
+              "tier": "candidate"
+            },
+            {
+              "line": "The engine hums a secret I must show",
+              "end_word": "show",
+              "tier": "candidate"
+            },
+            {
+              "line": "The shadows lengthen though the morning low",
+              "end_word": "low",
+              "tier": "candidate"
+            },
+            {
+              "line": "I feel the silence start to gently grow",
+              "end_word": "grow",
+              "tier": "rhymes"
+            },
+            {
+              "line": "I wonder where the journey will show",
+              "end_word": "show",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 5,
+          "rhymes": 1,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_whole_song_new_sound",
+      "task": "suggestions",
+      "prompt_chars": 1438,
+      "latency_s": 0.98,
+      "tokens_predicted": 53,
+      "output": "The scent of rain upon the dusty lane\nMy tired heart begins to softly strain\nI see the ghost of flowers in the rain\nA hidden promise in the garden stain\nThe shadows stretch where sunlight used to reign\nThis quiet truth I'm finally finding again",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_near_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1717,
+      "latency_s": 1.179,
+      "tokens_predicted": 63,
+      "output": "The faded signpost pointed in a different plight,\nThe memory of you burns ever so bright,\nThe dusty roads await a brand new flight,\nI’ll carve my story out upon this white,\nThe town's quiet shadow fades away quite,\nI’ll find my footing on a different site.",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "night",
+          "per_line": [
+            {
+              "line": "The faded signpost pointed in a different plight,",
+              "end_word": "plight",
+              "tier": "rhymes"
+            },
+            {
+              "line": "The memory of you burns ever so bright,",
+              "end_word": "bright",
+              "tier": "rhymes"
+            },
+            {
+              "line": "The dusty roads await a brand new flight,",
+              "end_word": "flight",
+              "tier": "candidate"
+            },
+            {
+              "line": "I’ll carve my story out upon this white,",
+              "end_word": "white",
+              "tier": "candidate"
+            },
+            {
+              "line": "The town's quiet shadow fades away quite,",
+              "end_word": "quite",
+              "tier": "candidate"
+            },
+            {
+              "line": "I’ll find my footing on a different site.",
+              "end_word": "site",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 4,
+          "rhymes": 2,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_plain_near_simple",
+      "task": "suggestions",
+      "prompt_chars": 1504,
+      "latency_s": 1.035,
+      "tokens_predicted": 56,
+      "output": "The wind began to howl a lonely strain\nThe dark clouds gathered up the whole campaign\nThe heavy drops began to fall again\nThe storm was coming, putting us to pain\nThe distant rumble sounded like a train\nThe whole world felt a sudden, shifting brain",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "rain",
+          "per_line": [
+            {
+              "line": "The wind began to howl a lonely strain",
+              "end_word": "strain",
+              "tier": "rhymes"
+            },
+            {
+              "line": "The dark clouds gathered up the whole campaign",
+              "end_word": "campaign",
+              "tier": "candidate"
+            },
+            {
+              "line": "The heavy drops began to fall again",
+              "end_word": "again",
+              "tier": "candidate"
+            },
+            {
+              "line": "The storm was coming, putting us to pain",
+              "end_word": "pain",
+              "tier": "candidate"
+            },
+            {
+              "line": "The distant rumble sounded like a train",
+              "end_word": "train",
+              "tier": "candidate"
+            },
+            {
+              "line": "The whole world felt a sudden, shifting brain",
+              "end_word": "brain",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 5,
+          "rhymes": 1,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_slant_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1721,
+      "latency_s": 1.14,
+      "tokens_predicted": 60,
+      "output": "The sirens wail a low and steady refrain again\nThe city pulse demands a focused, burning main\nA silent promise whispered in the coming pain\nThis electric rush is my relentless campaign\nI watch the passing lights on the arriving train\nMy tired mind struggles to make sense of the brain",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "rain",
+          "per_line": [
+            {
+              "line": "The sirens wail a low and steady refrain again",
+              "end_word": "again",
+              "tier": "candidate"
+            },
+            {
+              "line": "The city pulse demands a focused, burning main",
+              "end_word": "main",
+              "tier": "candidate"
+            },
+            {
+              "line": "A silent promise whispered in the coming pain",
+              "end_word": "pain",
+              "tier": "candidate"
+            },
+            {
+              "line": "This electric rush is my relentless campaign",
+              "end_word": "campaign",
+              "tier": "candidate"
+            },
+            {
+              "line": "I watch the passing lights on the arriving train",
+              "end_word": "train",
+              "tier": "candidate"
+            },
+            {
+              "line": "My tired mind struggles to make sense of the brain",
+              "end_word": "brain",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_bridge_slant_complex",
+      "task": "suggestions",
+      "prompt_chars": 1767,
+      "latency_s": 1.068,
+      "tokens_predicted": 54,
+      "output": "Though the cold winds bite a stark, unknown tone\nWhere the spirit's fire has been shown\nPast the frozen fields, the journey grown\nBeyond the limits of the lonely zone\nWhen the silence whispers secrets to the bone\nA different rhythm starts to be known",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "Though the cold winds bite a stark, unknown tone",
+              "end_word": "tone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Where the spirit's fire has been shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Past the frozen fields, the journey grown",
+              "end_word": "grown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Beyond the limits of the lonely zone",
+              "end_word": "zone",
+              "tier": "candidate"
+            },
+            {
+              "line": "When the silence whispers secrets to the bone",
+              "end_word": "bone",
+              "tier": "candidate"
+            },
+            {
+              "line": "A different rhythm starts to be known",
+              "end_word": "known",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "rw_passage_rephrase_chorus",
+      "task": "rewrite_passage",
+      "prompt_chars": 1226,
+      "latency_s": 0.443,
+      "tokens_predicted": 14,
+      "output": "Lead me down that empty way\nWhere the heavens lose my name",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "Lead me down that empty way\nWhere the heavens lose my name"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_harder_chorus",
+      "task": "rewrite_passage",
+      "prompt_chars": 1231,
+      "latency_s": 0.478,
+      "tokens_predicted": 15,
+      "output": "Take me down that open road\nWhere the sky forgets my show",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "Take me down that open road\nWhere the sky forgets my show"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_punchup_chorus",
+      "task": "rewrite_passage",
+      "prompt_chars": 1189,
+      "latency_s": 0.432,
+      "tokens_predicted": 13,
+      "output": "Burn down the open road\nWhere the heavens erase my name",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "Burn down the open road\nWhere the heavens erase my name"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_rephrase_verse",
+      "task": "rewrite_passage",
+      "prompt_chars": 1136,
+      "latency_s": 0.379,
+      "tokens_predicted": 9,
+      "output": "We kept our winter coats about the place",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "We kept our winter coats about the place"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_harder_verse",
+      "task": "rewrite_passage",
+      "prompt_chars": 1239,
+      "latency_s": 0.496,
+      "tokens_predicted": 18,
+      "output": "Tomatoes bending askew on their stakes\nShe said the earth recalls what we neglected",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "Tomatoes bending askew on their stakes\nShe said the earth recalls what we neglected"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_punchup_verse",
+      "task": "rewrite_passage",
+      "prompt_chars": 1196,
+      "latency_s": 0.505,
+      "tokens_predicted": 19,
+      "output": "Rubble rivers slick against the door\nNeon bleeds in puddles on the floor",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "Rubble rivers slick against the door\nNeon bleeds in puddles on the floor"
+        }
+      }
+    },
+    {
+      "id": "rw_word_rephrase_glow",
+      "task": "rewrite_word",
+      "prompt_chars": 1339,
+      "latency_s": 0.32,
+      "tokens_predicted": 2,
+      "output": "shine",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "shine"
+        }
+      }
+    },
+    {
+      "id": "rw_word_harder_glow",
+      "task": "rewrite_word",
+      "prompt_chars": 1344,
+      "latency_s": 0.321,
+      "tokens_predicted": 2,
+      "output": "slow",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "slow"
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "is_perfect_rhyme": true
+        }
+      }
+    },
+    {
+      "id": "rw_word_punchup_glow",
+      "task": "rewrite_word",
+      "prompt_chars": 1302,
+      "latency_s": 0.333,
+      "tokens_predicted": 3,
+      "output": "shimmer",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "shimmer"
+        }
+      }
+    },
+    {
+      "id": "rw_word_rephrase_stone",
+      "task": "rewrite_word",
+      "prompt_chars": 1266,
+      "latency_s": 0.322,
+      "tokens_predicted": 2,
+      "output": "grave",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "grave"
+        }
+      }
+    },
+    {
+      "id": "rw_word_harder_stone",
+      "task": "rewrite_word",
+      "prompt_chars": 1271,
+      "latency_s": 0.32,
+      "tokens_predicted": 2,
+      "output": "tone",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "tone"
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "is_perfect_rhyme": true
+        }
+      }
+    },
+    {
+      "id": "rw_word_punchup_ground",
+      "task": "rewrite_word",
+      "prompt_chars": 1307,
+      "latency_s": 0.337,
+      "tokens_predicted": 3,
+      "output": "slag",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "slag"
+        }
+      }
+    },
+    {
+      "id": "rw_word_rephrase_glow_retry",
+      "task": "rewrite_word",
+      "prompt_chars": 1353,
+      "latency_s": 0.323,
+      "tokens_predicted": 2,
+      "output": "light",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "light"
+        }
+      }
+    },
+    {
+      "id": "rw_word_harder_stone_retry",
+      "task": "rewrite_word",
+      "prompt_chars": 1285,
+      "latency_s": 0.322,
+      "tokens_predicted": 2,
+      "output": "bone",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "bone"
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "is_perfect_rhyme": true
+        }
+      }
+    },
+    {
+      "id": "rw_word_punchup_rain_retry",
+      "task": "rewrite_word",
+      "prompt_chars": 1112,
+      "latency_s": 0.274,
+      "tokens_predicted": 3,
+      "output": "deluge",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "deluge"
+        }
+      }
+    },
+    {
+      "id": "syn_promise",
+      "task": "synonyms",
+      "prompt_chars": 429,
+      "latency_s": 0.403,
+      "tokens_predicted": 22,
+      "output": "vow\npledge\noath\nword\nsaying\nassurance\ncommitment\npledging",
+      "score": {
+        "format": {
+          "passed": true,
+          "word_count": 8,
+          "violations": [],
+          "words": [
+            "vow",
+            "pledge",
+            "oath",
+            "word",
+            "saying",
+            "assurance",
+            "commitment",
+            "pledging"
+          ]
+        }
+      }
+    },
+    {
+      "id": "syn_shining",
+      "task": "synonyms",
+      "prompt_chars": 423,
+      "latency_s": 0.444,
+      "tokens_predicted": 25,
+      "output": "gleaming\nglinting\nsparkling\nshimmering\nglowing\nradiant\nlustrous\nbright",
+      "score": {
+        "format": {
+          "passed": true,
+          "word_count": 8,
+          "violations": [],
+          "words": [
+            "gleaming",
+            "glinting",
+            "sparkling",
+            "shimmering",
+            "glowing",
+            "radiant",
+            "lustrous",
+            "bright"
+          ]
+        }
+      }
+    },
+    {
+      "id": "syn_crooked",
+      "task": "synonyms",
+      "prompt_chars": 429,
+      "latency_s": 0.405,
+      "tokens_predicted": 22,
+      "output": "askew\nbent\ntilted\nslanted\naskewly\nwarped\nskewed",
+      "score": {
+        "format": {
+          "passed": true,
+          "word_count": 7,
+          "violations": [],
+          "words": [
+            "askew",
+            "bent",
+            "tilted",
+            "slanted",
+            "askewly",
+            "warped",
+            "skewed"
+          ]
+        }
+      }
+    },
+    {
+      "id": "syn_flickered_no_context",
+      "task": "synonyms",
+      "prompt_chars": 414,
+      "latency_s": 0.429,
+      "tokens_predicted": 24,
+      "output": "shimmered\ntwinkled\nblinked\nquivered\nshivered\ngleamed\nwavered",
+      "score": {
+        "format": {
+          "passed": true,
+          "word_count": 7,
+          "violations": [],
+          "words": [
+            "shimmered",
+            "twinkled",
+            "blinked",
+            "quivered",
+            "shivered",
+            "gleamed",
+            "wavered"
+          ]
+        }
+      }
+    }
+  ]
+}

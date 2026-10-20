@@ -60,6 +60,25 @@ class ControlMarkerTests(unittest.TestCase):
                 record, reason = generate.generate_one(ReplyClient(raw), case, "1-0-0")
                 self.assertEqual((record, reason), (None, "rejected_by_scorer"), raw)
 
+    def test_leading_thought_channel_is_cut_and_stray_closers_are_rejected(self):
+        case, rewrite = rewrite_case()
+        for opener in ("<|channel>thought\n<channel|>", "<|channel>thought\nweighing rhymes<channel|>\n"):
+            self.assertEqual(generate.clean_teacher_output(opener + rewrite), rewrite)
+        first, _, rest = rewrite.partition("\n")
+        if rest:
+            raw = "<|channel>thought\n<channel|>" + first + "\n<channel|>" + rest
+            self.assertIn("<channel|>", generate.clean_teacher_output(raw))
+            record, reason = generate.generate_one(ReplyClient(raw), case, "1-0-0")
+            self.assertEqual((record, reason), (None, "rejected_by_scorer"))
+
+    def test_unterminated_thought_channel_is_explicitly_rejected(self):
+        case, rewrite = rewrite_case()
+        for raw in ("<|channel>thought", " \n<|channel>thought\n" + rewrite,
+                    "<|channel>thought\n<|turn>model\n" + rewrite):
+            with self.subTest(raw=raw):
+                record, reason = generate.generate_one(ReplyClient(raw), case, "1-0-0")
+                self.assertEqual((record, reason), (None, "unterminated_thought_channel"))
+
     def test_gemma4_marker_fails_every_validator(self):
         for marker in GEMMA4_MARKERS:
             lines = ["Line %s number %d" % (word, i) for i, word in

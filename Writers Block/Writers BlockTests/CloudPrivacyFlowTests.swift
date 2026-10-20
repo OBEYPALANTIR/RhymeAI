@@ -58,7 +58,7 @@ struct CloudPrivacyFlowTests {
         }
     }
 
-    @Test func providerSerializersExcludeUnsharedLyricsForBufferedAndStreamingSuggestions() async throws {
+    @Test func providerSerializersExcludeUnsharedLyricsForStreamingSuggestions() async throws {
         let privateSentinel = "PRIVATE_STANZA_7D43"
         let allowedLine = "Keep only this target night"
         let matchingSuggestions = "One clear light\nTwo burn bright\nThree take flight\nFour feel right\nFive hold sight\nSix still might"
@@ -68,26 +68,6 @@ struct CloudPrivacyFlowTests {
             let service = AIService(session: Self.makeSession())
             let modelID = try #require(AIModel.models(for: provider).first?.id)
 
-            _ = try await service.getSuggestions(
-                provider: provider,
-                apiKey: "synthetic-key",
-                modelId: modelID,
-                theme: "quiet resolve",
-                lyrics: "[Verse]\n\(allowedLine)\n[Bridge]\n\(privateSentinel)",
-                targetRhymeLine: allowedLine,
-                rhymeType: .perfect,
-                rhymeScheme: "AABB",
-                currentLetter: "A",
-                currentSection: .verse,
-                complexity: .moderate,
-                useWholeSongContext: false
-            )
-
-            let bufferedBody = try #require(PrivacyURLProtocol.capturedBodies().first)
-            #expect(bufferedBody.contains(allowedLine), "\(provider.rawValue) buffered serializer omitted the allowed target line")
-            #expect(!bufferedBody.contains(privateSentinel), "\(provider.rawValue) buffered serializer leaked unshared lyrics")
-
-            PrivacyURLProtocol.reset(suggestionText: matchingSuggestions)
             var streamedLines: [String] = []
             for try await line in service.streamSuggestions(
                 provider: provider,
@@ -111,6 +91,44 @@ struct CloudPrivacyFlowTests {
             #expect(streamingBody.contains(allowedLine), "\(provider.rawValue) streaming serializer omitted the allowed target line")
             #expect(!streamingBody.contains(privateSentinel), "\(provider.rawValue) streaming serializer leaked unshared lyrics")
         }
+    }
+
+    @Test func cloudSuggestionStreamSanitizesProviderLineResponses() async throws {
+        let raw = """
+        1. "Yellow lights keep pulling me home"
+        * Yellow lights keep pulling me home
+        - Static in the choir of the road
+        model_response>
+        You are RhymeAI's on-device songwriting assistant.
+        This line is deliberately far too long to be a usable lyric suggestion because it keeps going past the expected single-line length limit for the assistant surface.
+        2) I trade the dark for a borrowed glow
+        """
+        PrivacyURLProtocol.reset(suggestionText: raw)
+        let service = AIService(session: Self.makeSession())
+
+        var streamed: [String] = []
+        for try await line in service.streamSuggestions(
+            provider: .gemini,
+            apiKey: "synthetic-key",
+            modelId: AIModel.default.id,
+            theme: "",
+            lyrics: "one line",
+            targetRhymeLine: nil,
+            rhymeType: .perfect,
+            rhymeScheme: "AABB",
+            currentLetter: "B",
+            currentSection: .verse,
+            complexity: .moderate,
+            useWholeSongContext: false
+        ) {
+            streamed.append(line)
+        }
+
+        #expect(streamed == [
+            "Yellow lights keep pulling me home",
+            "Static in the choir of the road",
+            "I trade the dark for a borrowed glow"
+        ])
     }
 
     @Test func wholeSongScopeEscalationRequiresFreshConsentBeforeSerialization() async throws {

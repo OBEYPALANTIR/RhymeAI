@@ -1,0 +1,8 @@
+PRE-CALIBRATION (gate at 348c7bb, original margins). Under the calibrated margins (GATE.md "Calibration"):
+levels FAIL (G2, G3, G6); null FAIL (G3, G6); null-noise FAIL (G3 only). Original record follows.
+levels {'G1': True, 'G2': False, 'G3': False, 'G4': True, 'G5': False, 'G6': False}
+null {'G1': True, 'G2': True, 'G3': False, 'G4': True, 'G5': True, 'G6': False}
+null-noise {'G1': True, 'G2': False, 'G3': False, 'G4': False, 'G5': False, 'G6': False}
+Final overlap: 0 lines; 805 files; v4: True
+Total incremental judge cost: 0.0
+Noise-control calibration: {'pooled': {'sign_p': 0.13380838418693225, 'ci_covers_zero': {'full_six': True, 'retry': True, 'level_pass': True, 'template_repetition': True, 'rewrite_passage': True, 'rewrite_word': True, 'synonyms': True}}, '7000': {'sign_p': 0.39519335735782307, 'ci_covers_zero': {'full_six': True, 'retry': False, 'level_pass': True, 'template_repetition': False, 'rewrite_passage': True, 'rewrite_word': True, 'synonyms': True}}, '7001': {'sign_p': 0.2588620001653153, 'ci_covers_zero': {'full_six': True, 'retry': True, 'level_pass': True, 'template_repetition': True, 'rewrite_passage': True, 'rewrite_word': True, 'synonyms': True}}, '7002': {'sign_p': 0.6535984498230588, 'ci_covers_zero': {'full_six': True, 'retry': True, 'level_pass': True, 'template_repetition': True, 'rewrite_passage': True, 'rewrite_word': True, 'synonyms': True}}}
