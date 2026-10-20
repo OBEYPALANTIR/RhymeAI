@@ -114,7 +114,7 @@ class NearSlantCandidateListTest {
                 for (word in list(anchor, type).filter { ProsodyAnalyzer.normalizeWord(it) == it }) {
                     assertEquals(type, ProsodyAnalyzer.rhymeRelation(word, anchor, dictionary), "$word is listed as $type for $anchor")
                     val line = "I keep coming back to $word"
-                    assertEquals(listOf(line), filter?.rank(listOf(line), 1), "the $type filter rejects $word for $anchor")
+                    assertTrue((filter?.tier(line) ?: 0) > 0, "the $type filter rejects $word for $anchor")
                 }
             }
         }

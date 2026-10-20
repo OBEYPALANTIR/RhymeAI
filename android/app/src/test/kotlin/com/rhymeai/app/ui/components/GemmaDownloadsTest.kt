@@ -144,7 +144,7 @@ class GemmaDownloadsTest {
         )
         assertEquals(
             listOf(
-                "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5",
+                "902e5d83a86393f064b1c8abc1a9d25fec5b3634683317792b02856c01c604e0",
                 "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944"
             ),
             GEMMA_DOWNLOADS.map(GemmaDownload::sha256)
@@ -193,30 +193,30 @@ class GemmaDownloadsTest {
     }
 
     @Test
-    fun sameSizeE2bV2IsReverifiedAndReclaimedForV21() {
+    fun sameSizeE2bV21IsReverifiedAndReclaimedForV6() {
         val e2b = GEMMA_DOWNLOADS.first()
         val dir = tempDir()
         val file = File(dir, e2b.fileName)
-        // The shipped v2 E2B file has exactly the v2.1 size and name; only its SHA-256 differs.
+        // The shipped v2.1 E2B file has exactly the v6 size and name; only its SHA-256 differs.
         java.io.RandomAccessFile(file, "rw").use { output ->
             output.write(validTinyGguf())
             output.setLength(e2b.expectedBytes)
         }
-        val v2Sha = "b250c2f6a91d9f7659f7ac2c90ccc563ca96a84aea4c1e8a3463fafc77d004af"
-        assertTrue(!v2Sha.equals(e2b.sha256, ignoreCase = true))
+        val v21Sha = "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5"
+        assertTrue(!v21Sha.equals(e2b.sha256, ignoreCase = true))
 
         // Size and header alone cannot tell the versions apart...
         assertNull(validateDownloadedGemma(e2b, file))
-        // ...so a registration verified against the v2 catalog SHA is not reused,
+        // ...so a registration verified against the v2.1 catalog SHA is not reused,
         assertFalse(
-            hasCurrentGemmaVerification(e2b, file, v2Sha, file.length(), file.lastModified())
+            hasCurrentGemmaVerification(e2b, file, v21Sha, file.length(), file.lastModified())
         )
-        // the forced re-check rejects the v2 bytes,
+        // the forced re-check rejects the v2.1 bytes,
         assertEquals(
             "${e2b.label} download failed its integrity check",
             validateDownloadedGemmaIntegrity(e2b, file)
         )
-        // and the stale file is reclaimed before the v2.1 download.
+        // and the stale file is reclaimed before the v6 download.
         assertEquals(e2b.expectedBytes, reclaimStaleInstalledGemma(e2b, file))
         assertFalse(file.exists())
     }

@@ -339,39 +339,6 @@ struct Writers_BlockTests {
         #expect(viewModel.errorMessage == "Existing editor error")
     }
 
-    @Test func suggestionParserSanitizesProviderLineResponses() {
-        let raw = """
-        1. "Yellow lights keep pulling me home"
-        * Yellow lights keep pulling me home
-        - Static in the choir of the road
-        model_response>
-        You are RhymeAI's on-device songwriting assistant.
-        This line is deliberately far too long to be a usable lyric suggestion because it keeps going past the expected single-line length limit for the assistant surface.
-        2) I trade the dark for a borrowed glow
-        """
-
-        let suggestions = AIService().parseSuggestionList(raw)
-
-        #expect(suggestions == [
-            "Yellow lights keep pulling me home",
-            "Static in the choir of the road",
-            "I trade the dark for a borrowed glow"
-        ])
-    }
-
-    @Test func suggestionParserAcceptsJsonArrayAndObjectWrappers() {
-        let service = AIService()
-
-        #expect(service.parseSuggestionList(#"["1. First clean line", "\"Second clean line\"", "First clean line"]"#) == [
-            "First clean line",
-            "Second clean line"
-        ])
-        #expect(service.parseSuggestionList(#"{"suggestions":["- First wrapped line","2) Second wrapped line"]}"#) == [
-            "First wrapped line",
-            "Second wrapped line"
-        ])
-    }
-
     @Test func suggestionPromptShapesImmediateAndWholeSongContext() {
         let service = AIService()
         let immediatePrompt = service.buildPrompt(
@@ -698,13 +665,6 @@ struct Writers_BlockTests {
         )
     }
 
-    @Test func emptySuggestionResponsesParseToEmptyList() {
-        let service = AIService()
-
-        #expect(service.parseSuggestionList("") == [])
-        #expect(service.parseSuggestionList("```json\n[]\n```") == [])
-    }
-
     @Test func localFrameworkFailureBecomesActionableMessage() {
         // The raw failure seen when the system model reports available but cannot run.
         let raw = NSError(domain: "FoundationModels.LanguageModelError", code: -1)
@@ -746,29 +706,6 @@ struct Writers_BlockTests {
         #expect(recognized.localizedDescription == "Failed to parse AI response.")
         #expect(cancelled is CancellationError)
         #expect((unrelated as? URLError)?.code == .timedOut)
-    }
-
-    @MainActor
-    @Test func cloudSuggestionSurfacesNoKeyBeforeNetworkWork() async throws {
-        do {
-            _ = try await AIService().getSuggestions(
-                provider: .gemini,
-                apiKey: "",
-                modelId: AIModel.default.id,
-                theme: "",
-                lyrics: "one line",
-                targetRhymeLine: nil,
-                rhymeType: .perfect,
-                rhymeScheme: "AABB",
-                currentLetter: "A",
-                currentSection: .unknown,
-                complexity: .moderate,
-                useWholeSongContext: false
-            )
-            #expect(Bool(false), "Expected missing Gemini key to fail")
-        } catch {
-            #expect(error.localizedDescription == "No API key set. Go to Settings to add your Gemini API key.")
-        }
     }
 
     @MainActor
@@ -877,7 +814,8 @@ struct Writers_BlockTests {
         let lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
 
         for model in Self.liveGeminiModels {
-            let suggestions = try await service.getSuggestions(
+            var constrained: [String] = []
+            for try await line in service.streamSuggestions(
                 provider: .gemini,
                 apiKey: apiKey,
                 modelId: model.id,
@@ -890,9 +828,11 @@ struct Writers_BlockTests {
                 currentSection: .verse,
                 complexity: .moderate,
                 useWholeSongContext: false
-            )
-            #expect(!suggestions.isEmpty, "Gemini returned no suggestions for \(model.id)")
-            #expect(suggestions.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+            ) {
+                constrained.append(line)
+            }
+            #expect(!constrained.isEmpty, "Gemini returned no suggestions for \(model.id)")
+            #expect(constrained.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
 
             for action in RewriteAction.allCases {
                 let rewrite = try await service.getRewrite(
@@ -970,7 +910,7 @@ struct Writers_BlockTests {
 
         for model in Self.liveGeminiModels {
             do {
-                _ = try await service.getSuggestions(
+                for try await _ in service.streamSuggestions(
                     provider: .gemini,
                     apiKey: invalidKey,
                     modelId: model.id,
@@ -983,7 +923,7 @@ struct Writers_BlockTests {
                     currentSection: .unknown,
                     complexity: .moderate,
                     useWholeSongContext: false
-                )
+                ) {}
                 #expect(Bool(false), "Expected invalid Gemini key to fail for \(model.id)")
             } catch {
                 let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)

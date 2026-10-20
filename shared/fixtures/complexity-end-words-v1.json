@@ -1,5 +1,5 @@
 {
-  "description": "Shared level-aware end-word fixture. For each case, Android RhymeConstraint.candidateEndWords(anchor, rhymeType, complexity = complexity) and finetune/eval/scoring.py candidate_end_words(anchor, rhymeType, complexity=complexity) must return `expected` word for word (limit 12, bundled dictionary and frequency list). MODERATE is the frequency order; COMPLEX puts words of two or more syllables first (stable); SIMPLE keeps one-syllable words only unless fewer than six exist, when the remaining words follow in their original order. Expected values were produced by finetune/eval/complexity_end_words_fixture.py; regenerate them there if the rule changes. iOS asserts the same rule on its own dictionary in RhymeConstraintTests.swift.",
+  "description": "Shared level-aware end-word fixture. For each case, Android RhymeConstraint.candidateEndWords(anchor, rhymeType, complexity = complexity) and finetune/eval/scoring.py candidate_end_words(anchor, rhymeType, complexity=complexity) must return `expected` word for word (limit 12, bundled dictionary and frequency list). PERFECT is the exact and multisyllabic pools; NEAR and SLANT are the exclusive rhymeRelation pools in songwriter order. MODERATE keeps the relation's ranked order; COMPLEX puts words of two or more syllables first (stable); SIMPLE keeps one-syllable words only unless fewer than six exist, when the remaining words follow in their original order. Expected values were produced by finetune/eval/complexity_end_words_fixture.py; regenerate them there if the rule changes. iOS asserts the Perfect level rule on its own dictionary in RhymeConstraintTests.swift.",
   "limit": 12,
   "cases": [
     {
@@ -63,6 +63,126 @@
       ]
     },
     {
+      "anchor": "home",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "mixed syllables; Simple and Complex both have full lists",
+      "expected": [
+        "know",
+        "go",
+        "own",
+        "show",
+        "oh",
+        "known",
+        "low",
+        "phone",
+        "co",
+        "pro",
+        "grow",
+        "shown"
+      ]
+    },
+    {
+      "anchor": "home",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "mixed syllables; Simple and Complex both have full lists",
+      "expected": [
+        "know",
+        "go",
+        "own",
+        "show",
+        "oh",
+        "ago",
+        "known",
+        "low",
+        "phone",
+        "co",
+        "alone",
+        "below"
+      ]
+    },
+    {
+      "anchor": "home",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "mixed syllables; Simple and Complex both have full lists",
+      "expected": [
+        "ago",
+        "alone",
+        "below",
+        "tomorrow",
+        "radio",
+        "photo",
+        "chicago",
+        "mexico",
+        "hello",
+        "know",
+        "go",
+        "own"
+      ]
+    },
+    {
+      "anchor": "home",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "mixed syllables; Simple and Complex both have full lists",
+      "expected": [
+        "time",
+        "same",
+        "come",
+        "old",
+        "game",
+        "team",
+        "name",
+        "told",
+        "came",
+        "job",
+        "whole",
+        "hope"
+      ]
+    },
+    {
+      "anchor": "home",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "mixed syllables; Simple and Complex both have full lists",
+      "expected": [
+        "time",
+        "same",
+        "come",
+        "old",
+        "game",
+        "team",
+        "name",
+        "told",
+        "came",
+        "job",
+        "whole",
+        "hope"
+      ]
+    },
+    {
+      "anchor": "home",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "mixed syllables; Simple and Complex both have full lists",
+      "expected": [
+        "become",
+        "control",
+        "almost",
+        "program",
+        "became",
+        "time",
+        "same",
+        "come",
+        "old",
+        "game",
+        "team",
+        "name"
+      ]
+    },
+    {
       "anchor": "night",
       "rhymeType": "PERFECT",
       "complexity": "SIMPLE",
@@ -120,6 +240,126 @@
         "insight",
         "overnight",
         "delight"
+      ]
+    },
+    {
+      "anchor": "night",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "mostly one-syllable rhymes; Complex has to reach past the frequency cut",
+      "expected": [
+        "like",
+        "high",
+        "side",
+        "try",
+        "guy",
+        "buy",
+        "type",
+        "died",
+        "rights",
+        "tried",
+        "die",
+        "eye"
+      ]
+    },
+    {
+      "anchor": "night",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "mostly one-syllable rhymes; Complex has to reach past the frequency cut",
+      "expected": [
+        "like",
+        "high",
+        "side",
+        "try",
+        "guy",
+        "buy",
+        "type",
+        "outside",
+        "died",
+        "inside",
+        "rights",
+        "july"
+      ]
+    },
+    {
+      "anchor": "night",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "mostly one-syllable rhymes; Complex has to reach past the frequency cut",
+      "expected": [
+        "outside",
+        "inside",
+        "july",
+        "provide",
+        "anti",
+        "apply",
+        "supply",
+        "decide",
+        "like",
+        "high",
+        "side",
+        "try"
+      ]
+    },
+    {
+      "anchor": "night",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "mostly one-syllable rhymes; Complex has to reach past the frequency cut",
+      "expected": [
+        "out",
+        "time",
+        "get",
+        "got",
+        "life",
+        "great",
+        "state",
+        "find",
+        "put",
+        "lot",
+        "let",
+        "set"
+      ]
+    },
+    {
+      "anchor": "night",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "mostly one-syllable rhymes; Complex has to reach past the frequency cut",
+      "expected": [
+        "about",
+        "out",
+        "time",
+        "get",
+        "got",
+        "life",
+        "great",
+        "state",
+        "find",
+        "put",
+        "lot",
+        "let"
+      ]
+    },
+    {
+      "anchor": "night",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "mostly one-syllable rhymes; Complex has to reach past the frequency cut",
+      "expected": [
+        "about",
+        "trying",
+        "behind",
+        "out",
+        "time",
+        "get",
+        "got",
+        "life",
+        "great",
+        "state",
+        "find",
+        "put"
       ]
     },
     {
@@ -183,6 +423,126 @@
       ]
     },
     {
+      "anchor": "road",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "the eval's own fixture anchor",
+      "expected": [
+        "know",
+        "go",
+        "old",
+        "show",
+        "told",
+        "job",
+        "hope",
+        "oh",
+        "low",
+        "co",
+        "hold",
+        "gold"
+      ]
+    },
+    {
+      "anchor": "road",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "the eval's own fixture anchor",
+      "expected": [
+        "know",
+        "go",
+        "old",
+        "show",
+        "told",
+        "job",
+        "hope",
+        "oh",
+        "ago",
+        "low",
+        "co",
+        "hold"
+      ]
+    },
+    {
+      "anchor": "road",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "the eval's own fixture anchor",
+      "expected": [
+        "ago",
+        "below",
+        "tomorrow",
+        "radio",
+        "photo",
+        "supposed",
+        "chicago",
+        "know",
+        "go",
+        "old",
+        "show",
+        "told"
+      ]
+    },
+    {
+      "anchor": "road",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "the eval's own fixture anchor",
+      "expected": [
+        "good",
+        "said",
+        "need",
+        "made",
+        "home",
+        "own",
+        "god",
+        "read",
+        "bad",
+        "head",
+        "side",
+        "whole"
+      ]
+    },
+    {
+      "anchor": "road",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "the eval's own fixture anchor",
+      "expected": [
+        "good",
+        "said",
+        "need",
+        "made",
+        "home",
+        "own",
+        "god",
+        "read",
+        "bad",
+        "head",
+        "side",
+        "whole"
+      ]
+    },
+    {
+      "anchor": "road",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "the eval's own fixture anchor",
+      "expected": [
+        "control",
+        "almost",
+        "outside",
+        "instead",
+        "include",
+        "good",
+        "said",
+        "need",
+        "made",
+        "home",
+        "own",
+        "god"
+      ]
+    },
+    {
       "anchor": "alone",
       "rhymeType": "PERFECT",
       "complexity": "SIMPLE",
@@ -240,6 +600,126 @@
         "leone",
         "simone",
         "testosterone"
+      ]
+    },
+    {
+      "anchor": "alone",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "mixed, with two-syllable rhymes near the top of the frequency order",
+      "expected": [
+        "know",
+        "go",
+        "home",
+        "show",
+        "oh",
+        "low",
+        "co",
+        "pro",
+        "grow",
+        "slow",
+        "throw",
+        "joe"
+      ]
+    },
+    {
+      "anchor": "alone",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "mixed, with two-syllable rhymes near the top of the frequency order",
+      "expected": [
+        "know",
+        "go",
+        "home",
+        "show",
+        "oh",
+        "ago",
+        "low",
+        "co",
+        "below",
+        "tomorrow",
+        "radio",
+        "photo"
+      ]
+    },
+    {
+      "anchor": "alone",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "mixed, with two-syllable rhymes near the top of the frequency order",
+      "expected": [
+        "ago",
+        "below",
+        "tomorrow",
+        "radio",
+        "photo",
+        "chicago",
+        "mexico",
+        "hello",
+        "studio",
+        "solo",
+        "audio",
+        "know"
+      ]
+    },
+    {
+      "anchor": "alone",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "mixed, with two-syllable rhymes near the top of the frequency order",
+      "expected": [
+        "one",
+        "down",
+        "man",
+        "old",
+        "done",
+        "told",
+        "mean",
+        "seen",
+        "men",
+        "job",
+        "line",
+        "run"
+      ]
+    },
+    {
+      "anchor": "alone",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "mixed, with two-syllable rhymes near the top of the frequency order",
+      "expected": [
+        "one",
+        "down",
+        "man",
+        "around",
+        "old",
+        "again",
+        "someone",
+        "done",
+        "told",
+        "mean",
+        "seen",
+        "men"
+      ]
+    },
+    {
+      "anchor": "alone",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "mixed, with two-syllable rhymes near the top of the frequency order",
+      "expected": [
+        "around",
+        "again",
+        "someone",
+        "everyone",
+        "control",
+        "almost",
+        "anyone",
+        "one",
+        "down",
+        "man",
+        "old",
+        "done"
       ]
     },
     {
@@ -303,6 +783,126 @@
       ]
     },
     {
+      "anchor": "glow",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "open vowel with many short rhymes",
+      "expected": [
+        "home",
+        "own",
+        "job",
+        "whole",
+        "hope",
+        "known",
+        "close",
+        "phone",
+        "road",
+        "shows",
+        "goes",
+        "role"
+      ]
+    },
+    {
+      "anchor": "glow",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "open vowel with many short rhymes",
+      "expected": [
+        "home",
+        "own",
+        "job",
+        "whole",
+        "hope",
+        "control",
+        "known",
+        "close",
+        "phone",
+        "road",
+        "shows",
+        "goes"
+      ]
+    },
+    {
+      "anchor": "glow",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "open vowel with many short rhymes",
+      "expected": [
+        "control",
+        "alone",
+        "episode",
+        "approach",
+        "photos",
+        "home",
+        "own",
+        "job",
+        "whole",
+        "hope",
+        "known",
+        "close"
+      ]
+    },
+    {
+      "anchor": "glow",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "open vowel with many short rhymes",
+      "expected": [
+        "old",
+        "told",
+        "post",
+        "hold",
+        "gold",
+        "cold",
+        "sold",
+        "goals",
+        "closed",
+        "coast",
+        "notes",
+        "host"
+      ]
+    },
+    {
+      "anchor": "glow",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "open vowel with many short rhymes",
+      "expected": [
+        "old",
+        "told",
+        "post",
+        "almost",
+        "hold",
+        "gold",
+        "cold",
+        "sold",
+        "goals",
+        "supposed",
+        "closed",
+        "coast"
+      ]
+    },
+    {
+      "anchor": "glow",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "open vowel with many short rhymes",
+      "expected": [
+        "almost",
+        "supposed",
+        "proposed",
+        "controlled",
+        "exposed",
+        "opposed",
+        "household",
+        "old",
+        "told",
+        "post",
+        "hold",
+        "gold"
+      ]
+    },
+    {
       "anchor": "time",
       "rhymeType": "PERFECT",
       "complexity": "SIMPLE",
@@ -360,6 +960,126 @@
         "daytime",
         "halftime",
         "paradigm"
+      ]
+    },
+    {
+      "anchor": "time",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "mixed",
+      "expected": [
+        "high",
+        "try",
+        "line",
+        "guy",
+        "buy",
+        "fine",
+        "sign",
+        "die",
+        "eye",
+        "hi",
+        "nine",
+        "lie"
+      ]
+    },
+    {
+      "anchor": "time",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "mixed",
+      "expected": [
+        "high",
+        "try",
+        "line",
+        "trying",
+        "guy",
+        "buy",
+        "sometimes",
+        "fine",
+        "online",
+        "design",
+        "july",
+        "sign"
+      ]
+    },
+    {
+      "anchor": "time",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "mixed",
+      "expected": [
+        "trying",
+        "sometimes",
+        "online",
+        "design",
+        "july",
+        "anti",
+        "apply",
+        "supply",
+        "identify",
+        "nearby",
+        "reply",
+        "high"
+      ]
+    },
+    {
+      "anchor": "time",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "mixed",
+      "expected": [
+        "like",
+        "right",
+        "life",
+        "home",
+        "same",
+        "come",
+        "find",
+        "game",
+        "team",
+        "name",
+        "night",
+        "live"
+      ]
+    },
+    {
+      "anchor": "time",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "mixed",
+      "expected": [
+        "like",
+        "right",
+        "life",
+        "home",
+        "same",
+        "come",
+        "find",
+        "game",
+        "team",
+        "name",
+        "night",
+        "live"
+      ]
+    },
+    {
+      "anchor": "time",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "mixed",
+      "expected": [
+        "become",
+        "behind",
+        "program",
+        "outside",
+        "like",
+        "right",
+        "life",
+        "home",
+        "same",
+        "come",
+        "find",
+        "game"
       ]
     },
     {
@@ -423,6 +1143,126 @@
       ]
     },
     {
+      "anchor": "world",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "five one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "girl",
+        "third",
+        "heard",
+        "word",
+        "bird",
+        "earl",
+        "pearl",
+        "herd",
+        "nerd",
+        "curl",
+        "blurred",
+        "stirred"
+      ]
+    },
+    {
+      "anchor": "world",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "five one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "girl",
+        "third",
+        "heard",
+        "word",
+        "bird",
+        "referred",
+        "occurred",
+        "transferred",
+        "preferred",
+        "earl",
+        "pearl",
+        "password"
+      ]
+    },
+    {
+      "anchor": "world",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "five one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "referred",
+        "occurred",
+        "transferred",
+        "preferred",
+        "password",
+        "absurd",
+        "incurred",
+        "deferred",
+        "overheard",
+        "conferred",
+        "unheard",
+        "keyword"
+      ]
+    },
+    {
+      "anchor": "world",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "five one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "first",
+        "work",
+        "years",
+        "old",
+        "called",
+        "told",
+        "turn",
+        "child",
+        "works",
+        "words",
+        "field",
+        "held"
+      ]
+    },
+    {
+      "anchor": "world",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "five one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "first",
+        "work",
+        "years",
+        "old",
+        "called",
+        "told",
+        "research",
+        "turn",
+        "child",
+        "works",
+        "current",
+        "words"
+      ]
+    },
+    {
+      "anchor": "world",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "five one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "research",
+        "current",
+        "return",
+        "first",
+        "work",
+        "years",
+        "old",
+        "called",
+        "told",
+        "turn",
+        "child",
+        "works"
+      ]
+    },
+    {
       "anchor": "love",
       "rhymeType": "PERFECT",
       "complexity": "SIMPLE",
@@ -483,6 +1323,126 @@
       ]
     },
     {
+      "anchor": "love",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "four one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "de",
+        "stuff",
+        "judge",
+        "plus",
+        "thus",
+        "touch",
+        "bus",
+        "tough",
+        "ca",
+        "le",
+        "rough",
+        "rush"
+      ]
+    },
+    {
+      "anchor": "love",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "four one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "enough",
+        "de",
+        "stuff",
+        "judge",
+        "plus",
+        "thus",
+        "touch",
+        "bus",
+        "tough",
+        "ca",
+        "discuss",
+        "le"
+      ]
+    },
+    {
+      "anchor": "love",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "four one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "enough",
+        "discuss",
+        "beloved",
+        "papa",
+        "de",
+        "stuff",
+        "judge",
+        "plus",
+        "thus",
+        "touch",
+        "bus",
+        "tough"
+      ]
+    },
+    {
+      "anchor": "love",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "four one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "one",
+        "up",
+        "come",
+        "give",
+        "done",
+        "live",
+        "once",
+        "run",
+        "five",
+        "young",
+        "fuck",
+        "comes"
+      ]
+    },
+    {
+      "anchor": "love",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "four one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "one",
+        "up",
+        "come",
+        "give",
+        "someone",
+        "done",
+        "live",
+        "once",
+        "believe",
+        "run",
+        "everyone",
+        "five"
+      ]
+    },
+    {
+      "anchor": "love",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "four one-syllable rhymes: the Simple list falls back to the remaining words",
+      "expected": [
+        "someone",
+        "believe",
+        "everyone",
+        "become",
+        "anyone",
+        "results",
+        "result",
+        "one",
+        "up",
+        "come",
+        "give",
+        "done"
+      ]
+    },
+    {
       "anchor": "river",
       "rhymeType": "PERFECT",
       "complexity": "SIMPLE",
@@ -543,6 +1503,126 @@
       ]
     },
     {
+      "anchor": "river",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "every rhyme has two or more syllables: all three lists are identical",
+      "expected": [
+        "silver",
+        "delivered",
+        "differ",
+        "fisher",
+        "delivers",
+        "pitcher",
+        "richer",
+        "fischer",
+        "caregivers",
+        "wither",
+        "shivers",
+        "scissor"
+      ]
+    },
+    {
+      "anchor": "river",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "every rhyme has two or more syllables: all three lists are identical",
+      "expected": [
+        "silver",
+        "delivered",
+        "differ",
+        "fisher",
+        "delivers",
+        "pitcher",
+        "richer",
+        "fischer",
+        "caregivers",
+        "wither",
+        "shivers",
+        "scissor"
+      ]
+    },
+    {
+      "anchor": "river",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "every rhyme has two or more syllables: all three lists are identical",
+      "expected": [
+        "silver",
+        "delivered",
+        "differ",
+        "fisher",
+        "delivers",
+        "pitcher",
+        "richer",
+        "fischer",
+        "caregivers",
+        "wither",
+        "shivers",
+        "scissor"
+      ]
+    },
+    {
+      "anchor": "river",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "every rhyme has two or more syllables: all three lists are identical",
+      "expected": [
+        "over",
+        "never",
+        "ever",
+        "picture",
+        "considered",
+        "cover",
+        "figure",
+        "consider",
+        "sister",
+        "pictures",
+        "winter",
+        "twitter"
+      ]
+    },
+    {
+      "anchor": "river",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "every rhyme has two or more syllables: all three lists are identical",
+      "expected": [
+        "over",
+        "never",
+        "ever",
+        "picture",
+        "considered",
+        "cover",
+        "figure",
+        "consider",
+        "sister",
+        "pictures",
+        "winter",
+        "twitter"
+      ]
+    },
+    {
+      "anchor": "river",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "every rhyme has two or more syllables: all three lists are identical",
+      "expected": [
+        "over",
+        "never",
+        "ever",
+        "picture",
+        "considered",
+        "cover",
+        "figure",
+        "consider",
+        "sister",
+        "pictures",
+        "winter",
+        "twitter"
+      ]
+    },
+    {
       "anchor": "arrival",
       "rhymeType": "PERFECT",
       "complexity": "SIMPLE",
@@ -582,6 +1662,126 @@
       ]
     },
     {
+      "anchor": "arrival",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "fewer than twelve rhymes and no one-syllable rhyme at all",
+      "expected": [
+        "aisle",
+        "trial",
+        "rifle",
+        "denial",
+        "rivals",
+        "dial",
+        "nigel",
+        "saliva",
+        "eiffel",
+        "vial",
+        "stifle",
+        "trifle"
+      ]
+    },
+    {
+      "anchor": "arrival",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "fewer than twelve rhymes and no one-syllable rhyme at all",
+      "expected": [
+        "trial",
+        "rifle",
+        "denial",
+        "rivals",
+        "dial",
+        "nigel",
+        "aisle",
+        "saliva",
+        "eiffel",
+        "vial",
+        "stifle",
+        "trifle"
+      ]
+    },
+    {
+      "anchor": "arrival",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "fewer than twelve rhymes and no one-syllable rhyme at all",
+      "expected": [
+        "trial",
+        "rifle",
+        "denial",
+        "rivals",
+        "dial",
+        "nigel",
+        "saliva",
+        "eiffel",
+        "vial",
+        "stifle",
+        "trifle",
+        "archrivals"
+      ]
+    },
+    {
+      "anchor": "arrival",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "fewer than twelve rhymes and no one-syllable rhyme at all",
+      "expected": [
+        "miles",
+        "level",
+        "final",
+        "private",
+        "science",
+        "china",
+        "title",
+        "michael",
+        "island",
+        "travel",
+        "civil",
+        "prices"
+      ]
+    },
+    {
+      "anchor": "arrival",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "fewer than twelve rhymes and no one-syllable rhyme at all",
+      "expected": [
+        "level",
+        "final",
+        "private",
+        "science",
+        "china",
+        "title",
+        "michael",
+        "island",
+        "miles",
+        "travel",
+        "civil",
+        "prices"
+      ]
+    },
+    {
+      "anchor": "arrival",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "fewer than twelve rhymes and no one-syllable rhyme at all",
+      "expected": [
+        "level",
+        "final",
+        "private",
+        "science",
+        "china",
+        "title",
+        "michael",
+        "island",
+        "travel",
+        "civil",
+        "prices",
+        "highest"
+      ]
+    },
+    {
       "anchor": "surrender",
       "rhymeType": "PERFECT",
       "complexity": "SIMPLE",
@@ -639,6 +1839,126 @@
         "slender",
         "bartender",
         "blender"
+      ]
+    },
+    {
+      "anchor": "surrender",
+      "rhymeType": "NEAR",
+      "complexity": "SIMPLE",
+      "note": "every rhyme has two or more syllables",
+      "expected": [
+        "center",
+        "centre",
+        "enter",
+        "defenders",
+        "mentor",
+        "header",
+        "rendered",
+        "offenders",
+        "presenter",
+        "vendors",
+        "lenders",
+        "inventor"
+      ]
+    },
+    {
+      "anchor": "surrender",
+      "rhymeType": "NEAR",
+      "complexity": "MODERATE",
+      "note": "every rhyme has two or more syllables",
+      "expected": [
+        "center",
+        "centre",
+        "enter",
+        "defenders",
+        "mentor",
+        "header",
+        "rendered",
+        "offenders",
+        "presenter",
+        "vendors",
+        "lenders",
+        "inventor"
+      ]
+    },
+    {
+      "anchor": "surrender",
+      "rhymeType": "NEAR",
+      "complexity": "COMPLEX",
+      "note": "every rhyme has two or more syllables",
+      "expected": [
+        "center",
+        "centre",
+        "enter",
+        "defenders",
+        "mentor",
+        "header",
+        "rendered",
+        "offenders",
+        "presenter",
+        "vendors",
+        "lenders",
+        "inventor"
+      ]
+    },
+    {
+      "anchor": "surrender",
+      "rhymeType": "SLANT",
+      "complexity": "SIMPLE",
+      "note": "every rhyme has two or more syllables",
+      "expected": [
+        "never",
+        "better",
+        "under",
+        "ever",
+        "together",
+        "remember",
+        "members",
+        "record",
+        "member",
+        "director",
+        "september",
+        "november"
+      ]
+    },
+    {
+      "anchor": "surrender",
+      "rhymeType": "SLANT",
+      "complexity": "MODERATE",
+      "note": "every rhyme has two or more syllables",
+      "expected": [
+        "never",
+        "better",
+        "under",
+        "ever",
+        "together",
+        "remember",
+        "members",
+        "record",
+        "member",
+        "director",
+        "september",
+        "november"
+      ]
+    },
+    {
+      "anchor": "surrender",
+      "rhymeType": "SLANT",
+      "complexity": "COMPLEX",
+      "note": "every rhyme has two or more syllables",
+      "expected": [
+        "never",
+        "better",
+        "under",
+        "ever",
+        "together",
+        "remember",
+        "members",
+        "record",
+        "member",
+        "director",
+        "september",
+        "november"
       ]
     }
   ]

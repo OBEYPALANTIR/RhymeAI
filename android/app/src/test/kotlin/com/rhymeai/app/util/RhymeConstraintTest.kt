@@ -79,61 +79,6 @@ class RhymeConstraintTest {
     }
 
     @Test
-    fun filterAndRankAdmitsOnlyTheRequestedRelation() {
-        val lines = listOf(
-            "The window glowed",
-            "Words I never wrote",
-            "Cold as stone",
-            "Everything burned red",
-            "Walking through the night"
-        )
-
-        assertEquals(
-            listOf("Words I never wrote"),
-            RhymeConstraint.filterAndRank(lines, "Down the road", RhymeType.NEAR, 2, dictionary)
-        )
-        assertEquals(
-            listOf("Cold as stone", "Everything burned red"),
-            RhymeConstraint.filterAndRank(lines, "Down the road", RhymeType.SLANT, 2, dictionary)
-        )
-        assertEquals(
-            listOf("The window glowed"),
-            RhymeConstraint.filterAndRank(lines, "Down the road", RhymeType.PERFECT, 2, dictionary)
-        )
-    }
-
-    @Test
-    fun nearRequestKeepsOnlyNearLinesFromAMixedResponse() {
-        // Perfect, near, slant, and non-rhyming endings, perfect first.
-        val lines = listOf(
-            "The lonely window showed",
-            "It glowed",
-            "Something that I never wrote",
-            "Cold as stone",
-            "Everything burned red",
-            "Walking through the night",
-            "I wrote"
-        )
-
-        // Closest syllable count to the three-syllable target first.
-        assertEquals(
-            listOf("I wrote", "Something that I never wrote"),
-            RhymeConstraint.filterAndRank(lines, "Down the road", RhymeType.NEAR, 6, dictionary)
-        )
-    }
-
-    @Test
-    fun slantRequestKeepsSlantLinesBehindSixPerfectAndNearOnes() {
-        val deviations = listOf(
-            "The window glowed", "The lantern showed", "Words I never wrote",
-            "It glowed", "It showed", "The note I wrote"
-        )
-        val slant = listOf("Cold as stone", "Everything burned red")
-
-        assertEquals(slant, RhymeConstraint.filterAndRank(deviations + slant, "Down the road", RhymeType.SLANT, 6, dictionary))
-    }
-
-    @Test
     fun rhymeTiersNameEveryRelationTruthfully() {
         assertEquals(2, RhymeConstraint.rhymeTier("The window glowed", "road", dictionary))
         assertEquals(1, RhymeConstraint.rhymeTier("Words I never wrote", "road", dictionary))
@@ -174,7 +119,7 @@ class RhymeConstraintTest {
     }
 
     @Test
-    fun filterAndRankClassifiesReturnedEndingsOutsidePromptCap() {
+    fun rhymeTierClassifiesReturnedEndingsOutsidePromptCap() {
         val words = (0 until 61).map { "zz" + "a".repeat(it + 2) }
         val crowded = PronunciationDictionary.fromLines(
             sequenceOf("anchor\tR AY1 M") + words.asSequence().map { "$it\tR AY1 M" }
@@ -184,55 +129,7 @@ class RhymeConstraintTest {
         val line = "Beyond the $outsideCap"
 
         assertEquals(2, RhymeConstraint.rhymeTier(line, "anchor", crowded))
-        assertEquals(listOf(line), RhymeConstraint.filterAndRank(listOf(line), "Find the anchor", RhymeType.PERFECT, 1, crowded))
-    }
-
-    @Test
-    fun filterAndRankPrefersRhymingLinesRegardlessOfOrder() {
-        val rhyming = "We chase the fading light"
-        val nonRhyming = "Nothing here can save us"
-
-        assertEquals(listOf(rhyming), RhymeConstraint.filterAndRank(listOf(nonRhyming, rhyming), "We own the night", RhymeType.PERFECT, 1, bundled))
-        assertEquals(listOf(rhyming), RhymeConstraint.filterAndRank(listOf(rhyming, nonRhyming), "We own the night", RhymeType.PERFECT, 1, bundled))
-    }
-
-    @Test
-    fun filterAndRankRejectsKnownNonRhymingLines() {
-        val rhyming = "Out beyond the light"
-        val ranked = RhymeConstraint.filterAndRank(
-            listOf("Nothing here can save us", rhyming, "The morning comes too soon"),
-            "We own the night", RhymeType.PERFECT, 3, bundled
-        )
-
-        assertEquals(listOf(rhyming), ranked)
-    }
-
-    @Test
-    fun filterAndRankReturnsEmptyWhenKnownTargetHasNoMatchingSuggestion() {
-        val lines = listOf("The morning comes too soon", "Nothing here can save us")
-
-        assertTrue(RhymeConstraint.filterAndRank(lines, "We own the night", RhymeType.PERFECT, 2, bundled).isEmpty())
-        // No rhyme required: an unknown target word keeps arrival order.
-        assertEquals(listOf(lines[0]), RhymeConstraint.filterAndRank(lines, "Surrounded by the zzzqxv", RhymeType.PERFECT, 1, bundled))
-    }
-
-    @Test
-    fun filterAndRankBreaksTierTiesBySyllableDistance() {
-        val ranked = RhymeConstraint.filterAndRank(
-            listOf("The lonely window showed", "It glowed"), "Down the road", RhymeType.PERFECT, 2, dictionary
-        )
-
-        assertEquals(listOf("It glowed", "The lonely window showed"), ranked)
-    }
-
-    @Test
-    fun filterAndRankDedupesByNormalizedText() {
-        val line = "We chase the light"
-
-        assertEquals(
-            listOf(line),
-            RhymeConstraint.filterAndRank(listOf(line, "WE CHASE THE LIGHT!!"), "We own the night", RhymeType.PERFECT, 6, bundled)
-        )
+        assertEquals(2, RhymeLineFilter.create("Find the anchor", RhymeType.PERFECT, crowded)?.tier(line))
     }
 
     @Test

@@ -1,0 +1,2365 @@
+{
+  "model": "/Users/tylermanring/models/Qwen3.5-4B-UD-Q4_K_XL.gguf",
+  "template": "qwen",
+  "sampler": {
+    "ctx_size": 2048,
+    "temperature": 0.8,
+    "top_k": 40,
+    "top_p": 0.95,
+    "n_predict": 256,
+    "stop": [
+      "<|im_end|>"
+    ]
+  },
+  "case_count": 43,
+  "results": [
+    {
+      "id": "sugg_verse_perfect_simple",
+      "task": "suggestions",
+      "prompt_chars": 1712,
+      "latency_s": 1.785,
+      "tokens_predicted": 103,
+      "output": "Static fades away as I go low\nThe past is a story I know\nThe road stretches out above\nI'm ready for the show\nEven the dust knows how to flow\nTomorrow will not feel the same\nThe engine hums through the show\nI'll take the road and the glow\nThe distance grows so high above\nNothing stays the same\nThe radio plays its old show\nI know where the road goes slow\nEven the dust knows how to glow\nTomorrow will not feel the same",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 14,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_14"
+              ]
+            },
+            {
+              "line_index": 13,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "per_line": [
+            {
+              "line": "Static fades away as I go low",
+              "end_word": "low",
+              "tier": "candidate"
+            },
+            {
+              "line": "The past is a story I know",
+              "end_word": "know",
+              "tier": "candidate"
+            },
+            {
+              "line": "The road stretches out above",
+              "end_word": "above",
+              "tier": "miss"
+            },
+            {
+              "line": "I'm ready for the show",
+              "end_word": "show",
+              "tier": "candidate"
+            },
+            {
+              "line": "Even the dust knows how to flow",
+              "end_word": "flow",
+              "tier": "rhymes"
+            },
+            {
+              "line": "Tomorrow will not feel the same",
+              "end_word": "same",
+              "tier": "miss"
+            },
+            {
+              "line": "The engine hums through the show",
+              "end_word": "show",
+              "tier": "candidate"
+            },
+            {
+              "line": "I'll take the road and the glow",
+              "end_word": "glow",
+              "tier": "miss"
+            },
+            {
+              "line": "The distance grows so high above",
+              "end_word": "above",
+              "tier": "miss"
+            },
+            {
+              "line": "Nothing stays the same",
+              "end_word": "same",
+              "tier": "miss"
+            },
+            {
+              "line": "The radio plays its old show",
+              "end_word": "show",
+              "tier": "candidate"
+            },
+            {
+              "line": "I know where the road goes slow",
+              "end_word": "slow",
+              "tier": "rhymes"
+            },
+            {
+              "line": "Even the dust knows how to glow",
+              "end_word": "glow",
+              "tier": "miss"
+            },
+            {
+              "line": "Tomorrow will not feel the same",
+              "end_word": "same",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 5,
+          "rhymes": 2,
+          "miss": 7
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_perfect_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1699,
+      "latency_s": 1.213,
+      "tokens_predicted": 61,
+      "output": "The static fades but I can't stop showing how I used to know\nThe roads ahead are leading nowhere now\nThough I remember everything that grew\nI'll be below where the old memories are flowing\nTomorrow's a different story for me to go\nThe radio plays songs that I could never know",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "per_line": [
+            {
+              "line": "The static fades but I can't stop showing how I used to know",
+              "end_word": "know",
+              "tier": "candidate"
+            },
+            {
+              "line": "The roads ahead are leading nowhere now",
+              "end_word": "now",
+              "tier": "miss"
+            },
+            {
+              "line": "Though I remember everything that grew",
+              "end_word": "grew",
+              "tier": "miss"
+            },
+            {
+              "line": "I'll be below where the old memories are flowing",
+              "end_word": "flowing",
+              "tier": "miss"
+            },
+            {
+              "line": "Tomorrow's a different story for me to go",
+              "end_word": "go",
+              "tier": "candidate"
+            },
+            {
+              "line": "The radio plays songs that I could never know",
+              "end_word": "know",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 3,
+          "rhymes": 0,
+          "miss": 3
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_perfect_complex",
+      "task": "suggestions",
+      "prompt_chars": 1744,
+      "latency_s": 3.013,
+      "tokens_predicted": 193,
+      "output": "Static hums beneath the engine's low\nWhere memories drift in a fog so deep\nThe road ahead won't show us how\nTo leave the silence of a quiet sleep\n\nThe morning light will fade and go\nBefore we learn the truth we seek\nNo distant shore will make it show\nA place where stars will never break\n\nThe story told is just a show\nOf dust that settles in the gray\nA different kind of light below\nWhere we might find our lost day\n\nThe wheels are turning now, we go\nAnd leave the ghosts of yesterday\nThe sky above will still be so\nBright against the fading gray\n\nThe static fades to make it know\nWe've left the town behind today\nNo more will shadows hold it low\nOr let the echoes play their way\n\nThe engine's roar will tell us so\nThat every mile is now a flight\nTo find the truth that lies below\nWhere freedom lives in pure delight",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 24,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_24"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "per_line": [
+            {
+              "line": "Static hums beneath the engine's low",
+              "end_word": "low",
+              "tier": "candidate"
+            },
+            {
+              "line": "Where memories drift in a fog so deep",
+              "end_word": "deep",
+              "tier": "miss"
+            },
+            {
+              "line": "The road ahead won't show us how",
+              "end_word": "how",
+              "tier": "miss"
+            },
+            {
+              "line": "To leave the silence of a quiet sleep",
+              "end_word": "sleep",
+              "tier": "miss"
+            },
+            {
+              "line": "The morning light will fade and go",
+              "end_word": "go",
+              "tier": "candidate"
+            },
+            {
+              "line": "Before we learn the truth we seek",
+              "end_word": "seek",
+              "tier": "miss"
+            },
+            {
+              "line": "No distant shore will make it show",
+              "end_word": "show",
+              "tier": "candidate"
+            },
+            {
+              "line": "A place where stars will never break",
+              "end_word": "break",
+              "tier": "miss"
+            },
+            {
+              "line": "The story told is just a show",
+              "end_word": "show",
+              "tier": "candidate"
+            },
+            {
+              "line": "Of dust that settles in the gray",
+              "end_word": "gray",
+              "tier": "miss"
+            },
+            {
+              "line": "A different kind of light below",
+              "end_word": "below",
+              "tier": "candidate"
+            },
+            {
+              "line": "Where we might find our lost day",
+              "end_word": "day",
+              "tier": "miss"
+            },
+            {
+              "line": "The wheels are turning now, we go",
+              "end_word": "go",
+              "tier": "candidate"
+            },
+            {
+              "line": "And leave the ghosts of yesterday",
+              "end_word": "yesterday",
+              "tier": "miss"
+            },
+            {
+              "line": "The sky above will still be so",
+              "end_word": "so",
+              "tier": "miss"
+            },
+            {
+              "line": "Bright against the fading gray",
+              "end_word": "gray",
+              "tier": "miss"
+            },
+            {
+              "line": "The static fades to make it know",
+              "end_word": "know",
+              "tier": "candidate"
+            },
+            {
+              "line": "We've left the town behind today",
+              "end_word": "today",
+              "tier": "miss"
+            },
+            {
+              "line": "No more will shadows hold it low",
+              "end_word": "low",
+              "tier": "candidate"
+            },
+            {
+              "line": "Or let the echoes play their way",
+              "end_word": "way",
+              "tier": "miss"
+            },
+            {
+              "line": "The engine's roar will tell us so",
+              "end_word": "so",
+              "tier": "miss"
+            },
+            {
+              "line": "That every mile is now a flight",
+              "end_word": "flight",
+              "tier": "miss"
+            },
+            {
+              "line": "To find the truth that lies below",
+              "end_word": "below",
+              "tier": "candidate"
+            },
+            {
+              "line": "Where freedom lives in pure delight",
+              "end_word": "delight",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 9,
+          "rhymes": 0,
+          "miss": 15
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_new_sound_simple",
+      "task": "suggestions",
+      "prompt_chars": 1401,
+      "latency_s": 1.187,
+      "tokens_predicted": 64,
+      "output": "The streetlights fade and turn to gold\nI wake up in a different town\nThe coffee cup is all my own\nAnd finally I can breathe out loud\nThe mail is waiting for my hand\nWith nowhere left to call my land\nI leave the shadows in my hand\nAnd watch the empty street extend",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 8,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_8"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_new_sound_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1388,
+      "latency_s": 0.814,
+      "tokens_predicted": 37,
+      "output": "The porch light buzzes like a trapped bee\nMy shadow stretches where I used to sleep\nThe map is blank with nowhere to keep\nWhile memories of rain and mud I keep",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 4,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_4"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_new_sound_complex",
+      "task": "suggestions",
+      "prompt_chars": 1433,
+      "latency_s": 0.744,
+      "tokens_predicted": 31,
+      "output": "The radio keeps playing static songs\nDust is dancing on the dashboard glow\nAs shadows stretch across the dusty floor\nWhere memories of childhood quietly roar",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 4,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_4"
+              ]
+            },
+            {
+              "line_index": 0,
+              "violations": [
+                "copies_existing_line"
+              ]
+            },
+            {
+              "line_index": 1,
+              "violations": [
+                "copies_existing_line"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sugg_bridge_perfect_simple",
+      "task": "suggestions",
+      "prompt_chars": 1737,
+      "latency_s": 2.085,
+      "tokens_predicted": 124,
+      "output": "All the roads we took are now frozen\nWe will find our way when the night is done\nAll the doors that we locked are now open\nWe will find our way when the night is gone\nAll the signs that we lost are now found\nWe will find our way when the night is known\nAll the voices we heard are now gone\nWe will find our way when the night is done\nAll the paths that we walked are now stone\nWe will find our way when the night is known\nAll the lights that we lost are now shown\nWe will find our way when the night is gone",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 12,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_12"
+              ]
+            },
+            {
+              "line_index": 7,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 9,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 11,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "All the roads we took are now frozen",
+              "end_word": "frozen",
+              "tier": "miss"
+            },
+            {
+              "line": "We will find our way when the night is done",
+              "end_word": "done",
+              "tier": "miss"
+            },
+            {
+              "line": "All the doors that we locked are now open",
+              "end_word": "open",
+              "tier": "rhymes"
+            },
+            {
+              "line": "We will find our way when the night is gone",
+              "end_word": "gone",
+              "tier": "miss"
+            },
+            {
+              "line": "All the signs that we lost are now found",
+              "end_word": "found",
+              "tier": "miss"
+            },
+            {
+              "line": "We will find our way when the night is known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "All the voices we heard are now gone",
+              "end_word": "gone",
+              "tier": "miss"
+            },
+            {
+              "line": "We will find our way when the night is done",
+              "end_word": "done",
+              "tier": "miss"
+            },
+            {
+              "line": "All the paths that we walked are now stone",
+              "end_word": "stone",
+              "tier": "miss"
+            },
+            {
+              "line": "We will find our way when the night is known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "All the lights that we lost are now shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "We will find our way when the night is gone",
+              "end_word": "gone",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 3,
+          "rhymes": 1,
+          "miss": 8
+        }
+      }
+    },
+    {
+      "id": "sugg_bridge_perfect_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1724,
+      "latency_s": 0.973,
+      "tokens_predicted": 42,
+      "output": "No more roads can be known\nNo more paths can be shown\nNo more signs will be given\nNo more hints can be found\nNo more signs can be shown\nNo more roads can be known",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 6,
+          "violations": [
+            {
+              "line_index": 5,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "No more roads can be known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "No more paths can be shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "No more signs will be given",
+              "end_word": "given",
+              "tier": "miss"
+            },
+            {
+              "line": "No more hints can be found",
+              "end_word": "found",
+              "tier": "miss"
+            },
+            {
+              "line": "No more signs can be shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "No more roads can be known",
+              "end_word": "known",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 4,
+          "rhymes": 0,
+          "miss": 2
+        }
+      }
+    },
+    {
+      "id": "sugg_bridge_perfect_complex",
+      "task": "suggestions",
+      "prompt_chars": 1769,
+      "latency_s": 3.881,
+      "tokens_predicted": 256,
+      "output": "Though ancient charts have hardened to a stone\nThe compass in our heads will never know\nA sudden wind could shift the frozen zone\nWe'll forge a new route on a borrowed phone\nThe fog may blur the path we've grown to know\nBut hope remains the only bone we'll show\nWhen silence breaks the winter's lonely tone\nWe'll find the answer that the unknown phone\nThe old roads led us where the unknown bone\nWith every step we made upon the stone\nThe future's written on a new unknown zone\nNo map can show the path to grown or phone\nOur spirits rise beyond the known and stone\nThe light will break the frozen zone alone\nAll the maps we drew are set in stone\nThe stars will guide us when we're truly shown\nThe winter's cold can't steal the warmth we know\nWe'll walk the path no map could ever show\nThe ice will crack beneath the grown and known\nWe'll find the light beyond the stone and tone\nWhen shadows fade the winter's final zone\nWe'll reach the end of every unknown loan\nThe stars will guide us through the frozen bone\nWe'll find the light beyond the stone and shown\nThe ice will crack beneath the grown and tone\nWe'll walk the",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 26,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_26"
+              ]
+            },
+            {
+              "line_index": 14,
+              "violations": [
+                "copies_existing_line"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "Though ancient charts have hardened to a stone",
+              "end_word": "stone",
+              "tier": "miss"
+            },
+            {
+              "line": "The compass in our heads will never know",
+              "end_word": "know",
+              "tier": "rhymes"
+            },
+            {
+              "line": "A sudden wind could shift the frozen zone",
+              "end_word": "zone",
+              "tier": "candidate"
+            },
+            {
+              "line": "We'll forge a new route on a borrowed phone",
+              "end_word": "phone",
+              "tier": "candidate"
+            },
+            {
+              "line": "The fog may blur the path we've grown to know",
+              "end_word": "know",
+              "tier": "rhymes"
+            },
+            {
+              "line": "But hope remains the only bone we'll show",
+              "end_word": "show",
+              "tier": "rhymes"
+            },
+            {
+              "line": "When silence breaks the winter's lonely tone",
+              "end_word": "tone",
+              "tier": "candidate"
+            },
+            {
+              "line": "We'll find the answer that the unknown phone",
+              "end_word": "phone",
+              "tier": "candidate"
+            },
+            {
+              "line": "The old roads led us where the unknown bone",
+              "end_word": "bone",
+              "tier": "candidate"
+            },
+            {
+              "line": "With every step we made upon the stone",
+              "end_word": "stone",
+              "tier": "miss"
+            },
+            {
+              "line": "The future's written on a new unknown zone",
+              "end_word": "zone",
+              "tier": "candidate"
+            },
+            {
+              "line": "No map can show the path to grown or phone",
+              "end_word": "phone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Our spirits rise beyond the known and stone",
+              "end_word": "stone",
+              "tier": "miss"
+            },
+            {
+              "line": "The light will break the frozen zone alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            },
+            {
+              "line": "All the maps we drew are set in stone",
+              "end_word": "stone",
+              "tier": "miss"
+            },
+            {
+              "line": "The stars will guide us when we're truly shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "The winter's cold can't steal the warmth we know",
+              "end_word": "know",
+              "tier": "rhymes"
+            },
+            {
+              "line": "We'll walk the path no map could ever show",
+              "end_word": "show",
+              "tier": "rhymes"
+            },
+            {
+              "line": "The ice will crack beneath the grown and known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "We'll find the light beyond the stone and tone",
+              "end_word": "tone",
+              "tier": "candidate"
+            },
+            {
+              "line": "When shadows fade the winter's final zone",
+              "end_word": "zone",
+              "tier": "candidate"
+            },
+            {
+              "line": "We'll reach the end of every unknown loan",
+              "end_word": "loan",
+              "tier": "candidate"
+            },
+            {
+              "line": "The stars will guide us through the frozen bone",
+              "end_word": "bone",
+              "tier": "candidate"
+            },
+            {
+              "line": "We'll find the light beyond the stone and shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "The ice will crack beneath the grown and tone",
+              "end_word": "tone",
+              "tier": "candidate"
+            },
+            {
+              "line": "We'll walk the",
+              "end_word": "the",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 16,
+          "rhymes": 5,
+          "miss": 5
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_repeat_simple",
+      "task": "suggestions",
+      "prompt_chars": 1939,
+      "latency_s": 1.019,
+      "tokens_predicted": 43,
+      "output": "Every star is begging to retire\nNew buyers rushing to the store\nDon't let a liar steal your fire\nKeep the desire burning inside\nThe city demands that we acquire\nRunning wild in the electric tide",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "wire",
+          "per_line": [
+            {
+              "line": "Every star is begging to retire",
+              "end_word": "retire",
+              "tier": "candidate"
+            },
+            {
+              "line": "New buyers rushing to the store",
+              "end_word": "store",
+              "tier": "miss"
+            },
+            {
+              "line": "Don't let a liar steal your fire",
+              "end_word": "fire",
+              "tier": "candidate"
+            },
+            {
+              "line": "Keep the desire burning inside",
+              "end_word": "inside",
+              "tier": "miss"
+            },
+            {
+              "line": "The city demands that we acquire",
+              "end_word": "acquire",
+              "tier": "candidate"
+            },
+            {
+              "line": "Running wild in the electric tide",
+              "end_word": "tide",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 3,
+          "rhymes": 0,
+          "miss": 3
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_repeat_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1926,
+      "latency_s": 0.844,
+      "tokens_predicted": 30,
+      "output": "We are running on a live wire\nEvery heartbeat taking us higher\nHearts lit up like a signal fire\nNever letting go of this desire",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 4,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_4"
+              ]
+            },
+            {
+              "line_index": 0,
+              "violations": [
+                "copies_existing_line"
+              ]
+            },
+            {
+              "line_index": 1,
+              "violations": [
+                "copies_existing_line"
+              ]
+            },
+            {
+              "line_index": 2,
+              "violations": [
+                "copies_existing_line"
+              ]
+            },
+            {
+              "line_index": 3,
+              "violations": [
+                "copies_existing_line"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "wire",
+          "per_line": [
+            {
+              "line": "We are running on a live wire",
+              "end_word": "wire",
+              "tier": "miss"
+            },
+            {
+              "line": "Every heartbeat taking us higher",
+              "end_word": "higher",
+              "tier": "candidate"
+            },
+            {
+              "line": "Hearts lit up like a signal fire",
+              "end_word": "fire",
+              "tier": "candidate"
+            },
+            {
+              "line": "Never letting go of this desire",
+              "end_word": "desire",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 3,
+          "rhymes": 0,
+          "miss": 1
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_repeat_complex",
+      "task": "suggestions",
+      "prompt_chars": 1971,
+      "latency_s": 0.99,
+      "tokens_predicted": 41,
+      "output": "Every shadow chasing us higher\nWe chase the fire through the wire\nNothing can make us retire\nNo buyer could buy us before\nEvery liar must tire\nWe require the whole of the wire\n",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "wire",
+          "per_line": [
+            {
+              "line": "Every shadow chasing us higher",
+              "end_word": "higher",
+              "tier": "candidate"
+            },
+            {
+              "line": "We chase the fire through the wire",
+              "end_word": "wire",
+              "tier": "miss"
+            },
+            {
+              "line": "Nothing can make us retire",
+              "end_word": "retire",
+              "tier": "candidate"
+            },
+            {
+              "line": "No buyer could buy us before",
+              "end_word": "before",
+              "tier": "miss"
+            },
+            {
+              "line": "Every liar must tire",
+              "end_word": "tire",
+              "tier": "candidate"
+            },
+            {
+              "line": "We require the whole of the wire",
+              "end_word": "wire",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 3,
+          "rhymes": 0,
+          "miss": 3
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_first_perfect",
+      "task": "suggestions",
+      "prompt_chars": 1709,
+      "latency_s": 1.08,
+      "tokens_predicted": 51,
+      "output": "Grow where the broken concrete is stone\nWait for the world to finally own\nKeep the secret that only you have known\nStand firm in the zone where you were shown\nLet the quiet grow until it is grown\nTrust the silence in the unknown",
+      "score": {
+        "format": {
+          "passed": true,
+          "line_count": 6,
+          "violations": []
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "Grow where the broken concrete is stone",
+              "end_word": "stone",
+              "tier": "miss"
+            },
+            {
+              "line": "Wait for the world to finally own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Keep the secret that only you have known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "Stand firm in the zone where you were shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Let the quiet grow until it is grown",
+              "end_word": "grown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Trust the silence in the unknown",
+              "end_word": "unknown",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 5,
+          "rhymes": 0,
+          "miss": 1
+        }
+      }
+    },
+    {
+      "id": "sugg_chorus_first_near",
+      "task": "suggestions",
+      "prompt_chars": 1719,
+      "latency_s": 3.717,
+      "tokens_predicted": 245,
+      "output": "Grow until you are finally your own\nReach for a sun you have never shown\nRoots hold tight when the cold wind moans\nNothing that blooms ever grows alone\nGrow until you are finally your own\nReach for a sun you have never shown\nRoots hold tight when the cold wind moans\nNothing that blooms ever grows alone\nGrow until you are finally your own\nReach for a sun you have never shown\nRoots hold tight when the cold wind moans\nNothing that blooms ever grows alone\nGrow until you are finally your own\nReach for a sun you have never shown\nRoots hold tight when the cold wind moans\nNothing that blooms ever grows alone\nGrow until you are finally your own\nReach for a sun you have never shown\nRoots hold tight when the cold wind moans\nNothing that blooms ever grows alone\nGrow until you are finally your own\nReach for a sun you have never shown\nRoots hold tight when the cold wind moans\nNothing that blooms ever grows alone\nGrow until you are finally your own\nReach for a sun you have never shown\nRoots hold tight when the cold wind moans\nNothing that blooms ever grows alone",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 28,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_28"
+              ]
+            },
+            {
+              "line_index": 2,
+              "violations": [
+                "copies_existing_line"
+              ]
+            },
+            {
+              "line_index": 3,
+              "violations": [
+                "copies_existing_line"
+              ]
+            },
+            {
+              "line_index": 4,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 5,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 6,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 7,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 8,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 9,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 10,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 11,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 12,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 13,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 14,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 15,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 16,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 17,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 18,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 19,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 20,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 21,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 22,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 23,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 24,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 25,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 26,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 27,
+              "violations": [
+                "copies_existing_line",
+                "duplicate_suggestion"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "Grow until you are finally your own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Reach for a sun you have never shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Roots hold tight when the cold wind moans",
+              "end_word": "moans",
+              "tier": "miss"
+            },
+            {
+              "line": "Nothing that blooms ever grows alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Grow until you are finally your own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Reach for a sun you have never shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Roots hold tight when the cold wind moans",
+              "end_word": "moans",
+              "tier": "miss"
+            },
+            {
+              "line": "Nothing that blooms ever grows alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Grow until you are finally your own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Reach for a sun you have never shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Roots hold tight when the cold wind moans",
+              "end_word": "moans",
+              "tier": "miss"
+            },
+            {
+              "line": "Nothing that blooms ever grows alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Grow until you are finally your own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Reach for a sun you have never shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Roots hold tight when the cold wind moans",
+              "end_word": "moans",
+              "tier": "miss"
+            },
+            {
+              "line": "Nothing that blooms ever grows alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Grow until you are finally your own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Reach for a sun you have never shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Roots hold tight when the cold wind moans",
+              "end_word": "moans",
+              "tier": "miss"
+            },
+            {
+              "line": "Nothing that blooms ever grows alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Grow until you are finally your own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Reach for a sun you have never shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Roots hold tight when the cold wind moans",
+              "end_word": "moans",
+              "tier": "miss"
+            },
+            {
+              "line": "Nothing that blooms ever grows alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            },
+            {
+              "line": "Grow until you are finally your own",
+              "end_word": "own",
+              "tier": "candidate"
+            },
+            {
+              "line": "Reach for a sun you have never shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "Roots hold tight when the cold wind moans",
+              "end_word": "moans",
+              "tier": "miss"
+            },
+            {
+              "line": "Nothing that blooms ever grows alone",
+              "end_word": "alone",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 21,
+          "rhymes": 0,
+          "miss": 7
+        }
+      }
+    },
+    {
+      "id": "sugg_unknown_perfect_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1488,
+      "latency_s": 0.837,
+      "tokens_predicted": 37,
+      "output": "The storm broke through to claim the night again\nThe thunder's voice now fills the main\nA silent fear began to show its pain\nNo battle plan could hold against the rain",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 4,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_4"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "strain",
+          "per_line": [
+            {
+              "line": "The storm broke through to claim the night again",
+              "end_word": "again",
+              "tier": "candidate"
+            },
+            {
+              "line": "The thunder's voice now fills the main",
+              "end_word": "main",
+              "tier": "candidate"
+            },
+            {
+              "line": "A silent fear began to show its pain",
+              "end_word": "pain",
+              "tier": "candidate"
+            },
+            {
+              "line": "No battle plan could hold against the rain",
+              "end_word": "rain",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 4,
+          "rhymes": 0,
+          "miss": 0
+        }
+      }
+    },
+    {
+      "id": "sugg_unknown_perfect_complex",
+      "task": "suggestions",
+      "prompt_chars": 1533,
+      "latency_s": 1.818,
+      "tokens_predicted": 108,
+      "output": "The ancient oak could not remain standing as the tempest came to claim its pain\nThe storm's grand campaign against the sky would leave us with a heavy, thundering train\nThe lightning sought to explain the fear that lay within the earth and in our brain\nThough fierce it raged, the trees would try to gain some height above the rising rain\nThe wind began to chain the world in place before the final, dark, and sudden plane\nNo more could silence be the main defense when thunder broke the quiet of the strain",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 6,
+          "violations": [
+            {
+              "line_index": 2,
+              "violations": [
+                "over_16_words"
+              ]
+            },
+            {
+              "line_index": 3,
+              "violations": [
+                "over_16_words"
+              ]
+            },
+            {
+              "line_index": 4,
+              "violations": [
+                "over_16_words"
+              ]
+            },
+            {
+              "line_index": 5,
+              "violations": [
+                "over_16_words"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "strain",
+          "per_line": [
+            {
+              "line": "The ancient oak could not remain standing as the tempest came to claim its pain",
+              "end_word": "pain",
+              "tier": "candidate"
+            },
+            {
+              "line": "The storm's grand campaign against the sky would leave us with a heavy, thundering train",
+              "end_word": "train",
+              "tier": "candidate"
+            },
+            {
+              "line": "The lightning sought to explain the fear that lay within the earth and in our brain",
+              "end_word": "brain",
+              "tier": "candidate"
+            },
+            {
+              "line": "Though fierce it raged, the trees would try to gain some height above the rising rain",
+              "end_word": "rain",
+              "tier": "candidate"
+            },
+            {
+              "line": "The wind began to chain the world in place before the final, dark, and sudden plane",
+              "end_word": "plane",
+              "tier": "candidate"
+            },
+            {
+              "line": "No more could silence be the main defense when thunder broke the quiet of the strain",
+              "end_word": "strain",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 5,
+          "rhymes": 0,
+          "miss": 1
+        }
+      }
+    },
+    {
+      "id": "sugg_unknown_new_sound_simple",
+      "task": "suggestions",
+      "prompt_chars": 1189,
+      "latency_s": 0.781,
+      "tokens_predicted": 37,
+      "output": "The wind began to scream above the street\nAnd trees stood shaking with the heavy beat\nThe rain fell hard against the glass and pan\nWhile birds flew silent in the coming ban",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 4,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_4"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sugg_unknown_new_sound_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1180,
+      "latency_s": 0.755,
+      "tokens_predicted": 35,
+      "output": "A sudden silence broke the heavy air\nWe traded fear for stories in the stair\nThe storm was just a lesson we agreed\nAnd now the peace returns with open door",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 4,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_4"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sugg_whole_song_constrained",
+      "task": "suggestions",
+      "prompt_chars": 1762,
+      "latency_s": 1.255,
+      "tokens_predicted": 63,
+      "output": "The miles have turned to something new\nThough silence speaks where radio used to go\nThe tires are worn and breaking through\nI wonder if I'll ever know\nThe roads I took before the show\nAre they a ghost or something low\nI drive alone but feel above\nWith nothing left but morning too",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 8,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_8"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "per_line": [
+            {
+              "line": "The miles have turned to something new",
+              "end_word": "new",
+              "tier": "miss"
+            },
+            {
+              "line": "Though silence speaks where radio used to go",
+              "end_word": "go",
+              "tier": "candidate"
+            },
+            {
+              "line": "The tires are worn and breaking through",
+              "end_word": "through",
+              "tier": "miss"
+            },
+            {
+              "line": "I wonder if I'll ever know",
+              "end_word": "know",
+              "tier": "candidate"
+            },
+            {
+              "line": "The roads I took before the show",
+              "end_word": "show",
+              "tier": "candidate"
+            },
+            {
+              "line": "Are they a ghost or something low",
+              "end_word": "low",
+              "tier": "candidate"
+            },
+            {
+              "line": "I drive alone but feel above",
+              "end_word": "above",
+              "tier": "miss"
+            },
+            {
+              "line": "With nothing left but morning too",
+              "end_word": "too",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 4,
+          "rhymes": 0,
+          "miss": 4
+        }
+      }
+    },
+    {
+      "id": "sugg_whole_song_new_sound",
+      "task": "suggestions",
+      "prompt_chars": 1438,
+      "latency_s": 0.932,
+      "tokens_predicted": 44,
+      "output": "Fingers curled to hold a forgotten key\nWinter waiting to steal the summer day\nSalt from the sea began to dry\nWaiting for a story to begin again\nThe frost crept in where the warm light lay",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 5,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_5"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_near_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1717,
+      "latency_s": 1.954,
+      "tokens_predicted": 113,
+      "output": "I left the porch light burning bright\nTo chase the moonlight across the street\nNow I fight the shadows of my flight\nWhile silence writes a story I can't read\nThe road ahead feels cold and white\nWhere memories fade into the night\nI'm driving past my old site\nWith nowhere left to hide or fight\nThe engine hums despite the dread\nAs dawn begins to write its lead\nJust a whisper of my flight\nThat vanishes into the night\nI'll never turn around and fight\nTo keep the dawn light burning bright",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 14,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_14"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "night",
+          "per_line": [
+            {
+              "line": "I left the porch light burning bright",
+              "end_word": "bright",
+              "tier": "rhymes"
+            },
+            {
+              "line": "To chase the moonlight across the street",
+              "end_word": "street",
+              "tier": "miss"
+            },
+            {
+              "line": "Now I fight the shadows of my flight",
+              "end_word": "flight",
+              "tier": "candidate"
+            },
+            {
+              "line": "While silence writes a story I can't read",
+              "end_word": "read",
+              "tier": "miss"
+            },
+            {
+              "line": "The road ahead feels cold and white",
+              "end_word": "white",
+              "tier": "candidate"
+            },
+            {
+              "line": "Where memories fade into the night",
+              "end_word": "night",
+              "tier": "miss"
+            },
+            {
+              "line": "I'm driving past my old site",
+              "end_word": "site",
+              "tier": "candidate"
+            },
+            {
+              "line": "With nowhere left to hide or fight",
+              "end_word": "fight",
+              "tier": "candidate"
+            },
+            {
+              "line": "The engine hums despite the dread",
+              "end_word": "dread",
+              "tier": "miss"
+            },
+            {
+              "line": "As dawn begins to write its lead",
+              "end_word": "lead",
+              "tier": "miss"
+            },
+            {
+              "line": "Just a whisper of my flight",
+              "end_word": "flight",
+              "tier": "candidate"
+            },
+            {
+              "line": "That vanishes into the night",
+              "end_word": "night",
+              "tier": "miss"
+            },
+            {
+              "line": "I'll never turn around and fight",
+              "end_word": "fight",
+              "tier": "candidate"
+            },
+            {
+              "line": "To keep the dawn light burning bright",
+              "end_word": "bright",
+              "tier": "rhymes"
+            }
+          ],
+          "candidate": 6,
+          "rhymes": 2,
+          "miss": 6
+        }
+      }
+    },
+    {
+      "id": "sugg_plain_near_simple",
+      "task": "suggestions",
+      "prompt_chars": 1504,
+      "latency_s": 1.999,
+      "tokens_predicted": 121,
+      "output": "The storm will drive the clouds away again\nThe rain will wash the fear from all the pain\nIt looks like lightning strikes to tell the main\nWe cannot stop the thunder from the rain\nThe sky is losing all its calm and plain\nLet us fight the battle in the rain\nThe clouds will never let the sun remain\nThey want to make us understand the rain\nThe wind will carry all our dreams away\nThe wind will carry all our dreams away\nThe wind will carry all our dreams away\nThe wind will carry all our dreams away\nThe wind will carry all our dreams away",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 13,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_13"
+              ]
+            },
+            {
+              "line_index": 9,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 10,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 11,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            },
+            {
+              "line_index": 12,
+              "violations": [
+                "duplicate_suggestion"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "rain",
+          "per_line": [
+            {
+              "line": "The storm will drive the clouds away again",
+              "end_word": "again",
+              "tier": "candidate"
+            },
+            {
+              "line": "The rain will wash the fear from all the pain",
+              "end_word": "pain",
+              "tier": "candidate"
+            },
+            {
+              "line": "It looks like lightning strikes to tell the main",
+              "end_word": "main",
+              "tier": "candidate"
+            },
+            {
+              "line": "We cannot stop the thunder from the rain",
+              "end_word": "rain",
+              "tier": "miss"
+            },
+            {
+              "line": "The sky is losing all its calm and plain",
+              "end_word": "plain",
+              "tier": "rhymes"
+            },
+            {
+              "line": "Let us fight the battle in the rain",
+              "end_word": "rain",
+              "tier": "miss"
+            },
+            {
+              "line": "The clouds will never let the sun remain",
+              "end_word": "remain",
+              "tier": "candidate"
+            },
+            {
+              "line": "They want to make us understand the rain",
+              "end_word": "rain",
+              "tier": "miss"
+            },
+            {
+              "line": "The wind will carry all our dreams away",
+              "end_word": "away",
+              "tier": "rhymes"
+            },
+            {
+              "line": "The wind will carry all our dreams away",
+              "end_word": "away",
+              "tier": "rhymes"
+            },
+            {
+              "line": "The wind will carry all our dreams away",
+              "end_word": "away",
+              "tier": "rhymes"
+            },
+            {
+              "line": "The wind will carry all our dreams away",
+              "end_word": "away",
+              "tier": "rhymes"
+            },
+            {
+              "line": "The wind will carry all our dreams away",
+              "end_word": "away",
+              "tier": "rhymes"
+            }
+          ],
+          "candidate": 4,
+          "rhymes": 6,
+          "miss": 3
+        }
+      }
+    },
+    {
+      "id": "sugg_verse_slant_moderate",
+      "task": "suggestions",
+      "prompt_chars": 1721,
+      "latency_s": 1.6,
+      "tokens_predicted": 87,
+      "output": "Strangers trade their shadows in the rain\nLost inside the subway train\nCan you tell me where we came\nOr what dream kept us safe from pain\nThe city lights just can't explain\nHow to keep the fear at bay\nTo find a reason to stay\nBefore the cold night brings us pain\nWe'll find a way to remain\nAs the neon fades from plain sight\nTo chase the light into the rain",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 11,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_11"
+              ]
+            },
+            {
+              "line_index": 0,
+              "violations": [
+                "copies_existing_line"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "rain",
+          "per_line": [
+            {
+              "line": "Strangers trade their shadows in the rain",
+              "end_word": "rain",
+              "tier": "miss"
+            },
+            {
+              "line": "Lost inside the subway train",
+              "end_word": "train",
+              "tier": "candidate"
+            },
+            {
+              "line": "Can you tell me where we came",
+              "end_word": "came",
+              "tier": "rhymes"
+            },
+            {
+              "line": "Or what dream kept us safe from pain",
+              "end_word": "pain",
+              "tier": "candidate"
+            },
+            {
+              "line": "The city lights just can't explain",
+              "end_word": "explain",
+              "tier": "candidate"
+            },
+            {
+              "line": "How to keep the fear at bay",
+              "end_word": "bay",
+              "tier": "miss"
+            },
+            {
+              "line": "To find a reason to stay",
+              "end_word": "stay",
+              "tier": "miss"
+            },
+            {
+              "line": "Before the cold night brings us pain",
+              "end_word": "pain",
+              "tier": "candidate"
+            },
+            {
+              "line": "We'll find a way to remain",
+              "end_word": "remain",
+              "tier": "candidate"
+            },
+            {
+              "line": "As the neon fades from plain sight",
+              "end_word": "sight",
+              "tier": "miss"
+            },
+            {
+              "line": "To chase the light into the rain",
+              "end_word": "rain",
+              "tier": "miss"
+            }
+          ],
+          "candidate": 5,
+          "rhymes": 1,
+          "miss": 5
+        }
+      }
+    },
+    {
+      "id": "sugg_bridge_slant_complex",
+      "task": "suggestions",
+      "prompt_chars": 1767,
+      "latency_s": 2.469,
+      "tokens_predicted": 151,
+      "output": "The compass spins and points to where the frozen bone\nThe signal fades but we are still known\nThe static hums a lullaby for the unknown zone\nThe frost reveals the shape of what we have grown\nThe phone rings out a melody in a distant tone\nThe winter deepens, yet the hope remains a loan\nNo map can chart a path to where the future shown\nWe stand alone in a landscape vast and bone\nThe silence grows but warmth is not unknown\nThe journey through the dark is finally known\nThe frozen lake reflects the light we found\nThe winter ends when winter is not known\nThe path ahead is not a frozen bone\nThe future waits without a single tone\nThe journey through the dark is finally shown",
+      "score": {
+        "format": {
+          "passed": false,
+          "line_count": 15,
+          "violations": [
+            {
+              "line_index": -1,
+              "violations": [
+                "expected_6_lines_got_15"
+              ]
+            }
+          ]
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "per_line": [
+            {
+              "line": "The compass spins and points to where the frozen bone",
+              "end_word": "bone",
+              "tier": "candidate"
+            },
+            {
+              "line": "The signal fades but we are still known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "The static hums a lullaby for the unknown zone",
+              "end_word": "zone",
+              "tier": "candidate"
+            },
+            {
+              "line": "The frost reveals the shape of what we have grown",
+              "end_word": "grown",
+              "tier": "candidate"
+            },
+            {
+              "line": "The phone rings out a melody in a distant tone",
+              "end_word": "tone",
+              "tier": "candidate"
+            },
+            {
+              "line": "The winter deepens, yet the hope remains a loan",
+              "end_word": "loan",
+              "tier": "candidate"
+            },
+            {
+              "line": "No map can chart a path to where the future shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            },
+            {
+              "line": "We stand alone in a landscape vast and bone",
+              "end_word": "bone",
+              "tier": "candidate"
+            },
+            {
+              "line": "The silence grows but warmth is not unknown",
+              "end_word": "unknown",
+              "tier": "candidate"
+            },
+            {
+              "line": "The journey through the dark is finally known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "The frozen lake reflects the light we found",
+              "end_word": "found",
+              "tier": "miss"
+            },
+            {
+              "line": "The winter ends when winter is not known",
+              "end_word": "known",
+              "tier": "candidate"
+            },
+            {
+              "line": "The path ahead is not a frozen bone",
+              "end_word": "bone",
+              "tier": "candidate"
+            },
+            {
+              "line": "The future waits without a single tone",
+              "end_word": "tone",
+              "tier": "candidate"
+            },
+            {
+              "line": "The journey through the dark is finally shown",
+              "end_word": "shown",
+              "tier": "candidate"
+            }
+          ],
+          "candidate": 14,
+          "rhymes": 0,
+          "miss": 1
+        }
+      }
+    },
+    {
+      "id": "rw_passage_rephrase_chorus",
+      "task": "rewrite_passage",
+      "prompt_chars": 1226,
+      "latency_s": 0.468,
+      "tokens_predicted": 14,
+      "output": "Lead me down that open road\nWhere the stars forget my name",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "Lead me down that open road\nWhere the stars forget my name"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_harder_chorus",
+      "task": "rewrite_passage",
+      "prompt_chars": 1231,
+      "latency_s": 0.498,
+      "tokens_predicted": 14,
+      "output": "Take me down that open road\nWhere the stars erase my name",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "Take me down that open road\nWhere the stars erase my name"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_punchup_chorus",
+      "task": "rewrite_passage",
+      "prompt_chars": 1189,
+      "latency_s": 0.503,
+      "tokens_predicted": 16,
+      "output": "Drift down the open road\nWhere the sky tries to forget my name",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "Drift down the open road\nWhere the sky tries to forget my name"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_rephrase_verse",
+      "task": "rewrite_passage",
+      "prompt_chars": 1136,
+      "latency_s": 0.418,
+      "tokens_predicted": 10,
+      "output": "We pulled our heavy winter coats around the walls",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "text": "We pulled our heavy winter coats around the walls"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_harder_verse",
+      "task": "rewrite_passage",
+      "prompt_chars": 1239,
+      "latency_s": 0.666,
+      "tokens_predicted": 28,
+      "output": "Tomatoes list their weight against the stakes\nShe said the dirt remembers words we never spoke\nThe earth keeps secrets in its heavy wakes",
+      "score": {
+        "format": {
+          "passed": false,
+          "violations": [
+            "line_count_mismatch"
+          ],
+          "text": "Tomatoes list their weight against the stakes\nShe said the dirt remembers words we never spoke\nThe earth keeps secrets in its heavy wakes"
+        }
+      }
+    },
+    {
+      "id": "rw_passage_punchup_verse",
+      "task": "rewrite_passage",
+      "prompt_chars": 1196,
+      "latency_s": 0.637,
+      "tokens_predicted": 26,
+      "output": "Slag veins flood the threshold where I stand\nBroken glass reflecting the city's sting\nI tally every window burning and blind",
+      "score": {
+        "format": {
+          "passed": false,
+          "violations": [
+            "line_count_mismatch"
+          ],
+          "text": "Slag veins flood the threshold where I stand\nBroken glass reflecting the city's sting\nI tally every window burning and blind"
+        }
+      }
+    },
+    {
+      "id": "rw_word_rephrase_glow",
+      "task": "rewrite_word",
+      "prompt_chars": 1339,
+      "latency_s": 0.35,
+      "tokens_predicted": 3,
+      "output": "warp",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "warp"
+        }
+      }
+    },
+    {
+      "id": "rw_word_harder_glow",
+      "task": "rewrite_word",
+      "prompt_chars": 1344,
+      "latency_s": 0.338,
+      "tokens_predicted": 2,
+      "output": "snow",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "snow"
+        },
+        "rhyme": {
+          "target_word": "glow",
+          "is_perfect_rhyme": true
+        }
+      }
+    },
+    {
+      "id": "rw_word_punchup_glow",
+      "task": "rewrite_word",
+      "prompt_chars": 1302,
+      "latency_s": 0.349,
+      "tokens_predicted": 3,
+      "output": "claw",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "claw"
+        }
+      }
+    },
+    {
+      "id": "rw_word_rephrase_stone",
+      "task": "rewrite_word",
+      "prompt_chars": 1266,
+      "latency_s": 0.351,
+      "tokens_predicted": 3,
+      "output": "the ground",
+      "score": {
+        "format": {
+          "passed": false,
+          "violations": [
+            "not_exactly_one_word"
+          ],
+          "word": "the ground"
+        }
+      }
+    },
+    {
+      "id": "rw_word_harder_stone",
+      "task": "rewrite_word",
+      "prompt_chars": 1271,
+      "latency_s": 0.338,
+      "tokens_predicted": 2,
+      "output": "bone",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "bone"
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "is_perfect_rhyme": true
+        }
+      }
+    },
+    {
+      "id": "rw_word_punchup_ground",
+      "task": "rewrite_word",
+      "prompt_chars": 1307,
+      "latency_s": 0.353,
+      "tokens_predicted": 3,
+      "output": "blacktop",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "blacktop"
+        }
+      }
+    },
+    {
+      "id": "rw_word_rephrase_glow_retry",
+      "task": "rewrite_word",
+      "prompt_chars": 1353,
+      "latency_s": 0.338,
+      "tokens_predicted": 2,
+      "output": "way",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "way"
+        }
+      }
+    },
+    {
+      "id": "rw_word_harder_stone_retry",
+      "task": "rewrite_word",
+      "prompt_chars": 1285,
+      "latency_s": 0.336,
+      "tokens_predicted": 2,
+      "output": "bone",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "bone"
+        },
+        "rhyme": {
+          "target_word": "stone",
+          "is_perfect_rhyme": true
+        }
+      }
+    },
+    {
+      "id": "rw_word_punchup_rain_retry",
+      "task": "rewrite_word",
+      "prompt_chars": 1112,
+      "latency_s": 0.272,
+      "tokens_predicted": 2,
+      "output": "sound",
+      "score": {
+        "format": {
+          "passed": true,
+          "violations": [],
+          "word": "sound"
+        }
+      }
+    },
+    {
+      "id": "syn_promise",
+      "task": "synonyms",
+      "prompt_chars": 429,
+      "latency_s": 0.449,
+      "tokens_predicted": 23,
+      "output": "vow\noath\nchant\nwhisper\npledge\noverture\noverture\noverture",
+      "score": {
+        "format": {
+          "passed": false,
+          "word_count": 8,
+          "violations": [
+            {
+              "line_index": 6,
+              "violations": [
+                "duplicate"
+              ]
+            },
+            {
+              "line_index": 7,
+              "violations": [
+                "duplicate"
+              ]
+            }
+          ],
+          "words": [
+            "vow",
+            "oath",
+            "chant",
+            "whisper",
+            "pledge",
+            "overture",
+            "overture",
+            "overture"
+          ]
+        }
+      }
+    },
+    {
+      "id": "syn_shining",
+      "task": "synonyms",
+      "prompt_chars": 423,
+      "latency_s": 0.46,
+      "tokens_predicted": 24,
+      "output": "glowing\nbright\nsparkling\ngleaming\nglittering\nradiant\nglistening\nshining",
+      "score": {
+        "format": {
+          "passed": false,
+          "word_count": 8,
+          "violations": [
+            {
+              "line_index": 7,
+              "violations": [
+                "is_target_word"
+              ]
+            }
+          ],
+          "words": [
+            "glowing",
+            "bright",
+            "sparkling",
+            "gleaming",
+            "glittering",
+            "radiant",
+            "glistening",
+            "shining"
+          ]
+        }
+      }
+    },
+    {
+      "id": "syn_crooked",
+      "task": "synonyms",
+      "prompt_chars": 429,
+      "latency_s": 0.476,
+      "tokens_predicted": 25,
+      "output": "bent\nslanting\naskew\nslouching\ncrooked\ntilted\nleaning\ncrook",
+      "score": {
+        "format": {
+          "passed": false,
+          "word_count": 8,
+          "violations": [
+            {
+              "line_index": 4,
+              "violations": [
+                "is_target_word"
+              ]
+            }
+          ],
+          "words": [
+            "bent",
+            "slanting",
+            "askew",
+            "slouching",
+            "crooked",
+            "tilted",
+            "leaning",
+            "crook"
+          ]
+        }
+      }
+    },
+    {
+      "id": "syn_flickered_no_context",
+      "task": "synonyms",
+      "prompt_chars": 414,
+      "latency_s": 0.503,
+      "tokens_predicted": 27,
+      "output": "shimmered\nflashed\nsparked\nglowed\ntwinkled\nglittered\nflashed\nblazed",
+      "score": {
+        "format": {
+          "passed": false,
+          "word_count": 8,
+          "violations": [
+            {
+              "line_index": 6,
+              "violations": [
+                "duplicate"
+              ]
+            }
+          ],
+          "words": [
+            "shimmered",
+            "flashed",
+            "sparked",
+            "glowed",
+            "twinkled",
+            "glittered",
+            "flashed",
+            "blazed"
+          ]
+        }
+      }
+    }
+  ]
+}

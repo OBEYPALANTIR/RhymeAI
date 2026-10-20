@@ -42,7 +42,7 @@ class ProviderLiveGateTest {
         val lyrics = "[Verse]\nYellow lights on a midnight road\nI keep the melody close"
 
         val suggestions = withTimeout(60_000) {
-            service.getSuggestions(
+            service.streamSuggestions(
                 provider = provider,
                 apiKey = apiKey,
                 modelId = model.id,
@@ -55,7 +55,7 @@ class ProviderLiveGateTest {
                 currentSection = SongSection.VERSE,
                 complexity = RhymeComplexity.MODERATE,
                 useWholeSongContext = false
-            )
+            ).toList()
         }
         assertTrue(suggestions.isNotEmpty(), "${provider.displayName} returned no suggestions for ${model.id}")
         assertTrue(suggestions.all { it.text.isNotBlank() })
