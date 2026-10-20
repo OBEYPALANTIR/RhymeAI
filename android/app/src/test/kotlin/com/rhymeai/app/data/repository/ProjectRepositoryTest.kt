@@ -28,6 +28,9 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -954,6 +957,43 @@ class ProjectRepositoryTest {
         }
     }
 
+    @Test
+    fun libraryFlowsSkipWritesThatLeaveTheLibraryUnchanged() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-library-flow").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val dataStore = PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") }
+        val song = SongProject(id = "flow-1", title = "Before", lyrics = "line")
+        val projectEmissions = java.util.concurrent.CopyOnWriteArrayList<List<SongProject>>()
+        val trashEmissions = java.util.concurrent.CopyOnWriteArrayList<List<TrashedSongProject>>()
+
+        try {
+            val repository = ProjectRepository(dataStore, testKeyStore())
+            repository.saveProjects(listOf(song))
+            val collectors = listOf(
+                scope.launch { repository.projectsFlow.collect { projectEmissions += it } },
+                scope.launch { repository.trashedProjectsFlow.collect { trashEmissions += it } }
+            )
+            withTimeout(5_000) { while (projectEmissions.isEmpty() || trashEmissions.isEmpty()) delay(10) }
+
+            // Editor position, draft and notebook writes rewrite other keys in the same store.
+            repeat(3) { index ->
+                repository.saveEditorState("Draft $index", "lyric $index", "")
+                repository.saveWorkspace(song.id, SongWorkspace(scrollOffset = index.toFloat()))
+                delay(50)
+            }
+            repository.saveProjects(listOf(song.copy(title = "After")))
+            withTimeout(5_000) { while (projectEmissions.size < 2) delay(10) }
+            delay(100)
+
+            assertEquals(listOf("Before", "After"), projectEmissions.map { it.single().title })
+            assertEquals(1, trashEmissions.size)
+            collectors.forEach { it.cancelAndJoin() }
+        } finally {
+            scope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun syncedRecording(id: String) = RecordingManifestEntry(
         projectId = id, fileName = "take.m4a", sizeBytes = 3L, modifiedAt = 500L, sha256 = "synthetic"
     )
@@ -973,6 +1013,32 @@ class ProjectRepositoryTest {
                         transform(current)
                     }
                 } else store.updateData(transform)
+        }
+    }
+
+    @Test
+    fun storedInkMarksStyleFromAnOlderVersionLeavesColorAnalysisSettingsIntact() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-legacy-ink-marks").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val dataStore = PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") }
+        val legacyStyleKey = stringPreferencesKey("analysis_presentation")
+        try {
+            // Ink Marks was removed; Color is the only analysis style, so the old value has no reader.
+            dataStore.edit { it[legacyStyleKey] = "ink_marks" }
+            val repository = ProjectRepository(dataStore, testKeyStore())
+
+            assertEquals(ProjectRepository.EditorToggles(), repository.editorTogglesFlow.first())
+            assertEquals(com.rhymeai.app.data.model.AppAppearance.INK, repository.appearanceFlow.first())
+
+            val chosen = ProjectRepository.EditorToggles(
+                isSyllableColoringEnabled = false,
+                isRhymeHighlightEnabled = true
+            )
+            repository.saveEditorToggles(chosen)
+            assertEquals(chosen, repository.editorTogglesFlow.first())
+        } finally {
+            scope.cancel()
+            directory.deleteRecursively()
         }
     }
 

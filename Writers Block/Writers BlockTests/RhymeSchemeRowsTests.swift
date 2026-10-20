@@ -22,10 +22,10 @@ final class RhymeSchemeRowsTests: XCTestCase {
         XCTAssertEqual(result.map(\.line), ["[Verse 1]", "first", "", "second"])
     }
 
-    func testHeadersBetweenLyricsAndNonCurrentBlanksDoNotConsumeLetters() {
-        let result = rows(["first", "  [Chorus]  ", " ", "second", "Bridge", "third"], current: 5, scheme: "ABC")
-        XCTAssertEqual(result.map(\.letter), ["A", nil, nil, "B", nil, "C"])
-        XCTAssertTrue(result[5].isCurrent)
+    func testHeadersRestartTheSchemeAndNonCurrentBlanksDoNotConsumeLetters() {
+        let result = rows(["first", "second", "  [Chorus]  ", " ", "third", "fourth", "Bridge", "fifth"], current: 7, scheme: "ABC")
+        XCTAssertEqual(result.map(\.letter), ["A", "B", nil, nil, "A", "B", nil, "A"])
+        XCTAssertTrue(result[7].isCurrent)
     }
 
     func testWhitespaceOnlyCurrentLineUsesCurrentLetterWithoutConsumingNextLyric() {
@@ -39,8 +39,8 @@ final class RhymeSchemeRowsTests: XCTestCase {
         XCTAssertTrue(rows([], current: 0, scheme: "AB").isEmpty)
     }
 
-    func testLyricsWrapWithoutCountingHeadersOrBlankRows() {
+    func testLyricsWrapWithoutCountingBlankRowsAndRestartAfterHeader() {
         let result = rows(["one", "[Verse]", "two", "", "three", "four", "five"], current: 0, scheme: "AB")
-        XCTAssertEqual(result.map(\.letter), ["A", nil, "B", nil, "A", "B", "A"])
+        XCTAssertEqual(result.map(\.letter), ["A", nil, "A", nil, "B", "A", "B"])
     }
 }

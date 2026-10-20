@@ -28,9 +28,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.ui.theme.DesignTokens
-import com.rhymeai.app.ui.theme.LocalAnalysisPresentation
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.rhymePalette
 import com.rhymeai.app.ui.theme.syllableColor
@@ -43,16 +41,15 @@ internal enum class FeatureLegend {
 internal enum class FeatureHelp(
     val title: String,
     val message: String,
-    val legend: FeatureLegend? = null,
-    val inkMarksMessage: String? = null
+    val legend: FeatureLegend? = null
 ) {
     CONTEXT_THEME(
         "Context & Theme",
-        "Adds a short topic or mood for the assistant when Whole Song Context is off. Use it to steer the next line without sending the full lyric."
+        "Adds a short topic or mood that steers the next line. It is sent with every suggestion request, together with the full lyric when Whole Song Context is on. Leave it empty and the assistant works from the lyrics alone."
     ),
     TARGET_LINE(
         "Target Line",
-        "The lyric line the assistant is matching. Put the cursor on a line when you want suggestions to rhyme with that exact sound."
+        "The earlier line the next suggestion has to rhyme with, picked by your rhyme scheme for the line being added. It is empty when the next line starts a new rhyme sound."
     ),
     RHYME_SCHEME(
         "Rhyme Scheme",
@@ -64,7 +61,7 @@ internal enum class FeatureHelp(
     ),
     COMPLEXITY(
         "Complexity",
-        "Changes how advanced the generated line should be. Higher complexity leans toward richer wording, multisyllable rhymes, and denser phrasing."
+        "Changes how advanced the suggested lines should be. Simple keeps the language plain with no wordplay, Moderate uses a balanced vocabulary, and Complex asks for clever wordplay and intricate rhymes."
     ),
     WHOLE_SONG_CONTEXT(
         "Whole Song Context",
@@ -76,9 +73,8 @@ internal enum class FeatureHelp(
     ),
     UNDERLINE_SYLLABLES(
         "Syllable Guide",
-        "Marks words by syllable count. In Color style, words carry syllable color when Rhyme Families is off; when both guides are on, the count moves to an underline.",
-        legend = FeatureLegend.SYLLABLES,
-        inkMarksMessage = "Marks words by syllable count using text weight: one syllable is regular, two medium, three semibold, and four or more bold."
+        "Marks words by syllable count. Words carry their syllable color when Rhyme Families is off; when both guides are on, the count moves to an underline.",
+        legend = FeatureLegend.SYLLABLES
     ),
     STRESS_IPA(
         "Stress + IPA",
@@ -87,8 +83,7 @@ internal enum class FeatureHelp(
     RHYME_FAMILIES(
         "Rhyme Families",
         "Colors matching rhyme sounds throughout the current lyric. Each color represents one rhyme family; this does not change generated suggestions.",
-        legend = FeatureLegend.RHYMES,
-        inkMarksMessage = "Underlines matching rhyme sounds throughout the current lyric. Solid, dashed, dotted, and dash-dot lines identify rhyme families; this does not change generated suggestions."
+        legend = FeatureLegend.RHYMES
     ),
     BEAT_GRID(
         "Beat Grid",
@@ -150,13 +145,6 @@ internal fun FeatureHelpDialog(
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val presentation = LocalAnalysisPresentation.current
-    val message = if (presentation == AnalysisPresentation.INK_MARKS) {
-        help.inkMarksMessage ?: help.message
-    } else {
-        help.message
-    }
-
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = colorScheme.surfaceContainerHigh,
@@ -167,11 +155,11 @@ internal fun FeatureHelpDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)) {
-                Text(message, fontSize = 14.sp, lineHeight = 20.sp)
+                Text(help.message, fontSize = 14.sp, lineHeight = 20.sp)
 
                 when (help.legend) {
-                    FeatureLegend.SYLLABLES -> SyllableLegend(presentation)
-                    FeatureLegend.RHYMES -> RhymeLegend(presentation)
+                    FeatureLegend.SYLLABLES -> SyllableLegend()
+                    FeatureLegend.RHYMES -> RhymeLegend()
                     null -> Unit
                 }
             }
@@ -185,83 +173,46 @@ internal fun FeatureHelpDialog(
 }
 
 @Composable
-private fun SyllableLegend(presentation: AnalysisPresentation) {
+private fun SyllableLegend() {
     val isDark = LocalAppAppearance.current.isDark
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (presentation == AnalysisPresentation.INK_MARKS) {
-            Text(
-                "Syllable weights",
-                fontSize = DesignTokens.Typography.caption,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            listOf(
-                "1 syllable" to FontWeight.Normal,
-                "2 syllables" to FontWeight.Medium,
-                "3 syllables" to FontWeight.SemiBold,
-                "4+ syllables" to FontWeight.Bold
-            ).forEach { (label, weight) ->
-                Text(
-                    text = label,
-                    fontSize = 12.sp,
-                    fontWeight = weight,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        } else {
-            Text(
-                "Syllable colors",
-                fontSize = DesignTokens.Typography.caption,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            LegendRow(color = syllableColor(1, isDark), label = "1 syllable")
-            LegendRow(color = syllableColor(2, isDark), label = "2 syllables")
-            LegendRow(color = syllableColor(3, isDark), label = "3 syllables")
-            LegendRow(color = syllableColor(4, isDark), label = "4+ syllables")
-        }
+        Text(
+            "Syllable colors",
+            fontSize = DesignTokens.Typography.caption,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        LegendRow(color = syllableColor(1, isDark), label = "1 syllable")
+        LegendRow(color = syllableColor(2, isDark), label = "2 syllables")
+        LegendRow(color = syllableColor(3, isDark), label = "3 syllables")
+        LegendRow(color = syllableColor(4, isDark), label = "4+ syllables")
     }
 }
 
 @Composable
-private fun RhymeLegend(presentation: AnalysisPresentation) {
+private fun RhymeLegend() {
     val palette = rhymePalette(LocalAppAppearance.current.isDark)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (presentation == AnalysisPresentation.INK_MARKS) {
-            Text(
-                "Rhyme underline patterns",
-                fontSize = DesignTokens.Typography.caption,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                "Solid, dashed, dotted, and dash-dot lines identify rhyme families.",
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else {
-            Text(
-                "Rhyme colors",
-                fontSize = DesignTokens.Typography.caption,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                "Matching colors belong to the same rhyme family. New rhyme families get the next available color.",
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                palette.take(6).forEach { color ->
-                    Box(
-                        modifier = Modifier
-                            .size(18.dp)
-                            .background(color, CircleShape)
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
-                    )
-                }
+        Text(
+            "Rhyme colors",
+            fontSize = DesignTokens.Typography.caption,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            "Matching colors belong to the same rhyme family. New rhyme families get the next available color.",
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            palette.take(6).forEach { color ->
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .background(color, CircleShape)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                )
             }
         }
     }

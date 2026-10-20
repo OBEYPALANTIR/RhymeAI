@@ -8,9 +8,25 @@ struct LyricsRewriteHighlight: Equatable {
     var isInsertion: Bool = false
 }
 
+/// Lyrics leave the editor as plain text. The syllable underline lives on the
+/// text storage, and the stock copy and cut would put it on the pasteboard as
+/// rich text.
+final class LyricsUITextView: UITextView {
+    override func copy(_ sender: Any?) {
+        let copied = selectedTextRange.flatMap(text(in:))
+        super.copy(sender)
+        if let copied, !copied.isEmpty { UIPasteboard.general.string = copied }
+    }
+
+    override func cut(_ sender: Any?) {
+        let removed = selectedTextRange.flatMap(text(in:))
+        super.cut(sender)
+        if let removed, !removed.isEmpty { UIPasteboard.general.string = removed }
+    }
+}
+
 struct LyricsTextView: UIViewRepresentable {
     @Environment(\.appAppearanceStyle) private var appearance
-    @Environment(\.analysisPresentationStyle) private var analysisPresentation
 
     @Binding var text: String
     var selection: NSRange? = nil
@@ -27,7 +43,7 @@ struct LyricsTextView: UIViewRepresentable {
     var placeholder: String = "Start writing your lyrics here..."
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView(usingTextLayoutManager: true)
+        let textView = LyricsUITextView(usingTextLayoutManager: true)
         textView.delegate = context.coordinator
         Self.configureTypography(textView)
         textView.backgroundColor = .clear
@@ -139,8 +155,7 @@ struct LyricsTextView: UIViewRepresentable {
             _ text: String,
             _ rhymeEnabled: Bool,
             _ syllablesEnabled: Bool,
-            _ isDark: Bool,
-            _ style: AnalysisPresentationStyle
+            _ isDark: Bool
         ) async -> [LyricsColorSpan]
 
         var parent: LyricsTextView
@@ -175,20 +190,18 @@ struct LyricsTextView: UIViewRepresentable {
             let rhyme: Bool
             let syllables: Bool
             let appearance: AppAppearanceStyle
-            let style: AnalysisPresentationStyle
         }
         var isApplyingProgrammaticUpdate = false
 
         init(
             _ parent: LyricsTextView,
             colorAnalysisDebounce: Duration = .milliseconds(120),
-            colorSpanProvider: @escaping ColorSpanProvider = { text, rhyme, syllables, isDark, style in
+            colorSpanProvider: @escaping ColorSpanProvider = { text, rhyme, syllables, isDark in
                 await LyricsHighlighting.spans(
                     text: text,
                     rhymeEnabled: rhyme,
                     syllablesEnabled: syllables,
-                    isDark: isDark,
-                    style: style
+                    isDark: isDark
                 )
             }
         ) {
@@ -321,8 +334,7 @@ struct LyricsTextView: UIViewRepresentable {
         func updateColors(_ textView: UITextView) {
             guard textView.markedTextRange == nil else { return }
             let request = ColorRequest(text: textView.text, rhyme: parent.rhymeHighlightEnabled,
-                                       syllables: parent.syllableColoringEnabled, appearance: parent.appearance,
-                                       style: parent.analysisPresentation)
+                                       syllables: parent.syllableColoringEnabled, appearance: parent.appearance)
             guard colorRequest != request else { return }
             let previousRequest = colorRequest
             colorRequest = request
@@ -337,7 +349,6 @@ struct LyricsTextView: UIViewRepresentable {
                     && $0.rhyme == request.rhyme
                     && $0.syllables == request.syllables
                     && $0.appearance == request.appearance
-                    && $0.style == request.style
             } ?? false
             colorTask = Task { [weak self, weak textView] in
                 guard let self else { return }
@@ -353,8 +364,7 @@ struct LyricsTextView: UIViewRepresentable {
                     request.text,
                     request.rhyme,
                     request.syllables,
-                    request.appearance == .graphite,
-                    request.style
+                    request.appearance == .graphite
                 )
                 guard !Task.isCancelled, let textView,
                       self.colorRequest == request, textView.text == request.text,
@@ -374,7 +384,12 @@ struct LyricsTextView: UIViewRepresentable {
             appliedColorSpans = spans
             appliedForeground = foreground
             appliedColorText = text
-            Self.applyColors(spans, to: textView, foreground: foreground)
+            Self.applyColors(
+                spans,
+                to: textView,
+                foreground: foreground,
+                sectionLabelForeground: UIColor(parent.appearance.palette.secondaryInk)
+            )
         }
 
         func resetColorsAfterProgrammaticTextChange(_ textView: UITextView) {
@@ -405,9 +420,7 @@ struct LyricsTextView: UIViewRepresentable {
                     adjusted.append(LyricsColorSpan(
                         range: NSRange(location: span.range.location + delta, length: span.range.length),
                         foreground: span.foreground,
-                        underline: span.underline,
-                        underlineStyle: span.underlineStyle,
-                        inkStrokeWidth: span.inkStrokeWidth
+                        underline: span.underline
                     ))
                 } else {
                     let prefixLength = max(edit.range.location - span.range.location, 0)
@@ -415,9 +428,7 @@ struct LyricsTextView: UIViewRepresentable {
                         adjusted.append(LyricsColorSpan(
                             range: NSRange(location: span.range.location, length: prefixLength),
                             foreground: span.foreground,
-                            underline: span.underline,
-                            underlineStyle: span.underlineStyle,
-                            inkStrokeWidth: span.inkStrokeWidth
+                            underline: span.underline
                         ))
                     }
                     let suffixLength = max(spanEnd - editEnd, 0)
@@ -425,9 +436,7 @@ struct LyricsTextView: UIViewRepresentable {
                         adjusted.append(LyricsColorSpan(
                             range: NSRange(location: edit.range.location + replacementLength, length: suffixLength),
                             foreground: span.foreground,
-                            underline: span.underline,
-                            underlineStyle: span.underlineStyle,
-                            inkStrokeWidth: span.inkStrokeWidth
+                            underline: span.underline
                         ))
                     }
                 }
@@ -436,15 +445,29 @@ struct LyricsTextView: UIViewRepresentable {
             installColors(adjusted, for: textView.text, on: textView, foreground: foreground)
         }
 
-        static func applyColors(_ spans: [LyricsColorSpan], to textView: UITextView, foreground: UIColor) {
+        /// `sectionLabelForeground` draws section header lines ("[Verse 1]",
+        /// "[Chorus]") in a quieter neutral ink. It is a rendering attribute
+        /// only: the stored text, its brackets, glyph metrics, selection and
+        /// undo are untouched. Header lines carry no analysis spans, and spans
+        /// are applied after it, so no lyric word loses its syllable or rhyme
+        /// colour.
+        ///
+        /// Word colours are rendering attributes. The syllable underline is
+        /// not: the text view draws only the foreground colour from rendering
+        /// attributes, so underlines go on the text storage (`applyUnderlines`).
+        static func applyColors(
+            _ spans: [LyricsColorSpan],
+            to textView: UITextView,
+            foreground: UIColor,
+            sectionLabelForeground: UIColor? = nil
+        ) {
             // Color attributes must not change glyph metrics or the user's selection.
+            applyUnderlines(spans, to: textView)
+            let sectionLabelRanges = sectionLabelForeground == nil ? [] : SectionMap.headerRanges(textView.text ?? "")
             let range = NSRange(location: 0, length: textView.textStorage.length)
             guard let layout = textView.textLayoutManager, let content = layout.textContentManager else { return }
             layout.renderingAttributesValidator = nil
             layout.removeRenderingAttribute(.foregroundColor, for: content.documentRange)
-            layout.removeRenderingAttribute(.underlineStyle, for: content.documentRange)
-            layout.removeRenderingAttribute(.underlineColor, for: content.documentRange)
-            layout.removeRenderingAttribute(.strokeWidth, for: content.documentRange)
             layout.invalidateRenderingAttributes(for: content.documentRange)
             let render: (NSTextLayoutManager, NSTextRange) -> Void = { layout, target in
                 guard let content = layout.textContentManager else { return }
@@ -452,24 +475,26 @@ struct LyricsTextView: UIViewRepresentable {
                 let start = content.offset(from: content.documentRange.location, to: target.location)
                 let end = content.offset(from: content.documentRange.location, to: target.endLocation)
                 let targetRange = NSRange(location: start, length: end - start)
+                if let sectionLabelForeground {
+                    for header in sectionLabelRanges {
+                        let intersection = NSIntersectionRange(header, targetRange)
+                        guard intersection.length > 0,
+                              let lower = content.location(content.documentRange.location, offsetBy: intersection.location),
+                              let upper = content.location(lower, offsetBy: intersection.length),
+                              let textRange = NSTextRange(location: lower, end: upper) else { continue }
+                        layout.setRenderingAttributes([.foregroundColor: sectionLabelForeground], for: textRange)
+                    }
+                }
                 for span in spans {
                     let intersection = NSIntersectionRange(span.range, targetRange)
                     guard intersection.length > 0,
                           let lower = content.location(content.documentRange.location, offsetBy: intersection.location),
                           let upper = content.location(lower, offsetBy: intersection.length),
                           let textRange = NSTextRange(location: lower, end: upper) else { continue }
-                    var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: span.foreground.map(UIColor.init) ?? foreground]
-                    if let underline = span.underline {
-                        attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                        attributes[.underlineColor] = UIColor(underline)
-                    }
-                    if let underlineStyle = span.underlineStyle {
-                        attributes[.underlineStyle] = underlineStyle
-                    }
-                    if let inkStrokeWidth = span.inkStrokeWidth {
-                        attributes[.strokeWidth] = inkStrokeWidth
-                    }
-                    layout.setRenderingAttributes(attributes, for: textRange)
+                    layout.setRenderingAttributes(
+                        [.foregroundColor: span.foreground.map(UIColor.init) ?? foreground],
+                        for: textRange
+                    )
                 }
             }
             layout.renderingAttributesValidator = { layout, fragment in
@@ -477,6 +502,75 @@ struct LyricsTextView: UIViewRepresentable {
             }
             if range.length > 0 { render(layout, content.documentRange) }
             textView.setNeedsDisplay()
+        }
+
+        /// The underline attributes kept on the text storage. Neither changes
+        /// glyph advances, so line breaks and the caret do not move.
+        static let underlineAttributeKeys: [NSAttributedString.Key] = [.underlineStyle, .underlineColor]
+
+        private struct Underline: Equatable {
+            let range: NSRange
+            let color: UIColor
+        }
+
+        /// Writes each span's syllable underline to the text storage and
+        /// removes the ones no span asks for, so turning a guide off leaves
+        /// nothing behind. The storage is touched only when the underlines
+        /// differ from what is already there. Only the plain `text` is ever
+        /// published, saved or exported, and an attribute change is not a user
+        /// edit: no delegate callback, no undo entry.
+        static func applyUnderlines(_ spans: [LyricsColorSpan], to textView: UITextView) {
+            // Restyling the storage would end an in-progress composition.
+            guard textView.markedTextRange == nil else { return }
+            let storage = textView.textStorage
+            let full = NSRange(location: 0, length: storage.length)
+
+            let wanted: [Underline] = spans.compactMap { span in
+                let range = NSIntersectionRange(span.range, full)
+                guard range.length > 0, let underline = span.underline else { return nil }
+                return Underline(range: range, color: UIColor(underline))
+            }.sorted { $0.range.location < $1.range.location }
+
+            var present: [Underline] = []
+            var unexpected = false
+            storage.enumerateAttributes(in: full) { attributes, range, _ in
+                let style = attributes[.underlineStyle] as? Int
+                let color = attributes[.underlineColor] as? UIColor
+                guard style != nil || color != nil else { return }
+                if style == NSUnderlineStyle.single.rawValue, let color {
+                    present.append(Underline(range: range, color: color))
+                } else {
+                    unexpected = true
+                }
+            }
+            guard unexpected || present != wanted else { return }
+
+            let selection = textView.selectedRange
+            storage.beginEditing()
+            for key in underlineAttributeKeys {
+                storage.removeAttribute(key, range: full)
+            }
+            for underline in wanted {
+                storage.addAttributes(
+                    [.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: underline.color],
+                    range: underline.range
+                )
+            }
+            storage.endEditing()
+            if textView.selectedRange != selection {
+                textView.selectedRange = selection
+            }
+            removeUnderlineFromTypingAttributes(textView)
+        }
+
+        /// Text typed next to an underlined word must not inherit the underline.
+        static func removeUnderlineFromTypingAttributes(_ textView: UITextView) {
+            guard underlineAttributeKeys.contains(where: { textView.typingAttributes[$0] != nil }) else { return }
+            var attributes = textView.typingAttributes
+            for key in underlineAttributeKeys {
+                attributes.removeValue(forKey: key)
+            }
+            textView.typingAttributes = attributes
         }
 
         func updatePlaceholder(_ textView: UITextView, text: String) {
@@ -488,11 +582,14 @@ struct LyricsTextView: UIViewRepresentable {
                 // Automatic label scaling would use its current trait collection and
                 // can temporarily diverge from the notification's new category.
                 label.adjustsFontForContentSizeCategory = false
+                // Wrap rather than run off the trailing edge at larger text sizes.
+                label.numberOfLines = 0
                 label.translatesAutoresizingMaskIntoConstraints = false
                 textView.addSubview(label)
                 NSLayoutConstraint.activate([
                     label.topAnchor.constraint(equalTo: textView.topAnchor),
-                    label.leadingAnchor.constraint(equalTo: textView.leadingAnchor)
+                    label.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
+                    label.widthAnchor.constraint(lessThanOrEqualTo: textView.widthAnchor)
                 ])
                 placeholderLabel = label
             }
@@ -531,6 +628,7 @@ struct LyricsTextView: UIViewRepresentable {
             replacementText text: String
         ) -> Bool {
             pendingColorEdit = (textView.text, range, text)
+            Self.removeUnderlineFromTypingAttributes(textView)
             return true
         }
 
@@ -549,7 +647,7 @@ struct LyricsTextView: UIViewRepresentable {
         func updateRewriteHighlight(_ textView: UITextView, highlight: LyricsRewriteHighlight?) {
             guard let rewriteHighlightView else { return }
             guard let highlight, highlight.range.length > 0 else {
-                rewriteHighlightView.configure(rects: [], isLoading: false, isError: false)
+                rewriteHighlightView.configure(rects: [], isLoading: false, colors: nil)
                 return
             }
 
@@ -559,8 +657,7 @@ struct LyricsTextView: UIViewRepresentable {
                 rewriteHighlightView.configure(
                     rects: rects,
                     isLoading: highlight.isLoading,
-                    isError: highlight.isError,
-                    insertionColor: highlight.isInsertion ? UIColor(self.parent.appearance.palette.primaryInk) : nil
+                    colors: RewriteHighlightColors.forHighlight(highlight, palette: self.parent.appearance.palette)
                 )
             }
         }
@@ -712,51 +809,70 @@ struct LyricsTextView: UIViewRepresentable {
     }
 }
 
+/// Colours for the pending-rewrite and insertion highlight, taken from the
+/// appearance palette so the editor stays monochrome while a rewrite is in
+/// flight. The overlay sits above the text, so the fill stays translucent.
+struct RewriteHighlightColors: Equatable {
+    static let pendingFillOpacity: CGFloat = 0.45
+    static let pendingStrokeOpacity: CGFloat = 0.90
+    static let errorFillOpacity: CGFloat = 0.20
+    static let errorStrokeOpacity: CGFloat = 0.60
+    static let insertionFillOpacity: CGFloat = 0.12
+    static let insertionStrokeOpacity: CGFloat = 0.45
+
+    let fill: UIColor
+    let stroke: UIColor
+
+    /// A selection waiting for, or receiving, a rewrite: the editor's own
+    /// selection tint with a strong-outline border. Nothing moves.
+    static func pending(palette: AppAppearancePalette) -> RewriteHighlightColors {
+        RewriteHighlightColors(
+            fill: UIColor(palette.selectionTint).withAlphaComponent(pendingFillOpacity),
+            stroke: UIColor(palette.outlineStrong).withAlphaComponent(pendingStrokeOpacity)
+        )
+    }
+
+    static func error(palette: AppAppearancePalette) -> RewriteHighlightColors {
+        RewriteHighlightColors(
+            fill: UIColor(palette.error).withAlphaComponent(errorFillOpacity),
+            stroke: UIColor(palette.error).withAlphaComponent(errorStrokeOpacity)
+        )
+    }
+
+    static func insertion(palette: AppAppearancePalette) -> RewriteHighlightColors {
+        RewriteHighlightColors(
+            fill: UIColor(palette.primaryInk).withAlphaComponent(insertionFillOpacity),
+            stroke: UIColor(palette.primaryInk).withAlphaComponent(insertionStrokeOpacity)
+        )
+    }
+
+    static func forHighlight(_ highlight: LyricsRewriteHighlight, palette: AppAppearancePalette) -> RewriteHighlightColors {
+        if highlight.isInsertion { return insertion(palette: palette) }
+        if highlight.isError { return error(palette: palette) }
+        return pending(palette: palette)
+    }
+}
+
+/// Draws the rewrite and insertion highlight: a rounded tint and a 1pt border
+/// around the affected glyph rects. It is static by design; the rewrite bar
+/// at the bottom of the editor carries the loading state.
 final class RewriteHighlightOverlayView: UIView {
-    private var rects: [CGRect] = []
-    private var isLoading = false
-    private var isError = false
-    private var insertionColor: UIColor?
-    private var scanProgress: CGFloat = 0
-    private var displayLink: CADisplayLink?
+    private(set) var rects: [CGRect] = []
+    private(set) var isLoading = false
+    private(set) var colors: RewriteHighlightColors?
 
-    var isRippleAnimating: Bool { displayLink != nil }
-
-    override func didMoveToSuperview() {
-        super.didMoveToSuperview()
-        if superview == nil { stopScan() }
-    }
-
-    deinit {
-        displayLink?.invalidate()
-    }
-
-    func configure(rects: [CGRect], isLoading: Bool, isError: Bool, insertionColor: UIColor? = nil) {
+    func configure(rects: [CGRect], isLoading: Bool, colors: RewriteHighlightColors?) {
         self.rects = rects
         self.isLoading = isLoading
-        self.isError = isError
-        self.insertionColor = insertionColor
-
-        if isLoading && !rects.isEmpty && !UIAccessibility.isReduceMotionEnabled {
-            startScan()
-        } else {
-            stopScan()
-        }
+        self.colors = colors
         setNeedsDisplay()
     }
 
     override func draw(_ rect: CGRect) {
-        guard let context = UIGraphicsGetCurrentContext(), !rects.isEmpty else { return }
+        guard let context = UIGraphicsGetCurrentContext(), let colors, !rects.isEmpty else { return }
 
-        let fillColor = insertionColor?.withAlphaComponent(0.12) ?? (isError
-            ? UIColor.systemRed.withAlphaComponent(0.20)
-            : UIColor.systemIndigo.withAlphaComponent(0.22))
-        let strokeColor = insertionColor?.withAlphaComponent(0.45) ?? (isError
-            ? UIColor.systemRed.withAlphaComponent(0.60)
-            : UIColor.systemTeal.withAlphaComponent(0.70))
-
-        context.setFillColor(fillColor.cgColor)
-        context.setStrokeColor(strokeColor.cgColor)
+        context.setFillColor(colors.fill.cgColor)
+        context.setStrokeColor(colors.stroke.cgColor)
         context.setLineWidth(1.0)
 
         for highlightRect in rects {
@@ -764,54 +880,6 @@ final class RewriteHighlightOverlayView: UIView {
             context.addPath(path.cgPath)
             context.drawPath(using: .fillStroke)
         }
-
-        guard isLoading, !UIAccessibility.isReduceMotionEnabled else { return }
-
-        for highlightRect in rects {
-            let bandWidth = max(highlightRect.width * 0.45, 24)
-            let travel = highlightRect.width + bandWidth * 2
-            let centerX = highlightRect.minX - bandWidth + travel * scanProgress
-            context.saveGState()
-            UIBezierPath(roundedRect: highlightRect, cornerRadius: RhymeAITokens.Radius.xs).addClip()
-            let colors = [
-                UIColor.systemIndigo.withAlphaComponent(0).cgColor,
-                UIColor.systemIndigo.withAlphaComponent(0.6).cgColor,
-                UIColor.systemIndigo.withAlphaComponent(0).cgColor
-            ] as CFArray
-            let locations: [CGFloat] = [0, 0.5, 1]
-            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
-                context.drawLinearGradient(
-                    gradient,
-                    start: CGPoint(x: centerX - bandWidth, y: highlightRect.midY),
-                    end: CGPoint(x: centerX + bandWidth, y: highlightRect.midY),
-                    options: []
-                )
-            }
-            context.restoreGState()
-        }
-    }
-
-    private func startScan() {
-        guard displayLink == nil else { return }
-        let link = CADisplayLink(target: self, selector: #selector(stepScan))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-    }
-
-    private func stopScan() {
-        displayLink?.invalidate()
-        displayLink = nil
-        scanProgress = 0
-    }
-
-    @objc private func stepScan() {
-        guard !UIAccessibility.isReduceMotionEnabled else { stopScan(); return }
-        let frameDuration = displayLink?.duration ?? (1.0 / 60.0)
-        scanProgress += CGFloat((frameDuration > 0 ? frameDuration : 1.0 / 60.0) / 1.2)
-        if scanProgress > 1 {
-            scanProgress = 0
-        }
-        setNeedsDisplay()
     }
 }
 

@@ -6,8 +6,10 @@ drift. Sources of truth (Kotlin):
   - android/.../service/AIService.kt
       buildLocalPrompt, buildLocalRewritePrompt, buildLocalSynonymsPrompt,
       constraintInstruction, buildSectionDirective, firstChorusLines,
-      firstChorusEndWords, localLyricsContext, gemmaInstructionPrompt,
+      firstChorusEndWords, localLyricsContext,
       suggestionRhymeConstraint, SUGGESTION_COUNT
+  - Writers Block/.../Services/GGUFModelService.swift
+      GGUFPromptFormat.resolve, gemmaPrompt (the on-device turn envelope)
   - android/.../data/model/RewriteAction.kt   (label + instruction strings)
   - android/.../data/model/SongSection.kt     (displayName + promptHint)
   - android/.../data/model/RhymeScheme.kt     (RhymeType / RhymeComplexity strings)
@@ -33,6 +35,10 @@ SUGGESTION_COUNT = 6
 LOCAL_RECENT_CONTEXT_CHARS = 2600
 LOCAL_WHOLE_SONG_HEAD_CHARS = 900
 LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
+LOCAL_TRIM_MARKER = "[Lyrics trimmed for on-device speed]"
+LOCAL_SUGGESTION_INTENT = (
+    "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
+)
 SYNONYM_LIMIT_DEFAULT = 8  # AIService.getSynonyms(limit: Int = 8)
 
 # ---------------------------------------------------------------------------
@@ -55,7 +61,7 @@ SONG_SECTIONS = {
     ),
     "UNKNOWN": (
         "Unmarked section",
-        "Section direction: no verse, chorus, or bridge header was detected. Fit the immediate stanza and surrounding lyric context.",
+        "Section direction: follow any explicit section label that is provided; otherwise fit the immediate stanza and surrounding lyric context.",
     ),
 }
 
@@ -70,15 +76,15 @@ RHYME_TYPES = {
 RHYME_COMPLEXITIES = {
     "SIMPLE": (
         "Simple",
-        "Use simple, everyday vocabulary. Keep the language accessible and straightforward. Aim for clear, easy-to-understand rhymes.",
+        "Each line must be 4 to 7 plain, everyday words. Prefer one-syllable end words. No wordplay.",
     ),
     "MODERATE": (
         "Moderate",
-        "Use a balanced vocabulary with some clever wordplay. The rhymes should be interesting but not overly complex.",
+        "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear rather than clever.",
     ),
     "COMPLEX": (
         "Complex",
-        "Use advanced, rich vocabulary with intricate multi-syllable rhymes, internal rhymes, and sophisticated wordplay. Push the boundaries of lyrical complexity.",
+        "Each line must be 8 to 12 words. End each line on a word of two or more syllables, or put an internal rhyme inside the line. Use vivid, specific, less common words and double meanings.",
     ),
 }
 
@@ -190,12 +196,16 @@ class SuggestionRhymeConstraint:
     chorus_end_words_ordered: tuple = ()
 
 
-_HEADER_LINE = re.compile(r"^\s*\[.+]\s*$")
+def _is_header_line(line: str) -> bool:
+    """SectionMap.headerTitle(line) != null: a bracketed or bare section header."""
+    trimmed = line.strip()
+    return bool(_BRACKETED_HEADER.match(line) or (trimmed and _BARE_HEADER.fullmatch(trimmed)))
 
 
 def first_chorus_end_words(lyrics: str) -> List[str]:
     """AIService.firstChorusEndWords — normalized end-words of the first CHORUS
-    section's lines, in document order (Kotlin builds a LinkedHashSet)."""
+    section's lyric lines (its header skipped, as SectionMap.headerTitle does on
+    Android), in document order (Kotlin builds a LinkedHashSet)."""
     refs = parse_section_map(lyrics)
     first_chorus = next((r for r in refs if r.type == "CHORUS"), None)
     if first_chorus is None:
@@ -203,7 +213,7 @@ def first_chorus_end_words(lyrics: str) -> List[str]:
     lines = lyrics.split("\n")
     seen = []
     for idx in first_chorus.line_range:
-        if idx >= len(lines):
+        if idx >= len(lines) or _is_header_line(lines[idx]):
             continue
         end = scoring.line_end_word(lines[idx])
         if end and end not in seen:
@@ -223,9 +233,16 @@ def first_chorus_lines(lyrics: str) -> List[str]:
         if idx >= len(lines):
             continue
         line = lines[idx]
-        if line.strip() and not _HEADER_LINE.match(line):
+        if line.strip() and not _is_header_line(line):
             result.append(line)
     return result
+
+
+def _rhyme_compatible(word: str, target_word: str, rhyme_type: str) -> bool:
+    """ProsodyAnalyzer.rhymeRelation(word, target) == rhymeType: the hook is
+    promoted only into a prompt for its own relation, so a perfect hook never
+    leads a Near or Slant list."""
+    return scoring.rhyme_relation(word, target_word) == rhyme_type
 
 
 def suggestion_rhyme_constraint(
@@ -233,14 +250,16 @@ def suggestion_rhyme_constraint(
     rhyme_type: str,
     section_ref: Optional[SectionRef] = None,
     chorus_end_words: Sequence[str] = (),
+    complexity: str = "MODERATE",
 ) -> Optional[SuggestionRhymeConstraint]:
-    """AIService.suggestionRhymeConstraint."""
+    """AIService.suggestionRhymeConstraint. `complexity` (RhymeComplexity name)
+    shapes the allowed end-word list: see scoring.level_end_words."""
     if target_rhyme_line is None or not target_rhyme_line.strip():
         return None
     target_word = scoring.line_end_word(target_rhyme_line)
     if not target_word:
         return None
-    candidates = scoring.candidate_end_words(target_word, rhyme_type)
+    candidates = scoring.candidate_end_words(target_word, rhyme_type, complexity=complexity)
     if not candidates:
         return None
 
@@ -249,11 +268,18 @@ def suggestion_rhyme_constraint(
     chorus_list = list(chorus_end_words)
     chorus_set = set(chorus_list)
 
-    # Chorus repeat (2nd+): promote first-chorus end-words to the front.
+    # Chorus repeat (2nd+): first-chorus end words in the requested rhyme relation
+    # to the target go first. The relation is verified directly
+    # (ProsodyAnalyzer.rhymeRelation on both apps and here), not by membership in the level's
+    # 12-word cut, so a hook the level ordering pushed past the limit is still
+    # promoted; the merged list is cut back to the limit. Hooks are not filtered
+    # through the level (chorus consistency wins).
     if section_type == "CHORUS" and ordinal >= 2 and chorus_list:
-        promoted = [w for w in chorus_list if w != target_word and w in candidates]
-        rest = [w for w in candidates if w not in promoted]
-        candidates = promoted + rest
+        promoted = [
+            w for w in chorus_list
+            if w != target_word and _rhyme_compatible(w, target_word, rhyme_type)
+        ]
+        candidates = (promoted + [w for w in candidates if w not in promoted])[: scoring.CANDIDATE_LIMIT]
 
     # Verse and bridge: exclude the chorus's end-words unless that empties it.
     if section_type in ("VERSE", "BRIDGE") and chorus_list:
@@ -313,50 +339,210 @@ def _build_section_directive(ref: Optional[SectionRef], lyrics: str) -> str:
     return ""
 
 
-def _trim_to_line_boundary(text: str, prefer_start: bool) -> str:
-    """String.trimToLineBoundary."""
-    if not text:
-        return text
-    if prefer_start:
-        newline = text.find("\n")
-        if 0 <= newline < len(text) - 1:
-            return text[newline + 1:].strip()
-        return text.strip()
-    newline = text.rfind("\n")
-    if newline > 0:
-        return text[:newline].strip()
-    return text.strip()
+def _utf16_len(text: str) -> int:
+    """String length in UTF-16 code units (non-BMP scalars count 2)."""
+    return len(text.encode("utf-16-le")) // 2
 
 
-def local_lyrics_context(lyrics: str, use_whole_song_context: bool) -> str:
-    """AIService.localLyricsContext."""
+def _utf16_suffix(text: str, max_units: int) -> str:
+    """Longest suffix of whole scalars that fits in `max_units` UTF-16 units;
+    matches the platforms' cut, which skips a low surrogate at the cut point."""
+    units = 0
+    start = len(text)
+    while start > 0:
+        size = 2 if ord(text[start - 1]) > 0xFFFF else 1
+        if units + size > max_units:
+            break
+        units += size
+        start -= 1
+    return text[start:]
+
+
+def local_end_word_rule(allowed_words: Optional[Sequence[str]]) -> str:
+    """AIService.localEndWordRule: a list with fewer than six distinct
+    (case-folded) words cannot give six different endings, so repeats are allowed.
+    Repeated chorus end words count once."""
+    if allowed_words is None:
+        return "- End each line on a different word."
+    if len({w.lower() for w in allowed_words}) >= SUGGESTION_COUNT:
+        return "- End each line on a different word from the allowed list."
+    return "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
+
+
+def local_lyric_window(
+    lyrics: str, cursor_line: Optional[int], budget: int, head_budget: int
+) -> str:
+    """AIService.localLyricWindow (same name and rule in AIService.kt and AIService.swift).
+
+    Lyrics over `budget` characters keep, in order: the cursor's
+    blank-line-delimited stanza plus the lines either side of the cursor; the
+    opening lines up to `head_budget`; then the lines nearest that window,
+    one above then one below, until the budget is spent. Each skipped run
+    that holds a lyric becomes one marker line; room for two markers is
+    reserved, so the result never exceeds `budget`. A stanza too long for the
+    budget keeps only the cursor's neighbours before the nearest-line fill, and
+    if those are still too long, only the cursor line. A cursor line longer
+    than the budget keeps its end (where the next line is inserted) after a
+    marker. Lengths count UTF-16 units, as String.length (Kotlin) and
+    utf16.count (Swift) do, and a cut never splits a surrogate pair."""
     trimmed = lyrics.strip()
-    if len(trimmed) <= LOCAL_RECENT_CONTEXT_CHARS:
+    if _utf16_len(trimmed) <= budget:
         return trimmed
+    lines = lyrics.split("\n")
+    last = len(lines) - 1
+    c = last if cursor_line is None else min(max(cursor_line, 0), last)
+    line_budget = budget - 2 * (len(LOCAL_TRIM_MARKER) + 1)
 
+    def cost(i: int) -> int:
+        return _utf16_len(lines[i]) + 1
+
+    def blank(i: int) -> bool:
+        return not lines[i].strip()
+
+    block_start = next((i + 1 for i in range(c - 1, -1, -1) if blank(i)), 0)
+    if blank(c):
+        block_end = c
+    else:
+        block_end = next((i - 1 for i in range(c + 1, last + 1) if blank(i)), last)
+    lo = min(block_start, max(c - 1, 0))
+    hi = max(block_end, min(c + 1, last))
+    if sum(cost(i) for i in range(lo, hi + 1)) > line_budget:
+        lo, hi = max(c - 1, 0), min(c + 1, last)
+    if sum(cost(i) for i in range(lo, hi + 1)) > line_budget:
+        lo, hi = c, c
+    cut = None
+    if cost(c) > line_budget:
+        cut = _utf16_suffix(lines[c], line_budget - 1)
+        used = line_budget
+    else:
+        used = sum(cost(i) for i in range(lo, hi + 1))
+
+    head_count = 0
+    head_used = 0
+    while head_count < lo and head_used + cost(head_count) <= head_budget and used + cost(head_count) <= line_budget:
+        head_used += cost(head_count)
+        used += cost(head_count)
+        head_count += 1
+
+    while True:
+        grew = False
+        if lo - 1 >= head_count and used + cost(lo - 1) <= line_budget:
+            lo -= 1
+            used += cost(lo)
+            grew = True
+        if hi + 1 <= last and used + cost(hi + 1) <= line_budget:
+            hi += 1
+            used += cost(hi)
+            grew = True
+        if not grew:
+            break
+
+    def has_lyric(a: int, b: int) -> bool:
+        return any(not blank(i) for i in range(a, b))
+
+    out = lines[:head_count]
+    if has_lyric(head_count, lo) or cut is not None:
+        out.append(LOCAL_TRIM_MARKER)
+    out.extend(cut if cut is not None and i == c else lines[i] for i in range(lo, hi + 1))
+    if has_lyric(hi + 1, last + 1):
+        out.append(LOCAL_TRIM_MARKER)
+    return "\n".join(out).strip()
+
+
+def local_lyrics_context(
+    lyrics: str, use_whole_song_context: bool, cursor_line: Optional[int] = None
+) -> str:
+    """AIService.localLyricsContext."""
     if use_whole_song_context:
-        head = _trim_to_line_boundary(
-            trimmed[:LOCAL_WHOLE_SONG_HEAD_CHARS], prefer_start=False
+        return local_lyric_window(
+            lyrics,
+            cursor_line,
+            LOCAL_WHOLE_SONG_HEAD_CHARS + LOCAL_WHOLE_SONG_TAIL_CHARS,
+            LOCAL_WHOLE_SONG_HEAD_CHARS,
         )
-        tail = _trim_to_line_boundary(
-            trimmed[-LOCAL_WHOLE_SONG_TAIL_CHARS:], prefer_start=True
-        )
-        return "%s\n\n[Middle lyrics trimmed for on-device speed]\n\n%s" % (head, tail)
-    return "[Earlier lyrics trimmed for on-device speed]\n" + _trim_to_line_boundary(
-        trimmed[-LOCAL_RECENT_CONTEXT_CHARS:], prefer_start=True
-    )
-
-
-def gemma_instruction_prompt(user_prompt: str) -> str:
-    """AIService.gemmaInstructionPrompt — the <start_of_turn> template.
-
-    NOTE: Kotlin trimIndent() drops the trailing newline, so the prompt ends
-    exactly with "<start_of_turn>model" (no trailing newline)."""
-    return "<start_of_turn>user\n%s\n<end_of_turn>\n<start_of_turn>model" % user_prompt
+    return local_lyric_window(lyrics, cursor_line, LOCAL_RECENT_CONTEXT_CHARS, 0)
 
 
 # ---------------------------------------------------------------------------
-# Public prompt builders
+# On-device prompt envelope
+# ---------------------------------------------------------------------------
+# The builders below return the INNER prompt; the app adds the turn markers
+# for the loaded model's family in exactly one place. Mirror of
+# "Writers Block/Writers Block/Services/GGUFModelService.swift":
+#   GGUFPromptFormat.resolve      lines 339-350 (family from GGUF metadata)
+#   GGUFModelService.gemmaPrompt  lines 469-491 (the envelope bytes)
+# llama.cpp prepends <bos> itself (llama_tokenize with addSpecialTokens,
+# lines 434 and 720; the GGUFs set tokenizer.ggml.add_bos_token), so an
+# envelope never contains <bos>, and parseSpecialTokens maps each marker to
+# its single special token. The model ends its turn by emitting
+# `end_of_turn`, an end-of-generation token. Android renders the same bytes
+# from the GGUF's own chat template (LocalModelService.formatPrompt), which
+# additionally trims the content.
+# The shipped RhymeAI E2B/E4B GGUFs are general.architecture "gemma4" with a
+# <|turn>/<turn|> chat template, so the app always gives them GEMMA4.
+
+
+@dataclass(frozen=True)
+class PromptEnvelope:
+    name: str          # GGUFModelService's tokenizerEnvelope spelling
+    user_marker: str
+    model_marker: str
+    suffix: str        # appended after model_marker
+    end_of_turn: str
+
+    @property
+    def generation_prefix(self) -> str:
+        """The model-turn opener the app's prompt ends with."""
+        return self.model_marker.rsplit("\n", 1)[-1] + self.suffix
+
+
+GEMMA4 = PromptEnvelope(
+    "gemma4", "<|turn>user\n", "<turn|>\n<|turn>model", "\n", "<turn|>")
+GEMMA_LEGACY = PromptEnvelope(
+    "gemmaLegacy", "<start_of_turn>user\n", "\n<end_of_turn>\n<start_of_turn>model",
+    "", "<end_of_turn>")
+ENVELOPES = {envelope.name: envelope for envelope in (GEMMA4, GEMMA_LEGACY)}
+# --envelope values shared by prepare_dataset.py, run_eval.py and generate.py.
+ENVELOPE_OPTIONS = {"gemma4": GEMMA4, "legacy": GEMMA_LEGACY}
+# The builders return the inner prompt, which never carries these.
+TURN_MARKERS = ("<start_of_turn>", "<end_of_turn>", "<|turn>", "<turn|>")
+
+
+def template_envelope(chat_template: str) -> Optional[PromptEnvelope]:
+    """The envelope whose markers a chat template uses: the template half of
+    GGUFPromptFormat.resolve. None when it has neither or both."""
+    has_legacy = "<start_of_turn>" in chat_template and "<end_of_turn>" in chat_template
+    has_gemma4 = "<|turn>" in chat_template and "<turn|>" in chat_template
+    if has_gemma4 == has_legacy:
+        return None
+    return GEMMA4 if has_gemma4 else GEMMA_LEGACY
+
+
+def resolve_prompt_envelope(architecture: str, chat_template: str) -> Optional[PromptEnvelope]:
+    """GGUFPromptFormat.resolve; None means the app refuses the model."""
+    envelope = template_envelope(chat_template)
+    if architecture == "gemma4":
+        return envelope if envelope is GEMMA4 else None
+    if architecture in ("gemma", "gemma2", "gemma3", "gemma3n"):
+        return envelope if envelope is GEMMA_LEGACY else None
+    return None
+
+
+def app_prompt(user_prompt: str, envelope: PromptEnvelope = GEMMA4) -> str:
+    """GGUFModelService.gemmaPrompt: the exact text the app tokenizes."""
+    content = user_prompt
+    while content.startswith(envelope.user_marker):
+        normalized = (content[:-1] if content.endswith(envelope.model_marker + "\n")
+                      else content)
+        if not normalized.endswith(envelope.model_marker):
+            break
+        content = normalized[len(envelope.user_marker):-len(envelope.model_marker)]
+    return envelope.user_marker + content + envelope.model_marker + envelope.suffix
+
+
+# ---------------------------------------------------------------------------
+# Public prompt builders. Each returns the INNER prompt, as AIService does;
+# a raw-text request wraps it with app_prompt, as the app's runner does.
 # ---------------------------------------------------------------------------
 
 def build_suggestions_prompt(
@@ -370,6 +556,7 @@ def build_suggestions_prompt(
     complexity: str = "MODERATE",
     use_whole_song_context: bool = False,
     constraint: Optional[SuggestionRhymeConstraint] = None,
+    cursor_line: Optional[int] = None,
 ) -> str:
     """AIService.buildLocalPrompt, wrapped in the Gemma turn template."""
     rhyme_type_display = RHYME_TYPES[rhyme_type]
@@ -394,15 +581,16 @@ def build_suggestions_prompt(
     else:
         song_context_instruction = "Use the immediate stanza, rhyme target, and theme first."
 
-    if theme.strip() and not use_whole_song_context:
+    if theme.strip():
         effective_theme = theme.strip()
     else:
         effective_theme = "Infer from the lyrics."
 
-    lyric_context = local_lyrics_context(lyrics, use_whole_song_context)
+    lyric_context = local_lyrics_context(lyrics, use_whole_song_context, cursor_line)
     section_directive = _build_section_directive(
         constraint.section_ref if constraint else None, lyrics
     )
+    end_word_rule = local_end_word_rule(constraint.candidate_words if constraint else None)
 
     user_prompt = (
         "You are RhymeAI's on-device songwriting assistant.\n"
@@ -413,6 +601,7 @@ def build_suggestions_prompt(
         "Current song section: %s.\n"
         "%s\n"
         "%s%s%s\n"
+        "%s\n"
         "%s\n"
         "Complexity: %s. %s\n"
         "\n"
@@ -425,6 +614,11 @@ def build_suggestions_prompt(
         "- Return exactly %d lines.\n"
         "- One suggestion per line.\n"
         "- Return only candidate lyric lines.\n"
+        "- Make the six lines six different directions: a different idea, image or angle in each. Do not write the same thought six ways.\n"
+        "%s\n"
+        "- Write them as raw material in the writer's own voice: match the length, plainness and capitalisation of the lines around it.\n"
+        "- Do not resolve or conclude the song, do not sum it up, and no grand statements.\n"
+        "- Stay inside what the song is already about.\n"
         "- Do not copy any existing lyric line.\n"
         "- Do not repeat the same suggestion.\n"
         "- No numbering, bullets, quotes, markdown, labels, or explanation.\n"
@@ -440,13 +634,15 @@ def build_suggestions_prompt(
         section_directive,
         rhyme_hint,
         constraint_block,
+        LOCAL_SUGGESTION_INTENT,
         song_context_instruction,
         complexity_label,
         complexity_hint,
         lyric_context,
         request_count,
+        end_word_rule,
     )
-    return gemma_instruction_prompt(user_prompt)
+    return user_prompt
 
 
 def _rewrite_reject_keys(selection: str, rejected_candidates: Sequence[str]) -> List[str]:
@@ -511,11 +707,13 @@ def build_rewrite_prompt(
             "- No quotes, no markdown, no labels, no commentary."
         ) % (selection, rejected_rule)
     else:
+        line_count = len(re.split(r"\r\n|\r|\n", selection))
         output_rules = (
             "- Output the rewritten passage only.\n"
+            "- Return exactly %d %s.\n"
             "- Preserve line breaks if the selection has multiple lines.\n"
             "- No quotes, no markdown, no labels, no commentary."
-        )
+        ) % (line_count, "line" if line_count == 1 else "lines")
 
     if selected_line is not None:
         selected_line_block = 'Line containing the selected word:\n"""\n%s\n"""\n' % selected_line
@@ -555,7 +753,7 @@ def build_rewrite_prompt(
         selection,
         output_rules,
     )
-    return gemma_instruction_prompt(user_prompt)
+    return user_prompt
 
 
 def build_synonyms_prompt(word: str, line_context: str, limit: int = SYNONYM_LIMIT_DEFAULT) -> str:
@@ -575,7 +773,7 @@ def build_synonyms_prompt(word: str, line_context: str, limit: int = SYNONYM_LIM
         '- Do not include "%s".\n'
         "- Prefer words with similar tone and syllable count."
     ) % (limit, word, context_block, word)
-    return gemma_instruction_prompt(user_prompt)
+    return user_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -604,7 +802,8 @@ def _self_test():
     section_ref = next(r for r in refs if r.type == "VERSE" and r.ordinal == 2)
     chorus_ends = first_chorus_end_words(lyrics)
     constraint = suggestion_rhyme_constraint(
-        target_line, "PERFECT", section_ref=section_ref, chorus_end_words=chorus_ends
+        target_line, "PERFECT", section_ref=section_ref, chorus_end_words=chorus_ends,
+        complexity="MODERATE",
     )
 
     print("=" * 72)

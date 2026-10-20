@@ -8,7 +8,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.SongWorkspace
@@ -24,6 +23,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -86,7 +86,6 @@ class ProjectRepository internal constructor(
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
         private val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
-        private val ANALYSIS_PRESENTATION_KEY = stringPreferencesKey("analysis_presentation")
         private val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         private val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
         private val CLAUDE_API_KEY = stringPreferencesKey("claude_api_key")
@@ -103,11 +102,14 @@ class ProjectRepository internal constructor(
         private val EDITOR_SYLLABLE_COLORING = booleanPreferencesKey("editor_syllable_coloring")
         private val EDITOR_RHYME_HIGHLIGHT = booleanPreferencesKey("editor_rhyme_highlight")
         private val EDITOR_BEAT_GRID = booleanPreferencesKey("editor_beat_grid")
+
+        /** Whole Song Context is on until the user saves a value (iOS parity). */
+        const val DEFAULT_USE_WHOLE_SONG_CONTEXT = true
     }
 
     // Snapshot of all 6 editor-toggle preferences, with sensible on-first-install defaults.
     data class EditorToggles(
-        val useWholeSongContext: Boolean = false,
+        val useWholeSongContext: Boolean = DEFAULT_USE_WHOLE_SONG_CONTEXT,
         val isStressIpaEnabled: Boolean = false,
         val isHighlightEnabled: Boolean = true,
         val isSyllableColoringEnabled: Boolean = true,
@@ -133,17 +135,23 @@ class ProjectRepository internal constructor(
         json.decodeFromString<List<SavedLocalModel>>(it)
     }
 
-    val projectsFlow: Flow<List<SongProject>> = dataStore.data.map { prefs ->
-        projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
-    }.flowOn(Dispatchers.Default)
+    // Every preference write (editor position, toggles, notebook) re-emits dataStore.data.
+    // Only decode the library when its stored JSON actually changed.
+    val projectsFlow: Flow<List<SongProject>> = dataStore.data
+        .map { prefs -> prefs[PROJECTS_KEY] ?: "[]" }
+        .distinctUntilChanged()
+        .map(projectsStore::decode)
+        .flowOn(Dispatchers.Default)
 
     val currentProjectIdFlow: Flow<String?> = dataStore.data.map { prefs ->
         prefs[CURRENT_PROJECT_ID_KEY]
     }
 
-    val trashedProjectsFlow: Flow<List<TrashedSongProject>> = dataStore.data.map { prefs ->
-        trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
-    }.flowOn(Dispatchers.Default)
+    val trashedProjectsFlow: Flow<List<TrashedSongProject>> = dataStore.data
+        .map { prefs -> prefs[TRASHED_PROJECTS_KEY] ?: "[]" }
+        .distinctUntilChanged()
+        .map(trashedProjectsStore::decode)
+        .flowOn(Dispatchers.Default)
 
     val workspacesFlow: Flow<Map<String, SongWorkspace>> = dataStore.data.map { prefs ->
         workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
@@ -483,16 +491,6 @@ class ProjectRepository internal constructor(
         }
     }
 
-    val analysisPresentationFlow: Flow<AnalysisPresentation> = dataStore.data.map { prefs ->
-        AnalysisPresentation.fromStorage(prefs[ANALYSIS_PRESENTATION_KEY])
-    }
-
-    suspend fun saveAnalysisPresentation(value: AnalysisPresentation) {
-        dataStore.edit { prefs ->
-            prefs[ANALYSIS_PRESENTATION_KEY] = value.storageValue
-        }
-    }
-
     suspend fun saveApiKey(provider: String, key: String) {
         withContext(Dispatchers.IO) {
             secureKeyStore.setKey(provider, key)
@@ -574,7 +572,7 @@ class ProjectRepository internal constructor(
     /** Flow of editor toggle preferences; emits immediately with current values. */
     val editorTogglesFlow: Flow<EditorToggles> = dataStore.data.map { prefs ->
         EditorToggles(
-            useWholeSongContext = prefs[EDITOR_WHOLE_SONG_CONTEXT] ?: false,
+            useWholeSongContext = prefs[EDITOR_WHOLE_SONG_CONTEXT] ?: DEFAULT_USE_WHOLE_SONG_CONTEXT,
             isStressIpaEnabled = prefs[EDITOR_STRESS_IPA] ?: false,
             isHighlightEnabled = prefs[EDITOR_HIGHLIGHT_RHYMES] ?: true,
             isSyllableColoringEnabled = prefs[EDITOR_SYLLABLE_COLORING] ?: true,

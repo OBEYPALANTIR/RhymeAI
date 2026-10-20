@@ -16,7 +16,9 @@ nonisolated func rhymeSchemeRows(context: RhymeContext, scheme: String) -> [Rhym
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         let letter: String?
         if SectionMap.headerTitle(trimmed) != nil {
+            // A section header starts a new stanza, so the scheme restarts under it.
             letter = nil
+            lyricIndex = 0
         } else if trimmed.isEmpty {
             letter = isCurrent ? context.currentLetter : nil
         } else {

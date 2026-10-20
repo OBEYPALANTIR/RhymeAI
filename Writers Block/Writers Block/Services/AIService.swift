@@ -75,7 +75,26 @@ struct AIService {
     }
 
     private static let suggestionCount = 6
+    /// Local rule (PARITY.md): fewer than `suggestionCount` survivors retries once; fewer than this after that is an error.
+    private static let minimumSuggestionCount = 3
+
+    /// Dedupe keys and counts shared by the local path's first and retry pass.
+    struct LineStreamState {
+        var seen = Set<String>()
+        var accepted = 0
+        var emitted = 0
+    }
     private static let localRewriteAttempts = 2
+    /// On-device whole-song context budget, shared with Android
+    /// `localLyricsContext` (see PARITY.md): text up to head + tail characters
+    /// is sent as is; longer songs keep the opening `head` and closing `tail`
+    /// characters cut to whole lines.
+    static let localWholeSongHeadChars = 900
+    static let localWholeSongTailChars = 2200
+    static let localTrimMarker = "[Lyrics trimmed for on-device speed]"
+    /// Next-line intent sentence, byte-identical to Android.
+    static let localSuggestionIntent =
+        "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
     private static let fallbackRephraseWords: [String: [String]] = [
         "believe": ["imagine", "trust", "dream"],
         "birds": ["sparrows", "voices", "wings"],
@@ -119,96 +138,6 @@ struct AIService {
         "walls": ["concrete", "barricades", "barriers"]
     ]
 
-    func getSuggestions(
-        provider: AIProvider,
-        apiKey: String,
-        modelId: String,
-        theme: String,
-        lyrics: String,
-        stanzaLines: [String]? = nil,
-        targetRhymeLine: String?,
-        rhymeType: RhymeType,
-        rhymeScheme: String,
-        currentLetter: String,
-        currentSection: SongSection = .unknown,
-        sectionOrdinal: Int = 1,
-        firstChorusLines: [String]? = nil,
-        complexity: RhymeComplexity,
-        useWholeSongContext: Bool
-    ) async throws -> [String] {
-        if provider == .local {
-            let localPrompt = buildLocalPrompt(
-                theme: theme,
-                lyrics: lyrics,
-                stanzaLines: stanzaLines,
-                targetRhymeLine: targetRhymeLine,
-                rhymeType: rhymeType,
-                rhymeScheme: rhymeScheme,
-                currentLetter: currentLetter,
-                currentSection: currentSection,
-                sectionOrdinal: sectionOrdinal,
-                firstChorusLines: firstChorusLines,
-                complexity: complexity,
-                useWholeSongContext: useWholeSongContext
-            )
-            let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
-
-            // Gemma engine: route through downloaded GGUF model.
-            if Self.shouldUseGemma() {
-                let parsed = try await callGGUFSuggestions(
-                    prompt: localPrompt,
-                    lyrics: lyrics,
-                    limit: Self.suggestionCount
-                )
-                guard let filter else { return parsed }
-                let ranked = filter.rank(parsed, want: Self.suggestionCount)
-                if ranked.isEmpty, !parsed.isEmpty {
-                    throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
-                }
-                return try requireSuggestionCount(ranked)
-            }
-
-            // Apple Intelligence fallback.
-            if #available(iOS 26.0, *) {
-                let parsed = try await callLocal(prompt: localPrompt, lyrics: lyrics, limit: Self.suggestionCount)
-                guard let filter else { return parsed }
-                let ranked = filter.rank(parsed, want: Self.suggestionCount)
-                if ranked.isEmpty, !parsed.isEmpty {
-                    throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
-                }
-                return try requireSuggestionCount(ranked)
-            }
-            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
-        }
-
-        guard !apiKey.isEmpty else {
-            throw AIServiceError.noApiKey(provider: provider.displayName)
-        }
-
-        let prompt = buildPrompt(
-            theme: theme,
-            lyrics: lyrics,
-            targetRhymeLine: targetRhymeLine,
-            rhymeType: rhymeType,
-            rhymeScheme: rhymeScheme,
-            currentLetter: currentLetter,
-            currentSection: currentSection,
-            sectionOrdinal: sectionOrdinal,
-            firstChorusLines: firstChorusLines,
-            complexity: complexity,
-            useWholeSongContext: useWholeSongContext
-        )
-
-        let raw = try await callCloudText(
-            provider: provider,
-            apiKey: apiKey,
-            modelId: modelId,
-            prompt: prompt,
-            kind: .suggestions
-        )
-        return parseSuggestionList(raw)
-    }
-
     // MARK: - Streaming
 
     func streamSuggestions(
@@ -226,7 +155,8 @@ struct AIService {
         sectionOrdinal: Int = 1,
         firstChorusLines: [String]? = nil,
         complexity: RhymeComplexity,
-        useWholeSongContext: Bool
+        useWholeSongContext: Bool,
+        cursorLineIndex: Int? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -244,24 +174,23 @@ struct AIService {
                             sectionOrdinal: sectionOrdinal,
                             firstChorusLines: firstChorusLines,
                             complexity: complexity,
-                            useWholeSongContext: useWholeSongContext
+                            useWholeSongContext: useWholeSongContext,
+                            cursorLineIndex: cursorLineIndex
                         )
-                        let tokens: AsyncThrowingStream<String, Error>
+                        let makeTokens: () -> AsyncThrowingStream<String, Error>
                         if Self.shouldUseGemma(), let path = Self.firstGGUFPath() {
-                            tokens = Self.streamGGUFChunks(prompt: prompt, filePath: path, runner: Self.ggufRunner)
+                            makeTokens = { Self.streamGGUFChunks(prompt: prompt, filePath: path, runner: Self.ggufRunner) }
                         } else if #available(iOS 26.0, *) {
-                            tokens = streamAppleLocalChunks(prompt: prompt)
+                            makeTokens = { streamAppleLocalChunks(prompt: prompt) }
                         } else {
                             throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
                         }
-                        try await emitLines(
-                            from: tokens,
+                        try await emitLocalLines(
+                            tokens: makeTokens,
                             into: continuation,
-                            filter: RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType),
-                            rhymeType: rhymeType,
-                            excludedKeys: existingSuggestionKeys(in: lyrics),
-                            rejectsLocalArtifacts: true,
-                            requiresExactCount: true
+                            lyrics: lyrics,
+                            targetRhymeLine: targetRhymeLine,
+                            rhymeType: rhymeType
                         )
                         continuation.finish()
                         return
@@ -313,6 +242,46 @@ struct AIService {
         }
     }
 
+    /// Local streaming rule: `tokens` is invoked once more for the retry pass.
+    private func emitLocalLines(
+        tokens makeTokens: () -> AsyncThrowingStream<String, Error>,
+        into continuation: AsyncThrowingStream<String, Error>.Continuation,
+        lyrics: String,
+        targetRhymeLine: String?,
+        rhymeType: RhymeType
+    ) async throws {
+        let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
+        let excludedKeys = existingSuggestionKeys(in: lyrics)
+        var state = try await emitLines(
+            from: makeTokens(), into: continuation, filter: filter, rhymeType: rhymeType,
+            excludedKeys: excludedKeys, rejectsLocalArtifacts: true
+        )
+        // Retry once: GGUFModelService draws a fresh random seed per generate call.
+        if state.emitted < Self.suggestionCount {
+            do {
+                state = try await emitLines(
+                    from: makeTokens(), into: continuation, filter: filter, rhymeType: rhymeType,
+                    excludedKeys: excludedKeys, rejectsLocalArtifacts: true, state: state
+                )
+            } catch {
+                // A failed optional retry keeps the first pass once it already met the minimum.
+                if error is CancellationError || Task.isCancelled || state.emitted < Self.minimumSuggestionCount { throw error }
+            }
+        }
+        try Self.requireMinimumLocalSuggestions(survivors: state.emitted, accepted: state.accepted, filter: filter, rhymeType: rhymeType)
+    }
+
+    private static func requireMinimumLocalSuggestions(survivors: Int, accepted: Int, filter: RhymeLineFilter?, rhymeType: RhymeType) throws {
+        guard survivors < minimumSuggestionCount else { return }
+        if filter != nil, accepted > 0, survivors == 0 {
+            throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
+        }
+        throw AIServiceError.incompleteResponse(expected: suggestionCount, actual: survivors)
+    }
+
+    /// Local (`rejectsLocalArtifacts`) streams return their state for the retry pass and
+    /// leave the count rule to `emitLocalLines`; cloud streams fail here when nothing matched.
+    @discardableResult
     private func emitLines(
         from tokens: AsyncThrowingStream<String, Error>,
         into continuation: AsyncThrowingStream<String, Error>.Continuation,
@@ -320,18 +289,18 @@ struct AIService {
         rhymeType: RhymeType? = nil,
         excludedKeys: Set<String> = [],
         rejectsLocalArtifacts: Bool = false,
-        requiresExactCount: Bool = false
-    ) async throws {
+        state: LineStreamState = LineStreamState()
+    ) async throws -> LineStreamState {
         var buffer = ""
-        var seen = Set<String>()
-        var emitted = 0
-        var accepted = 0
+        var state = state
         let rawLimit = filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
+        // The raw-line budget is per generation; a retry pass gets a fresh one.
+        var passAccepted = 0
 
         streamLoop: for try await chunk in tokens {
             try Task.checkCancellation()
             buffer += chunk
-            while (requiresExactCount || accepted < rawLimit), let newlineIdx = buffer.firstIndex(of: "\n") {
+            while passAccepted < rawLimit, let newlineIdx = buffer.firstIndex(of: "\n") {
                 let rawLine = String(buffer[..<newlineIdx])
                 buffer = String(buffer[buffer.index(after: newlineIdx)...])
                 if rejectsLocalArtifacts, SynonymSanitizer.containsMarkupOrControl(rawLine) {
@@ -341,44 +310,40 @@ struct AIService {
                 let key = normalizeSuggestionKey(cleaned)
                 guard !key.isEmpty,
                       !excludedKeys.contains(key),
-                      seen.insert(key).inserted else { continue }
-                accepted += 1
-                if filter?.tier(of: cleaned) != 0, emitted < Self.suggestionCount {
+                      state.seen.insert(key).inserted else { continue }
+                state.accepted += 1
+                passAccepted += 1
+                if filter?.tier(of: cleaned) != 0, state.emitted < Self.suggestionCount {
                     continuation.yield(cleaned)
-                    emitted += 1
+                    state.emitted += 1
                 }
-                if !requiresExactCount, emitted >= Self.suggestionCount { break streamLoop }
+                if state.emitted >= Self.suggestionCount { break streamLoop }
             }
-            if !requiresExactCount, accepted >= rawLimit { break }
+            if passAccepted >= rawLimit { break }
         }
         try Task.checkCancellation()
 
-        if requiresExactCount || (emitted < Self.suggestionCount && accepted < rawLimit) {
+        if state.emitted < Self.suggestionCount && passAccepted < rawLimit {
             let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
             if rejectsLocalArtifacts, SynonymSanitizer.containsMarkupOrControl(remaining) {
                 throw AIServiceError.decodingError
             }
             if !remaining.isEmpty, let cleaned = rejectsLocalArtifacts ? validatedLocalSuggestionLine(remaining) : cleanSuggestionLine(remaining) {
                 let key = normalizeSuggestionKey(cleaned)
-                if !key.isEmpty, !excludedKeys.contains(key), seen.insert(key).inserted {
-                    accepted += 1
-                    if filter?.tier(of: cleaned) != 0, emitted < Self.suggestionCount {
+                if !key.isEmpty, !excludedKeys.contains(key), state.seen.insert(key).inserted {
+                    state.accepted += 1
+                    if filter?.tier(of: cleaned) != 0, state.emitted < Self.suggestionCount {
                         continuation.yield(cleaned)
-                        emitted += 1
+                        state.emitted += 1
                     }
                 }
             }
         }
 
-        if filter != nil, accepted > 0, emitted == 0, let rhymeType {
+        if !rejectsLocalArtifacts, filter != nil, state.accepted > 0, state.emitted == 0, let rhymeType {
             throw AIServiceError.noMatchingRhymes(rhymeType: rhymeType.shortName)
         }
-        if requiresExactCount, accepted > Self.suggestionCount {
-            throw AIServiceError.incompleteResponse(expected: Self.suggestionCount, actual: accepted)
-        }
-        if requiresExactCount, emitted != Self.suggestionCount {
-            throw AIServiceError.incompleteResponse(expected: Self.suggestionCount, actual: emitted)
-        }
+        return state
     }
 
     private func streamCloudTokens(
@@ -519,41 +484,10 @@ struct AIService {
         return cleaned
     }
 
-    private func validatedLocalSuggestions(
-        _ raw: String,
-        lyrics: String,
-        limit: Int
-    ) throws -> [String] {
-        guard !SynonymSanitizer.containsMarkupOrControl(raw) else {
-            throw AIServiceError.decodingError
-        }
-        let excludedKeys = existingSuggestionKeys(in: lyrics)
-        var seen = Set<String>()
-        let suggestions = raw.components(separatedBy: .newlines).compactMap { line -> String? in
-            guard let cleaned = validatedLocalSuggestionLine(line) else { return nil }
-            let key = normalizeSuggestionKey(cleaned)
-            guard !key.isEmpty,
-                  !excludedKeys.contains(key),
-                  seen.insert(key).inserted else { return nil }
-            return cleaned
-        }
-        return try requireSuggestionCount(suggestions, expected: limit)
-    }
-
     private func existingSuggestionKeys(in lyrics: String) -> Set<String> {
         Set(lyrics.components(separatedBy: .newlines)
             .map(normalizeSuggestionKey)
             .filter { !$0.isEmpty })
-    }
-
-    private func requireSuggestionCount(
-        _ suggestions: [String],
-        expected: Int = Self.suggestionCount
-    ) throws -> [String] {
-        guard suggestions.count == expected else {
-            throw AIServiceError.incompleteResponse(expected: expected, actual: suggestions.count)
-        }
-        return suggestions
     }
 
     private func normalizeSuggestionKey(_ text: String) -> String {
@@ -647,9 +581,10 @@ struct AIService {
         complexity: RhymeComplexity,
         useWholeSongContext: Bool
     ) -> String {
-        let effectiveTheme = useWholeSongContext
+        // A written theme is sent in both modes; whole-song context only changes the fallback.
+        let effectiveTheme = !theme.isEmpty ? theme : (useWholeSongContext
             ? "Whole song context enabled; infer the theme from the full lyrics."
-            : (theme.isEmpty ? "No specific theme provided" : theme)
+            : "No specific theme provided")
 
         let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
         let lyricsContext = useWholeSongContext ? lyrics : (targetRhymeLine ?? "")
@@ -657,7 +592,8 @@ struct AIService {
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
             currentSection: currentSection,
-            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) }
+            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) },
+            complexity: complexity
         )
         // Over-generate 2x when ending words are constrained so the rhyme
         // filter can discard misses and still deliver a full set.
@@ -738,22 +674,50 @@ struct AIService {
     ///
     /// When `firstChorusEndWords` is non-nil the candidates are prepended with
     /// those words (chorus repeat) or have them removed (verse/bridge exclusion).
+    /// `complexity` shapes the allowed list (`RhymeConstraint.levelEndWords`):
+    /// two-or-more-syllable rhymes first at `.complex`, one-syllable rhymes at `.simple`.
     static func rhymeConstraintBlock(
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         currentSection: SongSection = .unknown,
-        firstChorusEndWords: [String]? = nil
+        firstChorusEndWords: [String]? = nil,
+        complexity: RhymeComplexity = .moderate
     ) -> String? {
+        rhymeConstraintWords(
+            targetRhymeLine: targetRhymeLine,
+            rhymeType: rhymeType,
+            currentSection: currentSection,
+            firstChorusEndWords: firstChorusEndWords,
+            complexity: complexity
+        ).map(rhymeConstraintText)
+    }
+
+    /// The target and allowed end words behind `rhymeConstraintBlock`; nil in the same cases.
+    static func rhymeConstraintWords(
+        targetRhymeLine: String?,
+        rhymeType: RhymeType,
+        currentSection: SongSection = .unknown,
+        firstChorusEndWords: [String]? = nil,
+        complexity: RhymeComplexity = .moderate
+    ) -> (target: String, targetWord: String, words: [String])? {
         guard let target = targetRhymeLine,
               !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
         let targetWord = RhymeConstraint.lineEndWord(target)
         guard !targetWord.isEmpty else { return nil }
-        var candidates = RhymeConstraint.candidateEndWords(targetWord: targetWord, rhymeType: rhymeType)
+        var candidates = RhymeConstraint.candidateEndWords(
+            targetWord: targetWord, rhymeType: rhymeType, complexity: complexity
+        )
         guard !candidates.isEmpty else { return nil }
 
         // Chorus 2nd+: prepend first-chorus end words so they rank highest.
+        // Hooks are not filtered through the complexity level and levelEndWords is
+        // not reapplied after the merge: chorus consistency wins over the level (a
+        // hook must stay allowed, which is why the Simple hint only prefers
+        // one-syllable endings), and reapplying the Complex partition would demote a
+        // one-syllable hook. Android promotes only rhyme-compatible hooks; this
+        // unconditional prepend is the pre-existing iOS behaviour.
         // Verse/Bridge: exclude first-chorus end words to diversify rhyme sounds.
         if let chorusWords = firstChorusEndWords, !chorusWords.isEmpty {
             switch currentSection {
@@ -770,10 +734,24 @@ struct AIService {
             }
         }
 
-        return """
-        The new line must rhyme with: "\(target)" (it ends with "\(targetWord)").
-        End each line with one of these rhyming words: \(candidates.joined(separator: ", ")) (choose the most natural fit).
+        return (target, targetWord, candidates)
+    }
+
+    private static func rhymeConstraintText(_ constraint: (target: String, targetWord: String, words: [String])) -> String {
         """
+        The new line must rhyme with: "\(constraint.target)" (it ends with "\(constraint.targetWord)").
+        End each line with one of these rhyming words: \(constraint.words.joined(separator: ", ")) (choose the most natural fit).
+        """
+    }
+
+    /// End-word rule for the on-device Rules list, byte-identical to Android
+    /// `localEndWordRule`: a list with fewer than six distinct (case-folded)
+    /// words allows repeats. A later chorus can list its hook word several times.
+    static func localEndWordRule(allowedWords: [String]?) -> String {
+        guard let allowedWords else { return "- End each line on a different word." }
+        return Set(allowedWords.map { $0.lowercased() }).count >= suggestionCount
+            ? "- End each line on a different word from the allowed list."
+            : "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
     }
 
     /// Verbatim section-instance sentence inserted after the section hint.
@@ -809,7 +787,6 @@ struct AIService {
     // MARK: - Cloud providers
 
     private enum ProviderRequestKind {
-        case suggestions
         case rawJSON
         case stream
 
@@ -1038,15 +1015,18 @@ struct AIService {
         sectionOrdinal: Int = 1,
         firstChorusLines: [String]? = nil,
         complexity: RhymeComplexity,
-        useWholeSongContext: Bool
+        useWholeSongContext: Bool,
+        cursorLineIndex: Int? = nil
     ) -> String {
         let permittedChorusLines = useWholeSongContext ? firstChorusLines : nil
-        let constraintBlock = Self.rhymeConstraintBlock(
+        let constraint = Self.rhymeConstraintWords(
             targetRhymeLine: targetRhymeLine,
             rhymeType: rhymeType,
             currentSection: currentSection,
-            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) }
+            firstChorusEndWords: permittedChorusLines.map { Self.endWords(of: $0) },
+            complexity: complexity
         )
+        let constraintBlock = constraint.map(Self.rhymeConstraintText)
         let requestCount = Self.suggestionCount
 
         var rhymeHint: String
@@ -1075,11 +1055,13 @@ struct AIService {
         let songContextInstruction = useWholeSongContext
             ? "Use the full song for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
             : "Use the immediate stanza, rhyme target, and theme first."
-        let effectiveTheme = !useWholeSongContext && !theme.isEmpty ? theme : "Infer from the lyrics."
+        let trimmedTheme = theme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveTheme = trimmedTheme.isEmpty ? "Infer from the lyrics." : trimmedTheme
         let lyricsContext = localLyricsContext(
             lyrics: lyrics,
             stanzaLines: stanzaLines,
-            useWholeSongContext: useWholeSongContext
+            useWholeSongContext: useWholeSongContext,
+            cursorLineIndex: cursorLineIndex
         )
 
         var prompt = """
@@ -1097,9 +1079,11 @@ struct AIService {
         if let sectionInstanceHint, !sectionInstanceHint.isEmpty {
             prompt += "\n" + sectionInstanceHint
         }
+        let endWordRule = Self.localEndWordRule(allowedWords: constraint?.words)
         prompt += """
 
         \(rhymeHint)
+        \(Self.localSuggestionIntent)
         \(songContextInstruction)
         Complexity: \(complexity.label). \(complexity.promptHint)
 
@@ -1112,6 +1096,11 @@ struct AIService {
         - Return exactly \(requestCount) lines.
         - One suggestion per line.
         - Return only candidate lyric lines.
+        - Make the six lines six different directions: a different idea, image or angle in each. Do not write the same thought six ways.
+        \(endWordRule)
+        - Write them as raw material in the writer's own voice: match the length, plainness and capitalisation of the lines around it.
+        - Do not resolve or conclude the song, do not sum it up, and no grand statements.
+        - Stay inside what the song is already about.
         - Do not copy any existing lyric line.
         - Do not repeat the same suggestion.
         - No numbering, bullets, quotes, markdown, labels, or explanation.
@@ -1124,35 +1113,97 @@ struct AIService {
     private func localLyricsContext(
         lyrics: String,
         stanzaLines: [String]?,
-        useWholeSongContext: Bool
+        useWholeSongContext: Bool,
+        cursorLineIndex: Int?
     ) -> String {
-        if useWholeSongContext { return lyrics }
+        if useWholeSongContext {
+            return Self.localLyricWindow(
+                lyrics,
+                cursorLine: cursorLineIndex,
+                budget: Self.localWholeSongHeadChars + Self.localWholeSongTailChars,
+                headBudget: Self.localWholeSongHeadChars
+            )
+        }
+        // The cursor's stanza is kept whole (localPromptRetainsLongStanzaAndWholeSongPolicy).
         let stanza = (stanzaLines ?? []).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return stanza
     }
 
-    @available(iOS 26.0, *)
-    private func callLocal(prompt: String, lyrics: String, limit: Int) async throws -> [String] {
-        let model = SystemLanguageModel.default
-        guard model.isAvailable else {
-            throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
+    /// Lyrics over `budget` UTF-16 units keep, in order: the cursor's
+    /// blank-line-delimited stanza plus the lines either side of the cursor;
+    /// the opening lines up to `headBudget`; then the lines nearest that
+    /// window, one above then one below, until the budget is spent. Each
+    /// skipped run that holds a lyric becomes one marker line, and room for two
+    /// markers is reserved, so the result never exceeds `budget`. A stanza too
+    /// long for the budget keeps only the cursor's neighbours before the
+    /// nearest-line fill, and if those are still too long, only the cursor
+    /// line. A cursor line longer than the budget keeps its end (where the next
+    /// line is inserted) after a marker; the cut never starts on a low surrogate. `cursorLine` is `NextLinePlacement.cursorLineIndex`;
+    /// nil means the last line. Byte-identical to Android
+    /// `AIService.localLyricWindow` (shared/fixtures/local-lyric-window-v1.json).
+    static func localLyricWindow(_ lyrics: String, cursorLine: Int?, budget: Int, headBudget: Int) -> String {
+        let trimmed = lyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.utf16.count <= budget { return trimmed }
+        let lines = lyrics.components(separatedBy: "\n")
+        let last = lines.count - 1
+        let c = min(max(cursorLine ?? last, 0), last)
+        let lineBudget = budget - 2 * (localTrimMarker.utf16.count + 1)
+        func cost(_ i: Int) -> Int { lines[i].utf16.count + 1 }
+        func blank(_ i: Int) -> Bool { lines[i].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        func cost(_ range: ClosedRange<Int>) -> Int { range.reduce(0) { $0 + cost($1) } }
+
+        let blockStart = stride(from: c - 1, through: 0, by: -1).first(where: blank).map { $0 + 1 } ?? 0
+        let blockEnd = blank(c) ? c : ((c + 1)..<lines.count).first(where: blank).map { $0 - 1 } ?? last
+        var lo = min(blockStart, max(c - 1, 0))
+        var hi = max(blockEnd, min(c + 1, last))
+        if cost(lo...hi) > lineBudget {
+            lo = max(c - 1, 0)
+            hi = min(c + 1, last)
+        }
+        if cost(lo...hi) > lineBudget {
+            lo = c
+            hi = c
+        }
+        var cut: String?
+        var used = cost(lo...hi)
+        if cost(c) > lineBudget {
+            let units = Array(lines[c].utf16)
+            var start = units.count - (lineBudget - 1)
+            if UTF16.isTrailSurrogate(units[start]) { start += 1 }
+            cut = String(decoding: units[start...], as: UTF16.self)
+            used = lineBudget
         }
 
-        let session = LanguageModelSession(
-            model: model,
-            instructions: "You are an expert songwriter and lyricist. Return concise lyric line suggestions only."
-        )
-        // Explicit token caps silently truncate Foundation Models responses.
-        // Require natural completion so a cut-off tail cannot become a lyric.
-        let content: String
-        do {
-            content = try await session.respond(to: prompt).content
-        } catch {
-            throw Self.mapLocalGenerationError(error)
+        var headCount = 0
+        var headUsed = 0
+        while headCount < lo, headUsed + cost(headCount) <= headBudget, used + cost(headCount) <= lineBudget {
+            headUsed += cost(headCount)
+            used += cost(headCount)
+            headCount += 1
         }
-        try Task.checkCancellation()
-        return try validatedLocalSuggestions(content, lyrics: lyrics, limit: limit)
+
+        while true {
+            var grew = false
+            if lo - 1 >= headCount, used + cost(lo - 1) <= lineBudget {
+                lo -= 1
+                used += cost(lo)
+                grew = true
+            }
+            if hi + 1 <= last, used + cost(hi + 1) <= lineBudget {
+                hi += 1
+                used += cost(hi)
+                grew = true
+            }
+            if !grew { break }
+        }
+
+        func hasLyric(_ from: Int, _ until: Int) -> Bool { (from..<max(from, until)).contains { !blank($0) } }
+        var out = Array(lines[0..<headCount])
+        if hasLyric(headCount, lo) || cut != nil { out.append(localTrimMarker) }
+        out += (lo...hi).map { $0 == c ? (cut ?? lines[$0]) : lines[$0] }
+        if hasLyric(hi + 1, last + 1) { out.append(localTrimMarker) }
+        return out.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func localSnapshotDelta(previous: String, current: String) throws -> String {
@@ -1276,12 +1327,6 @@ struct AIService {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
-    }
-
-    /// Route a suggestion prompt through Gemma and parse the result.
-    private func callGGUFSuggestions(prompt: String, lyrics: String, limit: Int) async throws -> [String] {
-        let raw = try await callGGUF(prompt: prompt)
-        return try validatedLocalSuggestions(raw, lyrics: lyrics, limit: limit)
     }
 
     private func callGGUFRewrite(
@@ -1422,7 +1467,8 @@ struct AIService {
         sectionOrdinal: Int,
         firstChorusLines: [String]?,
         complexity: RhymeComplexity = .moderate,
-        useWholeSongContext: Bool
+        useWholeSongContext: Bool,
+        cursorLineIndex: Int? = nil
     ) -> String {
         buildLocalPrompt(
             theme: theme,
@@ -1436,7 +1482,8 @@ struct AIService {
             sectionOrdinal: sectionOrdinal,
             firstChorusLines: firstChorusLines,
             complexity: complexity,
-            useWholeSongContext: useWholeSongContext
+            useWholeSongContext: useWholeSongContext,
+            cursorLineIndex: cursorLineIndex
         )
     }
 
@@ -1453,34 +1500,43 @@ struct AIService {
             sectionOrdinal: input.sectionOrdinal,
             firstChorusLines: input.firstChorusLines,
             complexity: input.complexity,
-            useWholeSongContext: input.useWholeSongContext
+            useWholeSongContext: input.useWholeSongContext,
+            cursorLineIndex: input.cursorLineIndex
         )
     }
 
+    /// `retryChunks` feeds the retry pass (an empty response when nil); `retryError` makes that pass
+    /// throw after its chunks; `retryCalls` reports whether it ran.
     func validatedLocalSuggestionStreamForTest(
         chunks: [String],
+        retryChunks: [String]? = nil,
+        retryError: Error? = nil,
         lyrics: String,
         targetRhymeLine: String? = nil,
-        rhymeType: RhymeType = .perfect
+        rhymeType: RhymeType = .perfect,
+        retryCalls: ((Int) -> Void)? = nil
     ) -> AsyncThrowingStream<String, Error> {
-        let tokens = AsyncThrowingStream<String, Error> { continuation in
-            for chunk in chunks {
-                continuation.yield(chunk)
-            }
-            continuation.finish()
-        }
-        return AsyncThrowingStream { continuation in
+        AsyncThrowingStream { continuation in
             let task = Task {
+                var attempts = [chunks, retryChunks ?? []]
+                var calls = 0
                 do {
-                    try await emitLines(
-                        from: tokens,
+                    try await emitLocalLines(
+                        tokens: {
+                            calls += 1
+                            let chunks = attempts.removeFirst()
+                            let error = calls > 1 ? retryError : nil
+                            return AsyncThrowingStream<String, Error> { continuation in
+                                for chunk in chunks { continuation.yield(chunk) }
+                                continuation.finish(throwing: error)
+                            }
+                        },
                         into: continuation,
-                        filter: RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType),
-                        rhymeType: rhymeType,
-                        excludedKeys: existingSuggestionKeys(in: lyrics),
-                        rejectsLocalArtifacts: true,
-                        requiresExactCount: true
+                        lyrics: lyrics,
+                        targetRhymeLine: targetRhymeLine,
+                        rhymeType: rhymeType
                     )
+                    retryCalls?(calls)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -2371,63 +2427,6 @@ struct AIService {
         return text
     }
 
-    // MARK: - Parsing
-
-    func parseSuggestionList(_ text: String) -> [String] {
-        parseSuggestionList(text, limit: Self.suggestionCount)
-    }
-
-    func parseSuggestionList(_ text: String, limit: Int) -> [String] {
-        let parsed = parseJsonArray(text, limit: limit)
-        let candidates = parsed.isEmpty ? parseLines(text) : parsed
-        var seen = Set<String>()
-        var result: [String] = []
-
-        for candidate in candidates {
-            guard let cleaned = cleanSuggestionLine(candidate) else { continue }
-            let key = normalizeSuggestionKey(cleaned)
-            guard !key.isEmpty, seen.insert(key).inserted else { continue }
-            result.append(cleaned)
-            if result.count >= limit { break }
-        }
-        return result
-    }
-
-    private func parseJsonArray(_ text: String, limit: Int) -> [String] {
-        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Strip code fences
-        if cleaned.hasPrefix("```json") { cleaned = String(cleaned.dropFirst(7)) }
-        if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
-        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
-        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Try parsing as a direct JSON array
-        if let data = cleaned.data(using: .utf8),
-           let array = try? JSONSerialization.jsonObject(with: data) as? [String] {
-            return Array(array.prefix(limit))
-        }
-
-        // Try parsing as a JSON object containing an array
-        if let data = cleaned.data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            for value in obj.values {
-                if let array = value as? [String] {
-                    return Array(array.prefix(limit))
-                }
-            }
-        }
-
-        return []
-    }
-
-    private func parseLines(_ text: String) -> [String] {
-        let normalized = text.contains("\n")
-            ? text
-            : text
-                .replacingOccurrences(of: "\\r\\n", with: "\n")
-                .replacingOccurrences(of: "\\n", with: "\n")
-        return normalized.components(separatedBy: .newlines)
-    }
     func buildLocalSuggestionPromptForTest(
         theme: String,
         lyrics: String,

@@ -10,15 +10,18 @@ import com.rhymeai.app.data.model.SongSection
 import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.RhymeConstraint
+import com.rhymeai.app.util.RhymeLineFilter
 import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SectionRef
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
@@ -95,6 +98,13 @@ class AIService {
         val disposition: String
     )
 
+    /** Dedupe keys and counts shared by the local path's first and retry pass. */
+    internal class LineStreamState {
+        val seen = mutableSetOf<String>()
+        var accepted = 0
+        var emitted = 0
+    }
+
     internal data class SingleWordRewriteContext(
         val previousWord: String?,
         val nextWord: String?,
@@ -102,7 +112,7 @@ class AIService {
     )
 
     // Computed once per suggestion request and shared by the prompt builders
-    // (constrain end words, over-generate) and the output filters (verify/rank).
+    // (constrain end words, over-generate) and the output filter (verify).
     internal data class SuggestionRhymeConstraint(
         val targetLine: String,
         val targetWord: String,
@@ -114,13 +124,28 @@ class AIService {
         /** End-words of lines in the first chorus instance, used for chorus-repeat
          *  candidate promotion and verse/bridge exclusion. Empty when no chorus exists. */
         val chorusEndWords: Set<String> = emptySet()
+    ) {
+        /** The returned-line filter for this request: admits only [rhymeType]. */
+        val lineFilter: RhymeLineFilter? by lazy { RhymeLineFilter.create(targetLine, rhymeType, dictionary) }
+    }
+
+    /** No returned line matched the requested relation; mirrors iOS `noMatchingRhymes`. */
+    internal class NoMatchingRhymesException(rhymeType: RhymeType) : RuntimeException(
+        "The provider returned lines, but none matched the requested ${rhymeType.name.lowercase()} rhyme. Try another rhyme type."
     )
 
     private companion object {
         const val SUGGESTION_COUNT = 6
+        /** Local rule (PARITY.md): fewer than [SUGGESTION_COUNT] survivors retries once; fewer than this after that is an error. */
+        const val MIN_SUGGESTIONS = 3
+        // On-device lyric context budget, shared with iOS (see PARITY.md).
         const val LOCAL_RECENT_CONTEXT_CHARS = 2600
         const val LOCAL_WHOLE_SONG_HEAD_CHARS = 900
         const val LOCAL_WHOLE_SONG_TAIL_CHARS = 2200
+        const val LOCAL_TRIM_MARKER = "[Lyrics trimmed for on-device speed]"
+        /** Next-line intent sentence, byte-identical to iOS `localSuggestionIntent`. */
+        const val LOCAL_SUGGESTION_INTENT =
+            "The writer is stuck on the next line and wants ideas to pick from, not a finished verse."
         const val LOCAL_REWRITE_ATTEMPTS = 2
         const val LOCAL_INCOMPLETE_RESPONSE =
             "Local model returned an incomplete response. Try again or use a cloud provider."
@@ -135,6 +160,7 @@ class AIService {
 
         fun userFacingProviderException(error: Throwable): RuntimeException {
             if (error is CancellationException) throw error
+            if (error is NoMatchingRhymesException) return error
             val causes = error.causes()
             val rawMessage = causes.joinToString(" ") { cause ->
                 "${cause::class.java.simpleName} ${cause.message.orEmpty()}"
@@ -180,28 +206,41 @@ class AIService {
 
     // LLMs rhyme unreliably because tokens hide phonetics. When the dictionary
     // knows the target end word, we pin suggestions to verified rhyme words and
-    // ask for double the lines so the phonetic filter has material to rank.
+    // ask for double the lines so the phonetic filter still has six that pass.
+    // The complexity level shapes the allowed list (RhymeConstraint.levelEndWords):
+    // two-or-more-syllable rhymes first at COMPLEX, one-syllable rhymes at SIMPLE.
     internal fun suggestionRhymeConstraint(
         targetRhymeLine: String?,
         rhymeType: RhymeType,
         dictionary: PronunciationDictionary = PronunciationDictionary.shared,
         sectionRef: SectionRef? = null,
-        chorusEndWords: Set<String> = emptySet()
+        chorusEndWords: Set<String> = emptySet(),
+        complexity: RhymeComplexity = RhymeComplexity.MODERATE
     ): SuggestionRhymeConstraint? {
         if (targetRhymeLine.isNullOrBlank()) return null
         val targetWord = RhymeConstraint.lineEndWord(targetRhymeLine)
         if (targetWord.isEmpty()) return null
-        var candidates = RhymeConstraint.candidateEndWords(targetWord, rhymeType, dictionary = dictionary)
+        var candidates = RhymeConstraint.candidateEndWords(
+            targetWord, rhymeType, dictionary = dictionary, complexity = complexity
+        )
         if (candidates.isEmpty()) return null
 
         val type = sectionRef?.type ?: SongSection.UNKNOWN
         val ordinal = sectionRef?.ordinal ?: 1
 
-        // Chorus repeat (2nd+): promote first-chorus end-words to the front of candidates.
+        // Chorus repeat (2nd+): first-chorus end words that stand in the requested
+        // rhyme relation to the target go first. The relation is verified directly
+        // (the same check RhymeLineFilter applies to returned lines), not by
+        // membership in the level's 12-word cut or the index's capped pools, so a
+        // hook the Complex or Simple ordering pushed past the limit is still
+        // promoted; the merged list is then cut back to the limit. Hooks are not
+        // filtered through the level: chorus consistency wins (the Simple hint says
+        // "Prefer one-syllable end words" for this reason).
         if (type == SongSection.CHORUS && ordinal >= 2 && chorusEndWords.isNotEmpty()) {
-            val promoted = chorusEndWords.filter { it != targetWord && it in candidates }
-            val rest = candidates.filter { it !in promoted }
-            candidates = promoted + rest
+            val promoted = chorusEndWords.filter {
+                it != targetWord && ProsodyAnalyzer.rhymeRelation(it, targetWord, dictionary) == rhymeType
+            }
+            candidates = (promoted + candidates.filter { it !in promoted }).take(RhymeConstraint.CANDIDATE_LIMIT)
         }
 
         // Verse and bridge: exclude the chorus's end-words unless that would empty the list.
@@ -292,7 +331,7 @@ class AIService {
         val providerLyrics = if (useWholeSongContext) lyrics else targetRhymeLine.orEmpty()
         val providerSection = sectionRef.takeIf { useWholeSongContext }
         val providerConstraint = if (useWholeSongContext) constraint else constraint?.let {
-            suggestionRhymeConstraint(targetRhymeLine, rhymeType, it.dictionary)
+            suggestionRhymeConstraint(targetRhymeLine, rhymeType, it.dictionary, complexity = complexity)
         }
         val rhymeInstruction = if (targetRhymeLine != null) {
             "Crucially, the new line MUST end with a **${rhymeType.displayName}** to this specific line: \"$targetRhymeLine\"."
@@ -307,10 +346,10 @@ class AIService {
             "Prioritize the target line, rhyme scheme, and provided theme/context."
         }
 
-        val effectiveTheme = if (useWholeSongContext) {
-            "Whole song context enabled; infer the theme from the full lyrics."
-        } else {
-            theme.ifEmpty { "No specific theme provided" }
+        // A written theme is sent in both modes; whole-song context only changes the fallback.
+        val effectiveTheme = theme.ifEmpty {
+            if (useWholeSongContext) "Whole song context enabled; infer the theme from the full lyrics."
+            else "No specific theme provided"
         }
 
         val sectionDirective = buildSectionDirective(providerSection, providerLyrics)
@@ -342,68 +381,6 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
     var localModelService: LocalModelService? = null
         internal set
 
-    suspend fun getSuggestions(
-        provider: AIProvider,
-        apiKey: String,
-        modelId: String,
-        theme: String,
-        lyrics: String,
-        targetRhymeLine: String?,
-        rhymeType: RhymeType,
-        rhymeScheme: String,
-        currentLetter: String,
-        currentSection: SongSection = SongSection.UNKNOWN,
-        complexity: RhymeComplexity = RhymeComplexity.MODERATE,
-        useWholeSongContext: Boolean = false,
-        sectionRef: SectionRef? = null,
-        fullLyrics: String = lyrics
-    ): List<SuggestedLine> {
-        if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
-            throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
-        }
-
-        val includeSong = provider == AIProvider.LOCAL || useWholeSongContext
-        val chorusEnds = if (includeSong) firstChorusEndWords(fullLyrics) else emptySet()
-        val constraint = suggestionRhymeConstraint(
-            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds
-        )
-        return if (provider == AIProvider.LOCAL) {
-            val localPrompt = buildLocalPrompt(
-                theme = theme,
-                lyrics = lyrics,
-                targetRhymeLine = targetRhymeLine,
-                rhymeType = rhymeType,
-                rhymeScheme = rhymeScheme,
-                currentLetter = currentLetter,
-                currentSection = currentSection,
-                complexity = complexity,
-                useWholeSongContext = useWholeSongContext,
-                constraint = constraint
-            )
-            callLocal(localPrompt, lyrics, constraint)
-        } else {
-            val prompt = buildPrompt(
-                theme,
-                lyrics,
-                targetRhymeLine,
-                rhymeType,
-                rhymeScheme,
-                currentLetter,
-                currentSection,
-                complexity,
-                useWholeSongContext,
-                constraint,
-                sectionRef
-            )
-            when (provider) {
-                AIProvider.GEMINI -> callGemini(apiKey, modelId, prompt, constraint)
-                AIProvider.OPENAI -> callOpenAI(apiKey, modelId, prompt, constraint)
-                AIProvider.CLAUDE -> callClaude(apiKey, modelId, prompt, constraint)
-                AIProvider.LOCAL -> error("unreachable")
-            }
-        }
-    }
-
     fun streamSuggestions(
         provider: AIProvider,
         apiKey: String,
@@ -418,7 +395,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         complexity: RhymeComplexity = RhymeComplexity.MODERATE,
         useWholeSongContext: Boolean = false,
         sectionRef: SectionRef? = null,
-        fullLyrics: String = lyrics
+        fullLyrics: String = lyrics,
+        cursorLine: Int? = null
     ): Flow<SuggestedLine> = flow {
         if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
             throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
@@ -427,7 +405,8 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         val includeSong = provider == AIProvider.LOCAL || useWholeSongContext
         val chorusEnds = if (includeSong) firstChorusEndWords(fullLyrics) else emptySet()
         val constraint = suggestionRhymeConstraint(
-            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds
+            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds,
+            complexity = complexity
         )
         if (provider == AIProvider.LOCAL) {
             val service = localModelService
@@ -445,9 +424,10 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 currentSection = currentSection,
                 complexity = complexity,
                 useWholeSongContext = useWholeSongContext,
-                constraint = constraint
+                constraint = constraint,
+                cursorLine = cursorLine
             )
-            validatedLocalSuggestionStream(service.streamResponse(prompt), lyrics, constraint)
+            validatedLocalSuggestionStream({ service.streamResponse(prompt) }, lyrics, constraint)
                 .collect { emit(it) }
         } else {
             val prompt = buildPrompt(
@@ -623,33 +603,27 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
         tokens: Flow<String>,
         constraint: SuggestionRhymeConstraint? = null,
         excludedKeys: Set<String> = emptySet(),
-        requireExactCount: Boolean = false,
-        onDecision: ((LocalSuggestionDecision) -> Unit)? = null
+        onDecision: ((LocalSuggestionDecision) -> Unit)? = null,
+        /** Local path only: state carried into the retry pass; the caller applies the count rule afterwards. */
+        localPass: LineStreamState? = null
     ) {
         val buffer = StringBuilder()
-        val seen = mutableSetOf<String>()
-        val held = mutableListOf<String>()
-        // Constrained requests over-generate 2x, surface verified rhymes as they
-        // stream, and keep the rest as ranked backfill for the end of the stream.
-        val matches = constraint?.let {
-            ProsodyAnalyzer.findRhymes(it.targetWord, dictionary = it.dictionary)
-        }
-        val isChorusRepeat = constraint?.let {
-            it.sectionRef?.type == SongSection.CHORUS && (it.sectionRef.ordinal) >= 2
-        } ?: false
-        val chorusEnds = constraint?.chorusEndWords ?: emptySet()
-        val acceptLimit = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
-        var accepted = 0
-        var emitted = 0
+        val state = localPass ?: LineStreamState()
+        // Constrained requests over-generate 2x and emit only lines that end in
+        // the requested relation, as they arrive (iOS `emitLines`).
+        val filter = constraint?.lineFilter
+        val acceptLimit = if (filter != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
+        // The budget is per generation; a retry pass gets a fresh one.
+        var passAccepted = 0
 
         suspend fun flushLine(rawLine: String): Boolean {
-            if (!requireExactCount && (accepted >= acceptLimit || emitted >= SUGGESTION_COUNT)) return false
+            if (passAccepted >= acceptLimit || state.emitted >= SUGGESTION_COUNT) return false
             val cleaned = cleanLocalSuggestionLine(rawLine)
             val key = cleaned?.let(::normalizeSuggestionKey).orEmpty()
             val rejection = when {
                 cleaned == null || key.isEmpty() -> "format"
                 key in excludedKeys -> "existing_lyric"
-                !seen.add(key) -> "duplicate"
+                !state.seen.add(key) -> "duplicate"
                 else -> null
             }
             if (rejection != null) {
@@ -657,74 +631,51 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
                 return false
             }
             checkNotNull(cleaned)
-            accepted++
+            state.accepted++
+            passAccepted++
             onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "accepted"))
 
-            // Determine phonetic tier; treat chorus-repeat end-words as tier 2
-            // so they stream immediately rather than being held.
-            val endWord = RhymeConstraint.lineEndWord(cleaned)
-            val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-            val tier = when {
-                isHook -> 2
-                matches != null && constraint != null -> RhymeConstraint.rhymeTier(
-                    cleaned, constraint.targetWord, matches, constraint.dictionary
-                )
-                else -> 0
-            }
-
-            if (matches != null && tier == 0 && !isHook) {
-                held += cleaned
-                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "held_for_rhyme_ranking"))
+            val tier = filter?.tier(cleaned) ?: 0
+            if (filter != null && tier == 0) {
+                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "rhyme_mismatch"))
                 return true
             }
-            if (emitted < SUGGESTION_COUNT) {
-                emit(SuggestedLine(cleaned, tier, isHook))
-                emitted++
-                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "displayed"))
-            } else {
-                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "display_limit"))
-            }
+            val isHook = constraint != null && isHookRepeat(cleaned, constraint)
+            emit(SuggestedLine(cleaned, tier, isHook))
+            state.emitted++
+            onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, "displayed"))
             return true
         }
 
-        tokens.collect { chunk ->
+        // Stop consuming the model once a cap is reached, as iOS `emitLines` breaks its loop.
+        tokens.transformWhile<String, Unit> { chunk ->
             buffer.append(chunk)
-            while (requireExactCount || (accepted < acceptLimit && emitted < SUGGESTION_COUNT)) {
+            while (passAccepted < acceptLimit && state.emitted < SUGGESTION_COUNT) {
                 val newlineIdx = buffer.indexOf('\n')
                 if (newlineIdx < 0) break
                 val rawLine = buffer.substring(0, newlineIdx)
                 buffer.delete(0, newlineIdx + 1)
                 flushLine(rawLine)
             }
-        }
+            passAccepted < acceptLimit && state.emitted < SUGGESTION_COUNT
+        }.collect()
         if (buffer.isNotBlank()) {
             flushLine(buffer.toString())
         }
-        if (constraint != null && emitted < SUGGESTION_COUNT && held.isNotEmpty()) {
-            RhymeConstraint.filterAndRank(
-                lines = held,
-                targetLine = constraint.targetLine,
-                rhymeType = constraint.rhymeType,
-                want = SUGGESTION_COUNT - emitted,
-                dictionary = constraint.dictionary
-            ).forEach { line ->
-                val endWord = RhymeConstraint.lineEndWord(line)
-                val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-                val tier = RhymeConstraint.rhymeTier(
-                    line, constraint.targetWord, requireNotNull(matches), constraint.dictionary
-                )
-                emit(SuggestedLine(line, tier, isHook))
-                emitted++
-                onDecision?.invoke(LocalSuggestionDecision(line, line, "displayed_after_rhyme_ranking"))
-            }
-        }
-        if (requireExactCount && (accepted != SUGGESTION_COUNT || emitted != SUGGESTION_COUNT)) {
-            throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
+        if (localPass == null && filter != null && state.accepted > 0 && state.emitted == 0) {
+            throw NoMatchingRhymesException(filter.rhymeType)
         }
     }
 
+    private fun requireMinimumLocalSuggestions(survivors: Int, accepted: Int, filter: RhymeLineFilter?) {
+        if (survivors >= MIN_SUGGESTIONS) return
+        if (filter != null && accepted > 0 && survivors == 0) throw NoMatchingRhymesException(filter.rhymeType)
+        throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
+    }
+
+    /** [tokens] is invoked once more for the retry pass. */
     internal fun validatedLocalSuggestionStream(
-        tokens: Flow<String>,
+        tokens: () -> Flow<String>,
         lyrics: String,
         constraint: SuggestionRhymeConstraint? = null,
         onDecision: ((LocalSuggestionDecision) -> Unit)? = null
@@ -733,21 +684,37 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
             .map(::normalizeSuggestionKey)
             .filter(String::isNotEmpty)
             .toSet()
-        emitLinesFromTokens(
-            tokens = flow {
-                tokens.collect { chunk ->
-                    if (containsMarkupOrControlLeakage(chunk)) {
-                        onDecision?.invoke(LocalSuggestionDecision(chunk, null, "markup_or_control"))
-                        throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
-                    }
-                    emit(chunk)
-                }
-            },
-            constraint = constraint,
-            excludedKeys = existingKeys,
-            requireExactCount = true,
-            onDecision = onDecision
-        )
+        val state = LineStreamState()
+        // retryFloor = the first pass's count, snapshotted before the retry mutates state.
+        suspend fun pass(retryFloor: Int?) {
+            try {
+                emitLinesFromTokens(
+                    tokens = flow {
+                        tokens().collect { chunk ->
+                            if (containsMarkupOrControlLeakage(chunk)) {
+                                onDecision?.invoke(LocalSuggestionDecision(chunk, null, "markup_or_control"))
+                                throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
+                            }
+                            emit(chunk)
+                        }
+                    },
+                    constraint = constraint,
+                    excludedKeys = existingKeys,
+                    onDecision = onDecision,
+                    localPass = state
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // A failed optional retry ends the pass once the first already met the minimum;
+                // its unterminated tail is dropped, as iOS skips the flush on a throw.
+                if (retryFloor == null || retryFloor < MIN_SUGGESTIONS) throw error
+            }
+        }
+        pass(retryFloor = null)
+        // Retry once: LocalModelService samples with seed -1, a fresh llama.cpp seed per call.
+        if (state.emitted < SUGGESTION_COUNT) pass(retryFloor = state.emitted)
+        requireMinimumLocalSuggestions(state.emitted, state.accepted, constraint?.lineFilter)
     }
 
     private fun httpPostStream(
@@ -1347,77 +1314,11 @@ $outputRules
         }
     }
 
-    private suspend fun callGemini(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        return try {
-            val text = generateGeminiText(apiKey, modelId, prompt) ?: return emptyList()
-            parseSuggestionList(text, constraint)
-        } catch (error: Throwable) {
-            throw userFacingProviderException(error)
-        }
-    }
-
-    private suspend fun callOpenAI(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val responseText = httpPost(
-            url = "https://api.openai.com/v1/chat/completions",
-            headers = mapOf(
-                "Authorization" to "Bearer $apiKey",
-                "Content-Type" to "application/json"
-            ),
-            body = buildOpenAIChatRequestBody(
-                modelId = modelId,
-                prompt = prompt,
-                temperature = 0.8
-            ).toString()
-        )
-        val content = parseOpenAIMessageContent(responseText) ?: return emptyList()
-        return parseSuggestionList(content, constraint)
-    }
-
-    private suspend fun callClaude(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val responseText = httpPost(
-            url = "https://api.anthropic.com/v1/messages",
-            headers = mapOf(
-                "x-api-key" to apiKey,
-                "anthropic-version" to "2023-06-01",
-                "Content-Type" to "application/json"
-            ),
-            body = buildClaudeMessagesRequestBody(modelId, prompt).toString()
-        )
-        val content = parseClaudeMessageText(responseText) ?: return emptyList()
-        return parseSuggestionList(content, constraint)
-    }
-
-    internal fun parseSuggestionList(raw: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val limit = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
-        val parsed = parseJsonArray(raw, limit).ifEmpty { parseLines(raw) }
-        val seen = mutableSetOf<String>()
-        val cleaned = parsed
-            .mapNotNull { cleanLocalSuggestionLine(it) }
-            .filter {
-                val key = normalizeSuggestionKey(it)
-                key.isNotEmpty() && seen.add(key)
-            }
-            .take(limit)
-        if (constraint == null) return cleaned.map { SuggestedLine(it, 0) }
-        val ranked = RhymeConstraint.filterAndRank(
-            lines = cleaned,
-            targetLine = constraint.targetLine,
-            rhymeType = constraint.rhymeType,
-            want = SUGGESTION_COUNT,
-            dictionary = constraint.dictionary
-        )
-        val matches = ProsodyAnalyzer.findRhymes(constraint.targetWord, dictionary = constraint.dictionary)
-        val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS &&
-                (constraint.sectionRef.ordinal) >= 2
-        val chorusEnds = constraint.chorusEndWords
-        return ranked.map { line ->
-            val endWord = RhymeConstraint.lineEndWord(line)
-            val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in chorusEnds
-            val tier = RhymeConstraint.rhymeTier(
-                line, constraint.targetWord, matches, constraint.dictionary
-            )
-            SuggestedLine(line, tier, isHook)
-        }
+    /** A repeated first-chorus ending; only changes the badge. */
+    private fun isHookRepeat(line: String, constraint: SuggestionRhymeConstraint): Boolean {
+        val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS && constraint.sectionRef.ordinal >= 2
+        val endWord = RhymeConstraint.lineEndWord(line)
+        return isChorusRepeat && endWord.isNotEmpty() && endWord in constraint.chorusEndWords
     }
 
     internal fun buildLocalPrompt(
@@ -1430,7 +1331,8 @@ $outputRules
         currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
         useWholeSongContext: Boolean,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        cursorLine: Int? = null
     ): String = buildLocalSuggestionUserPrompt(
             theme,
             lyrics,
@@ -1441,8 +1343,21 @@ $outputRules
             currentSection,
             complexity,
             useWholeSongContext,
-            constraint
+            constraint,
+            cursorLine
         )
+
+    /**
+     * End-word rule for the on-device Rules list, byte-identical to iOS
+     * `localEndWordRule`: a list with fewer than six distinct (case-folded) words
+     * allows repeats, so a duplicated word never counts twice.
+     */
+    internal fun localEndWordRule(allowedWords: List<String>?): String = when {
+        allowedWords == null -> "- End each line on a different word."
+        allowedWords.map { it.lowercase() }.toSet().size >= SUGGESTION_COUNT ->
+            "- End each line on a different word from the allowed list."
+        else -> "- The allowed list has fewer than six words, so end words may repeat, but the six lines must still be six different ideas."
+    }
 
     internal fun buildLocalSuggestionUserPrompt(
         theme: String,
@@ -1454,7 +1369,8 @@ $outputRules
         currentSection: SongSection = SongSection.UNKNOWN,
         complexity: RhymeComplexity,
         useWholeSongContext: Boolean,
-        constraint: SuggestionRhymeConstraint? = null
+        constraint: SuggestionRhymeConstraint? = null,
+        cursorLine: Int? = null
     ): String {
         val rhymeHint = if (targetRhymeLine != null) {
             "End every suggestion with a ${rhymeType.displayName.lowercase()} for: \"$targetRhymeLine\"."
@@ -1464,20 +1380,17 @@ $outputRules
         val constraintBlock = constraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
         // Cloud over-generates 2x for the rhyme filter; the on-device model is
         // slow and small, and doubling its output length doubles the chance of
-        // malformed output — keep the ask at 6 and let filterAndRank re-rank.
+        // malformed output — keep the ask at 6 and let the line filter drop misses.
         val requestCount = SUGGESTION_COUNT
         val songContextInstruction = if (useWholeSongContext) {
             "Use the whole-song context for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
         } else {
             "Use the immediate stanza, rhyme target, and theme first."
         }
-        val effectiveTheme = if (theme.isNotBlank() && !useWholeSongContext) {
-            theme.trim()
-        } else {
-            "Infer from the lyrics."
-        }
-        val lyricContext = localLyricsContext(lyrics, useWholeSongContext)
+        val effectiveTheme = if (theme.isNotBlank()) theme.trim() else "Infer from the lyrics."
+        val lyricContext = localLyricsContext(lyrics, useWholeSongContext, cursorLine)
         val sectionDirective = buildSectionDirective(constraint?.sectionRef, lyrics)
+        val endWordRule = localEndWordRule(constraint?.candidateWords)
         return """
 You are RhymeAI's on-device songwriting assistant.
 
@@ -1487,6 +1400,7 @@ Rhyme scheme: "$rhymeScheme"; next line is "$currentLetter".
 Current song section: ${currentSection.displayName}.
 ${currentSection.promptHint}
 ${sectionDirective}$rhymeHint$constraintBlock
+$LOCAL_SUGGESTION_INTENT
 $songContextInstruction
 Complexity: ${complexity.label}. ${complexity.promptHint}
 
@@ -1499,71 +1413,17 @@ Rules:
 - Return exactly $requestCount lines.
 - One suggestion per line.
 - Return only candidate lyric lines.
+- Make the six lines six different directions: a different idea, image or angle in each. Do not write the same thought six ways.
+$endWordRule
+- Write them as raw material in the writer's own voice: match the length, plainness and capitalisation of the lines around it.
+- Do not resolve or conclude the song, do not sum it up, and no grand statements.
+- Stay inside what the song is already about.
 - Do not copy any existing lyric line.
 - Do not repeat the same suggestion.
 - No numbering, bullets, quotes, markdown, labels, or explanation.
 - Do not apologize, explain limitations, or restate the rules.
 - Keep each suggestion under 16 words.
 """.trimIndent()
-    }
-
-    private suspend fun callLocal(prompt: String, lyrics: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val service = localModelService
-            ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
-        if (!service.isLoaded) {
-            throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
-        }
-        // The local prompt asks for SUGGESTION_COUNT lines even when constrained
-        // (see buildLocalPrompt); filterAndRank still verifies and re-ranks them.
-        val response = service.generateResponse(prompt)
-        val ranked = validateLocalSuggestionResponse(response, lyrics, constraint)
-        val matches = constraint?.let {
-            ProsodyAnalyzer.findRhymes(it.targetWord, dictionary = it.dictionary)
-        }
-        return ranked.map { line ->
-            if (constraint == null) {
-                SuggestedLine(line, 0)
-            } else {
-                val endWord = RhymeConstraint.lineEndWord(line)
-                val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS &&
-                        (constraint.sectionRef.ordinal) >= 2
-                val isHook = isChorusRepeat && endWord.isNotEmpty() && endWord in constraint.chorusEndWords
-                val tier = RhymeConstraint.rhymeTier(
-                    line, constraint.targetWord, requireNotNull(matches), constraint.dictionary
-                )
-                SuggestedLine(line, tier, isHook)
-            }
-        }
-    }
-
-    internal fun validateLocalSuggestionResponse(
-        response: String,
-        lyrics: String,
-        constraint: SuggestionRhymeConstraint? = null,
-        onDecision: ((LocalSuggestionDecision) -> Unit)? = null
-    ): List<String> {
-        if (containsMarkupOrControlLeakage(response)) {
-            onDecision?.invoke(LocalSuggestionDecision(response, null, "markup_or_control"))
-            throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
-        }
-        // Local prompts ask for exactly six, including constrained requests.
-        // Count the complete response before ranking or limiting visible items.
-        val rawResults = parseJsonArray(response, Int.MAX_VALUE).ifEmpty { response.lines() }
-        val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, onDecision)
-        if (sanitized.size != SUGGESTION_COUNT) {
-            throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
-        }
-        val ranked = if (constraint == null) sanitized else RhymeConstraint.filterAndRank(
-            lines = sanitized,
-            targetLine = constraint.targetLine,
-            rhymeType = constraint.rhymeType,
-            want = SUGGESTION_COUNT,
-            dictionary = constraint.dictionary
-        )
-        if (ranked.size != SUGGESTION_COUNT) {
-            throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
-        }
-        return ranked
     }
 
     private val listPrefixPattern = Regex("^\\s*(?:[-*]\\s+|\\d+[.)\\-:]\\s*)")
@@ -1602,11 +1462,6 @@ Rules:
     private val normalizedLinePattern = Regex("[^a-z0-9]+")
     private val singleWordPattern = Regex("[\\p{L}\\p{N}'-]+")
 
-    private fun parseLines(text: String): List<String> {
-        return text.lines()
-            .mapNotNull { cleanLocalSuggestionLine(it) }
-    }
-
     private suspend fun httpPost(url: String, headers: Map<String, String>, body: String): String =
         withContext(Dispatchers.IO) {
             val connection = URL(url).openConnection() as HttpURLConnection
@@ -1634,72 +1489,90 @@ Rules:
             }
         }
 
-    private fun parseJsonArray(text: String, limit: Int = SUGGESTION_COUNT): List<String> {
-        val cleaned = text.trim()
-            .removePrefix("```json")
-            .removePrefix("```")
-            .removeSuffix("```")
-            .trim()
-        if (cleaned.isEmpty()) return emptyList()
-
-        val directArray = runCatching {
-            json.decodeFromString<List<String>>(cleaned)
-        }.getOrNull()
-        if (directArray != null) return directArray.take(limit)
-
-        return runCatching {
-            json.parseToJsonElement(cleaned).jsonObject.values
-                .firstNotNullOfOrNull { value ->
-                    runCatching {
-                        value.jsonArray.mapNotNull { item ->
-                            item.jsonPrimitive.content.trim().takeIf(String::isNotEmpty)
-                        }
-                    }.getOrNull()
-                }
-                ?.take(limit)
-                ?: emptyList()
-        }.getOrDefault(emptyList())
-    }
-
-    private fun localLyricsContext(lyrics: String, useWholeSongContext: Boolean): String {
-        val trimmed = lyrics.trim()
-        if (trimmed.length <= LOCAL_RECENT_CONTEXT_CHARS) return trimmed
-
-        return if (useWholeSongContext) {
-            val head = trimmed.take(LOCAL_WHOLE_SONG_HEAD_CHARS).trimToLineBoundary(preferStart = false)
-            val tail = trimmed.takeLast(LOCAL_WHOLE_SONG_TAIL_CHARS).trimToLineBoundary(preferStart = true)
-            "$head\n\n[Middle lyrics trimmed for on-device speed]\n\n$tail"
+    /**
+     * Keeps long songs inside the on-device context window without dropping the
+     * stanza being written. `cursorLine` is the editor line the cursor is on
+     * (`NextLinePlacement.cursorLineIndex`); null means the last line.
+     */
+    internal fun localLyricsContext(lyrics: String, useWholeSongContext: Boolean, cursorLine: Int? = null): String =
+        if (useWholeSongContext) {
+            localLyricWindow(lyrics, cursorLine, LOCAL_WHOLE_SONG_HEAD_CHARS + LOCAL_WHOLE_SONG_TAIL_CHARS, LOCAL_WHOLE_SONG_HEAD_CHARS)
         } else {
-            "[Earlier lyrics trimmed for on-device speed]\n" +
-                trimmed.takeLast(LOCAL_RECENT_CONTEXT_CHARS).trimToLineBoundary(preferStart = true)
+            localLyricWindow(lyrics, cursorLine, LOCAL_RECENT_CONTEXT_CHARS, 0)
         }
-    }
 
-    private fun sanitizeLocalSuggestions(
-        candidates: List<String>,
-        lyrics: String,
-        onDecision: ((LocalSuggestionDecision) -> Unit)? = null
-    ): List<String> {
-        val existingLines = lyrics.lines()
-            .map { normalizeSuggestionKey(it) }
-            .filter { it.isNotEmpty() }
-            .toSet()
-        val seen = mutableSetOf<String>()
+    /**
+     * Lyrics over [budget] characters keep, in order: the cursor's blank-line-delimited
+     * stanza plus the lines either side of the cursor; the opening lines up to
+     * [headBudget]; then the lines nearest that window, one above then one below,
+     * until the budget is spent. Each skipped run that holds a lyric becomes one
+     * marker line, and room for two markers is reserved, so the result never exceeds
+     * [budget]. A stanza too long for the budget keeps only the cursor's neighbours
+     * before the nearest-line fill, and if those are still too long, only the cursor
+     * line. A cursor line longer than the budget keeps its end (where the next line is
+     * inserted) after a marker; the cut never starts on a low surrogate. Byte-identical to iOS `AIService.localLyricWindow`
+     * and `finetune/eval/prompts.py` (shared fixture: shared/fixtures/local-lyric-window-v1.json).
+     */
+    internal fun localLyricWindow(lyrics: String, cursorLine: Int?, budget: Int, headBudget: Int): String {
+        val trimmed = lyrics.trim()
+        if (trimmed.length <= budget) return trimmed
+        val lines = lyrics.split("\n")
+        val last = lines.lastIndex
+        val c = (cursorLine ?: last).coerceIn(0, last)
+        val lineBudget = budget - 2 * (LOCAL_TRIM_MARKER.length + 1)
+        fun cost(i: Int) = lines[i].length + 1
+        fun blank(i: Int) = lines[i].isBlank()
+        fun cost(range: IntRange) = range.sumOf { cost(it) }
 
-        return candidates
-            .flatMap { it.lines() }
-            .mapNotNull { rawLine ->
-                val cleaned = cleanLocalSuggestionLine(rawLine)
-                val key = cleaned?.let(::normalizeSuggestionKey).orEmpty()
-                val disposition = when {
-                    cleaned == null || key.isEmpty() -> "format"
-                    key in existingLines -> "existing_lyric"
-                    !seen.add(key) -> "duplicate"
-                    else -> "accepted"
-                }
-                onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, disposition))
-                cleaned.takeIf { disposition == "accepted" }
+        val blockStart = (c - 1 downTo 0).firstOrNull { blank(it) }?.plus(1) ?: 0
+        val blockEnd = if (blank(c)) c else (c + 1..last).firstOrNull { blank(it) }?.minus(1) ?: last
+        var lo = minOf(blockStart, maxOf(c - 1, 0))
+        var hi = maxOf(blockEnd, minOf(c + 1, last))
+        if (cost(lo..hi) > lineBudget) {
+            lo = maxOf(c - 1, 0)
+            hi = minOf(c + 1, last)
+        }
+        if (cost(lo..hi) > lineBudget) {
+            lo = c
+            hi = c
+        }
+        val cut: String? = if (cost(c) > lineBudget) {
+            val line = lines[c]
+            var start = line.length - (lineBudget - 1)
+            if (line[start].isLowSurrogate()) start++
+            line.substring(start)
+        } else null
+        var used = if (cut != null) lineBudget else cost(lo..hi)
+
+        var headCount = 0
+        var headUsed = 0
+        while (headCount < lo && headUsed + cost(headCount) <= headBudget && used + cost(headCount) <= lineBudget) {
+            headUsed += cost(headCount)
+            used += cost(headCount)
+            headCount++
+        }
+
+        while (true) {
+            var grew = false
+            if (lo - 1 >= headCount && used + cost(lo - 1) <= lineBudget) {
+                lo--
+                used += cost(lo)
+                grew = true
             }
+            if (hi + 1 <= last && used + cost(hi + 1) <= lineBudget) {
+                hi++
+                used += cost(hi)
+                grew = true
+            }
+            if (!grew) break
+        }
+
+        fun hasLyric(from: Int, until: Int) = (from until until).any { !blank(it) }
+        val out = lines.subList(0, headCount).toMutableList()
+        if (hasLyric(headCount, lo) || cut != null) out += LOCAL_TRIM_MARKER
+        out += (lo..hi).map { if (it == c) cut ?: lines[it] else lines[it] }
+        if (hasLyric(hi + 1, last + 1)) out += LOCAL_TRIM_MARKER
+        return out.joinToString("\n").trim()
     }
 
     private fun cleanLocalSuggestionLine(line: String): String? {
@@ -1780,15 +1653,4 @@ Rules:
 
     private fun containsMarkupOrControlLeakage(text: String): Boolean =
         markupOrControlLeakagePattern.containsMatchIn(text)
-
-    private fun String.trimToLineBoundary(preferStart: Boolean): String {
-        if (isEmpty()) return this
-        return if (preferStart) {
-            val newline = indexOf('\n')
-            if (newline >= 0 && newline < lastIndex) substring(newline + 1).trim() else trim()
-        } else {
-            val newline = lastIndexOf('\n')
-            if (newline > 0) substring(0, newline).trim() else trim()
-        }
-    }
 }

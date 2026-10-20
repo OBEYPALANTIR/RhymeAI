@@ -13,6 +13,7 @@ import com.rhymeai.app.service.LocalModelService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -149,7 +150,7 @@ class LocalModelInstrumentedTest {
         """.trimIndent()
 
         val suggestions = timedEval(modelLabel, "suggestions") {
-            service.getSuggestions(
+            service.streamSuggestions(
                 provider = AIProvider.LOCAL,
                 apiKey = "",
                 modelId = AIModel.LOCAL_MODEL.id,
@@ -162,7 +163,7 @@ class LocalModelInstrumentedTest {
                 currentSection = SongSection.VERSE,
                 complexity = RhymeComplexity.MODERATE,
                 useWholeSongContext = false
-            )
+            ).toList()
         }
         assertTrue("Local suggestions should contain exactly six usable lines", suggestions.size == 6)
         assertTrue(

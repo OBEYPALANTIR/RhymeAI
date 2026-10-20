@@ -1,5 +1,85 @@
 # Release Notes
 
+## Pending rewrite highlight is still and monochrome (iOS and Android)
+
+While a Harder Rhyme, Punch Up or other rewrite is being written, the selected
+lyric now keeps a plain highlight in the appearance's selection colour with a
+thin outline, the same tint as an ordinary selection. The moving indigo band on
+iOS and the green outline on Android are gone; the rewrite bar at the bottom
+still shows that the rewrite is in progress. A failed rewrite keeps its red
+highlight.
+
+## Pending next-line suggestions follow the selected rhyme scheme (iOS and Android)
+
+Suggest Next Line now works out the rhyme for the line it is about to add, not
+for the line the cursor is on. With ABAB and two lines written, the suggestion
+is the third line and rhymes with line 1; before, it was asked to start a new
+sound. The Target Line card and the scheme preview show the same letter and
+rhyme line that are sent to the model, and the preview marks the row where the
+new line will go ("Next line goes here").
+
+"Use line" puts the suggestion on the empty line the cursor is on, or on a new
+line directly after the cursor's line. It no longer splits a lyric line when the
+cursor is in the middle of it, and no longer leaves an extra blank line when a
+line is added between existing lines.
+
+A section header such as [Chorus] now starts a new stanza for the rhyme scheme
+even without a blank line above it, so a suggestion never rhymes across a
+header or a blank line. On Android a line containing only spaces now separates
+stanzas, as it already did on iOS. In a stanza longer than the scheme, the
+scheme repeats (the fifth line of AABB is "A" and rhymes with line 2).
+
+## Pending Android lyric analysis and editor fixes
+
+The Ink Marks analysis style has been removed from Android. Lyric analysis is
+always shown in colour, the Analysis Style control is gone from the Editor tab
+of Settings, and the Rhyme Families and Syllable Guide switches are unchanged.
+If Ink Marks was selected in an earlier version, the app now simply uses
+colour; no other setting is changed.
+
+Words keep their syllable and rhyme colours while text is selected; the
+selection highlight sits behind the coloured words. Focus mode still removes
+analysis colour.
+
+Selecting lyrics now hides the UnBlock and mic buttons while the rewrite bar is
+showing, for screen readers as well, and brings them back when the selection is
+cleared.
+
+The Word Inspector shows the pronunciation and syllable count straight away and
+a "Finding rhymes…" indicator while the first rhyme search of a session runs,
+instead of saying there are no rhymes until the search finishes.
+
+## Pending iOS draft safety during backup and restore
+
+Text typed while a Google Drive backup or restore is running is now also
+written to a small recovery file as each edit is made. If that file cannot be
+written, the editor shows "Save failed" with Retry instead of the saving
+indicator, because that edit would not survive a kill. A backup or restore
+does not start when the open song has an unsaved edit whose recovery file
+cannot be written; the edit is saved to the library and the backup status says
+why. If the app is closed or
+killed before the operation finishes, the next launch puts that text back. With
+iCloud sync on, it always comes back as a separate song, because another
+device's newer version of the original may not have arrived yet. With a
+local-only library it goes into the same song when that song is unchanged, and
+otherwise into a separate song, so neither version is lost. A separate song
+gets the recordings the original had when the operation began. Another song
+that happens to have the same text does not count as the text having been
+saved. If the recovery cannot be saved, the copy and its recordings are kept
+and tried again on later launches; it is not recovered into the temporary
+library used when the real one cannot be opened, and a copy that cannot be read
+is set aside rather than deleted.
+
+The backup that starts when the app goes to the background now asks iOS for
+extra run time. Trying to delete a song during a backup or restore now says, in
+the song list, that it can be deleted once the operation finishes.
+
+Recording copies left behind by a killed operation are removed at the next
+launch only when identical recordings (same name and content) still exist in
+the library; otherwise they
+stay on the device and are not shown in the app. Covered by unit tests that
+drop the editor mid-operation; a real kill on a device has not been tried.
+
 ## Pending Android backup format
 
 Android writes Google Drive backups in the same v3/RAI3 format as iOS and still
@@ -56,8 +136,9 @@ separately.
 - Undo and redo edits, select text containing emoji, and switch songs while an
   autosave or rewrite is pending. These paths preserve the intended song and
   selection.
-- Try the appearance and analysis styles on iPhone and iPad, including large text,
-  the keyboard, rewrite controls, and the iPad projects sidebar.
+- Try the appearances on iPhone and iPad, including large text, the keyboard,
+  rewrite controls, and the iPad projects sidebar.
+- The Ink Marks analysis style and its Settings selector are removed on iOS; rhyme and syllable analysis is shown in colour.
 - Restore or remove trashed songs and recordings. Recording cleanup rejects paths
   outside its storage directory; backup and sync validate restored metadata and
   keep provider API keys in the Keychain.

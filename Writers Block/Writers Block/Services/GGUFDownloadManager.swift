@@ -15,7 +15,12 @@ struct GGUFDownloadOption: Identifiable, Equatable, Sendable {
 }
 
 enum GGUFDownloadCatalog {
-    nonisolated static let huggingFaceRevision = "27492c6696f2f868bbbe3aeafb633009ef932598"
+    // Model versions:
+    // - E2B: v6, trained 2026-10-14 on teacher-data v6 (Gemma 4 31B teacher, current app
+    //   prompts). Same file name, byte size and embedded chat template as v2.1, so only the
+    //   SHA-256 (and the verified-artifact marker below) tells the versions apart.
+    // - E4B: v2.1, trained 2026-10-06 on teacher-data-v2 plus the shipped rewrite/synonym rows.
+    nonisolated static let huggingFaceRevision = "990bc8e01700f05d0cea805a66b43a7424a4b36b"
 
     nonisolated static let options: [GGUFDownloadOption] = [
         GGUFDownloadOption(
@@ -24,8 +29,8 @@ enum GGUFDownloadCatalog {
             subtitle: "Recommended for iPhone and iPad",
             size: "3.43 GB",
             fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
-            expectedBytes: 3_427_878_784,
-            sha256: "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
+            expectedBytes: 3_427_880_800,
+            sha256: "902e5d83a86393f064b1c8abc1a9d25fec5b3634683317792b02856c01c604e0",
             url: requiredURL(
                 "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true"
             ),
@@ -37,8 +42,8 @@ enum GGUFDownloadCatalog {
             subtitle: "For devices with at least 10 GB memory",
             size: "5.34 GB",
             fileName: "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
-            expectedBytes: 5_335_290_784,
-            sha256: "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3",
+            expectedBytes: 5_335_292_800,
+            sha256: "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
             url: requiredURL(
                 "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true"
             ),
@@ -73,6 +78,67 @@ nonisolated func isLegacyGGUFDownloadArtifact(fileName: String) -> Bool {
     }
 }
 
+/// The catalog artifact (SHA-256) an installed file was last verified as, plus the file
+/// identity at that moment. Model versions that share a name and byte size are told apart
+/// by this marker, so launch-time checks never re-hash gigabytes.
+nonisolated struct GGUFVerifiedArtifact: Codable, Equatable, Sendable {
+    let sha256: String
+    let size: Int64
+    let device: Int32
+    let inode: UInt64
+    let modifiedSeconds: Int
+    let modifiedNanoseconds: Int
+
+    init(sha256: String, identity: GGUFModelFileIdentity) {
+        self.sha256 = sha256
+        size = identity.size
+        device = identity.device
+        inode = identity.inode
+        modifiedSeconds = identity.modifiedSeconds
+        modifiedNanoseconds = identity.modifiedNanoseconds
+    }
+
+    /// True when this marker was written for exactly the file now on disk.
+    func describes(_ identity: GGUFModelFileIdentity) -> Bool {
+        self == GGUFVerifiedArtifact(sha256: sha256, identity: identity)
+    }
+}
+
+nonisolated enum GGUFVerifiedArtifactStore {
+    private static let key = "verifiedGGUFArtifacts"
+    private static let lock = NSLock()
+
+    static func marker(fileName: String, defaults: UserDefaults = .standard) -> GGUFVerifiedArtifact? {
+        lock.withLock { load(defaults)[fileName] }
+    }
+
+    /// Records that the file at `url` was just verified as `sha256`.
+    static func record(sha256: String, at url: URL, defaults: UserDefaults = .standard) {
+        guard let identity = try? GGUFModelFileIdentity.read(at: url.path) else { return }
+        update(defaults) { $0[url.lastPathComponent] = GGUFVerifiedArtifact(sha256: sha256, identity: identity) }
+    }
+
+    static func remove(fileName: String, defaults: UserDefaults = .standard) {
+        update(defaults) { $0[fileName] = nil }
+    }
+
+    private static func update(_ defaults: UserDefaults, _ body: (inout [String: GGUFVerifiedArtifact]) -> Void) {
+        lock.withLock {
+            var markers = load(defaults)
+            body(&markers)
+            if let data = try? JSONEncoder().encode(markers) { defaults.set(data, forKey: key) }
+        }
+    }
+
+    private static func load(_ defaults: UserDefaults) -> [String: GGUFVerifiedArtifact] {
+        guard let data = defaults.data(forKey: key),
+              let markers = try? JSONDecoder().decode([String: GGUFVerifiedArtifact].self, from: data) else {
+            return [:]
+        }
+        return markers
+    }
+}
+
 enum GGUFModelStorage {
     nonisolated static func modelsDirectory(create: Bool) throws -> URL {
         let baseURL = try FileManager.default.url(
@@ -96,18 +162,145 @@ enum GGUFModelStorage {
     }
 
     nonisolated static func installedModelFileNames() -> [String] {
-        guard let directory = try? modelsDirectory(create: false),
-              let contents = try? FileManager.default.contentsOfDirectory(
-                  at: directory,
-                  includingPropertiesForKeys: nil
-              ) else {
+        guard let directory = try? modelsDirectory(create: false) else { return [] }
+        return installedModelFileNames(in: directory)
+    }
+
+    /// A catalog file counts as installed only when a verified-artifact marker records the
+    /// current catalog SHA-256 for exactly this file (same size, inode and modification
+    /// time). A previous model version under the same name — even one of identical size —
+    /// is therefore offered for download, which first verifies or reclaims it. The check
+    /// reads metadata only; hashing happens at install, at model load, and on that download.
+    nonisolated static func installedModelFileNames(
+        in directory: URL,
+        defaults: UserDefaults = .standard
+    ) -> [String] {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        ) else {
             return []
         }
         return contents
+            .filter { url in
+                let fileName = url.lastPathComponent
+                guard fileName.lowercased().hasSuffix(".gguf") else { return false }
+                guard let option = GGUFDownloadCatalog.options.first(where: { $0.fileName == fileName }) else {
+                    return true
+                }
+                return isVerifiedInstall(of: option, at: url, defaults: defaults)
+            }
             .map(\.lastPathComponent)
-            .filter { $0.lowercased().hasSuffix(".gguf") }
             .sorted()
     }
+
+    nonisolated static func isVerifiedInstall(
+        of option: GGUFDownloadOption,
+        at url: URL,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        guard let identity = try? GGUFModelFileIdentity.read(at: url.path),
+              identity.size == option.expectedBytes,
+              let marker = GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: defaults) else {
+            return false
+        }
+        return marker.sha256 == option.sha256 && marker.describes(identity)
+    }
+
+    /// An installed file of the catalog size that carries no current marker: it may be the
+    /// current artifact (installed before markers existed) or a same-size previous version.
+    nonisolated static func needsInstalledVerification(
+        for option: GGUFDownloadOption,
+        in directory: URL,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        let url = directory.appendingPathComponent(option.fileName)
+        guard let identity = try? GGUFModelFileIdentity.read(at: url.path),
+              identity.size == option.expectedBytes else {
+            return false
+        }
+        return !isVerifiedInstall(of: option, at: url, defaults: defaults)
+    }
+
+    /// Hashes an unmarked installed file once. A match records the marker and returns true;
+    /// a mismatch (for example the previous same-size version) deletes it and returns false.
+    nonisolated static func verifyOrReclaimInstalled(
+        _ option: GGUFDownloadOption,
+        in directory: URL,
+        defaults: UserDefaults = .standard
+    ) throws -> Bool {
+        let url = directory.appendingPathComponent(option.fileName)
+        do {
+            try GGUFDownloadManager.validateDownload(at: url, option: option)
+        } catch let error as GGUFDownloadError {
+            switch error {
+            case .invalidFormat, .checksumMismatch, .incomplete:
+                try FileManager.default.removeItem(at: url)
+                GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
+                return false
+            default:
+                throw error
+            }
+        }
+        GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: url, defaults: defaults)
+        return true
+    }
+
+    /// Resume data is keyed by the artifact SHA-256, so a paused download of a previous
+    /// model version is never resumed into the current catalog entry.
+    nonisolated static func resumeDataURL(for option: GGUFDownloadOption, in directory: URL) -> URL {
+        directory.appendingPathComponent("\(option.fileName).\(option.sha256.prefix(16)).resume")
+    }
+
+    /// Removes what a previous version of `option` left under the same name: an installed
+    /// file whose size no longer matches the catalog entry, or whose marker records another
+    /// artifact's SHA-256 (neither can pass load-time validation), and resume data keyed to
+    /// another artifact. Returns the bytes freed.
+    @discardableResult
+    nonisolated static func removeStaleArtifacts(
+        for option: GGUFDownloadOption,
+        in directory: URL,
+        defaults: UserDefaults = .standard
+    ) throws -> Int64 {
+        let fileManager = FileManager.default
+        var freedBytes: Int64 = 0
+        let installedURL = directory.appendingPathComponent(option.fileName)
+        if let identity = try? GGUFModelFileIdentity.read(at: installedURL.path) {
+            let marker = GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: defaults)
+            let markedAsOtherArtifact = marker.map { $0.describes(identity) && $0.sha256 != option.sha256 } ?? false
+            if identity.size != option.expectedBytes || markedAsOtherArtifact {
+                try fileManager.removeItem(at: installedURL)
+                GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
+                freedBytes += identity.size
+            }
+        }
+        let currentResumeName = resumeDataURL(for: option, in: directory).lastPathComponent
+        for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            let name = url.lastPathComponent
+            if name.hasPrefix("\(option.fileName).") && name.hasSuffix(".resume") && name != currentResumeName {
+                try fileManager.removeItem(at: url)
+            }
+        }
+        return freedBytes
+    }
+
+    /// Reclaims stale artifacts first, then requires room for the full download plus a
+    /// reserve, so a device that only has room once the previous version is gone can upgrade.
+    nonisolated static func prepareSpace(
+        for option: GGUFDownloadOption,
+        in directory: URL,
+        defaults: UserDefaults = .standard,
+        availableCapacity: (URL) throws -> Int64?
+    ) throws {
+        try removeStaleArtifacts(for: option, in: directory, defaults: defaults)
+        guard let available = try availableCapacity(directory) else { return }
+        let required = option.expectedBytes + downloadReserveBytes
+        guard available >= required else {
+            throw GGUFDownloadError.insufficientSpace(required: required, available: available)
+        }
+    }
+
+    nonisolated static let downloadReserveBytes: Int64 = 512 * 1024 * 1024
 }
 
 @MainActor
@@ -189,6 +382,10 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
         do {
             let directory = try GGUFModelStorage.modelsDirectory(create: true)
+            if GGUFModelStorage.needsInstalledVerification(for: option, in: directory) {
+                verifyInstalled(option, in: directory)
+                return
+            }
             let stagingURL = directory.appendingPathComponent("\(option.fileName).download")
             if let size = try? stagingURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                Int64(size) == option.expectedBytes {
@@ -210,7 +407,10 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 return
             }
             try removeLegacyDownloadArtifacts(in: directory, for: option)
-            try verifyFreeSpace(for: option, in: directory)
+            try GGUFModelStorage.prepareSpace(for: option, in: directory) { directory in
+                try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+                    .volumeAvailableCapacityForImportantUsage
+            }
             let resumeURL = resumeDataURL(for: option, directory: directory)
             let task: URLSessionDownloadTask
             if let resumeData = try? Data(contentsOf: resumeURL), !resumeData.isEmpty {
@@ -225,6 +425,34 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             task.resume()
         } catch {
             errorMessage = "Could not start \(option.title): \(error.localizedDescription)"
+        }
+    }
+
+    /// Verifies a same-size installed file that carries no current marker. The current
+    /// artifact is selected without a download; anything else is reclaimed and downloaded.
+    private func verifyInstalled(_ option: GGUFDownloadOption, in directory: URL) {
+        beginDownload(option: option, receivedBytes: option.expectedBytes)
+        setVerifying(optionID: option.id)
+        Task {
+            do {
+                let verified = try await Task.detached {
+                    try GGUFModelStorage.verifyOrReclaimInstalled(option, in: directory)
+                }.value
+                if verified {
+                    finish(option: option)
+                    statusMessage = "\(option.title) verified and selected."
+                } else {
+                    isVerifying = false
+                    activeDownloadID = nil
+                    statusMessage = nil
+                    start(option)
+                }
+            } catch {
+                isVerifying = false
+                activeDownloadID = nil
+                statusMessage = nil
+                errorMessage = "Could not verify \(option.title): \(error.localizedDescription)"
+            }
         }
     }
 
@@ -338,20 +566,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         errorMessage = nil
     }
 
-    private func verifyFreeSpace(for option: GGUFDownloadOption, in directory: URL) throws {
-        let values = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        guard let available = values.volumeAvailableCapacityForImportantUsage else { return }
-        let reserve: Int64 = 512 * 1024 * 1024
-        guard available >= option.expectedBytes + reserve else {
-            throw GGUFDownloadError.insufficientSpace(
-                required: option.expectedBytes + reserve,
-                available: available
-            )
-        }
-    }
-
     private func resumeDataURL(for option: GGUFDownloadOption, directory: URL) -> URL {
-        directory.appendingPathComponent("\(option.fileName).resume")
+        GGUFModelStorage.resumeDataURL(for: option, in: directory)
     }
 
     private func removeLegacyDownloadArtifacts(in directory: URL, for option: GGUFDownloadOption) throws {
@@ -479,7 +695,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
            let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data,
            let directory = try? GGUFModelStorage.modelsDirectory(create: true) {
             try? resumeData.write(
-                to: directory.appendingPathComponent("\(option.fileName).resume"),
+                to: GGUFModelStorage.resumeDataURL(for: option, in: directory),
                 options: .atomic
             )
         }
@@ -499,9 +715,10 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
     nonisolated static func installDownload(
         from stagingURL: URL,
         in directory: URL,
-        option: GGUFDownloadOption
+        option: GGUFDownloadOption,
+        defaults: UserDefaults = .standard
     ) throws {
-        let resumeURL = directory.appendingPathComponent("\(option.fileName).resume")
+        let resumeURL = GGUFModelStorage.resumeDataURL(for: option, in: directory)
         do {
             try validateDownload(at: stagingURL, option: option)
         } catch let error as GGUFDownloadError {
@@ -528,6 +745,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         guard Darwin.rename(stagingURL.path, destinationURL.path) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
+        GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: destinationURL, defaults: defaults)
         try? FileManager.default.removeItem(at: resumeURL)
     }
 

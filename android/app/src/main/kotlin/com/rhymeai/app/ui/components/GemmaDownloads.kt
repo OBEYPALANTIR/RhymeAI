@@ -21,14 +21,21 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 internal const val DOWNLOAD_BUFFER_BYTES = 8 * 1024 * 1024
-internal const val GEMMA_HUGGING_FACE_REVISION = "27492c6696f2f868bbbe3aeafb633009ef932598"
+internal const val GEMMA_HUGGING_FACE_REVISION = "990bc8e01700f05d0cea805a66b43a7424a4b36b"
+// SHA-256 of each GGUF's embedded tokenizer.chat_template. Informational: it is recorded in
+// native-contract evidence only. The runtime picks the prompt envelope from the GGUF
+// architecture and turn markers (GGUFPromptFormat.resolve), never from this value.
 internal const val GEMMA4_CHAT_TEMPLATE_SHA256 = "33204f1acb5bd0002713e16a593847f24ceeafe711ed88bda2a352dc996a3373"
+// The revised template introduced by the v2 fine-tunes; E2B v6 and E4B v2.1 both embed it.
+internal const val GEMMA4_RHYMEAI_V2_CHAT_TEMPLATE_SHA256 = "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7"
 internal const val GEMMA_DOWNLOAD_CONNECTIONS = 4
 internal const val MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES = 750L * 1024L * 1024L
 private const val DOWNLOAD_PROGRESS_UPDATE_BYTES = 32L * 1024L * 1024L
 private const val DOWNLOAD_PROGRESS_UPDATE_NANOS = 250_000_000L
 private const val DOWNLOAD_STATE_MAGIC = 0x52484D44
-private const val DOWNLOAD_STATE_VERSION = 1
+// Version 2 records the artifact (SHA-256 and size) so ranges downloaded for a previous
+// model version under the same file name are never resumed into the current one.
+private const val DOWNLOAD_STATE_VERSION = 2
 
 // E4B needs roughly 7 GB of RAM headroom to run without thrashing. On a real 8 GB device
 // the kernel and OS reserve ~1–2 GB, leaving ~6 GB usable, which causes heavy swap pressure
@@ -59,22 +66,29 @@ internal data class GemmaDownload(
 
 // RhymeAI's own fine-tunes of Gemma 4 (LoRA-trained on the app's exact prompt
 // format; see finetune/SCORECARD.md). Hosted on the project's HF repo.
+// Model versions:
+// - E2B: v6, trained 2026-10-14 on teacher-data v6 (Gemma 4 31B teacher, current app prompts).
+//   Same file name and byte size as v2.1 (and the same embedded chat template), so only the
+//   SHA-256 tells the versions apart.
+// - E4B: v2.1, trained 2026-10-06 on teacher-data-v2 plus the shipped rewrite/synonym rows.
 internal val GEMMA_DOWNLOADS = listOf(
     GemmaDownload(
         label = "RhymeAI Gemma E2B",
         description = "Tuned for RhymeAI — best default for phones, 3.43 GB.",
         fileName = "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
         url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/$GEMMA_HUGGING_FACE_REVISION/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true",
-        expectedBytes = 3_427_878_784L,
-        sha256 = "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626"
+        expectedBytes = 3_427_880_800L,
+        sha256 = "902e5d83a86393f064b1c8abc1a9d25fec5b3634683317792b02856c01c604e0",
+        chatTemplateSha256 = GEMMA4_RHYMEAI_V2_CHAT_TEMPLATE_SHA256
     ),
     GemmaDownload(
         label = "RhymeAI Gemma E4B",
         description = "Tuned for RhymeAI — higher quality, slower, 5.34 GB.",
         fileName = "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
         url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/$GEMMA_HUGGING_FACE_REVISION/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true",
-        expectedBytes = 5_335_290_784L,
-        sha256 = "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3"
+        expectedBytes = 5_335_292_800L,
+        sha256 = "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
+        chatTemplateSha256 = GEMMA4_RHYMEAI_V2_CHAT_TEMPLATE_SHA256
     )
 )
 
@@ -175,8 +189,16 @@ internal suspend fun downloadGemmaToTemp(
     val segments = gemmaDownloadSegments(model.expectedBytes, connectionCount)
     val stateFile = gemmaDownloadStateFile(tempFile)
     tempFile.parentFile?.mkdirs()
-    val downloadedBytes = loadDownloadState(stateFile, segments)
-        ?: legacyDownloadState(tempFile, segments)
+    val downloadedBytes = if (stateFile.isFile) {
+        loadDownloadState(stateFile, segments, model) ?: run {
+            // State for another artifact or an older state format: its bytes cannot be reused.
+            tempFile.delete()
+            stateFile.delete()
+            LongArray(segments.size)
+        }
+    } else {
+        legacyDownloadState(tempFile, segments)
+    }
 
     RandomAccessFile(tempFile, "rw").use { output ->
         output.setLength(model.expectedBytes)
@@ -329,11 +351,14 @@ private fun legacyDownloadState(
 
 private fun loadDownloadState(
     stateFile: File,
-    segments: List<GemmaDownloadSegment>
+    segments: List<GemmaDownloadSegment>,
+    model: GemmaDownload
 ): LongArray? = runCatching {
     DataInputStream(stateFile.inputStream().buffered()).use { input ->
         if (input.readInt() != DOWNLOAD_STATE_MAGIC) return null
         if (input.readInt() != DOWNLOAD_STATE_VERSION) return null
+        if (!input.readUTF().equals(model.sha256, ignoreCase = true)) return null
+        if (input.readLong() != model.expectedBytes) return null
         if (input.readInt() != segments.size) return null
         LongArray(segments.size) { index ->
             input.readLong().coerceIn(0L, segments[index].length)
@@ -341,11 +366,13 @@ private fun loadDownloadState(
     }
 }.getOrNull()
 
-private fun saveDownloadState(stateFile: File, downloadedBytes: LongArray) {
+internal fun saveDownloadState(stateFile: File, model: GemmaDownload, downloadedBytes: LongArray) {
     val stagingFile = File(stateFile.parentFile, "${stateFile.name}.tmp")
     DataOutputStream(FileOutputStream(stagingFile).buffered()).use { output ->
         output.writeInt(DOWNLOAD_STATE_MAGIC)
         output.writeInt(DOWNLOAD_STATE_VERSION)
+        output.writeUTF(model.sha256)
+        output.writeLong(model.expectedBytes)
         output.writeInt(downloadedBytes.size)
         downloadedBytes.forEach(output::writeLong)
     }
@@ -393,7 +420,7 @@ private class GemmaProgressReporter(
                 return
             }
             val snapshot = LongArray(downloaded.length()) { downloaded.get(it) }
-            saveDownloadState(stateFile, snapshot)
+            saveDownloadState(stateFile, model, snapshot)
             lastCheckpointBytes = lockedTotal
             lastCheckpointNanos = lockedNow
             onProgress(
@@ -406,16 +433,38 @@ private class GemmaProgressReporter(
         (0 until downloaded.length()).sumOf(downloaded::get)
 }
 
-internal fun ensureEnoughSpaceForGemma(model: GemmaDownload, destFile: File, tempFile: File) {
+/**
+ * Deletes an installed catalog file that fails the current entry's integrity check (for
+ * example the previous model version under the same name) and returns the bytes freed.
+ * A file that passes is never touched.
+ */
+internal fun reclaimStaleInstalledGemma(model: GemmaDownload, destFile: File): Long {
+    if (!destFile.isFile) return 0L
+    if (validateDownloadedGemmaIntegrity(model, destFile) == null) return 0L
+    val bytes = destFile.length()
+    return if (destFile.delete()) bytes else 0L
+}
+
+/**
+ * Reclaims a stale installed file first, then requires room for the remaining download.
+ * A valid installed file stays on disk until the verified temp file replaces it, so its
+ * bytes are not counted as available.
+ */
+internal fun ensureEnoughSpaceForGemma(
+    model: GemmaDownload,
+    destFile: File,
+    tempFile: File,
+    usableSpace: (File) -> Long = File::getUsableSpace
+) {
+    reclaimStaleInstalledGemma(model, destFile)
     val segments = gemmaDownloadSegments(model.expectedBytes)
     val stateFile = gemmaDownloadStateFile(tempFile)
     val downloadedTempBytes = if (stateFile.isFile) {
-        loadDownloadState(stateFile, segments)?.sum() ?: 0L
+        loadDownloadState(stateFile, segments, model)?.sum() ?: 0L
     } else {
         tempFile.length().coerceAtMost(model.expectedBytes)
     }
-    val reclaimableBytes = destFile.length() + downloadedTempBytes
-    val availableBytes = (tempFile.parentFile ?: tempFile).usableSpace + reclaimableBytes
+    val availableBytes = usableSpace(tempFile.parentFile ?: tempFile) + downloadedTempBytes
     val requiredBytes = model.expectedBytes + MIN_FREE_SPACE_AFTER_DOWNLOAD_BYTES
     if (availableBytes < requiredBytes) {
         throw IllegalStateException(

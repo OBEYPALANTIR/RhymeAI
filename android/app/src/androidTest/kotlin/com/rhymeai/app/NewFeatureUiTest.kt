@@ -16,7 +16,6 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -42,7 +41,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
@@ -276,14 +274,12 @@ class NewFeatureUiTest {
             .assertHasClickAction()
             .performClick()
         composeRule.onNodeWithText("Editor").performClick()
-        composeRule.onNode(hasText("Ink Marks") and isSelected()).assertExists()
         composeRule.onNodeWithText("Syllable Guide").assertIsOn()
         composeRule.onNodeWithText("Rhyme Families").assertIsOn()
         composeRule.onNodeWithContentDescription("Rhyme Families help").performClick()
         composeRule.onNodeWithText(
-            "Underlines matching rhyme sounds throughout the current lyric. " +
-                "Solid, dashed, dotted, and dash-dot lines identify rhyme families; " +
-                "this does not change generated suggestions."
+            "Colors matching rhyme sounds throughout the current lyric. " +
+                "Each color represents one rhyme family; this does not change generated suggestions."
         ).assertIsDisplayed()
     }
 
@@ -522,7 +518,10 @@ class NewFeatureUiTest {
 
         composeRule.onNodeWithText("Trash").assertIsDisplayed()
         composeRule.onNodeWithText("UI Trash Song").assertIsDisplayed()
-        composeRule.onNode(hasText("30 days left", substring = true)).assertIsDisplayed()
+        // The header states the retention rule; each row carries its own countdown.
+        composeRule.onNodeWithText("Deleted songs stay here for 30 days.").assertIsDisplayed()
+        composeRule.onNode(hasText("30 days left", substring = true)).assertDoesNotExist()
+        composeRule.onNode(hasText("Deletes in 30 days", substring = true)).assertIsDisplayed()
 
         val trashSelection = composeRule.onNodeWithText("UI Trash Song")
         val semantics = trashSelection.fetchSemanticsNode().config
@@ -536,10 +535,6 @@ class NewFeatureUiTest {
     @Test
     fun editorSettingsSwitchesExposeAccessibleNames() {
         composeRule.onNodeWithText("New Song").performClick()
-        scenario?.onActivity { activity ->
-            ViewModelProvider(activity)[MainViewModel::class.java]
-                .setAnalysisPresentation(AnalysisPresentation.COLOR)
-        }
         composeRule.onNodeWithTag("songActionsMenuButton").performClick()
         composeRule.onNodeWithText("Settings").performClick()
         composeRule.onNodeWithText("Editor").performClick()
@@ -619,7 +614,8 @@ class NewFeatureUiTest {
         // Enable it there first, then open the assistant panel to verify prosody renders.
         openNewSong()
         composeRule.onNodeWithTag("lyricsEditor").performClick()
-        composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music\nfollow music")
+        // One lyric line: the next line is the second "A" of AABB, so the target line is "yellow music".
+        composeRule.onNodeWithTag("lyricsEditor").performTextInput("[Verse]\nyellow music")
 
         // Open Settings and navigate to the Editor tab.
         composeRule.onNodeWithTag("songActionsMenuButton").performClick()
@@ -721,6 +717,28 @@ class NewFeatureUiTest {
         // The swipe-to-collapse-keyboard NestedScrollConnection gates on the IME
         // being visible, which doesn't happen in instrumented Compose tests
         // (performTextInput bypasses the soft keyboard). Manual QA covers it.
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun rewriteChipBarReplacesFloatingActionsUntilSelectionClears() {
+        composeRule.onNodeWithText("New Song").performClick()
+
+        val lyrics = "The harbor lights are burning low"
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        editor.performClick().performTextInput(lyrics)
+        composeRule.onNodeWithTag("unBlockAction").assertIsDisplayed()
+        composeRule.onNodeWithTag("micButton").assertIsDisplayed()
+
+        editor.performTextInputSelection(TextRange(4, 10))
+        composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        composeRule.onNodeWithTag("unBlockAction").assertDoesNotExist()
+        composeRule.onNodeWithTag("micButton").assertDoesNotExist()
+
+        editor.performTextInputSelection(TextRange(lyrics.length))
+        composeRule.onNodeWithTag("rewriteChipBar").assertDoesNotExist()
+        composeRule.onNodeWithTag("unBlockAction").assertIsDisplayed()
+        composeRule.onNodeWithTag("micButton").assertIsDisplayed()
     }
 
     @OptIn(ExperimentalTestApi::class)

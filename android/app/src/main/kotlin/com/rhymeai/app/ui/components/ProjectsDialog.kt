@@ -1054,7 +1054,7 @@ private fun TrashBinPage(
 
                             item {
                                 Text(
-                                    "30 days left",
+                                    "Deleted songs stay here for 30 days.",
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = colorScheme.onSurface,
@@ -1115,7 +1115,7 @@ private fun TrashBinPage(
 
                                 item {
                                     Text(
-                                        "30 days left",
+                                        "Deleted recordings stay here for 30 days.",
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = colorScheme.onSurface,

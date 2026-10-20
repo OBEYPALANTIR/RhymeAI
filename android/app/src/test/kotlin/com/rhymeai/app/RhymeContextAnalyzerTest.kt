@@ -17,9 +17,10 @@ class RhymeContextAnalyzerTest {
             scheme = "AABB"
         )
 
-        assertEquals("A", context.currentLetter)
-        assertEquals("first light", context.targetLine)
-        assertEquals(2, context.currentLineIndex)
+        // The next line is the verse's third lyric line: "B", a new sound.
+        assertEquals("B", context.currentLetter)
+        assertNull(context.targetLine)
+        assertEquals(3, context.currentLineIndex)
         assertEquals(SongSection.VERSE, context.currentSection)
     }
 
@@ -33,8 +34,10 @@ class RhymeContextAnalyzerTest {
             scheme = "ABAB"
         )
 
-        assertEquals("B", context.currentLetter)
-        assertEquals("second rain", context.targetLine)
+        // The next line is the fifth lyric line: the scheme repeats, so it is "A",
+        // anchored to the latest "A" line (line 3), not the first.
+        assertEquals("A", context.currentLetter)
+        assertEquals("third road", context.targetLine)
         assertEquals(SongSection.CHORUS, context.currentSection)
     }
 
@@ -48,7 +51,10 @@ class RhymeContextAnalyzerTest {
             scheme = "ABAB"
         )
 
-        assertEquals("A", context.currentLetter)
+        // A header starts a new stanza: the next line is the second line under
+        // "pre-chorus", so it opens "B" and does not rhyme across the header.
+        assertEquals("B", context.currentLetter)
+        assertNull(context.targetLine)
         assertEquals(SongSection.UNKNOWN, context.currentSection)
         assertEquals("pre-chorus", context.currentSectionRef?.label)
     }
@@ -77,9 +83,10 @@ class RhymeContextAnalyzerTest {
             scheme = "ABAB"
         )
 
-        assertEquals("A", context.currentLetter)
-        assertEquals("first glow", context.targetLine)
-        assertEquals(3, context.currentLineIndex)
+        // The next line follows "third road": fourth lyric line, "B", rhyming with line 2.
+        assertEquals("B", context.currentLetter)
+        assertEquals("🎵 second rain", context.targetLine)
+        assertEquals(4, context.currentLineIndex)
         assertEquals(SongSection.VERSE, context.currentSection)
         assertEquals("Verse", context.currentSectionRef?.label)
         assertEquals(1, context.currentSectionRef?.ordinal)
@@ -97,7 +104,7 @@ class RhymeContextAnalyzerTest {
 
         assertEquals("A", context.currentLetter)
         assertNull(context.targetLine)
-        assertEquals(2, context.currentLineIndex)
+        assertEquals(3, context.currentLineIndex)
         assertEquals(SongSection.VERSE, context.currentSection)
         assertNull(context.currentSectionRef)
     }

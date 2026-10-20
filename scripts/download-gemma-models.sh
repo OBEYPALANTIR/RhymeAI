@@ -7,8 +7,8 @@ MODEL_DIR="${GEMMA_MODEL_DIR:-$ROOT_DIR/artifacts/gemma-local-models}"
 mkdir -p "$MODEL_DIR"
 
 models=(
-  "e2b|RhymeAI Gemma E2B|gemma-4-E2B-it-rhymeai-Q4_K_M.gguf|3427878784|https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/main/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true"
-  "e4b|RhymeAI Gemma E4B|gemma-4-E4B-it-rhymeai-Q4_K_M.gguf|5335290784|https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/main/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true"
+  "e2b|RhymeAI Gemma E2B|gemma-4-E2B-it-rhymeai-Q4_K_M.gguf|3427880800|https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/main/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true"
+  "e4b|RhymeAI Gemma E4B|gemma-4-E4B-it-rhymeai-Q4_K_M.gguf|5335292800|https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/main/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true"
 )
 
 file_size() {

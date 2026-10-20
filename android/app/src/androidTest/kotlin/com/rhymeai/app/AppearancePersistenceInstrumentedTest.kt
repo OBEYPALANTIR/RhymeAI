@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.compose.ui.graphics.toArgb
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.ui.theme.PaperWhite
@@ -24,13 +23,11 @@ class AppearancePersistenceInstrumentedTest {
     @Before
     fun setUp() = runBlocking {
         repo.saveAppearance(AppAppearance.INK)
-        repo.saveAnalysisPresentation(AnalysisPresentation.COLOR)
     }
 
     @After
     fun tearDown() = runBlocking {
         repo.saveAppearance(AppAppearance.INK)
-        repo.saveAnalysisPresentation(AnalysisPresentation.COLOR)
     }
 
     @Test
@@ -45,13 +42,5 @@ class AppearancePersistenceInstrumentedTest {
     @Test
     fun startupSurfaceUsesTheInkPaperColor() {
         assertEquals(PaperWhite.toArgb(), app.getColor(R.color.splash_material_surface))
-    }
-
-    @Test
-    fun analysisPresentationPersistsAndUnknownFallsBackToColor() = runBlocking {
-        AnalysisPresentation.entries.forEach { value ->
-            repo.saveAnalysisPresentation(value)
-            assertEquals(value, repo.analysisPresentationFlow.first())
-        }
     }
 }

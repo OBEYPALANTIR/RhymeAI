@@ -8,7 +8,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SavedLocalModel
@@ -74,7 +73,7 @@ enum class SaveStatus { IDLE, SAVING, SAVED }
 /**
  * A suggestion line paired with its phonetic tier and hook flag.
  *
- * rhymeTier: 2 = perfect/multi-syllable, 1 = near, 0 = unverified.
+ * rhymeTier: 3 = slant, 2 = perfect/multi-syllable, 1 = near, 0 = unverified.
  * isHook: true when this line repeats a chorus end-word from the first chorus
  *         instance — badge shows "hook" instead of "perfect".
  */
@@ -84,6 +83,14 @@ data class SuggestedLine(
     val isHook: Boolean = false
 )
 
+/**
+ * Rhyme context of the line a next-line suggestion will be inserted as
+ * (see [NextLinePlacement]), not of the line the cursor is on.
+ *
+ * [targetLine] is the rhyme anchor: the latest earlier line in the stanza with
+ * [currentLetter]. [stanzaLines] is the cursor's blank-line-delimited block with an
+ * empty row at [currentLineIndex] standing for the line to be inserted.
+ */
 data class RhymeContext(
     val targetLine: String?,
     val currentLetter: String,
@@ -214,7 +221,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _rhymeComplexity = value
         }
     // Editor toggles — initialized from DataStore in init{}, persisted on every change.
-    var useWholeSongContext by mutableStateOf(false)
+    var useWholeSongContext by mutableStateOf(ProjectRepository.DEFAULT_USE_WHOLE_SONG_CONTEXT)
         private set
 
     fun saveUseWholeSongContext(value: Boolean) {
@@ -437,9 +444,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var _appAppearance by mutableStateOf(AppAppearance.INK)
     val appAppearance: AppAppearance
         get() = _appAppearance
-    private var _analysisPresentation by mutableStateOf(AnalysisPresentation.COLOR)
-    val analysisPresentation: AnalysisPresentation
-        get() = _analysisPresentation
     var appearanceLoaded by mutableStateOf(false)
         private set
     private var _selectedProvider by mutableStateOf(AIProvider.LOCAL)
@@ -869,8 +873,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _appAppearance = runCatching { repo.appearanceFlow.first() }
                 .getOrDefault(AppAppearance.INK)
-            _analysisPresentation = runCatching { repo.analysisPresentationFlow.first() }
-                .getOrDefault(AnalysisPresentation.COLOR)
             appearanceLoaded = true
 
             // Load projects
@@ -957,6 +959,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     persistenceError = corruptLibraryMessage(error)
                 }
             }
+            // Trashed recordings have their own expiry clock and live outside the
+            // preferences store; rescan it whenever the recording Trash changes.
+            launch {
+                voiceMemoService.trashChanges.collect { scheduleTrashPurge() }
+            }
         }
     }
 
@@ -993,6 +1000,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val requestScheme = activeRhymeScheme
         val requestComplexity = rhymeComplexity
         val sectionRef = if (provider == AIProvider.LOCAL || wholeSong) context.currentSectionRef else null
+        // Lets on-device trimming keep the stanza being written.
+        val cursorLine = if (provider == AIProvider.LOCAL || wholeSong) {
+            NextLinePlacement(lyrics, cursorPosition).cursorLineIndex
+        } else null
         suggestions = emptyList()
         errorMessage = null
         isLoading = true
@@ -1004,7 +1015,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 aiService.streamSuggestions(
                     provider, key, modelId, requestTheme, requestLyrics, context.targetLine,
                     requestRhymeType, requestScheme, context.currentLetter, context.currentSection,
-                    requestComplexity, wholeSong, sectionRef, requestLyrics
+                    requestComplexity, wholeSong, sectionRef, requestLyrics, cursorLine
                 ).collect { line ->
                     if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@collect
                     emittedSuggestion = true
@@ -1060,19 +1071,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw e
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Failed to save appearance"
-            }
-        }
-    }
-
-    fun setAnalysisPresentation(value: AnalysisPresentation) {
-        _analysisPresentation = value
-        viewModelScope.launch {
-            try {
-                repo.saveAnalysisPresentation(value)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                errorMessage = error.message ?: "Failed to save analysis style"
             }
         }
     }
@@ -1180,7 +1178,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentProjectId = null
         restoreEditorPosition()
         suggestions = emptyList()
-        _analysisPresentation = AnalysisPresentation.INK_MARKS
         isSyllableColoringEnabled = true
         isRhymeHighlightEnabled = true
         saveStatus = SaveStatus.SAVED
@@ -1298,13 +1295,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Local word results remain valid when autosave assigns this song its first project ID.
         val inspectorLyrics = lyrics
+        inspectorProsody = null
+        inspectorMatches = null
         viewModelScope.launch {
+            fun stillCurrent() = inspectorWord == word && inspectorRange == range && lyrics == inspectorLyrics
+            // Pronunciation is a direct dictionary read; publish it before the rhyme search,
+            // whose first run of a session builds the whole rhyme index.
             val prosodyResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.analyzeWord(word) }
+            if (stillCurrent()) inspectorProsody = prosodyResult
             val matchesResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.findRhymes(word) }
-            if (inspectorWord == word && inspectorRange == range && lyrics == inspectorLyrics) {
-                inspectorProsody = prosodyResult
-                inspectorMatches = matchesResult
-            }
+            if (stillCurrent()) inspectorMatches = matchesResult
         }
 
         fetchInspectorSynonyms(word, range)
@@ -1390,19 +1390,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun insertSuggestion(suggestion: String) {
-        val pos = cursorPosition
-        val text = lyrics
-        val before = text.substring(0, pos)
-        val after = text.substring(pos)
-        val needsNewline = before.isNotEmpty() && !before.endsWith("\n")
-        val insertText = (if (needsNewline) "\n" else "") + suggestion + "\n"
-        val newText = before + insertText + after
-        val newPos = pos + insertText.length
-        applyAtomicLyricsEdit(TextFieldValue(newText, TextRange(newPos)))
+        // Same placement the rhyme context was computed for: a blank cursor line is
+        // filled, otherwise the suggestion becomes a new line after the cursor's line.
+        val insertion = NextLinePlacement(lyrics, cursorPosition).inserting(suggestion)
+        applyAtomicLyricsEdit(TextFieldValue(insertion.text, TextRange(insertion.cursor)))
         suggestionInsertion = SuggestionInsertion(
             id = ++suggestionInsertionRevision,
-            range = TextRange(pos + if (needsNewline) 1 else 0, newPos - 1),
-            lyrics = newText
+            range = TextRange(insertion.start, insertion.end),
+            lyrics = insertion.text
         )
         suggestions = emptyList()
         triggerAutoSave()

@@ -21,6 +21,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.recording.RecordingFiles
@@ -63,6 +67,16 @@ data class TrashedVoiceMemo(
  * the fix applied to LocalModelService's llama handle.
  */
 class VoiceMemoService(private val context: Context) {
+
+    // Recording Trash lives on disk, not in the preferences store, so nothing re-emits
+    // when a recording is trashed, restored or deleted. The purge scheduler used to be
+    // woken by unrelated preference writes re-emitting the trashed-songs flow; since that
+    // flow only emits on real changes, trash changes announce themselves here.
+    private val trashChangeEvents = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** Emits after a recording is moved to Trash, restored or permanently deleted. */
+    val trashChanges: SharedFlow<Unit> = trashChangeEvents.asSharedFlow()
 
     // --- Recording state (exposed to Compose as observable properties) ---
 
@@ -376,7 +390,7 @@ class VoiceMemoService(private val context: Context) {
                 target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
             }
             if (memo.file.renameTo(target)) trashedMemoFromFile(target, projectId) else null
-        }
+        }.also { if (it != null) trashChangeEvents.tryEmit(Unit) }
     }
 
     /** All trashed recordings across every project, newest deletion first. */
@@ -405,7 +419,10 @@ class VoiceMemoService(private val context: Context) {
         if (!dir.exists() && !dir.mkdirs()) return@withContext false
         val original = File(trashed.originalName)
         val target = RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension)
-        trashed.file.renameTo(target).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
+        trashed.file.renameTo(target).also {
+            cleanUpEmptyTrashDir(trashed.file.parentFile)
+            if (it) trashChangeEvents.tryEmit(Unit)
+        }
     }
 
     /** Permanently delete a trashed recording. */
@@ -413,7 +430,7 @@ class VoiceMemoService(private val context: Context) {
         if (playingFile == trashed.file) stopPlayback()
         return withContext(Dispatchers.IO) {
             deleteMemoFile(trashed.file).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
-        }
+        }.also { if (it) trashChangeEvents.tryEmit(Unit) }
     }
 
     /** Delete expired trashed recordings on their own clock, reporting partial failures. */

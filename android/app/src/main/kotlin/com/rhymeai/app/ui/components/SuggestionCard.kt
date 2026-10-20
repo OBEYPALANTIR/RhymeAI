@@ -135,11 +135,12 @@ fun SuggestionCard(
                     modifier = Modifier.padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
                 )
             }
-            // Rhyme tier pill — "hook" for chorus repeats, "perfect" for tier 2,
-            // "near" for tier 1; nothing for unverified (tier 0).
+            // Rhyme tier pill, as on iOS — "hook" for chorus repeats, "slant" for
+            // tier 3, "perfect" for tier 2, "near" for tier 1; nothing for tier 0.
             val tierLabel = when {
                 isHook -> "hook"
-                rhymeTier >= 2 -> "perfect"
+                rhymeTier == 3 -> "slant"
+                rhymeTier == 2 -> "perfect"
                 rhymeTier == 1 -> "near"
                 else -> null
             }

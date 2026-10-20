@@ -96,11 +96,200 @@ struct GGUFDownloadCatalogTests {
             $0.url.path.contains("/resolve/\(GGUFDownloadCatalog.huggingFaceRevision)/")
         })
         #expect(options.allSatisfy { !$0.url.path.contains("/resolve/main/") })
-        #expect(options.map(\.expectedBytes) == [3_427_878_784, 5_335_290_784])
+        #expect(options.map(\.expectedBytes) == [3_427_880_800, 5_335_292_800])
         #expect(options.map(\.sha256) == [
-            "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626",
-            "e39b2475a5c8d86d1b376babe16ffce32993c96ab650b6fed7c4e14f5d0d11a3",
+            "902e5d83a86393f064b1c8abc1a9d25fec5b3634683317792b02856c01c604e0",
+            "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
         ])
+    }
+
+    // The catalog must pin an immutable commit, never a branch or placeholder.
+    @Test func catalogPinsAnImmutableHuggingFaceCommit() {
+        let revision = GGUFDownloadCatalog.huggingFaceRevision
+        #expect(revision.count == 40 && revision.allSatisfy { "0123456789abcdef".contains($0) })
+    }
+
+    @Test func previousModelVersionUnderTheSameNameIsNotReportedInstalled() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gguf-installed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func sparseFile(_ name: String, bytes: Int64) throws {
+            let url = directory.appendingPathComponent(name)
+            #expect(FileManager.default.createFile(atPath: url.path, contents: Data("GGUF".utf8)))
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: UInt64(bytes))
+            try handle.close()
+        }
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+
+        // The shipped v1 E2B file: same name, 2,016 bytes smaller than the current entry.
+        try sparseFile(e2b.fileName, bytes: 3_427_878_784)
+        try sparseFile(e4b.fileName, bytes: e4b.expectedBytes)
+        GGUFVerifiedArtifactStore.record(
+            sha256: e4b.sha256, at: directory.appendingPathComponent(e4b.fileName), defaults: defaults
+        )
+        try sparseFile("my-custom-model.gguf", bytes: 1_024)
+        #expect(GGUFModelStorage.installedModelFileNames(in: directory, defaults: defaults) == [
+            e4b.fileName,
+            "my-custom-model.gguf",
+        ].sorted())
+
+        // The right size alone is not enough: the file must be marked as the current artifact.
+        try sparseFile(e2b.fileName, bytes: e2b.expectedBytes)
+        #expect(!GGUFModelStorage.installedModelFileNames(in: directory, defaults: defaults).contains(e2b.fileName))
+        GGUFVerifiedArtifactStore.record(
+            sha256: e2b.sha256, at: directory.appendingPathComponent(e2b.fileName), defaults: defaults
+        )
+        #expect(GGUFModelStorage.installedModelFileNames(in: directory, defaults: defaults).contains(e2b.fileName))
+    }
+
+    /// E2B v2.1 and v6 share a name and an exact byte size; only the SHA-256 differs.
+    @Test func sameSizePreviousE2bIsNotInstalledAndIsReclaimed() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let v21SHA256 = "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5"
+        #expect(v21SHA256 != e2b.sha256)
+        let installed = directory.appendingPathComponent(e2b.fileName)
+
+        // A device that installed v2.1 with a build which recorded its marker: reclaimed by
+        // metadata alone, without hashing.
+        try writeSparseFile(installed, bytes: e2b.expectedBytes)
+        GGUFVerifiedArtifactStore.record(sha256: v21SHA256, at: installed, defaults: defaults)
+        #expect(!GGUFModelStorage.installedModelFileNames(in: directory, defaults: defaults).contains(e2b.fileName))
+        #expect(try GGUFModelStorage.removeStaleArtifacts(for: e2b, in: directory, defaults: defaults) == e2b.expectedBytes)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+        #expect(GGUFVerifiedArtifactStore.marker(fileName: e2b.fileName, defaults: defaults) == nil)
+
+        // A device whose v2.1 file has no marker yet: not installed; the download path
+        // hashes it once, finds v2.1's bytes and reclaims the file.
+        try writeSparseFile(installed, bytes: e2b.expectedBytes)
+        #expect(!GGUFModelStorage.installedModelFileNames(in: directory, defaults: defaults).contains(e2b.fileName))
+        #expect(GGUFModelStorage.needsInstalledVerification(for: e2b, in: directory, defaults: defaults))
+        #expect(try GGUFModelStorage.verifyOrReclaimInstalled(e2b, in: directory, defaults: defaults) == false)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+        #expect(GGUFVerifiedArtifactStore.marker(fileName: e2b.fileName, defaults: defaults) == nil)
+    }
+
+    @Test func verifiedMarkerIsTrustedOnlyForTheFileItWasWrittenFor() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        let installed = directory.appendingPathComponent(option.fileName)
+
+        // A verified install writes the marker.
+        try valid.write(to: staging)
+        try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option, defaults: defaults)
+        #expect(GGUFModelStorage.isVerifiedInstall(of: option, at: installed, defaults: defaults))
+        #expect(!GGUFModelStorage.needsInstalledVerification(for: option, in: directory, defaults: defaults))
+
+        // Replacing the file under the same name invalidates the marker.
+        var other = valid
+        other[7] = 9
+        try FileManager.default.removeItem(at: installed)
+        try other.write(to: installed)
+        #expect(!GGUFModelStorage.isVerifiedInstall(of: option, at: installed, defaults: defaults))
+        #expect(GGUFModelStorage.needsInstalledVerification(for: option, in: directory, defaults: defaults))
+        #expect(try GGUFModelStorage.verifyOrReclaimInstalled(option, in: directory, defaults: defaults) == false)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+
+        // The current bytes without a marker (installed by an older build) are kept and marked.
+        try valid.write(to: installed)
+        #expect(try GGUFModelStorage.verifyOrReclaimInstalled(option, in: directory, defaults: defaults))
+        #expect(GGUFModelStorage.isVerifiedInstall(of: option, at: installed, defaults: defaults))
+        #expect(try GGUFModelStorage.removeStaleArtifacts(for: option, in: directory, defaults: defaults) == 0)
+    }
+
+    private func isolatedDefaults() -> (UserDefaults, String) {
+        let suite = "gguf-verified-\(UUID().uuidString)"
+        return (UserDefaults(suiteName: suite)!, suite)
+    }
+
+    private func makeModelsDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gguf-stale-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func writeSparseFile(_ url: URL, bytes: Int64) throws {
+        #expect(FileManager.default.createFile(atPath: url.path, contents: Data("GGUF".utf8)))
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(bytes))
+        try handle.close()
+    }
+
+    @Test func staleSameNameModelAndForeignResumeDataAreReclaimed() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let staleModel = directory.appendingPathComponent(e2b.fileName)
+        try writeSparseFile(staleModel, bytes: 3_427_878_784)
+        try writeSparseFile(directory.appendingPathComponent(e4b.fileName), bytes: e4b.expectedBytes)
+        // Resume data written by the previous build (unkeyed) and for another artifact.
+        let legacyResume = directory.appendingPathComponent("\(e2b.fileName).resume")
+        let foreignResume = directory.appendingPathComponent("\(e2b.fileName).059e73281d764ba0.resume")
+        let currentResume = GGUFModelStorage.resumeDataURL(for: e2b, in: directory)
+        for url in [legacyResume, foreignResume, currentResume] {
+            try Data("resume".utf8).write(to: url)
+        }
+        #expect(currentResume.lastPathComponent.contains(String(e2b.sha256.prefix(16))))
+
+        let freed = try GGUFModelStorage.removeStaleArtifacts(for: e2b, in: directory)
+
+        #expect(freed == 3_427_878_784)
+        #expect(!FileManager.default.fileExists(atPath: staleModel.path))
+        #expect(!FileManager.default.fileExists(atPath: legacyResume.path))
+        #expect(!FileManager.default.fileExists(atPath: foreignResume.path))
+        #expect(FileManager.default.fileExists(atPath: currentResume.path))
+        #expect(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent(e4b.fileName).path
+        ))
+
+        // A file matching the current entry is never removed.
+        try writeSparseFile(staleModel, bytes: e2b.expectedBytes)
+        #expect(try GGUFModelStorage.removeStaleArtifacts(for: e2b, in: directory) == 0)
+        #expect(FileManager.default.fileExists(atPath: staleModel.path))
+    }
+
+    @Test func upgradeSpaceCheckCountsTheReclaimedStaleModel() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let staleModel = directory.appendingPathComponent(e2b.fileName)
+        let staleBytes: Int64 = 3_427_878_784
+        try writeSparseFile(staleModel, bytes: staleBytes)
+        // Free space only suffices once the stale model's bytes are returned to the volume.
+        let freeWithStaleModel = e2b.expectedBytes + GGUFModelStorage.downloadReserveBytes - staleBytes
+        let capacity: (URL) throws -> Int64? = { _ in
+            FileManager.default.fileExists(atPath: staleModel.path)
+                ? freeWithStaleModel
+                : freeWithStaleModel + staleBytes
+        }
+
+        try GGUFModelStorage.prepareSpace(for: e2b, in: directory, availableCapacity: capacity)
+        #expect(!FileManager.default.fileExists(atPath: staleModel.path))
+
+        // Without anything to reclaim, the same volume is still too full.
+        #expect(throws: (any Error).self) {
+            try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in freeWithStaleModel }
+        }
     }
 
     @Test func preferredModelUsesCatalogOrder() {
@@ -132,17 +321,6 @@ struct GGUFDownloadCatalogTests {
         #expect(!isLegacyGGUFDownloadArtifact(
             fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf"
         ))
-    }
-}
-
-struct GGUFSuggestionParsingTests {
-    @Test func parsesLiteralEscapedLineBreaksFromTunedModel() {
-        let raw = #"A hazy amber glow begins to gleam\nA whispered, fragile, waking dream\nAcross the slick and darkened stream\nA silent, solitary, waking theme\nBeneath the shadows of a waking gleam\nA fading, ephemeral, silver gleam<end_of_turn>"#
-        let parsed = AIService().parseSuggestionList(raw)
-
-        #expect(parsed.count == 6)
-        #expect(parsed.first == "A hazy amber glow begins to gleam")
-        #expect(parsed.last == "A fading, ephemeral, silver gleam")
     }
 }
 
@@ -350,7 +528,7 @@ struct GGUFDownloadIntegrityTests {
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
         )
         let staging = directory.appendingPathComponent("fixture.gguf.download")
-        let resume = directory.appendingPathComponent("fixture.gguf.resume")
+        let resume = GGUFModelStorage.resumeDataURL(for: option, in: directory)
         let destination = directory.appendingPathComponent(option.fileName)
         let previousModel = Data("existing model".utf8)
         try previousModel.write(to: destination)
@@ -413,7 +591,7 @@ struct GGUFDownloadIntegrityTests {
         )
         let staging = directory.appendingPathComponent("fixture.gguf.download")
         let destination = directory.appendingPathComponent(option.fileName)
-        let resume = directory.appendingPathComponent("fixture.gguf.resume")
+        let resume = GGUFModelStorage.resumeDataURL(for: option, in: directory)
         try valid.write(to: staging)
         try previousModel.write(to: destination)
         try Data([1, 2]).write(to: resume)

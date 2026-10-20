@@ -1,31 +1,22 @@
 package com.rhymeai.app.ui.components
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.dp
-import com.rhymeai.app.data.model.AnalysisPresentation
-import com.rhymeai.app.ui.theme.InkUnderlinePattern
-import com.rhymeai.app.ui.theme.LocalAnalysisPresentation
 import com.rhymeai.app.ui.theme.LocalAppAppearance
-import com.rhymeai.app.ui.theme.analysisFontWeight
-import com.rhymeai.app.ui.theme.analysisInkPattern
 import com.rhymeai.app.ui.theme.rhymePalette
 import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.LyricTokenizer
@@ -107,105 +98,30 @@ private object DocumentAnalysisCache {
     }
 }
 
-@Immutable
-data class RhymeUnderlineSpan(
-    val start: Int,
-    val endExclusive: Int,
-    val color: Color,
-    val pattern: InkUnderlinePattern
-)
-
-@Immutable
-data class AnalysisWordWeight(
-    val start: Int,
-    val endExclusive: Int,
-    val weight: FontWeight
-)
-
-@Immutable
-data class AnalysisTextResult(
-    val text: AnnotatedString,
-    val rhymeSpans: List<RhymeUnderlineSpan>,
-    val wordWeights: List<AnalysisWordWeight>
-)
-
 @Composable
-fun RhymeHighlightedText(
-    text: String,
-    enabled: Boolean,
-    syllablesEnabled: Boolean = false,
-    modifier: Modifier = Modifier,
-    style: TextStyle = TextStyle.Default
-) {
-    val result = rememberAnalysisTextResult(text, enabled, syllablesEnabled)
-    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val density = LocalDensity.current
-    val strokeWidth = with(density) { 3.dp.toPx() }
-    val underlineGap = with(density) { 2.dp.toPx() }
-
-    Text(
-        text = result.text,
-        modifier = modifier.rhymeUnderlines(
-            spans = result.rhymeSpans,
-            textLayoutResult = layoutResult,
-            underlineGap = underlineGap,
-            strokeWidth = strokeWidth
-        ),
-        style = style,
-        onTextLayout = { layoutResult = it }
-    )
-}
-
-@Composable
-internal fun rememberAnalysisTextResult(
+internal fun rememberAnalysisText(
     text: String,
     enabled: Boolean,
     syllablesEnabled: Boolean = false
-): AnalysisTextResult {
+): AnnotatedString {
     val baseTextColor = MaterialTheme.colorScheme.onBackground
     val isDark = LocalAppAppearance.current.isDark
     val palette = rhymePalette(isDark)
-    val presentation = LocalAnalysisPresentation.current
 
     if ((!enabled && !syllablesEnabled) || text.isEmpty()) {
-        return remember(text) {
-            AnalysisTextResult(AnnotatedString(text), emptyList(), emptyList())
-        }
+        return remember(text) { AnnotatedString(text) }
     }
 
-    var result by remember(
-        text,
-        baseTextColor,
-        palette,
-        isDark,
-        presentation,
-        enabled,
-        syllablesEnabled
-    ) {
-        mutableStateOf(
-            AnalysisTextResult(
-                text = AnnotatedString(text),
-                rhymeSpans = emptyList(),
-                wordWeights = emptyList()
-            )
-        )
+    var result by remember(text, baseTextColor, palette, isDark, enabled, syllablesEnabled) {
+        mutableStateOf(AnnotatedString(text))
     }
-    LaunchedEffect(
-        text,
-        baseTextColor,
-        palette,
-        isDark,
-        presentation,
-        enabled,
-        syllablesEnabled
-    ) {
+    LaunchedEffect(text, baseTextColor, palette, isDark, enabled, syllablesEnabled) {
         result = withContext(Dispatchers.Default) {
             buildAnalysisText(
                 text = text,
                 baseTextColor = baseTextColor,
                 rhymePalette = palette,
                 isDark = isDark,
-                presentation = presentation,
                 rhymeEnabled = enabled,
                 syllablesEnabled = syllablesEnabled
             )
@@ -219,10 +135,9 @@ internal fun buildAnalysisText(
     baseTextColor: Color,
     rhymePalette: List<Color>,
     isDark: Boolean,
-    presentation: AnalysisPresentation,
     rhymeEnabled: Boolean,
     syllablesEnabled: Boolean
-): AnalysisTextResult {
+): AnnotatedString {
     val documentAnalysis = DocumentAnalysisCache.analysisFor(
         DocumentAnalysisRequest(text = text, rhymeEnabled = rhymeEnabled)
     ) {
@@ -253,10 +168,8 @@ internal fun buildAnalysisText(
     val analyses = documentAnalysis.words
     val familyKeys = documentAnalysis.familyKeys
     val familyColors = assignRhymeFamilyColors(familyKeys, rhymePalette)
-    val rhymeSpans = mutableListOf<RhymeUnderlineSpan>()
-    val weights = mutableListOf<AnalysisWordWeight>()
 
-    val annotated = buildAnnotatedString {
+    return buildAnnotatedString {
         var cursor = 0
         tokens.forEachIndexed { index, token ->
             if (token.start > cursor) {
@@ -271,37 +184,18 @@ internal fun buildAnalysisText(
                 null
             }
             val familyKey = familyKeys[index]
-            val tokenStyle = when (presentation) {
-                AnalysisPresentation.COLOR -> when {
-                    rhymeEnabled && familyKey != null -> SpanStyle(
-                        color = familyColors.getValue(familyKey),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    !rhymeEnabled && syllablesEnabled -> SpanStyle(
-                        color = syllableColor(requireNotNull(syllableCount), isDark),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    else -> SpanStyle(color = baseTextColor)
-                }
-                AnalysisPresentation.INK_MARKS -> {
-                    val weight = syllableCount?.let(::analysisFontWeight)
-                    if (weight != null) {
-                        weights += AnalysisWordWeight(token.start, token.end, weight)
-                    }
-                    if (rhymeEnabled && familyKey != null) {
-                        rhymeSpans += RhymeUnderlineSpan(
-                            start = token.start,
-                            endExclusive = token.end,
-                            color = baseTextColor,
-                            pattern = analysisInkPattern(familyKey)
-                        )
-                    }
-                    if (weight == null) {
-                        SpanStyle(color = baseTextColor)
-                    } else {
-                        SpanStyle(color = baseTextColor, fontWeight = weight)
-                    }
-                }
+            // Rhyme colouring owns the word colour when it is on; the syllable cue then moves
+            // to the underline drawn by the editor, so the foreground is never double-claimed.
+            val tokenStyle = when {
+                rhymeEnabled && familyKey != null -> SpanStyle(
+                    color = familyColors.getValue(familyKey),
+                    fontWeight = FontWeight.SemiBold
+                )
+                !rhymeEnabled && syllablesEnabled -> SpanStyle(
+                    color = syllableColor(requireNotNull(syllableCount), isDark),
+                    fontWeight = FontWeight.SemiBold
+                )
+                else -> SpanStyle(color = baseTextColor)
             }
             withStyle(tokenStyle) { append(token.text) }
             cursor = token.end
@@ -312,8 +206,18 @@ internal fun buildAnalysisText(
             }
         }
     }
+}
 
-    return AnalysisTextResult(annotated, rhymeSpans, weights)
+/**
+ * Draws the analysed lyric inside the editor field. Offsets map one to one, so the
+ * cursor and any selection sit on the coloured words instead of replacing them.
+ */
+internal fun lyricAnalysisTransformation(
+    active: Boolean,
+    analysed: AnnotatedString
+): VisualTransformation = VisualTransformation { source ->
+    val transformed = if (active && analysed.text == source.text) analysed else source
+    TransformedText(transformed, OffsetMapping.Identity)
 }
 
 internal fun assignRhymeFamilyColors(

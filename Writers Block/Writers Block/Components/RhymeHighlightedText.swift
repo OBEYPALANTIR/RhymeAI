@@ -54,8 +54,6 @@ struct LyricsColorSpan: Sendable {
     let range: NSRange
     let foreground: Color?
     let underline: Color?
-    var underlineStyle: Int? = nil
-    var inkStrokeWidth: Int? = nil
 }
 
 nonisolated private final class HighlightAnalysisCache: @unchecked Sendable {
@@ -119,7 +117,7 @@ enum LyricsHighlighting {
         Color(red:  77/255, green: 124/255, blue:  15/255)  // lime-700
     ]
 
-    static func spans(text: String, rhymeEnabled: Bool, syllablesEnabled: Bool, isDark: Bool, style: AnalysisPresentationStyle = .color) async -> [LyricsColorSpan] {
+    static func spans(text: String, rhymeEnabled: Bool, syllablesEnabled: Bool, isDark: Bool) async -> [LyricsColorSpan] {
         let task = Task.detached(priority: .userInitiated) { () -> [LyricsColorSpan] in
             guard !Task.isCancelled else { return [] }
             let request = HighlightAnalysisRequest(source: text, rhymeEnabled: rhymeEnabled)
@@ -134,11 +132,10 @@ enum LyricsHighlighting {
             for token in analysis.tokens {
                 guard !Task.isCancelled else { return [] }
                 let familyKey = rhymeEnabled ? token.familyKey : nil
-                let colorMode = style == .color
                 let foreground: Color?
-                if colorMode, let familyKey {
+                if let familyKey {
                     foreground = colorFor(key: familyKey, isDark: isDark)
-                } else if colorMode && !rhymeEnabled && syllablesEnabled {
+                } else if !rhymeEnabled && syllablesEnabled {
                     foreground = syllableColor(for: token.syllableCount, isDark: isDark)
                 } else {
                     foreground = nil
@@ -146,11 +143,8 @@ enum LyricsHighlighting {
                 spans.append(LyricsColorSpan(
                     range: NSRange(location: token.location, length: token.length),
                     foreground: foreground,
-                    underline: colorMode && rhymeEnabled && syllablesEnabled
-                        ? syllableColor(for: token.syllableCount, isDark: isDark) : nil,
-                    underlineStyle: !colorMode ? familyKey.map { analysisInkPattern(for: $0).underlineStyleRawValue } : nil,
-                    inkStrokeWidth: !colorMode && syllablesEnabled
-                        ? inkStrokeWidth(for: token.syllableCount) : nil
+                    underline: rhymeEnabled && syllablesEnabled
+                        ? syllableColor(for: token.syllableCount, isDark: isDark) : nil
                 ))
             }
             return spans
@@ -159,15 +153,6 @@ enum LyricsHighlighting {
             await task.value
         } onCancel: {
             task.cancel()
-        }
-    }
-
-    nonisolated private static func inkStrokeWidth(for syllables: Int) -> Int? {
-        switch syllables {
-        case ...1: nil
-        case 2: -1
-        case 3: -2
-        default: -3
         }
     }
 
@@ -233,183 +218,6 @@ enum LyricsHighlighting {
 
     nonisolated private static func syllableColor(for count: Int, isDark: Bool) -> Color {
         if isDark {
-            switch count {
-            case 1: return Color(red: 110.0 / 255, green: 231.0 / 255, blue: 183.0 / 255)
-            case 2: return Color(red: 147.0 / 255, green: 197.0 / 255, blue: 253.0 / 255)
-            case 3: return Color(red: 216.0 / 255, green: 180.0 / 255, blue: 254.0 / 255)
-            default: return Color(red: 253.0 / 255, green: 164.0 / 255, blue: 175.0 / 255)
-            }
-        } else {
-            switch count {
-            case 1: return Color(red:   4 / 255.0, green: 120 / 255.0, blue:  87 / 255.0) // emerald-700
-            case 2: return Color(red:   3 / 255.0, green: 105 / 255.0, blue: 161 / 255.0) // sky-700
-            case 3: return Color(red: 126 / 255.0, green:  34 / 255.0, blue: 206 / 255.0) // purple-700
-            default: return Color(red: 185 / 255.0, green:  28 / 255.0, blue:  28 / 255.0) // rose-700
-            }
-        }
-    }
-}
-
-extension InkUnderlinePattern {
-    var underlineStyleRawValue: Int {
-        let pattern: NSUnderlineStyle
-        switch self {
-        case .solid: pattern = []
-        case .dashed: pattern = .patternDash
-        case .dotted: pattern = .patternDot
-        case .dashDot: pattern = .patternDashDot
-        }
-        return NSUnderlineStyle.single.rawValue | pattern.rawValue
-    }
-
-    var lineStyle: Text.LineStyle {
-        switch self {
-        case .solid: Text.LineStyle(pattern: .solid)
-        case .dashed: Text.LineStyle(pattern: .dash)
-        case .dotted: Text.LineStyle(pattern: .dot)
-        case .dashDot: Text.LineStyle(pattern: .dashDot)
-        }
-    }
-}
-
-
-struct RhymeHighlightedText: View, Equatable {
-    let text: String
-    let enabled: Bool
-    let syllablesEnabled: Bool
-
-    @Environment(\.appAppearanceStyle) private var appearance
-    @Environment(\.analysisPresentationStyle) private var analysisPresentation
-
-    init(text: String, enabled: Bool, syllablesEnabled: Bool = false) {
-        self.text = text
-        self.enabled = enabled
-        self.syllablesEnabled = syllablesEnabled
-    }
-
-    static func == (lhs: RhymeHighlightedText, rhs: RhymeHighlightedText) -> Bool {
-        lhs.text == rhs.text
-            && lhs.enabled == rhs.enabled
-            && lhs.syllablesEnabled == rhs.syllablesEnabled
-    }
-
-    private var palette: [Color] {
-        appearance.analysisRhymeHexValues.map { Color(hex: $0) }
-    }
-
-    var body: some View {
-        if (enabled || syllablesEnabled) && !text.isEmpty {
-            Text(highlightedAttributedString)
-                .font(.body)
-        } else {
-            Text(text)
-                .font(.body)
-                .foregroundStyle(.primary)
-        }
-    }
-
-    private var highlightedAttributedString: AttributedString {
-        let nsText = text as NSString
-        let matches = LyricRegex.word.matches(in: text, range: NSRange(location: 0, length: nsText.length))
-
-        struct Token {
-            let value: String
-            let range: Range<String.Index>
-        }
-        var tokens: [Token] = []
-        for match in matches {
-            guard let r = Range(match.range, in: text) else { continue }
-            tokens.append(Token(value: String(text[r]), range: r))
-        }
-
-        let analyses = tokens.map { WordAnalysisCache.shared.analysis(for: $0.value) }
-        let keysPerToken: [[String]] = analyses.map(\.rhymeKeys)
-
-        var keyOccurrences: [String: Int] = [:]
-        for keys in keysPerToken {
-            for k in keys { keyOccurrences[k, default: 0] += 1 }
-        }
-
-        let familyKeyPerToken: [String?] = keysPerToken.map { keys in
-            keys.last { (keyOccurrences[$0] ?? 0) >= 2 }
-        }
-
-        var result = AttributedString()
-        var cursor = text.startIndex
-
-        for (i, tok) in tokens.enumerated() {
-            if cursor < tok.range.lowerBound {
-                var pre = AttributedString(String(text[cursor..<tok.range.lowerBound]))
-                pre.foregroundColor = .primary
-                result += pre
-            }
-            let count = analyses[i].syllableCount
-            var seg = AttributedString(tok.value)
-            if enabled, let familyKey = familyKeyPerToken[i] {
-                switch analysisPresentation {
-                case .color:
-                    seg.foregroundColor = colorFor(key: familyKey)
-                    seg.font = .body.weight(.semibold)
-                    if syllablesEnabled {
-                        seg.underlineStyle = Text.LineStyle(
-                            pattern: .solid,
-                            color: syllableColor(for: count)
-                        )
-                    }
-                case .inkMarks:
-                    seg.foregroundColor = appearance.palette.primaryInk
-                    seg.underlineStyle = analysisInkPattern(for: familyKey).lineStyle
-                    if let weight = analysisFontWeight(
-                        syllableCount: count,
-                        syllableGuideEnabled: syllablesEnabled
-                    ) {
-                        seg.font = .body.weight(weight)
-                    }
-                }
-            } else if analysisPresentation == .inkMarks, syllablesEnabled {
-                seg.foregroundColor = appearance.palette.primaryInk
-                seg.font = .body.weight(analysisFontWeight(syllableCount: count))
-            } else if !enabled && syllablesEnabled {
-                seg.foregroundColor = syllableColor(for: count)
-                seg.font = .body.weight(.semibold)
-            } else {
-                seg.foregroundColor = .primary
-                if syllablesEnabled {
-                    seg.underlineStyle = Text.LineStyle(
-                        pattern: .solid,
-                        color: syllableColor(for: count)
-                    )
-                }
-            }
-            result += seg
-            cursor = tok.range.upperBound
-        }
-
-        if cursor < text.endIndex {
-            var tail = AttributedString(String(text[cursor...]))
-            tail.foregroundColor = .primary
-            result += tail
-        }
-
-        return result
-    }
-
-    private func colorFor(key: String) -> Color {
-        let p = palette
-        // Stable across launches: Swift's `hashValue` is per-process seeded, so a
-        // rhyme family would recolor every launch. FNV-1a over the key's UTF-8
-        // bytes is deterministic. `&*`/`&+` wrap on overflow instead of trapping.
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in key.utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 0x0000_0100_0000_01b3
-        }
-        let index = Int(hash % UInt64(p.count))
-        return p[index]
-    }
-
-    private func syllableColor(for count: Int) -> Color {
-        if appearance.usesDarkAnalysisPalette {
             switch count {
             case 1: return Color(red: 110.0 / 255, green: 231.0 / 255, blue: 183.0 / 255)
             case 2: return Color(red: 147.0 / 255, green: 197.0 / 255, blue: 253.0 / 255)

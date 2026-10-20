@@ -356,6 +356,20 @@ struct SynonymTests {
         #expect(action == .retry)
     }
 
+    @Test func synonymFailureMessageKeepsServiceWordingAndHidesFrameworkErrors() {
+        #expect(
+            SynonymResultPresentation.message(for: AIServiceError.networkUnavailable)
+                == AIServiceError.networkUnavailable.errorDescription
+        )
+
+        let frameworkError = NSError(domain: "FoundationModels.LanguageModelError", code: -1)
+        let message = SynonymResultPresentation.message(for: frameworkError)
+
+        #expect(!message.contains("LanguageModelError"))
+        #expect(!message.contains("error -1"))
+        #expect(message.contains("Settings"))
+    }
+
     @Test func sanitizerRejectsPromptEchoLineBeforeCommaSplitting() {
         let raw = "Sure, here are:\nGlow"
 

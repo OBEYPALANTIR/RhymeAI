@@ -45,8 +45,10 @@ struct WelcomeView: View {
                             .padding(.bottom, RhymeAITokens.Spacing.xs)
 
                         if !dynamicTypeSize.isAccessibilitySize {
-                            // Subtitle
-                            Text("Your intelligent songwriting companion.\nStart from scratch, load a project, or pick a template.")
+                            // Subtitle. The non-breaking spaces keep "pick a
+                            // template." together, so a narrow screen cannot
+                            // strand its last word or two on a line.
+                            Text("Your intelligent songwriting companion.\nStart fresh, load a song, or pick\u{00A0}a\u{00A0}template.")
                                 .font(.body)
                                 .foregroundStyle(appearance.palette.secondaryInk)
                                 .multilineTextAlignment(.center)
@@ -85,13 +87,16 @@ struct WelcomeView: View {
         }
     }
 
+    // The centred tile layout only suits the side-by-side row. Stacked at
+    // accessibility sizes it stretched each card to a third of the screen with
+    // its content pinned to the top, so the stack uses the row layout instead.
     @ViewBuilder
     private var cardContent: some View {
         WelcomeCard(
             icon: "plus",
             title: "New Song",
             subtitle: "Start with a blank canvas",
-            compact: isRegular
+            compact: usesHorizontalCards
         ) {
             viewModel.newProject()
         }
@@ -100,7 +105,7 @@ struct WelcomeView: View {
             icon: "folder",
             title: "Load Song",
             subtitle: "Continue where you left off",
-            compact: isRegular
+            compact: usesHorizontalCards
         ) {
             viewModel.showProjectsSheet = true
         }
@@ -109,7 +114,7 @@ struct WelcomeView: View {
             icon: "rectangle.grid.2x2",
             title: "Song Templates",
             subtitle: "Start with a structured layout",
-            compact: isRegular
+            compact: usesHorizontalCards
         ) {
             viewModel.showTemplatesSheet = true
         }

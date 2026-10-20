@@ -90,7 +90,7 @@ Then run `xcodebuild build` or `xcodebuild test` with the confirmed scheme and s
 ## RhymeAI UI Polish Pass — Agent Conventions
 
 - Working branch: `chore/ui-polish-2026-05`.
-- Design contract: `/Users/tylermanring/Documents/RhymeAI/DESIGN.md`.
+- Design contract: `DESIGN.md` at the repository root.
 - Required commands:
   - `./gradlew check`
   - `./gradlew lint`

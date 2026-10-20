@@ -1,0 +1,86 @@
+name: Jules CI repair
+
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/jules-ci*'
+      - '.github/workflows/jules-ci.yml'
+  workflow_run:
+    workflows: [Android, iOS, Android APK]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Actual failed GitHub Actions run ID
+        required: true
+        type: string
+      dry_run:
+        description: Read-only preflight (no check marker or Jules session)
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: node --test .github/scripts/jules-ci.test.mjs
+  resolve:
+    if: >-
+      github.repository == 'OBEYPALANTIR/RhymeAI' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (vars.JULES_CI_ENABLED == 'true' && github.event.workflow_run.conclusion == 'failure'))
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      sha: ${{ steps.run.outputs.sha }}
+      run_id: ${{ steps.run.outputs.run_id }}
+    steps:
+      - id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || exit 1
+          sha=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .head_sha)
+          [[ "$sha" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+  repair:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: jules-ci-${{ github.repository }}-${{ needs.resolve.outputs.sha }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      checks: write
+    steps:
+      - name: Checkout trusted default branch helper
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Preflight or submit one repair attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ needs.resolve.outputs.run_id }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+          JULES_CI_ENABLED: ${{ vars.JULES_CI_ENABLED }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+        run: node .github/scripts/jules-ci.mjs

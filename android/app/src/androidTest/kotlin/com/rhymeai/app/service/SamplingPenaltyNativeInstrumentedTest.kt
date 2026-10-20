@@ -141,6 +141,6 @@ class SamplingPenaltyNativeInstrumentedTest {
     }
 
     private companion object {
-        const val EXPECTED_MODEL_SHA = "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626"
+        val EXPECTED_MODEL_SHA = com.rhymeai.app.ui.components.GEMMA_DOWNLOADS.first().sha256
     }
 }

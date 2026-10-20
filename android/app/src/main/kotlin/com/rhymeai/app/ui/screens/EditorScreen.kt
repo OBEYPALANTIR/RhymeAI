@@ -96,6 +96,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
@@ -137,10 +138,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.input.TransformedText
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -151,7 +149,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.SaveStatus
-import com.rhymeai.app.data.model.AnalysisPresentation
 import com.rhymeai.app.data.model.ExportFormat
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SongProject
@@ -160,8 +157,8 @@ import com.rhymeai.app.ui.components.ExportSheet
 import com.rhymeai.app.ui.components.EditorUndoRedoControls
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
-import com.rhymeai.app.ui.components.rememberAnalysisTextResult
-import com.rhymeai.app.ui.components.rhymeUnderlines
+import com.rhymeai.app.ui.components.rememberAnalysisText
+import com.rhymeai.app.ui.components.lyricAnalysisTransformation
 import com.rhymeai.app.ui.components.WordInspectorSheet
 import com.rhymeai.app.ui.components.analyzeSyllableUnderlines
 import com.rhymeai.app.ui.components.colorSyllableUnderlines
@@ -169,10 +166,10 @@ import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.components.keyboardAwareBottomPadding
 import com.rhymeai.app.ui.components.syllableUnderlines
 import com.rhymeai.app.ui.theme.DesignTokens
-import com.rhymeai.app.ui.theme.LocalAnalysisPresentation
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.outlineStrongColorFor
 import com.rhymeai.app.ui.theme.selectionColorFor
 import com.rhymeai.app.ui.theme.editorSyllableCountColor
 import com.rhymeai.app.ui.theme.editorWordCountColor
@@ -510,7 +507,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             .fillMaxSize()
             .appWritingSurface()
     ) {
-        val fabRowVisible = !focusMode && !showBottomSheet && !pendingAssistantSheet && !modalOpen && !viewModel.hasActiveRewrite
+        // The rewrite chip bar takes the floating actions' place, so they leave the screen and
+        // the accessibility tree until the selection is gone.
+        val fabRowVisible = !focusMode && !showBottomSheet && !pendingAssistantSheet && !modalOpen &&
+            !viewModel.hasActiveRewrite && !rewriteVisible
         val memoService = viewModel.voiceMemoService
         LaunchedEffect(memoService) {
             val activity = context as? android.app.Activity
@@ -713,7 +713,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
             // Editor
             val scrollState = androidx.compose.runtime.key(viewModel.editorPositionRevision) {
-                rememberScrollState(with(density) { viewModel.editorScrollOffset.dp.roundToPx() })
+                // The saved offset only seeds a new scroll state (keyed by revision). Reading it
+                // observably would recompose the whole editor on every scroll frame, because the
+                // collector below writes it back as the user scrolls.
+                val savedOffset = Snapshot.withoutReadObservation { viewModel.editorScrollOffset }
+                rememberScrollState(with(density) { savedOffset.dp.roundToPx() })
             }
             LaunchedEffect(scrollState, viewModel.editorPositionRevision) {
                 snapshotFlow { scrollState.value }.collectLatest { offset ->
@@ -954,22 +958,19 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
                     // Expensive lyric analysis waits until typing pauses so editor redraws stay stable.
+                    // It stays on while text is selected: the field draws its selection behind the coloured words.
                     val lyricAnalysisReady = analyzedLyrics == viewModel.lyrics
                     val analysisOverlayActive = (
                         viewModel.isRhymeHighlightEnabled || viewModel.isSyllableColoringEnabled
                     ) &&
                         viewModel.lyrics.isNotEmpty() &&
                         !viewModel.hasActiveRewrite &&
-                        selection.collapsed &&
                         lyricAnalysisReady
                     // Underlines only when rhyme coloring owns the foreground; otherwise syllables tint the word itself.
-                    val analysisPresentation = LocalAnalysisPresentation.current
                     val syllableUnderlineActive = !focusMode && viewModel.isSyllableColoringEnabled &&
                         viewModel.isRhymeHighlightEnabled &&
-                        analysisPresentation == AnalysisPresentation.COLOR &&
                         viewModel.lyrics.isNotEmpty() &&
                         !viewModel.hasActiveRewrite &&
-                        selection.collapsed &&
                         lyricAnalysisReady
                     // Center glyphs in the 28sp line box and drop legacy font padding so the
                     // cursor, placeholder, and color overlays all share one vertical metric.
@@ -1015,25 +1016,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         )
                     }
                     val analysisTextActive = analysisOverlayActive && !focusMode
-                    val analysisTextResult = rememberAnalysisTextResult(
+                    val analysisText = rememberAnalysisText(
                         text = analyzedLyrics,
                         enabled = analysisTextActive && viewModel.isRhymeHighlightEnabled,
                         syllablesEnabled = analysisTextActive && viewModel.isSyllableColoringEnabled
                     )
-                    val analysisTransformation = remember(analysisTextActive, analysisTextResult) {
-                        VisualTransformation { source ->
-                            val transformed = if (
-                                analysisTextActive && analysisTextResult.text.text == source.text
-                            ) {
-                                analysisTextResult.text
-                            } else {
-                                source
-                            }
-                            TransformedText(transformed, OffsetMapping.Identity)
-                        }
+                    val analysisTransformation = remember(analysisTextActive, analysisText) {
+                        lyricAnalysisTransformation(analysisTextActive, analysisText)
                     }
-                    val rhymeUnderlineGap = with(density) { 2.dp.toPx() }
-                    val rhymeUnderlineWidth = with(density) { 3.dp.toPx() }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1072,24 +1062,20 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     state = RewriteHighlightState(
                                         range = if (focusMode) null else rewriteHighlightRange
                                     ),
-                                    colors = RewriteHighlightColors(
-                                        fill = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
-                                            colorScheme.error.copy(alpha = 0.22f)
-                                        } else {
-                                            colorScheme.primary.copy(alpha = 0.20f)
-                                        },
-                                        stroke = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
-                                            colorScheme.error.copy(alpha = 0.70f)
-                                        } else {
-                                            colorScheme.tertiary.copy(alpha = 0.78f)
-                                        }
-                                    )
-                                )
-                                .rhymeUnderlines(
-                                    spans = if (analysisTextActive) analysisTextResult.rhymeSpans else emptyList(),
-                                    textLayoutResult = lyricsTextLayout,
-                                    underlineGap = rhymeUnderlineGap,
-                                    strokeWidth = rhymeUnderlineWidth
+                                    // The editor's own selection tint and strong outline: nothing on
+                                    // the text moves while a rewrite is in flight, the rewrite bar
+                                    // carries the loading state. Drawn behind the text, so opaque is fine.
+                                    colors = if (viewModel.hasActiveRewrite && viewModel.rewriteError != null) {
+                                        RewriteHighlightColors(
+                                            fill = colorScheme.error.copy(alpha = 0.22f),
+                                            stroke = colorScheme.error.copy(alpha = 0.70f)
+                                        )
+                                    } else {
+                                        RewriteHighlightColors(
+                                            fill = selectionColorFor(LocalAppAppearance.current),
+                                            stroke = outlineStrongColorFor(LocalAppAppearance.current)
+                                        )
+                                    }
                                 )
                                 .syllableUnderlines(
                                     spans = syllableUnderlineSpans,

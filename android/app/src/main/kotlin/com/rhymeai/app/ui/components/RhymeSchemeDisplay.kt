@@ -38,7 +38,8 @@ internal fun rhymeSchemeRows(context: RhymeContext, scheme: String): List<RhymeS
     return context.stanzaLines.mapIndexed { rowIndex, line ->
         val isCurrent = rowIndex == context.currentLineIndex
         val letter = when {
-            SectionMap.headerTitle(line) != null -> null
+            // A section header starts a new stanza, so the scheme restarts under it.
+            SectionMap.headerTitle(line) != null -> null.also { lyricIndex = 0 }
             line.isBlank() -> context.currentLetter.takeIf { isCurrent }
             else -> letters[lyricIndex++ % letters.size].toString()
         }
@@ -103,7 +104,7 @@ fun RhymeSchemeDisplay(
                         )
                     } else if (isCurrent) {
                         Text(
-                            text = "Typing here...",
+                            text = "Next line goes here",
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
                             fontStyle = FontStyle.Italic,

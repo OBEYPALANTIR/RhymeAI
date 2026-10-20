@@ -1,5 +1,9 @@
 # finetune/train/ — Phase 3 LoRA Training Runbook
 
+For the scripted round-2 E2B reproduction on a bounded Google Cloud Spot A100 or L4,
+see [the GCP training path](gcp/README.md). It runs the frozen notebook headlessly,
+caches the pinned weights/CUDA build, and verifies GCS downloads on external storage.
+
 End-to-end procedure for fine-tuning the on-device Gemma 4 models
 (E2B + E4B) on the verified Phase 2 dataset, on a **rented GPU box**
 (RunPod / Lambda; one A100 or one RTX 4090 is plenty), then exporting and
@@ -11,10 +15,15 @@ models) → `export_gguf.sh` (local) → `finetune/eval/run_eval.py`
 
 Key design facts (do not change casually):
 
-- Training text is the app's exact raw Gemma template
-  (`eval/prompts.gemma_instruction_prompt`), NOT the tokenizer's chat
-  template — the app posts raw `<start_of_turn>` prompts to llama.cpp
-  `/completion` with no template, so train == deploy byte-for-byte.
+- Training text starts with the app's exact on-device prompt
+  (`eval/prompts.app_prompt`, the port of `GGUFModelService.gemmaPrompt`),
+  NOT the tokenizer's chat template. The shipped E2B/E4B GGUFs are Gemma 4,
+  so the app sends `<|turn>user\n{prompt}<turn|>\n<|turn>model\n` and
+  llama.cpp adds one `<bos>`; the text has no `<bos>` and `train_lora.py`
+  prepends exactly one (Gemma 4's HF tokenizer adds none itself), then
+  checks row 0. `prepare_dataset.py --envelope legacy` is only for
+  Gemma 1-3n bases; `train_lora.py` refuses a dataset whose markers are not
+  single special tokens of `--base`.
 - LoRA is text-only (`finetune_vision_layers=False`, language layers only).
   This is required for the GGUF export detour that avoids unsloth bug
   #6808 (`Can not map tensor 'audio_tower.layers.0...'` when converting a
@@ -97,7 +106,7 @@ python3 train_lora.py \
 
 Defaults: r=16 / alpha=16, 2 epochs, lr 2e-4 cosine + warmup 3%,
 adamw_8bit, effective batch 16 (8×2), no packing, prompt-masked loss
-(only the completion + `<end_of_turn>` is supervised — the script prints
+(only the completion + `<turn|>` is supervised — the script prints
 the supervised tokens of row 0 at startup; verify they are a completion,
 not the prompt).
 
@@ -184,6 +193,14 @@ Compare against `finetune/baseline-E2B.json` / `baseline-E4B.json`:
 format-pass rate and rhyme-compliance tiers per task are the headline
 numbers. Ship only if the tuned model beats baseline on format-pass without
 regressing rhyme misses.
+
+## Base-model bake-off (Qwen3.5-4B) — retired
+
+The July 2026 Qwen3.5-4B bake-off lost the naturalness A/B to tuned E4B
+(see `finetune/SCORECARD.md`), so its `--template qwen` plumbing and its
+export detour (`merge_qwen_lora.py`, `graft_mtp.py`) were dropped when the
+v3 pipeline was ported onto the Gemma 4 envelope. Both are in commit
+`3e54522` if the memory/license case is revisited.
 
 ## Cost estimate
 

@@ -11,6 +11,8 @@ func suggestionRhymeBadgeLabel(rhymeTier: Int, isHookRepeat: Bool) -> String? {
 }
 
 struct SuggestionCardView: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
     let suggestion: String
     /// Rhyme quality tier: 3 = slant, 2 = perfect/multi, 1 = near, 0 = unverified (no badge shown).
     var rhymeTier: Int = 0
@@ -126,9 +128,12 @@ struct SuggestionCardView: View {
         // Last word - highlighted
         if let wordRange = Range(match.range(at: 2), in: text) {
             var word = AttributedString(String(text[wordRange]))
-            word.foregroundColor = Color(red: 165.0 / 255, green: 180.0 / 255, blue: 252.0 / 255) // Indigo 200
+            // The appearance's violet rhyme colour: the previous fixed pale
+            // indigo was about 1.8:1 on the light appearances.
+            let highlight = Color(hex: appearance.analysisRhymeHexValues[4])
+            word.foregroundColor = highlight
             word.underlineStyle = .single
-            word.underlineColor = UIColor(Color.indigo.opacity(0.6))
+            word.underlineColor = UIColor(highlight.opacity(0.6))
             result += word
         }
 

@@ -68,6 +68,7 @@ nonisolated enum GGUFModelCatalog {
     static func validateFile(
         at url: URL,
         against model: GGUFDownloadOption,
+        defaults: UserDefaults = .standard,
         cancellationCheck: () throws -> Void = {}
     ) throws {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -80,6 +81,8 @@ nonisolated enum GGUFModelCatalog {
         guard digest == model.sha256 else {
             throw AIServiceError.localModelUnavailable(reason: "The downloaded model failed its integrity check.")
         }
+        // A model installed before verified-artifact markers existed is marked on first load.
+        GGUFVerifiedArtifactStore.record(sha256: model.sha256, at: url, defaults: defaults)
     }
 
     static func fileSHA256(at url: URL, cancellationCheck: () throws -> Void = {}) throws -> String {

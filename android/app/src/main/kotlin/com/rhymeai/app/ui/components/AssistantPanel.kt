@@ -178,7 +178,6 @@ fun AssistantPanel(
                 OutlinedTextField(
                     value = viewModel.theme,
                     onValueChange = { viewModel.onThemeChanged(it) },
-                    enabled = !viewModel.useWholeSongContext,
                     placeholder = { Text("What is this song about?", fontSize = DesignTokens.Typography.caption) },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -258,7 +257,7 @@ fun AssistantPanel(
                         }
                     } else {
                         Text(
-                            "New rhyme sound (or place cursor on a line)",
+                            "New rhyme sound: no earlier line to match",
                             fontStyle = FontStyle.Italic,
                             color = colorScheme.onSurfaceVariant,
                             fontSize = DesignTokens.Typography.caption

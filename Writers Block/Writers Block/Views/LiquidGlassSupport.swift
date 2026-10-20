@@ -40,7 +40,7 @@ enum RhymeAITokens {
         static let threeColumnWorkspaceMinWidth: CGFloat = 1_100
         static let assistantColumnWidth: CGFloat = 380
         static let assistantReadableWidth: CGFloat = 420
-        static let assistantSheetHandleArea: CGFloat = 72
+        static let assistantSheetHandleArea: CGFloat = Touch.minimum
         static let assistantSheetHandleWidth: CGFloat = 52
         static let assistantSheetHandleHeight: CGFloat = 4
         static let editorMaxWidth: CGFloat = 740
@@ -74,11 +74,21 @@ enum RhymeAITokens {
 struct RhymeAIPressButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Reports press begin and end, including a press that ends outside the control.
+    var onPressingChanged: ((Bool) -> Void)?
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            // A custom style only hit-tests what the label draws, so a 44pt
+            // frame around a glyph or a line of text would otherwise leave
+            // just the ink tappable.
+            .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .opacity(configuration.isPressed ? 0.86 : 1)
             .animation(reduceMotion ? nil : RhymeAITokens.Motion.feedback, value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, isPressed in
+                onPressingChanged?(isPressed)
+            }
     }
 }
 

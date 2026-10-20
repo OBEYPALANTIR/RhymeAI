@@ -26,9 +26,14 @@ pipeline too.
   flag, rewrite action, selection span, rejected-word lists, and synonym
   limits. Draws whose rhyme constraint has no candidate end-words are skipped
   (the generator redraws).
-- `teacher.py` — HTTP client. `--api completion` posts the raw Gemma-templated
-  prompt to llama-server `/completion` (stop `<end_of_turn>`); `--api chat`
-  posts the inner user prompt to an OpenAI-compatible `/v1/chat/completions`.
+- `teacher.py` — HTTP client. `--api completion` posts the app's exact
+  on-device request to llama-server `/completion` (no chat template): the
+  inner prompt in the `--envelope` turn markers (`gemma4` by default, `legacy`
+  for a Gemma 1-3n teacher GGUF), stopping at that envelope's end of turn, and
+  with no `<bos>` (llama-server adds it, as llama.cpp does in the app).
+  `generate.py` warns when the served chat template uses other markers.
+  `--api chat` posts the inner prompt unwrapped to an OpenAI-compatible
+  `/v1/chat/completions`, where the server applies the model's own template.
   Default temperature 0.9 (diversity), retries and timeout configurable.
 - `generate.py` — the CLI loop.
 - `out/` — generated JSONL (git-ignored artifacts; do not commit).
@@ -59,9 +64,9 @@ Each accepted record is one JSONL line:
  "user_prompt": "...", "completion": "...", "run_seed": 1, "sample_index": 42}
 ```
 
-- `user_prompt` is the **inner** prompt (no `<start_of_turn>` markers) — apply
-  the Gemma turn template at training time
-  (`eval.prompts.gemma_instruction_prompt`).
+- `user_prompt` is the **inner** prompt (no turn markers) — the app's
+  envelope is applied at training time (`train/prepare_dataset.py`, via
+  `eval.prompts.app_prompt`).
 - `completion` is the cleaned teacher text with all control-marker artifacts
   stripped.
 - A rejected sample is re-drawn up to 2× with a different sub-seed; per-task
@@ -116,7 +121,8 @@ are safe because the scorers re-validate the exact text that gets stored:
    server running a large Gemma instruct model. Prefer `--api chat` against
    an OpenAI-compatible server (vLLM etc.) — the server applies its own chat
    template and the generator sends the inner user prompt. `--api completion`
-   also works for a llama-server hosting the big model. Add `--model` /
+   also works for a llama-server hosting the big model (pass the envelope of
+   its family; the app's own is `gemma4`). Add `--model` /
    `--api-key` if the gateway needs them. Nothing else changes: same sampler
    seeds, same scorers, same JSONL schema.
 3. Expected effect: acceptance rate rises sharply with the bigger teacher;

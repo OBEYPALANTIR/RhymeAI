@@ -58,7 +58,7 @@ struct CloudPrivacyFlowTests {
         }
     }
 
-    @Test func providerSerializersExcludeUnsharedLyricsForBufferedAndStreamingSuggestions() async throws {
+    @Test func providerSerializersExcludeUnsharedLyricsForStreamingSuggestions() async throws {
         let privateSentinel = "PRIVATE_STANZA_7D43"
         let allowedLine = "Keep only this target night"
         let matchingSuggestions = "One clear light\nTwo burn bright\nThree take flight\nFour feel right\nFive hold sight\nSix still might"
@@ -68,26 +68,6 @@ struct CloudPrivacyFlowTests {
             let service = AIService(session: Self.makeSession())
             let modelID = try #require(AIModel.models(for: provider).first?.id)
 
-            _ = try await service.getSuggestions(
-                provider: provider,
-                apiKey: "synthetic-key",
-                modelId: modelID,
-                theme: "quiet resolve",
-                lyrics: "[Verse]\n\(allowedLine)\n[Bridge]\n\(privateSentinel)",
-                targetRhymeLine: allowedLine,
-                rhymeType: .perfect,
-                rhymeScheme: "AABB",
-                currentLetter: "A",
-                currentSection: .verse,
-                complexity: .moderate,
-                useWholeSongContext: false
-            )
-
-            let bufferedBody = try #require(PrivacyURLProtocol.capturedBodies().first)
-            #expect(bufferedBody.contains(allowedLine), "\(provider.rawValue) buffered serializer omitted the allowed target line")
-            #expect(!bufferedBody.contains(privateSentinel), "\(provider.rawValue) buffered serializer leaked unshared lyrics")
-
-            PrivacyURLProtocol.reset(suggestionText: matchingSuggestions)
             var streamedLines: [String] = []
             for try await line in service.streamSuggestions(
                 provider: provider,
@@ -111,6 +91,44 @@ struct CloudPrivacyFlowTests {
             #expect(streamingBody.contains(allowedLine), "\(provider.rawValue) streaming serializer omitted the allowed target line")
             #expect(!streamingBody.contains(privateSentinel), "\(provider.rawValue) streaming serializer leaked unshared lyrics")
         }
+    }
+
+    @Test func cloudSuggestionStreamSanitizesProviderLineResponses() async throws {
+        let raw = """
+        1. "Yellow lights keep pulling me home"
+        * Yellow lights keep pulling me home
+        - Static in the choir of the road
+        model_response>
+        You are RhymeAI's on-device songwriting assistant.
+        This line is deliberately far too long to be a usable lyric suggestion because it keeps going past the expected single-line length limit for the assistant surface.
+        2) I trade the dark for a borrowed glow
+        """
+        PrivacyURLProtocol.reset(suggestionText: raw)
+        let service = AIService(session: Self.makeSession())
+
+        var streamed: [String] = []
+        for try await line in service.streamSuggestions(
+            provider: .gemini,
+            apiKey: "synthetic-key",
+            modelId: AIModel.default.id,
+            theme: "",
+            lyrics: "one line",
+            targetRhymeLine: nil,
+            rhymeType: .perfect,
+            rhymeScheme: "AABB",
+            currentLetter: "B",
+            currentSection: .verse,
+            complexity: .moderate,
+            useWholeSongContext: false
+        ) {
+            streamed.append(line)
+        }
+
+        #expect(streamed == [
+            "Yellow lights keep pulling me home",
+            "Static in the choir of the road",
+            "I trade the dark for a borrowed glow"
+        ])
     }
 
     @Test func wholeSongScopeEscalationRequiresFreshConsentBeforeSerialization() async throws {
@@ -182,6 +200,52 @@ struct CloudPrivacyFlowTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(PrivacyURLProtocol.capturedBodies().count == requestsBeforeRevocation)
         #expect(viewModel.rewritePreview == nil)
+    }
+
+    @Test func themeEditDropsInFlightSuggestionsWithWholeSongContextOn() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.saveUseWholeSongContext(true)
+        viewModel.setCloudAISharingConsent(true, scope: .wholeSong)
+        viewModel.lyrics = "A first unfinished line"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+        viewModel.theme = "leaving town"
+
+        // Control: an undisturbed request lands its suggestions. The next line rhymes
+        // with "line", so the fixture lines end on perfect rhymes for it.
+        let rhymingLines = "Under the pine\nHolding the sign\nPouring the wine\nAll of it mine\nDrawing the design\nTelling me fine"
+        PrivacyURLProtocol.reset(suggestionText: rhymingLines)
+        viewModel.getSuggestions()
+        #expect(await Self.waitUntil { !viewModel.isLoading && !viewModel.suggestions.isEmpty })
+
+        // A theme edit while the next request is in flight drops it.
+        PrivacyURLProtocol.reset(suggestionText: rhymingLines, holdResponse: true)
+        defer { PrivacyURLProtocol.releaseHeldResponse() }
+        viewModel.getSuggestions()
+        #expect(await Self.waitUntil { PrivacyURLProtocol.capturedBodies().count == 1 })
+        #expect(PrivacyURLProtocol.capturedBodies()[0].contains("leaving town"))
+        let requestID = try #require(viewModel.suggestionsRequestIDForTest())
+        #expect(viewModel.isLoading)
+
+        viewModel.theme = "coming home"
+
+        #expect(viewModel.suggestionsRequestIDForTest() != requestID)
+        #expect(!viewModel.isLoading)
+        #expect(viewModel.suggestions.isEmpty)
+        PrivacyURLProtocol.releaseHeldResponse()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(viewModel.suggestions.isEmpty)
+        #expect(viewModel.errorMessage == nil)
+        #expect(!viewModel.isLoading)
+        #expect(viewModel.theme == "coming home")
     }
 
     @Test func delayedSuggestionResponseCannotCrossSongNavigation() async throws {
@@ -346,7 +410,11 @@ struct CloudPrivacyFlowTests {
 
     private static func makeDefaults() -> (UserDefaults, String) {
         let name = "rhymeai.cloud-privacy.\(UUID().uuidString)"
-        return (UserDefaults(suiteName: name)!, name)
+        let defaults = UserDefaults(suiteName: name)!
+        // These flows exercise the selected-context scope; Whole Song Context
+        // defaults on, so start each one from an explicit off.
+        defaults.set(false, forKey: "editor.useWholeSongContext")
+        return (defaults, name)
     }
 
     private static func waitUntil(

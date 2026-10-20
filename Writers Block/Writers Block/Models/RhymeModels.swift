@@ -48,20 +48,27 @@ enum RhymeComplexity: Int, CaseIterable, Codable {
 
     var description: String {
         switch self {
-        case .simple: return "Basic vocabulary, straightforward rhymes"
-        case .moderate: return "Balanced vocabulary, clever wordplay"
-        case .complex: return "Advanced vocabulary, intricate rhymes"
+        case .simple: return "Plain language, no wordplay"
+        case .moderate: return "Balanced vocabulary, natural phrasing"
+        case .complex: return "Advanced vocabulary, wordplay, intricate rhymes"
         }
     }
 
+    /// Simple and Complex carry numeric, checkable targets (words per line and
+    /// the end word's syllables) that pair with the level-aware allowed
+    /// end-word list (`RhymeConstraint.levelEndWords`); only Complex asks for
+    /// wordplay. Simple only prefers one-syllable endings: its list falls back
+    /// to longer words when an anchor has fewer than six one-syllable rhymes,
+    /// and chorus hook words are never filtered by the level. Byte-identical to
+    /// Android `RhymeComplexity.promptHint` and finetune/eval/prompts.py.
     var promptHint: String {
         switch self {
         case .simple:
-            return "Use simple, everyday vocabulary. Keep the language accessible and straightforward. Aim for clear, easy-to-understand rhymes."
+            return "Each line must be 4 to 7 plain, everyday words. Prefer one-syllable end words. No wordplay."
         case .moderate:
-            return "Use a balanced vocabulary with some clever wordplay. The rhymes should be interesting but not overly complex."
+            return "Use a balanced vocabulary and natural, conversational phrasing. Keep the rhymes clear rather than clever."
         case .complex:
-            return "Use advanced, rich vocabulary with intricate multi-syllable rhymes, internal rhymes, and sophisticated wordplay. Push the boundaries of lyrical complexity."
+            return "Each line must be 8 to 12 words. End each line on a word of two or more syllables, or put an internal rhyme inside the line. Use vivid, specific, less common words and double meanings."
         }
     }
 }
@@ -131,9 +138,15 @@ struct SuggestedLine: Identifiable {
     }
 }
 
+/// Rhyme context of the line a next-line suggestion will be inserted as
+/// (see `NextLinePlacement`), not of the line the cursor is on.
 nonisolated struct RhymeContext: Sendable {
+    /// Rhyme anchor: the latest earlier line in the stanza with `currentLetter`.
     let targetLine: String?
+    /// Scheme letter of the line to be inserted.
     let currentLetter: String
+    /// The cursor's blank-line-delimited block, with an empty row at
+    /// `currentLineIndex` standing for the line to be inserted.
     let stanzaLines: [String]
     let currentLineIndex: Int
     let currentSection: SongSection
@@ -152,6 +165,17 @@ nonisolated struct RhymeContext: Sendable {
         sectionOrdinal: 1,
         firstChorusLines: nil
     )
+
+    /// The block's existing lines, without the row reserved for the new line.
+    var existingStanzaLines: [String] {
+        guard stanzaLines.indices.contains(currentLineIndex),
+              stanzaLines[currentLineIndex].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return stanzaLines
+        }
+        var lines = stanzaLines
+        lines.remove(at: currentLineIndex)
+        return lines
+    }
 
     static func emptyContext(currentLetter: String = "A", currentSection: SongSection = .unknown) -> RhymeContext {
         RhymeContext(

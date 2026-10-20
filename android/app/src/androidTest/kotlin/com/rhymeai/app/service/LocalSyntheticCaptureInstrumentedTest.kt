@@ -185,7 +185,7 @@ class LocalSyntheticCaptureInstrumentedTest {
         val parserChunks = postBoundaryEmitted.toList()
         val replayError = runCatching {
             ai.validatedLocalSuggestionStream(
-                flowOf(*parserChunks.map(Chunk::text).toTypedArray()), fixture.lyrics, constraint,
+                { flowOf(*parserChunks.map(Chunk::text).toTypedArray()) }, fixture.lyrics, constraint,
                 onDecision = { decisions += it }
             ).collect { replayDisplayed += it }
         }.exceptionOrNull()
@@ -227,9 +227,8 @@ class LocalSyntheticCaptureInstrumentedTest {
             put("acceptedCount", decisions.count { it.disposition == "accepted" })
             put("rejectedCount", decisions.count { it.disposition in
                 setOf("format", "existing_lyric", "duplicate", "markup_or_control") })
-            put("heldForRankingCount", decisions.count { it.disposition == "held_for_rhyme_ranking" })
+            put("rhymeMismatchCount", decisions.count { it.disposition == "rhyme_mismatch" })
             put("displayedDirectCount", decisions.count { it.disposition == "displayed" })
-            put("rankedCount", decisions.count { it.disposition == "displayed_after_rhyme_ranking" })
             put("displayLimitCount", decisions.count { it.disposition == "display_limit" })
             put("productionDisplayed", suggestionsJson(displayed))
             put("replayDisplayed", suggestionsJson(replayDisplayed))
@@ -289,8 +288,7 @@ class LocalSyntheticCaptureInstrumentedTest {
         .digest(bytes).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     private companion object {
-        const val EXPECTED_MODEL_SHA =
-            "059e73281d764ba0d541470aabdbd89de84878263b67d50c6c3afbc292933626"
+        val EXPECTED_MODEL_SHA = com.rhymeai.app.ui.components.GEMMA_DOWNLOADS.first().sha256
         const val SHARED_MANIFEST_SHA =
             "649b0a49e5a90626bf26ad6f66eb8b0979cd42992db5ff16ea51bf197e1acb2d"
     }

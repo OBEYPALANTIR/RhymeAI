@@ -5,7 +5,6 @@ struct SyllableColoredText: View {
     let enabled: Bool
 
     @Environment(\.appAppearanceStyle) private var appearance
-    @Environment(\.analysisPresentationStyle) private var analysisPresentation
 
     var body: some View {
         if enabled && !text.isEmpty {
@@ -38,16 +37,11 @@ struct SyllableColoredText: View {
             let word = String(text[matchRange])
             let count = SyllableCounter.count(word)
             var segment = AttributedString(word)
-            if analysisPresentation == .inkMarks {
-                segment.foregroundColor = appearance.palette.primaryInk
-                segment.font = .body.weight(analysisFontWeight(syllableCount: count))
-            } else {
-                segment.foregroundColor = .primary
-                segment.underlineStyle = Text.LineStyle(
-                    pattern: .solid,
-                    color: syllableColor(for: count)
-                )
-            }
+            segment.foregroundColor = .primary
+            segment.underlineStyle = Text.LineStyle(
+                pattern: .solid,
+                color: syllableColor(for: count)
+            )
             result += segment
 
             lastEnd = matchRange.upperBound

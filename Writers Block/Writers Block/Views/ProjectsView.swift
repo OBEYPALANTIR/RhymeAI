@@ -10,7 +10,7 @@ struct ProjectsView: View {
     @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
     @State private var searchText = ""
     @State private var fileImporterPresented = false
-    @State private var importError: String?
+    @State private var listError: String?
     @State private var pendingDeleteProject: SongProject?
     @State private var trashBinPresented = false
 
@@ -59,6 +59,7 @@ struct ProjectsView: View {
                 .padding(.horizontal, RhymeAITokens.Spacing.sm)
                 .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, interactive: true)
                 .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
 
                 Button {
                     viewModel.newProject()
@@ -70,14 +71,17 @@ struct ProjectsView: View {
                         Text("Create New Song")
                             .foregroundStyle(appearance.palette.onAction)
                     }
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RhymeAITokens.Spacing.sm)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(height: RhymeAITokens.Touch.minimum)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
                     .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
                 }
                 .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
 
                 Button {
-                    importError = nil
+                    listError = nil
                     fileImporterPresented = true
                 } label: {
                     HStack {
@@ -86,17 +90,21 @@ struct ProjectsView: View {
                         Text("Import From File")
                             .foregroundStyle(.primary)
                     }
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RhymeAITokens.Spacing.sm)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(height: RhymeAITokens.Touch.minimum)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
                     .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
                 }
                 .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
 
-                if let importError {
-                    Text(importError)
+                if let listError = listError ?? viewModel.projectDeletionNotice {
+                    Text(listError)
                         .font(.caption)
                         .foregroundStyle(appearance.palette.error)
                         .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
 
                 if projects.isEmpty {
@@ -106,6 +114,7 @@ struct ProjectsView: View {
                         Text("Your songs will appear here once you start writing.")
                     }
                     .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 } else if filteredProjects.isEmpty {
                     ContentUnavailableView {
                         Label("No Matching Songs", systemImage: "magnifyingglass")
@@ -113,6 +122,7 @@ struct ProjectsView: View {
                         Text("Try a title, lyric, or theme.")
                     }
                     .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 } else {
                     ForEach(filteredProjects, id: \.id) { project in
                         Button {
@@ -200,7 +210,11 @@ struct ProjectsView: View {
                 pendingDeleteProject = nil
             }
             Button("Move to Trash", role: .destructive) {
-                viewModel.moveProjectToTrash(project)
+                if viewModel.moveProjectToTrash(project) || viewModel.projectDeletionNotice != nil {
+                    listError = nil
+                } else {
+                    listError = viewModel.errorMessage
+                }
                 pendingDeleteProject = nil
             }
         } message: { project in
@@ -221,10 +235,10 @@ struct ProjectsView: View {
                     dismiss()
                 }
             } catch {
-                importError = "Could not import this file. Pick a RhymeAI project JSON."
+                listError = "Could not import this file. Pick a RhymeAI project JSON."
             }
         case .failure:
-            importError = "Could not open the selected file."
+            listError = "Could not open the selected file."
         }
     }
 
