@@ -12,7 +12,7 @@ enum InkBurstMotion {
     /// How far the farthest dot travels.
     static let reach: CGFloat = 44
 
-    /// Dot radius at the start of the burst.
+    /// Dot radius in flight; dots shrink to 40 percent of it as they fade.
     static let dotRadius: CGFloat = 2.2
 
     /// Blot radius at the start of the burst.
@@ -42,7 +42,8 @@ enum InkBurstMotion {
         let p = min(max(progress, 0), 1)
         let travel = eased(p)
         let alpha = alpha(p)
-        let radius = dotRadius * CGFloat(1 - 0.6 * p)
+        // Dots keep their size in flight, then shrink to 40 percent as they fade.
+        let radius = dotRadius * CGFloat(0.4 + 0.6 * alpha)
         return (0..<particleCount).map { index in
             // A fixed jitter per dot keeps the ring from reading as a gear.
             let jitter = Double((index * 7) % particleCount) / Double(particleCount) * 0.35

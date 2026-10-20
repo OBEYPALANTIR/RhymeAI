@@ -1,5 +1,6 @@
 package com.rhymeai.app.ui.components
 
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,6 +33,15 @@ class InkBurstMotionTest {
         assertTrue(InkBurstMotion.alpha(0.85f) in 0.4f..0.6f)
         assertEquals(0f, InkBurstMotion.alpha(1f))
         assertTrue(InkBurstMotion.particles(1f).all { it.alpha == 0f })
+    }
+
+    @Test
+    fun `dots keep their size in flight, then shrink to 40 percent as they fade`() {
+        val full = InkBurstMotion.DOT_RADIUS_DP
+        assertTrue(InkBurstMotion.particles(0.5f).all { abs(it.radiusDp - full) < 0.0001f }, "no shrinking before the fade")
+        assertTrue(InkBurstMotion.particles(0.69f).all { abs(it.radiusDp - full) < 0.0001f })
+        assertTrue(InkBurstMotion.particles(0.85f).all { it.radiusDp < full && it.radiusDp > full * 0.4f }, "shrinking with the fade")
+        assertTrue(InkBurstMotion.particles(1f).all { abs(it.radiusDp - full * 0.4f) < 0.0001f }, "40 percent by the end")
     }
 
     @Test

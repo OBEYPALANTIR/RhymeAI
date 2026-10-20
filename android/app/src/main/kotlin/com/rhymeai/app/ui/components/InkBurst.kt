@@ -31,7 +31,7 @@ object InkBurstMotion {
     /** How far the farthest dot travels. */
     val reach = 44.dp
 
-    /** Dot radius at the start of the burst. */
+    /** Dot radius in flight; dots shrink to 40 percent of it as they fade. */
     const val DOT_RADIUS_DP = 2.2f
 
     /** Blot radius at the start of the burst. */
@@ -53,7 +53,8 @@ object InkBurstMotion {
         val p = progress.coerceIn(0f, 1f)
         val travel = eased(p)
         val alpha = alpha(p)
-        val radius = DOT_RADIUS_DP * (1f - 0.6f * p)
+        // Dots keep their size in flight, then shrink to 40 percent as they fade.
+        val radius = DOT_RADIUS_DP * (0.4f + 0.6f * alpha)
         return List(PARTICLE_COUNT) { index ->
             // A fixed jitter per dot keeps the ring from reading as a gear.
             val jitter = ((index * 7) % PARTICLE_COUNT) / PARTICLE_COUNT.toFloat() * 0.35f

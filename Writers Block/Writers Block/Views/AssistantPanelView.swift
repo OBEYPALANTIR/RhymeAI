@@ -168,20 +168,29 @@ struct AssistantPanelView: View {
             }
         } label: {
             let isDisabled = suggestionDisabled
-            HStack {
+            // Stop and Suggest Next Line cross-fade in place, so the label
+            // changes underneath the ink burst instead of snapping.
+            ZStack {
                 if viewModel.isLoading {
-                    ProgressView()
-                        .tint(appearance.palette.onAction)
-                        .background(GeometryReader { proxy in
-                            let frame = proxy.frame(in: .named(Self.suggestBarSpace))
-                            Color.clear.preference(key: SpinnerCenterPreferenceKey.self, value: CGPoint(x: frame.midX, y: frame.midY))
-                        })
-                    Text("Stop")
+                    HStack {
+                        ProgressView()
+                            .tint(appearance.palette.onAction)
+                            .background(GeometryReader { proxy in
+                                let frame = proxy.frame(in: .named(Self.suggestBarSpace))
+                                Color.clear.preference(key: SpinnerCenterPreferenceKey.self, value: CGPoint(x: frame.midX, y: frame.midY))
+                            })
+                        Text("Stop")
+                    }
+                    .transition(.opacity)
                 } else {
-                    Image(systemName: "sparkles")
-                    Text("Suggest Next Line")
+                    HStack {
+                        Image(systemName: "sparkles")
+                        Text("Suggest Next Line")
+                    }
+                    .transition(.opacity)
                 }
             }
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.isLoading)
             .font(.body.weight(.semibold))
             .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity)
@@ -520,7 +529,9 @@ struct AssistantPanelView: View {
             }
             }
             .id(Self.resultsAnchor)
-            .rhymeAnimation(RhymeAITokens.Motion.dismiss, value: showsSuggestions)
+            // The section opens on the state tier; a request that ends with
+            // no lines takes it away on the dismiss tier.
+            .rhymeAnimation(showsSuggestions ? RhymeAITokens.Motion.state : RhymeAITokens.Motion.dismiss, value: showsSuggestions)
             // A caption inserted into the hierarchy is not read on its own, so
             // tell VoiceOver when writing starts, as the Word Inspector does.
             .onChange(of: viewModel.isLoading) { _, isLoading in

@@ -37,6 +37,15 @@ struct InkBurstMotionTests {
     }
 
     @Test
+    func dotsKeepTheirSizeInFlightThenShrinkAsTheyFade() {
+        let full = InkBurstMotion.dotRadius
+        #expect(InkBurstMotion.particles(progress: 0.5).allSatisfy { abs($0.radius - full) < 0.0001 })
+        #expect(InkBurstMotion.particles(progress: 0.69).allSatisfy { abs($0.radius - full) < 0.0001 })
+        #expect(InkBurstMotion.particles(progress: 0.85).allSatisfy { $0.radius < full && $0.radius > full * 0.4 })
+        #expect(InkBurstMotion.particles(progress: 1).allSatisfy { abs($0.radius - full * 0.4) < 0.0001 })
+    }
+
+    @Test
     func theBlotCollapsesAsTheDotsLeave() {
         #expect(InkBurstMotion.blot(progress: 0.5).radius < InkBurstMotion.blot(progress: 0.1).radius)
         #expect(InkBurstMotion.blot(progress: 1).radius == 0)
