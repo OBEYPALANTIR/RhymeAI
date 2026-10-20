@@ -110,33 +110,17 @@ class LocalSuggestionCountTest {
         }
     }
 
-    private fun batch(name: String, raw: String, constrained: Boolean = false): Capture {
-        val decisions = mutableListOf<AIService.LocalSuggestionDecision>()
-        var displayed = emptyList<String>()
-        val error = runCatching {
-            displayed = service.validateLocalSuggestionResponse(
-                raw, "Existing lyric", constraint.takeIf { constrained }, onDecision = { decisions += it }
-            )
-        }.exceptionOrNull()
-        return Capture(decisions, displayed, error).also { persist(name, raw, listOf(raw), it, constrained) }
-    }
-
     @Test
     fun sixValidLinesPassAndExcessValidLinesAreCappedAtSix() = runBlocking {
         val allRuns = mutableListOf<Pair<Int, Capture>>()
         for (constrained in listOf(false, true)) {
             for (count in listOf(6, 8)) {
                 val raw = lines.take(count).joinToString("\n")
-                val runs = listOf(
-                    stream("stream-$constrained-$count", listOf(raw), constrained),
-                    batch("batch-$constrained-$count", raw, constrained),
-                    batch("json-$constrained-$count", JsonArray(lines.take(count).map(::JsonPrimitive)).toString(), constrained)
-                )
-                allRuns += runs.map { count to it }
+                allRuns += count to stream("stream-$constrained-$count", listOf(raw), constrained)
             }
         }
         for ((count, capture) in allRuns) {
-            // The stream stops accepting at its limit; batch sanitizes the whole response.
+            // The stream stops accepting at its limit.
             assertTrue(capture.decisions.count { it.disposition == "accepted" } in 6..count)
             assertEquals(null, capture.error)
             assertEquals(6, capture.displayed.size)

@@ -9,6 +9,8 @@ import com.rhymeai.app.util.RhymeConstraint
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -64,7 +66,7 @@ class AIServicePromptTest {
     )
 
     @Test
-    fun serviceBatchAndStreamRetainPerfectRhymeBeyondCappedDisplayPool() = runBlocking {
+    fun serviceStreamRetainsPerfectRhymeBeyondCappedDisplayPool() = runBlocking {
         val crowded = PronunciationDictionary.fromLines(
             sequenceOf("rain\tR EY1 N", "pain\tP EY1 N") +
                 (0 until 65).asSequence().map { index ->
@@ -78,14 +80,6 @@ class AIServicePromptTest {
             dictionary = crowded
         ))
         assertFalse("wane" in constraint.candidateWords)
-
-        val batch = service.parseSuggestionList(
-            "I wander through the night\nI watch the lanterns wane",
-            constraint
-        )
-        // Misses are dropped, not used as padding (as on iOS).
-        assertEquals(listOf("I watch the lanterns wane"), batch.map { it.text })
-        assertEquals(listOf(2), batch.map { it.rhymeTier })
 
         val chunkProcessed = CompletableDeferred<Unit>()
         val finishUpstream = CompletableDeferred<Unit>()
@@ -352,14 +346,6 @@ class AIServicePromptTest {
         )
     }
 
-    @Test
-    fun emptySuggestionResponsesParseToEmptyList() {
-        val service = AIService()
-
-        assertEquals(emptyList<com.rhymeai.app.SuggestedLine>(), service.parseSuggestionList(""))
-        assertEquals(emptyList<com.rhymeai.app.SuggestedLine>(), service.parseSuggestionList("```json\n[]\n```"))
-    }
-
     // --- Section-aware prompt directive tests ---
 
     @Test
@@ -546,7 +532,7 @@ class AIServicePromptTest {
     }
 
     @Test
-    fun tierBadgeIsHookWhenChorusRepeatEndWordMatches() {
+    fun tierBadgeIsHookWhenChorusRepeatEndWordMatches() = runBlocking {
         val service = AIService()
         val lyrics = "[Chorus]\nThe lantern glowed\n\n[Chorus]\nSecond chorus"
         val chorusEnds = service.firstChorusEndWords(lyrics, rhymeDictionary)
@@ -565,13 +551,12 @@ class AIServicePromptTest {
                 chorusEndWords = chorusEnds
             )
         )
-        // "glowed" is in firstChorusEndWords; parseSuggestionList should mark it isHook.
+        // "glowed" is in firstChorusEndWords; the stream should mark it isHook.
         // The hook flag is only a badge: the line still has to pass the filter, as on iOS,
         // so a line ending on the target word itself is dropped.
-        val results = service.parseSuggestionList(
-            raw = "The window glowed\nI walk along the road",
-            constraint = constraint
-        )
+        val results = flow<com.rhymeai.app.SuggestedLine> {
+            with(service) { emitLinesFromTokens(flowOf("The window glowed\nI walk along the road"), constraint) }
+        }.toList()
         val hookLine = results.firstOrNull { it.isHook }
         assertNotNull(hookLine, "Expected at least one isHook=true suggestion when end word matches chorus")
         assertEquals(listOf("The window glowed"), results.map { it.text })

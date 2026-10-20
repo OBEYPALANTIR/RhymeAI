@@ -324,17 +324,6 @@ struct GGUFDownloadCatalogTests {
     }
 }
 
-struct GGUFSuggestionParsingTests {
-    @Test func parsesLiteralEscapedLineBreaksFromTunedModel() {
-        let raw = #"A hazy amber glow begins to gleam\nA whispered, fragile, waking dream\nAcross the slick and darkened stream\nA silent, solitary, waking theme\nBeneath the shadows of a waking gleam\nA fading, ephemeral, silver gleam<end_of_turn>"#
-        let parsed = AIService().parseSuggestionList(raw)
-
-        #expect(parsed.count == 6)
-        #expect(parsed.first == "A hazy amber glow begins to gleam")
-        #expect(parsed.last == "A fading, ephemeral, silver gleam")
-    }
-}
-
 @Suite(.serialized)
 struct GGUFModelSelectionTests {
     @Test func selectionPersistsAndWinsOverCatalogOrder() {

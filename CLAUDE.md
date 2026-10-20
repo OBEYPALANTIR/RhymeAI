@@ -69,7 +69,7 @@ Most rhyme, prosody, prompt and export logic has a same-named file on each platf
 1. `NextLinePlacement` and rhyme-context parsing find the cursor's stanza, its section, and the active rhyme-scheme letter.
 2. `RhymeConstraint` builds the allowed end-word list for the requested relation (Perfect, Near or Slant) from the shared CMU dictionary and word-frequency list, then applies the complexity level: Complex puts multi-syllable words first, and Simple keeps only one-syllable words when at least six exist.
 3. `AIService` builds either a cloud prompt (Gemini, OpenAI or Claude; streamed; asks for 12 lines instead of 6 when a rhyme constraint applies) or an on-device prompt (a Rules list asking for six lines, lyrics trimmed by `localLyricWindow`).
-4. Returned lines pass `RhymeLineFilter`, which keeps only the requested relation, ranks by syllable distance, cuts back to the suggestion count, and never pads with misses.
+4. Returned lines pass `RhymeLineFilter`, which keeps only the requested relation in arrival order, cuts back to the suggestion count, and never pads with misses.
 
 On-device models: Android runs GGUFs through `service/LocalModelService.kt` and `:kotlinllamacpp`. iOS `Services/GGUFModelService.swift` uses llama.cpp when the `llama` product from `Writers Block/LlamaFramework` is linked (it is in the checked-in project) and otherwise falls back to Apple Foundation Models. `Writers Block/Frameworks/` is an archived build that is not linked. The shipped Gemma 4 E2B/E4B GGUFs are downloaded at runtime, and model weights stay out of the repo.
 

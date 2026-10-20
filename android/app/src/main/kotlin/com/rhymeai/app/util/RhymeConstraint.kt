@@ -2,12 +2,11 @@ package com.rhymeai.app.util
 
 import com.rhymeai.app.data.model.RhymeComplexity
 import com.rhymeai.app.data.model.RhymeType
-import kotlin.math.abs
 
 /**
  * Deterministic rhyme constraints for AI suggestions. LLMs cannot see
  * phonetics through their tokens, so we pin line endings to dictionary-backed
- * rhyme words up front and verify/rank the over-generated output afterwards.
+ * rhyme words up front and verify the over-generated output afterwards.
  */
 object RhymeConstraint {
     private val wordPattern = LyricTokenizer.wordPattern
@@ -113,40 +112,10 @@ object RhymeConstraint {
             null -> 0
         }
     }
-
-    /** Dedupe, admit only the requested verified relation, then rank by
-     *  syllable distance to the target line and arrival order. Mirrors iOS:
-     *  lines that miss the relation are dropped, never used as padding. */
-    fun filterAndRank(
-        lines: List<String>,
-        targetLine: String,
-        rhymeType: RhymeType,
-        want: Int,
-        dictionary: PronunciationDictionary = PronunciationDictionary.shared
-    ): List<String> {
-        if (want <= 0 || lines.isEmpty()) return emptyList()
-        // Unknown target word: the prompt was never constrained, so there is
-        // nothing to verify against — keep arrival order.
-        val filter = RhymeLineFilter.create(targetLine, rhymeType, dictionary)
-            ?: return dedupe(lines).take(want)
-        return filter.rank(lines, want)
-    }
-
-    /** Same normalization the suggestion stream uses for dedupe keys. */
-    fun dedupeKey(line: String): String = line.lowercase().filter(Char::isLetterOrDigit)
-
-    fun dedupe(lines: List<String>): List<String> {
-        val seen = HashSet<String>()
-        return lines.filter { line ->
-            val key = dedupeKey(line)
-            key.isEmpty() || seen.add(key)
-        }
-    }
 }
 
 /** Per-request rhyme verifier; mirrors iOS `RhymeLineFilter`. */
 class RhymeLineFilter private constructor(
-    private val targetSyllables: Int,
     private val targetWord: String,
     val rhymeType: RhymeType,
     private val dictionary: PronunciationDictionary
@@ -162,26 +131,6 @@ class RhymeLineFilter private constructor(
         return if (tier == wanted) tier else 0
     }
 
-    /** Requested-relation lines only, closest syllable count first, then arrival order. */
-    fun rank(lines: List<String>, want: Int): List<String> {
-        if (want <= 0 || lines.isEmpty()) return emptyList()
-        data class Scored(val line: String, val tier: Int, val syllableDistance: Int, val index: Int)
-        val seen = HashSet<String>()
-        val scored = ArrayList<Scored>()
-        lines.forEachIndexed { index, line ->
-            val key = RhymeConstraint.dedupeKey(line)
-            if (key.isNotEmpty() && !seen.add(key)) return@forEachIndexed
-            scored += Scored(line, tier(line), abs(SyllableCounter.countText(line) - targetSyllables), index)
-        }
-        return scored
-            .filter { it.tier > 0 }
-            .sortedWith(
-                compareByDescending<Scored> { it.tier }.thenBy { it.syllableDistance }.thenBy { it.index }
-            )
-            .take(want)
-            .map { it.line }
-    }
-
     companion object {
         /** Null exactly when the prompt would not be constrained, so an
          *  unconstrained generation is never filtered. */
@@ -194,7 +143,7 @@ class RhymeLineFilter private constructor(
             val targetWord = RhymeConstraint.lineEndWord(targetLine)
             if (targetWord.isEmpty()) return null
             if (RhymeConstraint.candidateEndWords(targetWord, rhymeType, dictionary = dictionary).isEmpty()) return null
-            return RhymeLineFilter(SyllableCounter.countText(targetLine), targetWord, rhymeType, dictionary)
+            return RhymeLineFilter(targetWord, rhymeType, dictionary)
         }
     }
 }

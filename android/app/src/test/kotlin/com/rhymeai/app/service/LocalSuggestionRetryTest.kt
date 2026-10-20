@@ -56,23 +56,13 @@ class LocalSuggestionRetryTest {
         lines.map { it.text } to attempts.calls
     }
 
-    private fun batched(vararg responses: String?): Pair<List<String>, Int> = runBlocking {
-        val attempts = Attempts(responses.toList())
-        val lines = service.localSuggestionLines({ attempts.next() }, "Existing lyric", constraint)
-        lines to attempts.calls
-    }
-
     private fun response(lines: List<String>) = lines.joinToString("\n")
 
-    // The batch path ranks survivors by syllable distance, so compare membership, not order.
     @Test
     fun sixSurvivorsDoNotRetry() {
-        val full = response(rhymes.take(6))
-        assertEquals(rhymes.take(6), streamed(full).first)
-        for (run in listOf(streamed(full), batched(full))) {
-            assertEquals(rhymes.take(6).toSet(), run.first.toSet())
-            assertEquals(1, run.second)
-        }
+        val run = streamed(response(rhymes.take(6)))
+        assertEquals(rhymes.take(6), run.first)
+        assertEquals(1, run.second)
     }
 
     @Test
@@ -80,47 +70,36 @@ class LocalSuggestionRetryTest {
         val first = response(rhymes.take(4) + misses.take(2))
         // Retry repeats two first-attempt lines (deduped) and brings two new rhymes.
         val retry = response(rhymes.take(2) + misses.take(2) + rhymes.subList(4, 6))
-        assertEquals(rhymes.take(6), streamed(first, retry).first)
-        for (run in listOf(streamed(first, retry), batched(first, retry))) {
-            assertEquals(rhymes.take(4).toSet(), run.first.take(4).toSet())
-            assertEquals(rhymes.subList(4, 6), run.first.drop(4))
-            assertEquals(2, run.second)
-        }
+        val run = streamed(first, retry)
+        assertEquals(rhymes.take(6), run.first)
+        assertEquals(2, run.second)
     }
 
     @Test
     fun fourSurvivorsWithEmptyRetryAreShown() {
         val first = response(rhymes.take(4) + misses.take(2))
         val retry = response(rhymes.take(4) + misses.take(2))
-        assertEquals(rhymes.take(4), streamed(first, retry).first)
-        for (run in listOf(streamed(first, retry), batched(first, retry))) {
-            assertEquals(rhymes.take(4).toSet(), run.first.toSet())
-            assertEquals(2, run.second)
-        }
+        val run = streamed(first, retry)
+        assertEquals(rhymes.take(4), run.first)
+        assertEquals(2, run.second)
     }
 
     @Test
     fun twoSurvivorsAfterRetryStillFail() {
         val first = response(rhymes.take(2) + misses)
         val retry = response(rhymes.take(2) + misses)
-        for (run in listOf<() -> Unit>({ streamed(first, retry) }, { batched(first, retry) })) {
-            val error = assertFailsWith<RuntimeException> { run() }
-            assertEquals("Local model returned an incomplete response. Try again or use a cloud provider.", error.message)
-        }
+        val error = assertFailsWith<RuntimeException> { streamed(first, retry) }
+        assertEquals("Local model returned an incomplete response. Try again or use a cloud provider.", error.message)
         val none = response(misses)
-        for (run in listOf<() -> Unit>({ streamed(none, none) }, { batched(none, none) })) {
-            assertFailsWith<AIService.NoMatchingRhymesException> { run() }
-        }
+        assertFailsWith<AIService.NoMatchingRhymesException> { streamed(none, none) }
     }
 
     @Test
     fun fourSurvivorsWithFailedRetryAreShown() {
         val first = response(rhymes.take(4) + misses.take(2))
-        assertEquals(rhymes.take(4), streamed(first, null).first)
-        for (run in listOf(streamed(first, null), batched(first, null))) {
-            assertEquals(rhymes.take(4).toSet(), run.first.toSet())
-            assertEquals(2, run.second)
-        }
+        val run = streamed(first, null)
+        assertEquals(rhymes.take(4), run.first)
+        assertEquals(2, run.second)
     }
 
     @Test
@@ -167,10 +146,8 @@ class LocalSuggestionRetryTest {
     @Test
     fun twoSurvivorsWithFailedRetrySurfaceTheRetryError() {
         val first = response(rhymes.take(2) + misses)
-        for (run in listOf<() -> Unit>({ streamed(first, null) }, { batched(first, null) })) {
-            val error = assertFailsWith<IllegalStateException> { run() }
-            assertEquals("generation failed", error.message)
-        }
+        val error = assertFailsWith<IllegalStateException> { streamed(first, null) }
+        assertEquals("generation failed", error.message)
     }
 
     @Test
@@ -180,15 +157,6 @@ class LocalSuggestionRetryTest {
         val retry = response(rhymes.subList(2, 6))
         val run = streamed(first, retry)
         assertEquals(rhymes.take(6), run.first)
-        assertEquals(2, run.second)
-    }
-
-    @Test
-    fun batchPassCapsAtTwelveCandidatesBeforeRanking() {
-        // Rhymes past the 12-candidate budget are not ranked; the retry supplies them.
-        val first = response(misses + overproducedMisses + rhymes)
-        val run = batched(first, response(rhymes))
-        assertEquals(rhymes.take(6).toSet(), run.first.toSet())
         assertEquals(2, run.second)
     }
 

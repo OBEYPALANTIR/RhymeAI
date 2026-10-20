@@ -138,82 +138,6 @@ struct AIService {
         "walls": ["concrete", "barricades", "barriers"]
     ]
 
-    func getSuggestions(
-        provider: AIProvider,
-        apiKey: String,
-        modelId: String,
-        theme: String,
-        lyrics: String,
-        stanzaLines: [String]? = nil,
-        targetRhymeLine: String?,
-        rhymeType: RhymeType,
-        rhymeScheme: String,
-        currentLetter: String,
-        currentSection: SongSection = .unknown,
-        sectionOrdinal: Int = 1,
-        firstChorusLines: [String]? = nil,
-        complexity: RhymeComplexity,
-        useWholeSongContext: Bool,
-        cursorLineIndex: Int? = nil
-    ) async throws -> [String] {
-        if provider == .local {
-            let localPrompt = buildLocalPrompt(
-                theme: theme,
-                lyrics: lyrics,
-                stanzaLines: stanzaLines,
-                targetRhymeLine: targetRhymeLine,
-                rhymeType: rhymeType,
-                rhymeScheme: rhymeScheme,
-                currentLetter: currentLetter,
-                currentSection: currentSection,
-                sectionOrdinal: sectionOrdinal,
-                firstChorusLines: firstChorusLines,
-                complexity: complexity,
-                useWholeSongContext: useWholeSongContext,
-                cursorLineIndex: cursorLineIndex
-            )
-            let filter = RhymeLineFilter(targetLine: targetRhymeLine, rhymeType: rhymeType)
-            let generate: () async throws -> String
-            if Self.shouldUseGemma() {
-                // Gemma engine: route through downloaded GGUF model.
-                generate = { try await callGGUF(prompt: localPrompt) }
-            } else if #available(iOS 26.0, *) {
-                // Apple Intelligence fallback.
-                generate = { try await callLocal(prompt: localPrompt) }
-            } else {
-                throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
-            }
-            return try await localSuggestionLines(generate: generate, lyrics: lyrics, filter: filter, rhymeType: rhymeType)
-        }
-
-        guard !apiKey.isEmpty else {
-            throw AIServiceError.noApiKey(provider: provider.displayName)
-        }
-
-        let prompt = buildPrompt(
-            theme: theme,
-            lyrics: lyrics,
-            targetRhymeLine: targetRhymeLine,
-            rhymeType: rhymeType,
-            rhymeScheme: rhymeScheme,
-            currentLetter: currentLetter,
-            currentSection: currentSection,
-            sectionOrdinal: sectionOrdinal,
-            firstChorusLines: firstChorusLines,
-            complexity: complexity,
-            useWholeSongContext: useWholeSongContext
-        )
-
-        let raw = try await callCloudText(
-            provider: provider,
-            apiKey: apiKey,
-            modelId: modelId,
-            prompt: prompt,
-            kind: .suggestions
-        )
-        return parseSuggestionList(raw)
-    }
-
     // MARK: - Streaming
 
     func streamSuggestions(
@@ -560,59 +484,6 @@ struct AIService {
         return cleaned
     }
 
-    /// Batch local rule: `generate` is invoked once more for the retry pass; the first pass's ranking stays first.
-    func localSuggestionLines(
-        generate: () async throws -> String,
-        lyrics: String,
-        filter: RhymeLineFilter?,
-        rhymeType: RhymeType
-    ) async throws -> [String] {
-        var state = LineStreamState()
-        var lines = try rankedLocalSuggestions(try await generate(), lyrics: lyrics, filter: filter, state: &state)
-        // Retry once: each local generate call draws a fresh seed (GGUF) or session (Apple Intelligence).
-        if lines.count < Self.suggestionCount {
-            try Task.checkCancellation()
-            do {
-                lines += try rankedLocalSuggestions(try await generate(), lyrics: lyrics, filter: filter, state: &state)
-                    .prefix(Self.suggestionCount - lines.count)
-            } catch {
-                // A failed optional retry keeps the first pass once it already met the minimum.
-                if error is CancellationError || Task.isCancelled || lines.count < Self.minimumSuggestionCount { throw error }
-            }
-        }
-        try Self.requireMinimumLocalSuggestions(survivors: lines.count, accepted: state.accepted, filter: filter, rhymeType: rhymeType)
-        return lines
-    }
-
-    /// One local response: sanitized, filtered and ranked to at most `suggestionCount`; `state` dedupes across passes.
-    private func rankedLocalSuggestions(
-        _ raw: String,
-        lyrics: String,
-        filter: RhymeLineFilter?,
-        state: inout LineStreamState
-    ) throws -> [String] {
-        guard !SynonymSanitizer.containsMarkupOrControl(raw) else {
-            throw AIServiceError.decodingError
-        }
-        let excludedKeys = existingSuggestionKeys(in: lyrics)
-        var seen = state.seen
-        // Same per-generation raw budget as the streaming path (`emitLines` rawLimit).
-        let rawLimit = filter == nil ? Self.suggestionCount : Self.suggestionCount * 2
-        var suggestions: [String] = []
-        for line in raw.components(separatedBy: .newlines) where suggestions.count < rawLimit {
-            guard let cleaned = validatedLocalSuggestionLine(line) else { continue }
-            let key = normalizeSuggestionKey(cleaned)
-            guard !key.isEmpty,
-                  !excludedKeys.contains(key),
-                  seen.insert(key).inserted else { continue }
-            suggestions.append(cleaned)
-        }
-        state.seen = seen
-        state.accepted += suggestions.count
-        guard let filter else { return suggestions }
-        return filter.rank(suggestions, want: Self.suggestionCount)
-    }
-
     private func existingSuggestionKeys(in lyrics: String) -> Set<String> {
         Set(lyrics.components(separatedBy: .newlines)
             .map(normalizeSuggestionKey)
@@ -916,7 +787,6 @@ struct AIService {
     // MARK: - Cloud providers
 
     private enum ProviderRequestKind {
-        case suggestions
         case rawJSON
         case stream
 
@@ -1334,29 +1204,6 @@ struct AIService {
         out += (lo...hi).map { $0 == c ? (cut ?? lines[$0]) : lines[$0] }
         if hasLyric(hi + 1, last + 1) { out.append(localTrimMarker) }
         return out.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    @available(iOS 26.0, *)
-    private func callLocal(prompt: String) async throws -> String {
-        let model = SystemLanguageModel.default
-        guard model.isAvailable else {
-            throw AIServiceError.localModelUnavailable(reason: describe(model.availability))
-        }
-
-        let session = LanguageModelSession(
-            model: model,
-            instructions: "You are an expert songwriter and lyricist. Return concise lyric line suggestions only."
-        )
-        // Explicit token caps silently truncate Foundation Models responses.
-        // Require natural completion so a cut-off tail cannot become a lyric.
-        let content: String
-        do {
-            content = try await session.respond(to: prompt).content
-        } catch {
-            throw Self.mapLocalGenerationError(error)
-        }
-        try Task.checkCancellation()
-        return content
     }
 
     static func localSnapshotDelta(previous: String, current: String) throws -> String {
@@ -2580,63 +2427,6 @@ struct AIService {
         return text
     }
 
-    // MARK: - Parsing
-
-    func parseSuggestionList(_ text: String) -> [String] {
-        parseSuggestionList(text, limit: Self.suggestionCount)
-    }
-
-    func parseSuggestionList(_ text: String, limit: Int) -> [String] {
-        let parsed = parseJsonArray(text, limit: limit)
-        let candidates = parsed.isEmpty ? parseLines(text) : parsed
-        var seen = Set<String>()
-        var result: [String] = []
-
-        for candidate in candidates {
-            guard let cleaned = cleanSuggestionLine(candidate) else { continue }
-            let key = normalizeSuggestionKey(cleaned)
-            guard !key.isEmpty, seen.insert(key).inserted else { continue }
-            result.append(cleaned)
-            if result.count >= limit { break }
-        }
-        return result
-    }
-
-    private func parseJsonArray(_ text: String, limit: Int) -> [String] {
-        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Strip code fences
-        if cleaned.hasPrefix("```json") { cleaned = String(cleaned.dropFirst(7)) }
-        if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
-        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
-        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Try parsing as a direct JSON array
-        if let data = cleaned.data(using: .utf8),
-           let array = try? JSONSerialization.jsonObject(with: data) as? [String] {
-            return Array(array.prefix(limit))
-        }
-
-        // Try parsing as a JSON object containing an array
-        if let data = cleaned.data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            for value in obj.values {
-                if let array = value as? [String] {
-                    return Array(array.prefix(limit))
-                }
-            }
-        }
-
-        return []
-    }
-
-    private func parseLines(_ text: String) -> [String] {
-        let normalized = text.contains("\n")
-            ? text
-            : text
-                .replacingOccurrences(of: "\\r\\n", with: "\n")
-                .replacingOccurrences(of: "\\n", with: "\n")
-        return normalized.components(separatedBy: .newlines)
-    }
     func buildLocalSuggestionPromptForTest(
         theme: String,
         lyrics: String,

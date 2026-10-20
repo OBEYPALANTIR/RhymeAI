@@ -112,7 +112,7 @@ class AIService {
     )
 
     // Computed once per suggestion request and shared by the prompt builders
-    // (constrain end words, over-generate) and the output filters (verify/rank).
+    // (constrain end words, over-generate) and the output filter (verify).
     internal data class SuggestionRhymeConstraint(
         val targetLine: String,
         val targetWord: String,
@@ -206,7 +206,7 @@ class AIService {
 
     // LLMs rhyme unreliably because tokens hide phonetics. When the dictionary
     // knows the target end word, we pin suggestions to verified rhyme words and
-    // ask for double the lines so the phonetic filter has material to rank.
+    // ask for double the lines so the phonetic filter still has six that pass.
     // The complexity level shapes the allowed list (RhymeConstraint.levelEndWords):
     // two-or-more-syllable rhymes first at COMPLEX, one-syllable rhymes at SIMPLE.
     internal fun suggestionRhymeConstraint(
@@ -380,71 +380,6 @@ Respond with exactly $requestCount lines, one suggestion per line. No numbering,
 
     var localModelService: LocalModelService? = null
         internal set
-
-    suspend fun getSuggestions(
-        provider: AIProvider,
-        apiKey: String,
-        modelId: String,
-        theme: String,
-        lyrics: String,
-        targetRhymeLine: String?,
-        rhymeType: RhymeType,
-        rhymeScheme: String,
-        currentLetter: String,
-        currentSection: SongSection = SongSection.UNKNOWN,
-        complexity: RhymeComplexity = RhymeComplexity.MODERATE,
-        useWholeSongContext: Boolean = false,
-        sectionRef: SectionRef? = null,
-        fullLyrics: String = lyrics,
-        cursorLine: Int? = null
-    ): List<SuggestedLine> {
-        if (provider != AIProvider.LOCAL && apiKey.isBlank()) {
-            throw IllegalStateException("No API key set. Go to Settings to add your ${provider.displayName} API key.")
-        }
-
-        val includeSong = provider == AIProvider.LOCAL || useWholeSongContext
-        val chorusEnds = if (includeSong) firstChorusEndWords(fullLyrics) else emptySet()
-        val constraint = suggestionRhymeConstraint(
-            targetRhymeLine, rhymeType, sectionRef = sectionRef.takeIf { includeSong }, chorusEndWords = chorusEnds,
-            complexity = complexity
-        )
-        return if (provider == AIProvider.LOCAL) {
-            val localPrompt = buildLocalPrompt(
-                theme = theme,
-                lyrics = lyrics,
-                targetRhymeLine = targetRhymeLine,
-                rhymeType = rhymeType,
-                rhymeScheme = rhymeScheme,
-                currentLetter = currentLetter,
-                currentSection = currentSection,
-                complexity = complexity,
-                useWholeSongContext = useWholeSongContext,
-                constraint = constraint,
-                cursorLine = cursorLine
-            )
-            callLocal(localPrompt, lyrics, constraint)
-        } else {
-            val prompt = buildPrompt(
-                theme,
-                lyrics,
-                targetRhymeLine,
-                rhymeType,
-                rhymeScheme,
-                currentLetter,
-                currentSection,
-                complexity,
-                useWholeSongContext,
-                constraint,
-                sectionRef
-            )
-            when (provider) {
-                AIProvider.GEMINI -> callGemini(apiKey, modelId, prompt, constraint)
-                AIProvider.OPENAI -> callOpenAI(apiKey, modelId, prompt, constraint)
-                AIProvider.CLAUDE -> callClaude(apiKey, modelId, prompt, constraint)
-                AIProvider.LOCAL -> error("unreachable")
-            }
-        }
-    }
 
     fun streamSuggestions(
         provider: AIProvider,
@@ -1379,63 +1314,6 @@ $outputRules
         }
     }
 
-    private suspend fun callGemini(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        return try {
-            val text = generateGeminiText(apiKey, modelId, prompt) ?: return emptyList()
-            parseSuggestionList(text, constraint)
-        } catch (error: Throwable) {
-            throw userFacingProviderException(error)
-        }
-    }
-
-    private suspend fun callOpenAI(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val responseText = httpPost(
-            url = "https://api.openai.com/v1/chat/completions",
-            headers = mapOf(
-                "Authorization" to "Bearer $apiKey",
-                "Content-Type" to "application/json"
-            ),
-            body = buildOpenAIChatRequestBody(
-                modelId = modelId,
-                prompt = prompt,
-                temperature = 0.8
-            ).toString()
-        )
-        val content = parseOpenAIMessageContent(responseText) ?: return emptyList()
-        return parseSuggestionList(content, constraint)
-    }
-
-    private suspend fun callClaude(apiKey: String, modelId: String, prompt: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val responseText = httpPost(
-            url = "https://api.anthropic.com/v1/messages",
-            headers = mapOf(
-                "x-api-key" to apiKey,
-                "anthropic-version" to "2023-06-01",
-                "Content-Type" to "application/json"
-            ),
-            body = buildClaudeMessagesRequestBody(modelId, prompt).toString()
-        )
-        val content = parseClaudeMessageText(responseText) ?: return emptyList()
-        return parseSuggestionList(content, constraint)
-    }
-
-    internal fun parseSuggestionList(raw: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val limit = if (constraint != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
-        val parsed = parseJsonArray(raw, limit).ifEmpty { parseLines(raw) }
-        val seen = mutableSetOf<String>()
-        val cleaned = parsed
-            .mapNotNull { cleanLocalSuggestionLine(it) }
-            .filter {
-                val key = normalizeSuggestionKey(it)
-                key.isNotEmpty() && seen.add(key)
-            }
-            .take(limit)
-        val filter = constraint?.lineFilter ?: return cleaned.map { SuggestedLine(it, 0) }
-        val ranked = filter.rank(cleaned, SUGGESTION_COUNT)
-        if (ranked.isEmpty() && cleaned.isNotEmpty()) throw NoMatchingRhymesException(constraint.rhymeType)
-        return ranked.map { line -> SuggestedLine(line, filter.tier(line), isHookRepeat(line, constraint)) }
-    }
-
     /** A repeated first-chorus ending; only changes the badge. */
     private fun isHookRepeat(line: String, constraint: SuggestionRhymeConstraint): Boolean {
         val isChorusRepeat = constraint.sectionRef?.type == SongSection.CHORUS && constraint.sectionRef.ordinal >= 2
@@ -1502,7 +1380,7 @@ $outputRules
         val constraintBlock = constraint?.let { "\n" + constraintInstruction(it) }.orEmpty()
         // Cloud over-generates 2x for the rhyme filter; the on-device model is
         // slow and small, and doubling its output length doubles the chance of
-        // malformed output — keep the ask at 6 and let the line filter re-rank.
+        // malformed output — keep the ask at 6 and let the line filter drop misses.
         val requestCount = SUGGESTION_COUNT
         val songContextInstruction = if (useWholeSongContext) {
             "Use the whole-song context for story arc, recurring images, hook language, speaker perspective, tone, and vocabulary."
@@ -1548,70 +1426,6 @@ $endWordRule
 """.trimIndent()
     }
 
-    private suspend fun callLocal(prompt: String, lyrics: String, constraint: SuggestionRhymeConstraint? = null): List<SuggestedLine> {
-        val service = localModelService
-            ?: throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
-        if (!service.isLoaded) {
-            throw IllegalStateException("No local model loaded. Go to Settings to load a model file.")
-        }
-        // The local prompt asks for SUGGESTION_COUNT lines even when constrained
-        // (see buildLocalPrompt); the line filter still verifies and re-ranks them.
-        val ranked = localSuggestionLines({ service.generateResponse(prompt) }, lyrics, constraint)
-        val filter = constraint?.lineFilter
-        return ranked.map { line ->
-            if (constraint == null || filter == null) {
-                SuggestedLine(line, 0)
-            } else {
-                SuggestedLine(line, filter.tier(line), isHookRepeat(line, constraint))
-            }
-        }
-    }
-
-    /** Batch local rule: [generate] is invoked once more for the retry pass; the first pass's ranking stays first. */
-    internal suspend fun localSuggestionLines(
-        generate: suspend () -> String,
-        lyrics: String,
-        constraint: SuggestionRhymeConstraint? = null
-    ): List<String> {
-        val state = LineStreamState()
-        var lines = validateLocalSuggestionResponse(generate(), lyrics, constraint, state = state)
-        // Retry once: LocalModelService samples with seed -1, a fresh llama.cpp seed per call.
-        if (lines.size < SUGGESTION_COUNT) {
-            val retry = try {
-                validateLocalSuggestionResponse(generate(), lyrics, constraint, state = state)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                // A failed optional retry keeps the first pass once it already met the minimum.
-                if (lines.size < MIN_SUGGESTIONS) throw error
-                emptyList()
-            }
-            lines = lines + retry.take(SUGGESTION_COUNT - lines.size)
-        }
-        requireMinimumLocalSuggestions(lines.size, state.accepted, constraint?.lineFilter)
-        return lines
-    }
-
-    /** One local response: sanitized, filtered and ranked to at most [SUGGESTION_COUNT]; [state] dedupes across passes. */
-    internal fun validateLocalSuggestionResponse(
-        response: String,
-        lyrics: String,
-        constraint: SuggestionRhymeConstraint? = null,
-        onDecision: ((LocalSuggestionDecision) -> Unit)? = null,
-        state: LineStreamState = LineStreamState()
-    ): List<String> {
-        if (containsMarkupOrControlLeakage(response)) {
-            onDecision?.invoke(LocalSuggestionDecision(response, null, "markup_or_control"))
-            throw RuntimeException(LOCAL_INCOMPLETE_RESPONSE)
-        }
-        val rawResults = parseJsonArray(response, Int.MAX_VALUE).ifEmpty { response.lines() }
-        // Same per-generation raw budget as the streaming path (iOS `rankedLocalSuggestions`).
-        val limit = if (constraint?.lineFilter != null) SUGGESTION_COUNT * 2 else SUGGESTION_COUNT
-        val sanitized = sanitizeLocalSuggestions(rawResults, lyrics, onDecision, state.seen, limit)
-        state.accepted += sanitized.size
-        return constraint?.lineFilter?.rank(sanitized, SUGGESTION_COUNT) ?: sanitized
-    }
-
     private val listPrefixPattern = Regex("^\\s*(?:[-*]\\s+|\\d+[.)\\-:]\\s*)")
     private val markerOnlyPattern = Regex(
         pattern = "^\\s*(?:_?response>|_?output>|_?model_response>|assistant_response>|model_response>|<?/?(?:start|end)_?(?:of_?)?turn>?\\w*|<[^>]+>|>|user|model|assistant)\\s*$",
@@ -1648,11 +1462,6 @@ $endWordRule
     private val normalizedLinePattern = Regex("[^a-z0-9]+")
     private val singleWordPattern = Regex("[\\p{L}\\p{N}'-]+")
 
-    private fun parseLines(text: String): List<String> {
-        return text.lines()
-            .mapNotNull { cleanLocalSuggestionLine(it) }
-    }
-
     private suspend fun httpPost(url: String, headers: Map<String, String>, body: String): String =
         withContext(Dispatchers.IO) {
             val connection = URL(url).openConnection() as HttpURLConnection
@@ -1679,33 +1488,6 @@ $endWordRule
                 connection.disconnect()
             }
         }
-
-    private fun parseJsonArray(text: String, limit: Int = SUGGESTION_COUNT): List<String> {
-        val cleaned = text.trim()
-            .removePrefix("```json")
-            .removePrefix("```")
-            .removeSuffix("```")
-            .trim()
-        if (cleaned.isEmpty()) return emptyList()
-
-        val directArray = runCatching {
-            json.decodeFromString<List<String>>(cleaned)
-        }.getOrNull()
-        if (directArray != null) return directArray.take(limit)
-
-        return runCatching {
-            json.parseToJsonElement(cleaned).jsonObject.values
-                .firstNotNullOfOrNull { value ->
-                    runCatching {
-                        value.jsonArray.mapNotNull { item ->
-                            item.jsonPrimitive.content.trim().takeIf(String::isNotEmpty)
-                        }
-                    }.getOrNull()
-                }
-                ?.take(limit)
-                ?: emptyList()
-        }.getOrDefault(emptyList())
-    }
 
     /**
      * Keeps long songs inside the on-device context window without dropping the
@@ -1791,35 +1573,6 @@ $endWordRule
         out += (lo..hi).map { if (it == c) cut ?: lines[it] else lines[it] }
         if (hasLyric(hi + 1, last + 1)) out += LOCAL_TRIM_MARKER
         return out.joinToString("\n").trim()
-    }
-
-    private fun sanitizeLocalSuggestions(
-        candidates: List<String>,
-        lyrics: String,
-        onDecision: ((LocalSuggestionDecision) -> Unit)? = null,
-        seen: MutableSet<String> = mutableSetOf(),
-        limit: Int = Int.MAX_VALUE
-    ): List<String> {
-        val existingLines = lyrics.lines()
-            .map { normalizeSuggestionKey(it) }
-            .filter { it.isNotEmpty() }
-            .toSet()
-
-        val accepted = mutableListOf<String>()
-        for (rawLine in candidates.flatMap { it.lines() }) {
-            if (accepted.size >= limit) break
-            val cleaned = cleanLocalSuggestionLine(rawLine)
-            val key = cleaned?.let(::normalizeSuggestionKey).orEmpty()
-            val disposition = when {
-                cleaned == null || key.isEmpty() -> "format"
-                key in existingLines -> "existing_lyric"
-                !seen.add(key) -> "duplicate"
-                else -> "accepted"
-            }
-            onDecision?.invoke(LocalSuggestionDecision(rawLine, cleaned, disposition))
-            if (disposition == "accepted") accepted += checkNotNull(cleaned)
-        }
-        return accepted
     }
 
     private fun cleanLocalSuggestionLine(line: String): String? {

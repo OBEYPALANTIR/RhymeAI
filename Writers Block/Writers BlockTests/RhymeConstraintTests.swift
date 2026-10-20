@@ -193,7 +193,7 @@ struct RhymeConstraintTests {
         ))
     }
 
-    @Test func filterAndRankAdmitsOnlyTheRequestedRelation() {
+    @Test func lineFilterAdmitsOnlyTheRequestedRelation() throws {
         let lines = [
             "The window glowed",
             "Words I never wrote",
@@ -202,20 +202,10 @@ struct RhymeConstraintTests {
             "Walking through the night"
         ]
 
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "Down the road",
-            rhymeType: .near,
-            want: 2,
-            dictionary: relationDictionary
-        ) == ["Words I never wrote"])
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "Down the road",
-            rhymeType: .slant,
-            want: 2,
-            dictionary: relationDictionary
-        ) == ["Cold as stone", "Everything burned red"])
+        let near = try #require(RhymeLineFilter(targetLine: "Down the road", rhymeType: .near, dictionary: relationDictionary))
+        let slant = try #require(RhymeLineFilter(targetLine: "Down the road", rhymeType: .slant, dictionary: relationDictionary))
+        #expect(lines.filter { near.tier(of: $0) != 0 } == ["Words I never wrote"])
+        #expect(lines.filter { slant.tier(of: $0) != 0 } == ["Cold as stone", "Everything burned red"])
     }
 
     @Test func rhymeTiersAndBadgesNameEveryRelationTruthfully() {
@@ -283,7 +273,7 @@ struct RhymeConstraintTests {
         #expect(RhymeConstraint.rhymeTier(line: "", targetWord: "night") == 0)
     }
 
-    @Test func filterAndRankClassifiesReturnedEndingsOutsidePromptCap() throws {
+    @Test func rhymeTierAndFilterClassifyReturnedEndingsOutsidePromptCap() throws {
         let words = (0..<61).map { "zz" + String(repeating: "a", count: $0 + 2) }
         let dictionary = PronunciationDictionary.fromLines(
             ["anchor\tR AY1 M"] + words.map { "\($0)\tR AY1 M" }
@@ -297,78 +287,14 @@ struct RhymeConstraintTests {
             targetWord: "anchor",
             dictionary: dictionary
         ) == 2)
-        #expect(RhymeConstraint.filterAndRank(
-            lines: [line],
+        let filter = try #require(RhymeLineFilter(
             targetLine: "Find the anchor",
             rhymeType: .perfect,
-            want: 1,
             dictionary: dictionary
-        ) == [line])
-    }
-
-    @Test func filterAndRankPrefersRhymingLinesRegardlessOfOrder() throws {
-        let rhymeWord = try #require(roundTripSafeCandidate(for: "night", rhymeType: .perfect))
-        let rhyming = "We chase the fading \(rhymeWord)"
-        let nonRhyming = "Nothing here can save us"
-
-        #expect(RhymeConstraint.filterAndRank(
-            lines: [nonRhyming, rhyming],
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 1
-        ) == [rhyming])
-        #expect(RhymeConstraint.filterAndRank(
-            lines: [rhyming, nonRhyming],
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 1
-        ) == [rhyming])
-    }
-
-    @Test func filterAndRankRejectsKnownNonRhymingLines() throws {
-        let rhymeWord = try #require(roundTripSafeCandidate(for: "night", rhymeType: .perfect))
-        let rhyming = "Out beyond the \(rhymeWord)"
-        let fillerA = "Nothing here can save us"
-        let fillerB = "The morning comes too soon"
-
-        let ranked = RhymeConstraint.filterAndRank(
-            lines: [fillerA, rhyming, fillerB],
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 3
-        )
-        #expect(ranked == [rhyming])
-    }
-
-    @Test func filterAndRankReturnsEmptyWhenKnownTargetHasNoMatchingSuggestion() {
-        let lines = ["The morning comes too soon", "Nothing here can save us"]
-
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 2
-        ).isEmpty)
-
-        #expect(RhymeConstraint.filterAndRank(
-            lines: lines,
-            targetLine: "Surrounded by the zzzqxv",
-            rhymeType: .perfect,
-            want: 1
-        ) == [lines[0]])
-    }
-
-    @Test func filterAndRankDedupesByNormalizedText() throws {
-        let rhymeWord = try #require(roundTripSafeCandidate(for: "night", rhymeType: .perfect))
-        let line = "We chase the \(rhymeWord)"
-        let shoutedDupe = "WE CHASE THE \(rhymeWord.uppercased())!!"
-
-        #expect(RhymeConstraint.filterAndRank(
-            lines: [line, shoutedDupe],
-            targetLine: "We own the night",
-            rhymeType: .perfect,
-            want: 6
-        ) == [line])
+        ))
+        #expect(filter.tier(of: line) == 2)
+        // Unknown target word: the prompt was never constrained, so there is no filter.
+        #expect(RhymeLineFilter(targetLine: "Surrounded by the zzzqxv", rhymeType: .perfect) == nil)
     }
 
     @Test func constraintBlockAppearsOnlyForKnownTargetLines() {

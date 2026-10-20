@@ -128,68 +128,44 @@ struct LocalGenerationBoundaryTests {
         return (lines, calls)
     }
 
-    private func batched(_ first: [String], retry: [String]? = nil, retryError: Error? = nil) async throws -> (lines: [String], calls: Int) {
-        var attempts = [first, retry ?? []]
-        var calls = 0
-        let lines = try await AIService().localSuggestionLines(
-            generate: {
-                calls += 1
-                if calls > 1, let retryError { throw retryError }
-                return attempts.removeFirst().joined(separator: "\n")
-            },
-            lyrics: "Existing lyric",
-            filter: RhymeLineFilter(targetLine: Self.target, rhymeType: .perfect),
-            rhymeType: .perfect
-        )
-        return (lines, calls)
-    }
-
     @Test func localSixSurvivorsDoNotRetry() async throws {
-        for run in [try await streamed(Self.rhymes), try await batched(Self.rhymes)] {
-            #expect(run.lines == Self.rhymes)
-            #expect(run.calls == 1)
-        }
+        let run = try await streamed(Self.rhymes)
+        #expect(run.lines == Self.rhymes)
+        #expect(run.calls == 1)
     }
 
     @Test func localFourSurvivorsRetryAndMergeToSixKeepingFirstAttemptFirst() async throws {
         let first = Array(Self.rhymes.prefix(4)) + Self.misses.prefix(2)
         // Retry repeats two first-attempt lines (deduped) and brings two new rhymes.
         let retry = Array(Self.rhymes.prefix(2)) + Self.misses.prefix(2) + Self.rhymes[4...]
-        for run in [try await streamed(first, retry: retry), try await batched(first, retry: retry)] {
-            #expect(run.lines == Self.rhymes)
-            #expect(run.calls == 2)
-        }
+        let run = try await streamed(first, retry: retry)
+        #expect(run.lines == Self.rhymes)
+        #expect(run.calls == 2)
     }
 
     @Test func localFourSurvivorsWithEmptyRetryAreShown() async throws {
         let first = Array(Self.rhymes.prefix(4)) + Self.misses.prefix(2)
-        for run in [try await streamed(first, retry: first), try await batched(first, retry: first)] {
-            #expect(run.lines == Array(Self.rhymes.prefix(4)))
-            #expect(run.calls == 2)
-        }
+        let run = try await streamed(first, retry: first)
+        #expect(run.lines == Array(Self.rhymes.prefix(4)))
+        #expect(run.calls == 2)
     }
 
     @Test func localFourSurvivorsWithFailedRetryAreShown() async throws {
         let first = Array(Self.rhymes.prefix(4)) + Self.misses.prefix(2)
-        let timeout = URLError(.timedOut)
-        for run in [try await streamed(first, retryError: timeout), try await batched(first, retryError: timeout)] {
-            #expect(run.lines == Array(Self.rhymes.prefix(4)))
-            #expect(run.calls == 2)
-        }
+        let run = try await streamed(first, retryError: URLError(.timedOut))
+        #expect(run.lines == Array(Self.rhymes.prefix(4)))
+        #expect(run.calls == 2)
     }
 
     @Test func localTwoSurvivorsWithFailedRetrySurfaceTheRetryError() async {
         let two = Array(Self.rhymes.prefix(2)) + Self.misses
-        let timeout = URLError(.timedOut)
-        for run in [{ try await self.streamed(two, retryError: timeout) }, { try await self.batched(two, retryError: timeout) }] {
-            do {
-                _ = try await run()
-                Issue.record("Expected the retry's error")
-            } catch let error as URLError {
-                #expect(error.code == .timedOut)
-            } catch {
-                Issue.record("Unexpected error: \(error)")
-            }
+        do {
+            _ = try await streamed(two, retryError: URLError(.timedOut))
+            Issue.record("Expected the retry's error")
+        } catch let error as URLError {
+            #expect(error.code == .timedOut)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
         }
     }
 
@@ -206,14 +182,6 @@ struct LocalGenerationBoundaryTests {
         "The gulls fight over scraps of bread"
     ]
 
-    @Test func localBatchPassCapsAtTwelveCandidatesBeforeRanking() async throws {
-        // Rhymes past the 12-candidate budget are not ranked; the retry supplies them.
-        let first = Self.misses + Self.overproducedMisses + Self.rhymes
-        let run = try await batched(first, retry: Self.rhymes)
-        #expect(run.lines == Self.rhymes)
-        #expect(run.calls == 2)
-    }
-
     @Test func localRetryGetsItsOwnRawLineBudget() async throws {
         // The first pass spends the whole 12-line budget on two rhymes and ten misses.
         let first = Array(Self.rhymes.prefix(2)) + Self.overproducedMisses
@@ -224,25 +192,21 @@ struct LocalGenerationBoundaryTests {
 
     @Test func localTwoSurvivorsAfterRetryStillFail() async {
         let two = Array(Self.rhymes.prefix(2)) + Self.misses
-        for run in [{ try await self.streamed(two, retry: two) }, { try await self.batched(two, retry: two) }] {
-            do {
-                _ = try await run()
-                Issue.record("Expected incomplete-response error")
-            } catch AIServiceError.incompleteResponse(let expected, let actual) {
-                #expect(expected == 6)
-                #expect(actual == 2)
-            } catch {
-                Issue.record("Unexpected error: \(error)")
-            }
+        do {
+            _ = try await streamed(two, retry: two)
+            Issue.record("Expected incomplete-response error")
+        } catch AIServiceError.incompleteResponse(let expected, let actual) {
+            #expect(expected == 6)
+            #expect(actual == 2)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
         }
-        for run in [{ try await self.streamed(Self.misses, retry: Self.misses) }, { try await self.batched(Self.misses, retry: Self.misses) }] {
-            do {
-                _ = try await run()
-                Issue.record("Expected no-matching-rhymes error")
-            } catch AIServiceError.noMatchingRhymes {
-            } catch {
-                Issue.record("Unexpected error: \(error)")
-            }
+        do {
+            _ = try await streamed(Self.misses, retry: Self.misses)
+            Issue.record("Expected no-matching-rhymes error")
+        } catch AIServiceError.noMatchingRhymes {
+        } catch {
+            Issue.record("Unexpected error: \(error)")
         }
     }
 
