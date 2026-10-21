@@ -9,24 +9,17 @@ class SuggestionPlaceholderMotionTest {
     // Slots
 
     @Test
-    fun `reserves three ghost slots before the first line arrives`() {
-        assertEquals(3, SuggestionPlaceholderMotion.placeholderCount(arrived = 0, isLoading = true))
-        assertEquals(3, SuggestionPlaceholderMotion.slotCount(arrived = 0, isLoading = true))
+    fun `one ghost opens before the first line arrives`() {
+        assertEquals(1, SuggestionPlaceholderMotion.placeholderCount(arrived = 0, isLoading = true))
+        assertEquals(1, SuggestionPlaceholderMotion.slotCount(arrived = 0, isLoading = true))
     }
 
     @Test
-    fun `each arriving line takes the next reserved slot`() {
-        assertEquals(2, SuggestionPlaceholderMotion.placeholderCount(arrived = 1, isLoading = true))
-        assertEquals(1, SuggestionPlaceholderMotion.placeholderCount(arrived = 2, isLoading = true))
-        assertEquals(0, SuggestionPlaceholderMotion.placeholderCount(arrived = 3, isLoading = true))
-        assertEquals(3, SuggestionPlaceholderMotion.slotCount(arrived = 1, isLoading = true))
-        assertEquals(3, SuggestionPlaceholderMotion.slotCount(arrived = 2, isLoading = true))
-    }
-
-    @Test
-    fun `lines past the reserved slots append without new ghosts`() {
-        assertEquals(0, SuggestionPlaceholderMotion.placeholderCount(arrived = 5, isLoading = true))
-        assertEquals(5, SuggestionPlaceholderMotion.slotCount(arrived = 5, isLoading = true))
+    fun `each arriving line opens the next ghost below it`() {
+        assertEquals(1, SuggestionPlaceholderMotion.placeholderCount(arrived = 1, isLoading = true))
+        assertEquals(1, SuggestionPlaceholderMotion.placeholderCount(arrived = 5, isLoading = true))
+        assertEquals(2, SuggestionPlaceholderMotion.slotCount(arrived = 1, isLoading = true))
+        assertEquals(6, SuggestionPlaceholderMotion.slotCount(arrived = 5, isLoading = true))
     }
 
     @Test
