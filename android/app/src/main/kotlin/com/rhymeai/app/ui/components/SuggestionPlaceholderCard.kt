@@ -1,5 +1,7 @@
 package com.rhymeai.app.ui.components
 
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
@@ -154,7 +156,7 @@ fun SuggestionSlot(
         visibleState = visibleState,
         enter = if (animationsEnabled) {
             fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) +
-                expandVertically(DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
+                expandVertically(DesignTokens.Motion.standardSpring(IntSize.VisibilityThreshold), expandFrom = Alignment.Top)
         } else {
             EnterTransition.None
         },
@@ -175,7 +177,7 @@ fun SuggestionSlot(
                     // dismiss tier is kept for slots that stay empty.
                     (fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) togetherWith
                         fadeOut(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)))
-                        .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring() })
+                        .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring(IntSize.VisibilityThreshold) })
                 } else {
                     (EnterTransition.None togetherWith ExitTransition.None)
                         .using(SizeTransform(clip = false) { _, _ -> snap() })

@@ -1,5 +1,7 @@
 package com.rhymeai.app.ui.components
 
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -67,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
@@ -313,14 +316,14 @@ fun AssistantPanel(
                         Icons.Default.KeyboardArrowDown,
                         contentDescription = if (rhymeOptionsExpanded) "Collapse rhyme options" else "Expand rhyme options",
                         tint = colorScheme.onSurfaceVariant,
-                        modifier = Modifier.rotate(chevronRotation)
+                        modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
                     )
                 }
 
                 AnimatedVisibility(
                     visible = rhymeOptionsExpanded,
                     enter = if (animationsEnabled) {
-                        expandVertically(animationSpec = DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
+                        expandVertically(animationSpec = DesignTokens.Motion.standardSpring(IntSize.VisibilityThreshold), expandFrom = Alignment.Top)
                     } else {
                         EnterTransition.None
                     },
@@ -500,7 +503,7 @@ fun AssistantPanel(
                 visible = slotCount > 0,
                 enter = if (animationsEnabled) {
                     fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) +
-                        expandVertically(DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
+                        expandVertically(DesignTokens.Motion.standardSpring(IntSize.VisibilityThreshold), expandFrom = Alignment.Top)
                 } else {
                     EnterTransition.None
                 },
@@ -712,7 +715,7 @@ fun AssistantPanel(
                     if (animationsEnabled) {
                         (fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) togetherWith
                             fadeOut(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)))
-                            .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring() })
+                            .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring(IntSize.VisibilityThreshold) })
                     } else {
                         (EnterTransition.None togetherWith ExitTransition.None)
                             .using(SizeTransform(clip = false) { _, _ -> snap() })
