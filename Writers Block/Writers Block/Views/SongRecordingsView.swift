@@ -321,13 +321,17 @@ struct SongRecordingsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Image(systemName: isRecordingFolderExpanded(folder) ? "chevron.down" : "chevron.right")
+            Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isRecordingFolderExpanded(folder) ? 90 : 0))
+                .accessibilityHidden(true)
         }
         .frame(minHeight: RhymeAITokens.Touch.comfortable)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(isRecordingFolderExpanded(folder) ? "Expanded" : "Collapsed")
         .onTapGesture {
             withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.state) {
                 if expandedFolders.contains(folder.id) {

@@ -107,8 +107,8 @@ struct ProjectsDrawerView: View {
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
             Spacer(minLength: RhymeAITokens.Spacing.sm)
             Button {
-                toast.undo()
                 withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                    toast.undo()
                     undoToast = nil
                 }
             } label: {
@@ -583,10 +583,13 @@ struct ProjectsDrawerView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(isRecordingFolderExpanded(folder) ? 90 : 0))
+                .accessibilityHidden(true)
         }
         .frame(minHeight: RhymeAITokens.Touch.comfortable)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(isRecordingFolderExpanded(folder) ? "Expanded" : "Collapsed")
         .onTapGesture {
             withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
                 if expandedFolders.contains(folder.id) {
