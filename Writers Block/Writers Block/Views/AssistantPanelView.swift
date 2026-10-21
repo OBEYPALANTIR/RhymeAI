@@ -8,8 +8,8 @@ struct AssistantPanelView: View {
     @State private var showModelSetup = false
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
-    /// When the current suggestion request started writing; the ghost cards
-    /// share it so their ink lines move together.
+    /// When the current suggestion request started writing; each ghost of
+    /// the request reads it, so the ink line runs on unbroken from slot to slot.
     @State private var writingStartedAt = Date()
     @AppStorage("assistant.targetLineStressExpanded") private var stressDetailExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -457,10 +457,10 @@ struct AssistantPanelView: View {
             }
 
             // MARK: - Suggestions
-            // Three slots open as ghost cards when a request starts. Each
-            // arriving line takes the next slot in place, cross-fading out of
-            // its ghost; lines past the third append below, and any slot still
-            // empty when writing stops leaves on the dismiss tier.
+            // One ghost card opens in the first slot when a request starts.
+            // Each arriving line takes the ghost's slot in place, cross-fading
+            // out of it, while the next ghost opens below; the ghost still
+            // waiting when writing stops leaves on the dismiss tier.
             let arrived = viewModel.suggestions.count
             let placeholderCount = SuggestionInkLineMotion.placeholderCount(
                 arrived: arrived,
@@ -504,8 +504,8 @@ struct AssistantPanelView: View {
                         .transition(.opacity)
                     }
 
-                    // Identified by slot, so a ghost stays put while the slots
-                    // above it fill and only the one being filled fades.
+                    // Identified by slot, so the filled slot's ghost fades out
+                    // as its line fades in and the next slot's ghost fades in.
                     ForEach(arrived..<(arrived + placeholderCount), id: \.self) { slot in
                         SuggestionPlaceholderCardView(
                             slot: slot,
@@ -516,8 +516,8 @@ struct AssistantPanelView: View {
                     }
                 }
                 .rhymeAnimation(RhymeAITokens.Motion.state, value: arrived)
-                // Writing starts on the state tier; when it stops, any slot
-                // still empty leaves on the dismiss tier.
+                // Writing starts on the state tier; when it stops, the ghost
+                // still waiting leaves on the dismiss tier.
                 .rhymeAnimation(viewModel.isLoading ? RhymeAITokens.Motion.state : RhymeAITokens.Motion.dismiss, value: viewModel.isLoading)
                 .transition(.opacity)
             }
