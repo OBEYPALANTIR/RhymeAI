@@ -75,6 +75,11 @@ final class SuggestionLoadingUITests: XCTestCase {
         )
         attachScreenshot(of: app, named: "\(screenshotPrefix)-writing")
 
+        // Mid-stream: the first line in its slot and the next ghost open below it.
+        let first = app.buttons.matching(identifier: "useSuggestionButton").element(boundBy: 0)
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "The first scripted line should land after the hold")
+        attachScreenshot(of: app, named: "\(screenshotPrefix)-first-line")
+
         let last = app.buttons.matching(identifier: "useSuggestionButton").element(boundBy: expectedLines - 1)
         XCTAssertTrue(last.waitForExistence(timeout: 15), "Every scripted line should land")
         XCTAssertTrue(suggest.waitForExistence(timeout: 5), "Suggest Next Line should return once the stream ends")

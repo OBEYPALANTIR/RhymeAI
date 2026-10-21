@@ -7,24 +7,23 @@ struct SuggestionInkLineMotionTests {
     // MARK: - Slots
 
     @Test
-    func reservesThreeGhostSlotsBeforeTheFirstLineArrives() {
-        #expect(SuggestionInkLineMotion.placeholderCount(arrived: 0, isLoading: true) == 3)
-        #expect(SuggestionInkLineMotion.slotCount(arrived: 0, isLoading: true) == 3)
+    func opensOneGhostBeforeTheFirstLineArrives() {
+        #expect(SuggestionInkLineMotion.placeholderCount(arrived: 0, isLoading: true) == 1)
+        #expect(SuggestionInkLineMotion.slotCount(arrived: 0, isLoading: true) == 1)
     }
 
     @Test
-    func eachArrivingLineTakesTheNextReservedSlot() {
-        #expect(SuggestionInkLineMotion.placeholderCount(arrived: 1, isLoading: true) == 2)
-        #expect(SuggestionInkLineMotion.placeholderCount(arrived: 2, isLoading: true) == 1)
-        #expect(SuggestionInkLineMotion.placeholderCount(arrived: 3, isLoading: true) == 0)
-        #expect(SuggestionInkLineMotion.slotCount(arrived: 1, isLoading: true) == 3)
-        #expect(SuggestionInkLineMotion.slotCount(arrived: 2, isLoading: true) == 3)
+    func eachArrivingLineTakesTheGhostsSlotAndTheNextGhostOpensBelow() {
+        for arrived in 1...3 {
+            #expect(SuggestionInkLineMotion.placeholderCount(arrived: arrived, isLoading: true) == 1)
+            #expect(SuggestionInkLineMotion.slotCount(arrived: arrived, isLoading: true) == arrived + 1)
+        }
     }
 
     @Test
-    func linesPastTheReservedSlotsAppendWithoutNewGhosts() {
-        #expect(SuggestionInkLineMotion.placeholderCount(arrived: 5, isLoading: true) == 0)
-        #expect(SuggestionInkLineMotion.slotCount(arrived: 5, isLoading: true) == 5)
+    func longStreamsStillShowOneGhost() {
+        #expect(SuggestionInkLineMotion.placeholderCount(arrived: 5, isLoading: true) == 1)
+        #expect(SuggestionInkLineMotion.slotCount(arrived: 5, isLoading: true) == 6)
     }
 
     @Test

@@ -1,20 +1,17 @@
 import SwiftUI
 
 /// Slot arithmetic and timing for the placeholders shown while next-line
-/// suggestions stream in. When a request starts, three slots open as ghost
-/// cards; each streamed line takes the next slot in place, lines past the
-/// third append below, and any slot still empty when the stream stops
-/// collapses. While a ghost waits, its text bar is written like an ink line,
-/// held, cleared and written again. Every step is one tier of the motion
-/// ladder, so none passes the 0.5s cap on utilitarian motion, and all the
-/// ghosts share one start so their lines write together.
+/// suggestions stream in. One ghost card is open at a time: it opens in the
+/// first slot when a request starts, each streamed line takes its slot in
+/// place while the next ghost opens below, and the ghost still waiting when
+/// the stream stops collapses. While a ghost waits, its text bar is written
+/// like an ink line, held, cleared and written again. Every step is one tier
+/// of the motion ladder, so none passes the 0.5s cap on utilitarian motion,
+/// and every ghost of a request shares one start so the loop runs unbroken.
 ///
 /// Android mirror: `SuggestionPlaceholderMotion` in
 /// `ui/components/SuggestionPlaceholderCard.kt`.
 enum SuggestionInkLineMotion {
-    /// Slots opened as ghost cards when a request starts.
-    static let reservedSlots = 3
-
     static let drawDuration: TimeInterval = RhymeAITokens.Motion.settleDuration
     static let holdDuration: TimeInterval = RhymeAITokens.Motion.stateDuration
     static let fadeDuration: TimeInterval = RhymeAITokens.Motion.feedbackDuration
@@ -30,11 +27,10 @@ enum SuggestionInkLineMotion {
 
     static let textBarFractions: [CGFloat] = [0.72, 0.56, 0.64]
 
-    /// Ghost cards still waiting for a line: the reserved slots the stream has
-    /// not filled yet, and none once it stops.
+    /// Ghost cards waiting for a line: one, in the next slot, while the stream
+    /// runs, and none once it stops.
     static func placeholderCount(arrived: Int, isLoading: Bool) -> Int {
-        guard isLoading else { return 0 }
-        return max(0, reservedSlots - arrived)
+        isLoading ? 1 : 0
     }
 
     /// Slots to lay out: every line that has arrived plus the ghosts still waiting.
