@@ -256,6 +256,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val assistantSheetHandleHeightPx = with(density) { DesignTokens.Sheet.handleArea.toPx() }
     val assistantSheetCloseThresholdPx =
         ((fullSheetHeightPx - assistantSheetHandleHeightPx).coerceAtLeast(0f)) * 0.5f
+    // A medium downward flick dismisses short of halfway; the half-travel projection alone needs ~1,380 dp/s (Material sheets use 125 dp/s).
+    val assistantSheetDismissVelocityPx = with(density) { 450.dp.toPx() }
     val assistantSheetOffset = remember(scope) { OffsetMotionState(scope) }
     val assistantSheetDecay = rememberSplineBasedDecay<Float>()
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
@@ -335,17 +337,20 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     fun settleAssistantSheetDrag(velocity: Float) {
         // Like iOS predictedEndTranslation: a downward fling dismisses even when released short of the threshold.
         val projectedOffset = assistantSheetDecay.calculateTargetValue(assistantSheetOffset.value, velocity)
-        if (assistantSheetOffset.value >= assistantSheetCloseThresholdPx ||
+        val dismiss = velocity >= assistantSheetDismissVelocityPx ||
+            assistantSheetOffset.value >= assistantSheetCloseThresholdPx ||
             projectedOffset >= assistantSheetCloseThresholdPx
+        // Both outcomes start from the finger's velocity, so a dismissing fling does not stall at release.
+        assistantSheetOffset.animateTo(
+            target = if (dismiss) fullSheetHeightPx else 0f,
+            animationSpec = DesignTokens.Motion.settleSpring(visibilityThreshold = 0.5f),
+            animationsEnabled = animationsEnabled,
+            initialVelocity = velocity
         ) {
-            dismissAssistantSheet()
-        } else {
-            assistantSheetOffset.animateTo(
-                target = 0f,
-                animationSpec = DesignTokens.Motion.settleSpring(visibilityThreshold = 0.5f),
-                animationsEnabled = animationsEnabled,
-                initialVelocity = velocity
-            )
+            if (dismiss) {
+                showBottomSheet = false
+                assistantSheetOffset.snapTo(0f)
+            }
         }
     }
 
@@ -1208,7 +1213,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
                 val unBlockWordmarkAlpha = micTransition.animateFloat(
                     label = "unBlockWordmarkAlpha",
-                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
+                    // Fade out on the feedback tier so the label is mostly gone before the width spring starts clipping it.
+                    transitionSpec = {
+                        if (targetState) tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing)
+                        else DesignTokens.Motion.expressiveSpring()
+                    }
                 ) { recording -> if (recording) 0f else 1f }
 
                 val unBlockWordmarkWidth = micTransition.animateDp(

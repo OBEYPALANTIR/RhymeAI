@@ -628,7 +628,16 @@ class NewFeatureUiTest {
             .getUnclippedBoundsInRoot().top
         assertTrue("Sheet must settle back: $restingTop -> $settledTop", kotlin.math.abs((settledTop - restingTop).value) < 1f)
 
-        // The same distance flung: the projected release passes the threshold.
+        // The same distance at a medium flick (~750 dp/s): the projection stays short, the velocity threshold dismisses.
+        val mediumFlickMillis = (travel / composeRule.density.density / 750f * 1_000f).toLong()
+        composeRule.onNodeWithContentDescription("Close assistant").performTouchInput {
+            swipe(center, center + Offset(0f, travel), durationMillis = mediumFlickMillis)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Close assistant").assertDoesNotExist()
+
+        // The same distance flung fast: the projected release passes the threshold.
+        composeRule.onNodeWithText("UnBlock").performClick()
         composeRule.onNodeWithContentDescription("Close assistant").performTouchInput {
             swipe(center, center + Offset(0f, travel), durationMillis = 60)
         }

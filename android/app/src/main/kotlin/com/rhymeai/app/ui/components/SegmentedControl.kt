@@ -18,7 +18,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -27,10 +26,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
@@ -138,37 +140,47 @@ fun SlidingSegmentedControl(
                 }
             }
         }
-        Row(Modifier.fillMaxSize().selectableGroup()) {
-            labels.forEachIndexed { index, label ->
-                val selected = index == selectedIndex
-                // Foreground follows the rendered fill, not its destination, so labels
-                // remain readable while the highlight travels across a dark surface.
-                // Derived so a label recomposes only when the fill crosses its center.
-                val overHighlight by remember(index, segmentWidth) {
-                    derivedStateOf {
-                        val labelCenter = segmentWidth * (index + 0.5f)
-                        labelCenter >= pillOffset.value && labelCenter <= pillOffset.value + segmentWidth
+        // Labels draw twice: onSurfaceVariant underneath, and an onPrimary copy clipped to the
+        // pill's live bounds so the colour hand-off follows the pill edge mid-glyph. The clip
+        // reads the offset at draw time, so a spring frame only redraws.
+        for (onPill in listOf(false, true)) {
+            Row(
+                if (onPill) {
+                    Modifier.fillMaxSize().clearAndSetSemantics {}.drawWithContent {
+                        val pillLeft = pillOffset.value.roundToPx().toFloat()
+                        clipRect(left = pillLeft, right = pillLeft + segmentWidth.toPx()) {
+                            this@drawWithContent.drawContent()
+                        }
                     }
+                } else {
+                    Modifier.fillMaxSize().selectableGroup()
                 }
-                val textColor = if (overHighlight) colorScheme.onPrimary else colorScheme.onSurfaceVariant
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clip(shape)
-                        .selectable(
-                            selected = selected,
-                            role = Role.RadioButton,
-                            onClick = { onSelect(index) }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = label,
-                        fontSize = fontSize,
-                        color = textColor,
-                        maxLines = 1
-                    )
+            ) {
+                labels.forEachIndexed { index, label ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .then(
+                                if (onPill) {
+                                    Modifier
+                                } else {
+                                    Modifier.clip(shape).selectable(
+                                        selected = index == selectedIndex,
+                                        role = Role.RadioButton,
+                                        onClick = { onSelect(index) }
+                                    )
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = fontSize,
+                            color = if (onPill) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
         }
