@@ -79,7 +79,9 @@ object SuggestionPlaceholderMotion {
     /** The iOS settle tier; Android settles with a spring and has no 420ms constant. */
     const val DRAW_MILLIS = 420
 
-    /** The text bar's ink while it draws and once it rests, with animations on or off. */
+    /** The stroke's ink as it starts; it settles to [RESTING_INK_ALPHA] as it draws. */
+    const val STROKE_INK_ALPHA = 0.34f
+    /** The still bar's ink once drawn, with animations on or off. */
     const val RESTING_INK_ALPHA = 0.08f
     const val GHOST_ALPHA = 0.08f
     const val GHOST_SOFT_ALPHA = 0.06f
@@ -100,6 +102,10 @@ object SuggestionPlaceholderMotion {
         if (elapsedMillis >= DRAW_MILLIS) return 1f
         return DesignTokens.Motion.standardEasing.transform(elapsedMillis / DRAW_MILLIS.toFloat())
     }
+
+    /** Stroke ink, settling from [STROKE_INK_ALPHA] to [RESTING_INK_ALPHA] on the same curve as the extent. */
+    fun strokeAlpha(elapsedMillis: Long): Float =
+        STROKE_INK_ALPHA + (RESTING_INK_ALPHA - STROKE_INK_ALPHA) * strokeExtent(elapsedMillis)
 }
 
 /**
@@ -315,8 +321,9 @@ private fun SoftRow(widthFraction: Float, ink: Color) {
 }
 
 /**
- * The ghost's text bar, written once from the left when the ghost opens and
- * then held still. The stroke is read in the draw phase, so the bar redraws
+ * The ghost's text bar, written once from the left when the ghost opens, its
+ * ink settling from the stroke's 34% to the resting 8% as it draws, and then
+ * held still. The stroke is read in the draw phase, so the bar redraws
  * each frame without recomposing. With animations off it starts fully drawn.
  */
 @Composable
@@ -334,9 +341,10 @@ private fun InkLine(ink: Color, animationsEnabled: Boolean, modifier: Modifier =
                 .fillMaxSize()
                 .graphicsLayer {
                     scaleX = SuggestionPlaceholderMotion.strokeExtent(elapsed.value.toLong())
+                    alpha = SuggestionPlaceholderMotion.strokeAlpha(elapsed.value.toLong())
                     transformOrigin = TransformOrigin(0f, 0.5f)
                 }
-                .background(ink.copy(alpha = SuggestionPlaceholderMotion.RESTING_INK_ALPHA))
+                .background(ink)
         )
     }
 }

@@ -70,4 +70,17 @@ class SuggestionPlaceholderMotionTest {
         assertEquals(0.08f, SuggestionPlaceholderMotion.RESTING_INK_ALPHA)
         assertEquals(SuggestionPlaceholderMotion.GHOST_ALPHA, SuggestionPlaceholderMotion.RESTING_INK_ALPHA)
     }
+
+    @Test
+    fun `stroke ink settles from 34 to 8 percent as it draws, then holds`() {
+        val draw = SuggestionPlaceholderMotion.DRAW_MILLIS.toLong()
+        assertEquals(0.34f, SuggestionPlaceholderMotion.strokeAlpha(0))
+        assertEquals(0.34f, SuggestionPlaceholderMotion.strokeAlpha(-5))
+        val alphas = (0L..draw step 20).map { SuggestionPlaceholderMotion.strokeAlpha(it) }
+        assertTrue(alphas.zipWithNext().all { (a, b) -> b <= a }, "alphas were $alphas")
+        val mid = SuggestionPlaceholderMotion.strokeAlpha(draw / 2)
+        assertTrue(mid < 0.34f && mid > 0.08f, "mid-draw alpha was $mid")
+        assertEquals(0.08f, SuggestionPlaceholderMotion.strokeAlpha(draw), 1e-6f)
+        assertEquals(0.08f, SuggestionPlaceholderMotion.strokeAlpha(60_000), 1e-6f)
+    }
 }
