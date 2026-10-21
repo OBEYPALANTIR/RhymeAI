@@ -298,7 +298,6 @@ struct EditorView: View {
                 .transition(.opacity)
             }
         }
-        .rhymeAnimation(RhymeAITokens.Motion.presentation, value: inlineAssistantVisible)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: editorActionsVisible)
     }
 
@@ -509,7 +508,7 @@ struct EditorView: View {
                 )
                 .background(appearance.palette.canvas)
                 .offset(y: assistantSheetDragOffset)
-                .transition(.move(edge: .bottom))
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom))
                 .ignoresSafeArea()
             }
         }

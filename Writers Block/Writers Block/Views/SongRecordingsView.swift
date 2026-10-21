@@ -43,7 +43,7 @@ struct SongRecordingsView: View {
     }
 
     private func showUndoToast(_ message: String, undo: @escaping () -> Void) {
-        withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
+        withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
             undoToast = UndoToast(message: message, undo: undo)
         }
     }
