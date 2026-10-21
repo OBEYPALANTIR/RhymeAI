@@ -4,24 +4,20 @@ import SwiftUI
 /// suggestions stream in. One ghost card is open at a time: it opens in the
 /// first slot when a request starts, each streamed line takes its slot in
 /// place while the next ghost opens below, and the ghost still waiting when
-/// the stream stops collapses. While a ghost waits, its text bar is written
-/// like an ink line, held, cleared and written again. Every step is one tier
-/// of the motion ladder, so none passes the 0.5s cap on utilitarian motion,
-/// and every ghost of a request shares one start so the loop runs unbroken.
+/// the stream stops collapses. When a ghost opens, its text bar is written
+/// once, left to right on the settle tier, and the ink settles to the resting
+/// bar, which then holds still until the line arrives.
 ///
 /// Android mirror: `SuggestionPlaceholderMotion` in
 /// `ui/components/SuggestionPlaceholderCard.kt`.
 enum SuggestionInkLineMotion {
     static let drawDuration: TimeInterval = RhymeAITokens.Motion.settleDuration
-    static let holdDuration: TimeInterval = RhymeAITokens.Motion.stateDuration
-    static let fadeDuration: TimeInterval = RhymeAITokens.Motion.feedbackDuration
-    static let restDuration: TimeInterval = RhymeAITokens.Motion.stateDuration
-    static var cycleDuration: TimeInterval { drawDuration + holdDuration + fadeDuration + restDuration }
+    static let draw: Animation = .easeInOut(duration: drawDuration)
 
+    /// The bar's ink while it waits, and under Reduce Motion, where it is never drawn.
     static let restingInkOpacity: Double = 0.08
+    /// The ink at the pen as the stroke starts; it settles to the resting ink as it draws.
     static let strokeInkOpacity: Double = 0.34
-    /// Bar opacity under Reduce Motion: a still bar must read on its own.
-    static let staticInkOpacity: Double = 0.16
     static let ghostOpacity: Double = 0.08
     static let ghostSoftOpacity: Double = 0.06
 
@@ -40,28 +36,6 @@ enum SuggestionInkLineMotion {
 
     static func textBarFraction(slot: Int) -> CGFloat {
         textBarFractions[max(0, slot) % textBarFractions.count]
-    }
-
-    /// Position inside the cycle, `elapsed` seconds after writing started.
-    static func phase(elapsed: TimeInterval) -> TimeInterval {
-        guard elapsed > 0 else { return 0 }
-        return elapsed.truncatingRemainder(dividingBy: cycleDuration)
-    }
-
-    /// Horizontal extent of the stroke, 0...1, eased while drawing.
-    static func strokeExtent(phase: TimeInterval) -> CGFloat {
-        guard phase > 0 else { return 0 }
-        guard phase < drawDuration else { return 1 }
-        return CGFloat(UnitCurve.easeInOut.value(at: phase / drawDuration))
-    }
-
-    /// Stroke opacity: solid through draw and hold, eased out, then resting.
-    static func strokeOpacity(phase: TimeInterval) -> Double {
-        let fadeStart = drawDuration + holdDuration
-        guard phase >= fadeStart else { return 1 }
-        let fadeEnd = fadeStart + fadeDuration
-        guard phase < fadeEnd else { return 0 }
-        return 1 - UnitCurve.easeIn.value(at: (phase - fadeStart) / fadeDuration)
     }
 }
 
@@ -83,8 +57,8 @@ struct SuggestionPlaceholderCardView: View {
     let slot: Int
     /// Mirrors `SuggestionCardView.showProsody`: reserves the stress-and-IPA rows.
     var showProsody: Bool = false
-    /// When writing started; every ghost shares it so their lines move together.
-    var writingStartedAt: Date = .now
+    /// Flips on appear, so each ghost writes its line once as it opens.
+    @State private var drawn = false
 
     var body: some View {
         let ink = appearance.palette.primaryInk
@@ -136,27 +110,16 @@ struct SuggestionPlaceholderCardView: View {
             .hidden()
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .leading) {
-                Group {
-                    if reduceMotion {
-                        Capsule()
-                            .fill(ink.opacity(SuggestionInkLineMotion.staticInkOpacity))
-                    } else {
-                        // 30 frames a second is plenty for a bar this size.
-                        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                            let phase = SuggestionInkLineMotion.phase(elapsed: context.date.timeIntervalSince(writingStartedAt))
-                            ZStack(alignment: .leading) {
-                                Capsule()
-                                    .fill(ink.opacity(SuggestionInkLineMotion.restingInkOpacity))
-                                Capsule()
-                                    .fill(ink.opacity(SuggestionInkLineMotion.strokeInkOpacity))
-                                    .scaleEffect(x: max(0.001, SuggestionInkLineMotion.strokeExtent(phase: phase)), anchor: .leading)
-                                    .opacity(SuggestionInkLineMotion.strokeOpacity(phase: phase))
-                            }
-                        }
-                    }
-                }
-                .frame(height: barHeight)
-                .scaleEffect(x: SuggestionInkLineMotion.textBarFraction(slot: slot), anchor: .leading)
+                Capsule()
+                    .fill(ink)
+                    .opacity(drawn ? SuggestionInkLineMotion.restingInkOpacity : SuggestionInkLineMotion.strokeInkOpacity)
+                    .scaleEffect(x: drawn ? 1 : 0.001, anchor: .leading)
+                    .frame(height: barHeight)
+                    .scaleEffect(x: SuggestionInkLineMotion.textBarFraction(slot: slot), anchor: .leading)
+            }
+            .onAppear {
+                // Under Reduce Motion the bar is simply there, still, at the resting ink.
+                withRhymeAnimation(SuggestionInkLineMotion.draw, reduceMotion: reduceMotion) { drawn = true }
             }
     }
 
