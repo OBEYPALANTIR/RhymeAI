@@ -1,6 +1,7 @@
 package com.rhymeai.app.ui.motion
 
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.BroadcastFrameClock
 import kotlinx.coroutines.runBlocking
@@ -58,6 +59,27 @@ class OffsetMotionStateTest {
             assertTrue(settled)
             assertEquals(0f, motion.value)
         }
+    }
+
+    @Test
+    fun `release velocity toward the target carries the settle further on the first frames`() {
+        fun valueAfter50ms(initialVelocity: Float): Float {
+            val clock = BroadcastFrameClock()
+            return runBlocking(clock) {
+                val motion = OffsetMotionState(this)
+                motion.snapTo(100f)
+                motion.animateTo(0f, spring(), animationsEnabled = true, initialVelocity = initialVelocity)
+                yield()
+                clock.sendFrame(0L)
+                yield()
+                clock.sendFrame(50_000_000L)
+                yield()
+                motion.value.also { motion.snapTo(it) }
+            }
+        }
+        val still = valueAfter50ms(0f)
+        val flung = valueAfter50ms(-2_000f)
+        assertTrue(flung < still - 5f, "flung=$flung still=$still")
     }
 
     @Test

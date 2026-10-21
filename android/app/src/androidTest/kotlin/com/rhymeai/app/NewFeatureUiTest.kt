@@ -616,12 +616,17 @@ class NewFeatureUiTest {
         composeRule.onNodeWithText("UnBlock").performClick()
         // A quarter of the screen: well short of the half-travel dismiss threshold.
         val travel = composeRule.onRoot().fetchSemanticsNode().size.height * 0.25f
+        val restingTop = composeRule.onNodeWithContentDescription("Close assistant").getUnclippedBoundsInRoot().top
 
         composeRule.onNodeWithContentDescription("Close assistant").performTouchInput {
             swipe(center, center + Offset(0f, travel), durationMillis = 2_000)
         }
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("Close assistant").assertIsDisplayed()
+        // Settled back to rest, not stopped at the release point.
+        val settledTop = composeRule.onNodeWithContentDescription("Close assistant")
+            .assertIsDisplayed()
+            .getUnclippedBoundsInRoot().top
+        assertTrue("Sheet must settle back: $restingTop -> $settledTop", kotlin.math.abs((settledTop - restingTop).value) < 1f)
 
         // The same distance flung: the projected release passes the threshold.
         composeRule.onNodeWithContentDescription("Close assistant").performTouchInput {
