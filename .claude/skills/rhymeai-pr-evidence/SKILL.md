@@ -69,4 +69,8 @@ Every publish here needs the owner's OK. Debug builds are slow on device; use
 `assembleBenchmark` (R8, debug-signed) for perceived performance. Publish test APKs as GitHub
 pre-releases tagged `android-testing-<date>-<slug>` with the APK and its SHA-256 as assets.
 TestFlight needs a build-number bump and the iOS Release gate, `./scripts/ios-release-smoke.sh`
-(it installs the app on the simulator, so follow the registry's `ios-device` row).
+(it installs the app on the simulator, so follow the registry's `ios-device` row). Export the
+gate's archive with `xcodebuild -exportArchive` (method `app-store-connect`, destination `upload`)
+and the App Store Connect API key from `~/.private_keys/appstoreconnect.env`, using **manual**
+signing with the "Writers Block App Store" profile and the Apple Distribution certificate:
+automatic signing fails because that key has no access to cloud-managed distribution certificates.
