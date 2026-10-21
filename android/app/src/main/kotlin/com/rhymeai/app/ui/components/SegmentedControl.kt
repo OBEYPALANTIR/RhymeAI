@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
@@ -35,6 +36,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.rhymeai.app.ui.theme.DesignTokens
@@ -140,21 +142,27 @@ fun SlidingSegmentedControl(
                 }
             }
         }
-        // Labels draw twice: onSurfaceVariant underneath, and an onPrimary copy clipped to the
-        // pill's live bounds so the colour hand-off follows the pill edge mid-glyph. The clip
+        // Labels draw twice: onSurfaceVariant outside the pill's live bounds and an onPrimary
+        // copy inside them, so the colour hand-off follows the pill edge mid-glyph. The clip
         // reads the offset at draw time, so a spring frame only redraws.
         for (onPill in listOf(false, true)) {
             Row(
-                if (onPill) {
-                    Modifier.fillMaxSize().clearAndSetSemantics {}.drawWithContent {
-                        val pillLeft = pillOffset.value.roundToPx().toFloat()
-                        clipRect(left = pillLeft, right = pillLeft + segmentWidth.toPx()) {
+                Modifier
+                    .fillMaxSize()
+                    .then(if (onPill) Modifier.clearAndSetSemantics {} else Modifier.selectableGroup())
+                    .drawWithContent {
+                        val offsetPx = pillOffset.value.roundToPx().toFloat()
+                        val widthPx = segmentWidth.roundToPx().toFloat()
+                        // offset {} mirrors in RTL; the clip rect is physical.
+                        val pillLeft = if (layoutDirection == LayoutDirection.Rtl) size.width - offsetPx - widthPx else offsetPx
+                        clipRect(
+                            left = pillLeft,
+                            right = pillLeft + widthPx,
+                            clipOp = if (onPill) ClipOp.Intersect else ClipOp.Difference
+                        ) {
                             this@drawWithContent.drawContent()
                         }
                     }
-                } else {
-                    Modifier.fillMaxSize().selectableGroup()
-                }
             ) {
                 labels.forEachIndexed { index, label ->
                     Box(
