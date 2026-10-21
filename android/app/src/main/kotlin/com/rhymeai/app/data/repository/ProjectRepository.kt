@@ -346,6 +346,19 @@ class ProjectRepository internal constructor(
         committed
     }
 
+    /**
+     * Tombstone one recording so no device restores it through Drive sync. Callers
+     * write this before deleting the file; a failed write keeps the file in Trash.
+     */
+    suspend fun recordRecordingDeletion(projectId: String, fileName: String, deletedAt: Long) = projectSaveMutex.withLock {
+        dataStore.edit { prefs ->
+            val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
+            prefs[SYNC_DELETIONS_KEY] = json.encodeToString(
+                SyncMerger.mergeDeletions(deletions + SyncDeletion(projectId, fileName, deletedAt))
+            )
+        }
+    }
+
     /** A deletion becomes retryable in the same commit that removes its song and notebook. */
     suspend fun pendingRecordingDeletionIds(): Set<String> =
         dataStore.data.first()[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()

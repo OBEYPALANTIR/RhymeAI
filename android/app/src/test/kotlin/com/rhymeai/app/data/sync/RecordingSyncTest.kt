@@ -171,6 +171,40 @@ class RecordingSyncTest {
     }
 
     @Test
+    fun restorePlanSkipsRecordingsSittingInLocalTrash() {
+        val trashedHere = recording("p1", "trashed.m4a", modifiedAt = 500L, sha256 = "remote")
+        val remoteOnly = recording("p1", "remote-only.m4a", modifiedAt = 200L, sha256 = "remote")
+
+        val plan = RecordingSyncPlanner.planRestores(
+            local = emptyList(),
+            remoteManifest = listOf(trashedHere, remoteOnly),
+            remoteFilesByName = mapOf(trashedHere.driveName to "drive-trashed", remoteOnly.driveName to "drive-only"),
+            locallyTrashed = setOf(trashedHere.identityKey)
+        )
+
+        assertEquals(listOf("drive-only"), plan.map { it.remoteFileId })
+    }
+
+    @Test
+    fun trashedRecordingIdentitiesComeFromTrashFolderNamesOnly() {
+        val filesDir = Files.createTempDirectory("rhymeai-trash-identities").toFile()
+        try {
+            assertEquals(emptySet(), snapshotTrashedRecordingIdentities(filesDir))
+            val trash = RecordingFiles.trashDirectory(filesDir, "p1").also { it.mkdirs() }
+            File(trash, "1700000000000__take.m4a").writeBytes(byteArrayOf(1))
+            File(trash, "1700000000001__Take two.m4a").writeBytes(byteArrayOf(1))
+            File(trash, "not-a-trash-name.m4a").writeBytes(byteArrayOf(1))
+            File(trash, "1700000000002__notes.txt").writeBytes(byteArrayOf(1))
+            // Live memos never count as trashed.
+            RecordingFiles.memoDirectory(filesDir, "p1").also { it.mkdirs() }.let { File(it, "live.m4a").writeBytes(byteArrayOf(1)) }
+
+            assertEquals(setOf("p1/take.m4a", "p1/Take two.m4a"), snapshotTrashedRecordingIdentities(filesDir))
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun recordingFileStoreUsesTempWriteAndKeepsExistingFileOnIntegrityFailure() {
         val root = Files.createTempDirectory("rhymeai-recording-store").toFile()
         try {

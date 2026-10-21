@@ -11,6 +11,7 @@ import com.rhymeai.app.BuildConfig
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SecureKeyStore
 import com.rhymeai.app.data.recording.RecordingFiles
+import com.rhymeai.app.service.VoiceMemoService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -431,11 +432,15 @@ object RecordingSyncPlanner {
     fun planRestores(
         local: List<RecordingManifestEntry>,
         remoteManifest: List<RecordingManifestEntry>,
-        remoteFilesByName: Map<String, String>
+        remoteFilesByName: Map<String, String>,
+        locallyTrashed: Set<String> = emptySet()
     ): List<RecordingRestorePlan> {
         val localByIdentity = local.associateBy { it.identityKey }
         return remoteManifest.mapNotNull { remoteEntry ->
             if (!remoteEntry.isTransferable) return@mapNotNull null
+            // A recording the user moved to Trash here is absent from the live manifest
+            // but not deleted; downloading it again would undo the trash action.
+            if (remoteEntry.identityKey in locallyTrashed) return@mapNotNull null
             val remoteFileId = remoteFilesByName[remoteEntry.driveName] ?: return@mapNotNull null
             val localEntry = localByIdentity[remoteEntry.identityKey]
             // A local file over the transfer limit was never uploaded, so it may exist
@@ -873,6 +878,22 @@ internal fun skippedLargeRecordingCount(
 )
 
 internal data class LocalRecordingFile(val entry: RecordingManifestEntry, val file: File)
+
+/** Identity keys (projectId/originalName) of recordings sitting in the local Trash. */
+internal fun snapshotTrashedRecordingIdentities(filesDir: File): Set<String> {
+    val root = RecordingFiles.trashRoot(filesDir)
+    if (!root.exists()) return emptySet()
+    return root.listFiles()
+        ?.filter { it.isDirectory }
+        ?.flatMap { projectDir ->
+            projectDir.listFiles()
+                ?.filter { RecordingFiles.isMemoFile(it) }
+                ?.mapNotNull { file -> VoiceMemoService.parseTrashedName(file.name)?.let { "${projectDir.name}/${it.second}" } }
+                ?: emptyList()
+        }
+        ?.toSet()
+        ?: emptySet()
+}
 
 /** Never turn a pending local deletion into a durable remote recording. */
 internal fun snapshotLocalRecordingFiles(
@@ -1536,7 +1557,8 @@ class DriveSyncService(
         val plan = RecordingSyncPlanner.planRestores(
             local = localManifest,
             remoteManifest = remoteManifest,
-            remoteFilesByName = remoteFilesByName
+            remoteFilesByName = remoteFilesByName,
+            locallyTrashed = snapshotTrashedRecordingIdentities(context.filesDir)
         )
         if (plan.isEmpty()) return
         val restoreBytes = requireTransferableRecordings(plan.map { it.entry })

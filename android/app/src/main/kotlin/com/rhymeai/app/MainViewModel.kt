@@ -171,7 +171,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val aiService = AIService().also { it.localModelService = localModelService }
 
     /** Owns MediaRecorder/MediaPlayer resources; released in onCleared(). */
-    val voiceMemoService = VoiceMemoService(application)
+    val voiceMemoService = VoiceMemoService(application).also {
+        it.recordingDeletionRecorder = repo::recordRecordingDeletion
+    }
 
     // Editor state
     var title by mutableStateOf("")
