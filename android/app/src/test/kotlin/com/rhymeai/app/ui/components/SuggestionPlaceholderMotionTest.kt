@@ -1,6 +1,5 @@
 package com.rhymeai.app.ui.components
 
-import com.rhymeai.app.ui.theme.DesignTokens
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -41,57 +40,34 @@ class SuggestionPlaceholderMotionTest {
     // Ink line timing
 
     @Test
-    fun `cycle is built from the motion ladder`() {
+    fun `stroke draws on the settle tier, inside the utilitarian cap`() {
         assertEquals(420, SuggestionPlaceholderMotion.DRAW_MILLIS)
-        assertEquals(DesignTokens.Motion.standardMillis, SuggestionPlaceholderMotion.HOLD_MILLIS)
-        assertEquals(DesignTokens.Motion.dismissMillis, SuggestionPlaceholderMotion.FADE_MILLIS)
-        assertEquals(DesignTokens.Motion.standardMillis, SuggestionPlaceholderMotion.REST_MILLIS)
-        assertEquals(1100, SuggestionPlaceholderMotion.CYCLE_MILLIS)
+        assertTrue(SuggestionPlaceholderMotion.DRAW_MILLIS <= 500)
     }
 
     @Test
-    fun `no step passes the utilitarian cap`() {
-        val steps = listOf(
-            SuggestionPlaceholderMotion.DRAW_MILLIS,
-            SuggestionPlaceholderMotion.HOLD_MILLIS,
-            SuggestionPlaceholderMotion.FADE_MILLIS,
-            SuggestionPlaceholderMotion.REST_MILLIS
-        )
-        assertTrue(steps.all { it <= 500 }, "steps were $steps")
+    fun `stroke starts on a blank bar`() {
+        assertEquals(0f, SuggestionPlaceholderMotion.strokeExtent(elapsedMillis = 0))
+        assertEquals(0f, SuggestionPlaceholderMotion.strokeExtent(elapsedMillis = -5))
     }
 
     @Test
-    fun `a loop starts on a blank bar`() {
-        assertEquals(0, SuggestionPlaceholderMotion.phaseMillis(elapsedMillis = 0))
-        assertEquals(0, SuggestionPlaceholderMotion.phaseMillis(elapsedMillis = -5))
-        assertEquals(0f, SuggestionPlaceholderMotion.strokeExtent(0))
-    }
-
-    @Test
-    fun `stroke draws then holds then fades`() {
-        val midDraw = SuggestionPlaceholderMotion.strokeExtent(SuggestionPlaceholderMotion.DRAW_MILLIS / 2)
+    fun `stroke rises once to full and stays there`() {
+        val draw = SuggestionPlaceholderMotion.DRAW_MILLIS.toLong()
+        val extents = (0L..draw step 20).map { SuggestionPlaceholderMotion.strokeExtent(it) }
+        assertTrue(extents.zipWithNext().all { (a, b) -> b >= a }, "extents were $extents")
+        val midDraw = SuggestionPlaceholderMotion.strokeExtent(draw / 2)
         assertTrue(midDraw > 0f && midDraw < 1f, "mid-draw extent was $midDraw")
-        assertEquals(1f, SuggestionPlaceholderMotion.strokeExtent(SuggestionPlaceholderMotion.DRAW_MILLIS))
-
-        val holdEnd = SuggestionPlaceholderMotion.DRAW_MILLIS + SuggestionPlaceholderMotion.HOLD_MILLIS
-        assertEquals(1f, SuggestionPlaceholderMotion.strokeAlpha(holdEnd - 1))
-        val midFade = SuggestionPlaceholderMotion.strokeAlpha(holdEnd + SuggestionPlaceholderMotion.FADE_MILLIS / 2)
-        assertTrue(midFade > 0f && midFade < 1f, "mid-fade alpha was $midFade")
-        assertEquals(0f, SuggestionPlaceholderMotion.strokeAlpha(holdEnd + SuggestionPlaceholderMotion.FADE_MILLIS))
-        assertEquals(0f, SuggestionPlaceholderMotion.strokeAlpha(SuggestionPlaceholderMotion.CYCLE_MILLIS - 1))
+        assertEquals(1f, SuggestionPlaceholderMotion.strokeExtent(draw))
+        // No wraparound: a ghost waiting on a slow model keeps its full bar.
+        assertEquals(1f, SuggestionPlaceholderMotion.strokeExtent(draw + 1))
+        assertEquals(1f, SuggestionPlaceholderMotion.strokeExtent(1_100))
+        assertEquals(1f, SuggestionPlaceholderMotion.strokeExtent(60_000))
     }
 
     @Test
-    fun `the loop wraps at the end of each cycle`() {
-        val cycle = SuggestionPlaceholderMotion.CYCLE_MILLIS.toLong()
-        assertEquals(0, SuggestionPlaceholderMotion.phaseMillis(cycle))
-        assertEquals(100, SuggestionPlaceholderMotion.phaseMillis(cycle + 100))
-        assertEquals(250, SuggestionPlaceholderMotion.phaseMillis(3 * cycle + 250))
-    }
-
-    @Test
-    fun `still bar reads more strongly than the resting bar`() {
-        assertTrue(SuggestionPlaceholderMotion.STATIC_INK_ALPHA > SuggestionPlaceholderMotion.RESTING_INK_ALPHA)
-        assertTrue(SuggestionPlaceholderMotion.STATIC_INK_ALPHA < SuggestionPlaceholderMotion.STROKE_INK_ALPHA)
+    fun `bar rests at the ghost's own ink`() {
+        assertEquals(0.08f, SuggestionPlaceholderMotion.RESTING_INK_ALPHA)
+        assertEquals(SuggestionPlaceholderMotion.GHOST_ALPHA, SuggestionPlaceholderMotion.RESTING_INK_ALPHA)
     }
 }

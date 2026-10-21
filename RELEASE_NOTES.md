@@ -3,9 +3,9 @@
 ## Suggestions hold their places while they are written (iOS and Android)
 
 Tapping Suggest Next Line now opens the Suggestions list straight away with
-one placeholder card where the first line will go, with a short ink line
-that is written, held and cleared, and a "Writing…" note beside the heading.
-Each line fades into the placeholder's place as it arrives, and the next
+one placeholder card where the first line will go, with a faint ink line
+that is written once and then waits, and a "Writing…" note beside the heading.
+Each line fades and rises into the placeholder's place as it arrives, and the next
 placeholder opens below it while the model is still writing, so only one
 waits at a time. Placeholders follow your text size, so the list only moves
 when a line runs onto a second line, at large text sizes too. The placeholder
