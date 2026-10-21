@@ -590,7 +590,7 @@ struct EditorView: View {
 
     private func presentAssistant() {
         if horizontalSizeClass == .regular {
-            withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
+            withRhymeAnimation(inlineAssistantVisible ? RhymeAITokens.Motion.dismiss : RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
                 inlineAssistantVisible.toggle()
             }
         } else {
