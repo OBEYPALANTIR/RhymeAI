@@ -7,18 +7,16 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -41,6 +39,7 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,10 +68,9 @@ import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
  * suggestions stream in. When a request starts, one slot opens as a ghost
  * card; each streamed line takes the ghost's slot in place and the next ghost
  * opens below it while the request is still writing, and the ghost still
- * waiting when the stream stops collapses. While a ghost waits, its text bar
- * is written like an ink line, held, cleared and written again. Every step is
- * one tier of the motion ladder, so none passes the 500ms cap on utilitarian
- * motion.
+ * waiting when the stream stops collapses. When a ghost opens, its text bar is
+ * written once from the left on the 420ms settle tier and then holds still
+ * until its line arrives; with animations off it is the same still bar.
  *
  * iOS mirror: `SuggestionInkLineMotion` in
  * `Writers Block/Components/SuggestionPlaceholderCardView.swift`.
@@ -80,15 +78,9 @@ import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 object SuggestionPlaceholderMotion {
     /** The iOS settle tier; Android settles with a spring and has no 420ms constant. */
     const val DRAW_MILLIS = 420
-    const val HOLD_MILLIS = DesignTokens.Motion.standardMillis
-    const val FADE_MILLIS = DesignTokens.Motion.dismissMillis
-    const val REST_MILLIS = DesignTokens.Motion.standardMillis
-    const val CYCLE_MILLIS = DRAW_MILLIS + HOLD_MILLIS + FADE_MILLIS + REST_MILLIS
 
+    /** The text bar's ink while it draws and once it rests, with animations on or off. */
     const val RESTING_INK_ALPHA = 0.08f
-    const val STROKE_INK_ALPHA = 0.34f
-    /** Bar alpha when animations are off: a still bar must read on its own. */
-    const val STATIC_INK_ALPHA = 0.16f
     const val GHOST_ALPHA = 0.08f
     const val GHOST_SOFT_ALPHA = 0.06f
 
@@ -102,24 +94,11 @@ object SuggestionPlaceholderMotion {
 
     fun textBarFraction(slot: Int): Float = textBarFractions[slot.coerceAtLeast(0) % textBarFractions.size]
 
-    /** Position inside the cycle, [elapsedMillis] after the ghost started writing. */
-    fun phaseMillis(elapsedMillis: Long): Int =
-        if (elapsedMillis <= 0) 0 else (elapsedMillis % CYCLE_MILLIS).toInt()
-
-    /** Horizontal extent of the stroke, 0..1, on the standard curve while drawing. */
-    fun strokeExtent(phaseMillis: Int): Float {
-        if (phaseMillis <= 0) return 0f
-        if (phaseMillis >= DRAW_MILLIS) return 1f
-        return DesignTokens.Motion.standardEasing.transform(phaseMillis / DRAW_MILLIS.toFloat())
-    }
-
-    /** Stroke alpha: solid through draw and hold, out on the exit curve, then resting. */
-    fun strokeAlpha(phaseMillis: Int): Float {
-        val fadeStart = DRAW_MILLIS + HOLD_MILLIS
-        if (phaseMillis < fadeStart) return 1f
-        val fadeEnd = fadeStart + FADE_MILLIS
-        if (phaseMillis >= fadeEnd) return 0f
-        return 1f - DesignTokens.Motion.exitEasing.transform((phaseMillis - fadeStart) / FADE_MILLIS.toFloat())
+    /** Horizontal extent of the stroke, 0..1, [elapsedMillis] after the ghost opened: drawn once on the standard curve, then full. */
+    fun strokeExtent(elapsedMillis: Long): Float {
+        if (elapsedMillis <= 0) return 0f
+        if (elapsedMillis >= DRAW_MILLIS) return 1f
+        return DesignTokens.Motion.standardEasing.transform(elapsedMillis / DRAW_MILLIS.toFloat())
     }
 }
 
@@ -130,7 +109,8 @@ object SuggestionPlaceholderMotion {
  * section ([appearsWithSection]: the request just opened it, or the sheet was
  * reopened or rotated) appears with the section instead of animating on its
  * own, so nothing that already landed replays. The arrival cross-fade uses the
- * 260ms state tier, the collapse the 160ms dismiss tier, sizes settle on the
+ * 260ms state tier, with the arriving card rising 24dp into place as it fades
+ * in; the collapse uses the 160ms dismiss tier, sizes settle on the
  * standard spring, and everything snaps when animations are off. [modifier]
  * applies inside the collapse, so spacing passed in collapses with the slot.
  */
@@ -144,6 +124,8 @@ fun SuggestionSlot(
     card: @Composable (SuggestedLine) -> Unit
 ) {
     val animationsEnabled = LocalAnimationsEnabled.current
+    // The same short rise the iOS undo toast uses.
+    val arrivalRisePx = with(LocalDensity.current) { 24.dp.roundToPx() }
     val visible = line != null || pending
     val visibleState = remember { MutableTransitionState(appearsWithSection && visible) }
     visibleState.targetState = visible
@@ -170,8 +152,15 @@ fun SuggestionSlot(
             transitionSpec = {
                 if (animationsEnabled) {
                     // Both halves of the arrival share the state tier; the
-                    // dismiss tier is kept for slots that stay empty.
-                    (fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) togetherWith
+                    // dismiss tier is kept for slots that stay empty. An
+                    // arriving card also rises into place; a ghost does not.
+                    val fade = fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing))
+                    val enter = if (targetState != null) {
+                        fade + slideInVertically(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) { arrivalRisePx }
+                    } else {
+                        fade
+                    }
+                    (enter togetherWith
                         fadeOut(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)))
                         .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring(IntSize.VisibilityThreshold) })
                 } else {
@@ -326,51 +315,29 @@ private fun SoftRow(widthFraction: Float, ink: Color) {
 }
 
 /**
- * The ghost's text bar. While animations are on it is written from the left,
- * held, faded and rested on a loop that starts with the ghost; the loop is
- * read in the draw phase, so the bar redraws each frame without recomposing.
- * With animations off the loop is never created and the bar holds still.
+ * The ghost's text bar, written once from the left when the ghost opens and
+ * then held still. The stroke is read in the draw phase, so the bar redraws
+ * each frame without recomposing. With animations off it starts fully drawn.
  */
 @Composable
 private fun InkLine(ink: Color, animationsEnabled: Boolean, modifier: Modifier = Modifier) {
     val barHeight = with(LocalDensity.current) { 9.sp.toDp() }
-    Box(
-        modifier
-            .height(barHeight)
-            .clip(RoundedCornerShape(50))
-            .background(
-                ink.copy(
-                    alpha = if (animationsEnabled) {
-                        SuggestionPlaceholderMotion.RESTING_INK_ALPHA
-                    } else {
-                        SuggestionPlaceholderMotion.STATIC_INK_ALPHA
-                    }
-                )
-            )
-    ) {
-        if (animationsEnabled) {
-            val loop = rememberInfiniteTransition(label = "suggestionInkLine")
-            val elapsed = loop.animateFloat(
-                initialValue = 0f,
-                targetValue = SuggestionPlaceholderMotion.CYCLE_MILLIS.toFloat(),
-                animationSpec = infiniteRepeatable(
-                    animation = tween(SuggestionPlaceholderMotion.CYCLE_MILLIS, easing = LinearEasing),
-                    repeatMode = RepeatMode.Restart
-                ),
-                label = "elapsed"
-            )
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        val phase = SuggestionPlaceholderMotion.phaseMillis(elapsed.value.toLong())
-                        scaleX = SuggestionPlaceholderMotion.strokeExtent(phase)
-                        alpha = SuggestionPlaceholderMotion.strokeAlpha(phase)
-                        transformOrigin = TransformOrigin(0f, 0.5f)
-                    }
-                    .background(ink.copy(alpha = SuggestionPlaceholderMotion.STROKE_INK_ALPHA))
-            )
-        }
+    val drawMillis = SuggestionPlaceholderMotion.DRAW_MILLIS.toFloat()
+    val elapsed = remember { Animatable(if (animationsEnabled) 0f else drawMillis) }
+    LaunchedEffect(Unit) {
+        elapsed.animateTo(drawMillis, tween(SuggestionPlaceholderMotion.DRAW_MILLIS, easing = LinearEasing))
+    }
+    // The pill clips the stroke, so its leading end stays round while it draws.
+    Box(modifier.height(barHeight).clip(RoundedCornerShape(50))) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = SuggestionPlaceholderMotion.strokeExtent(elapsed.value.toLong())
+                    transformOrigin = TransformOrigin(0f, 0.5f)
+                }
+                .background(ink.copy(alpha = SuggestionPlaceholderMotion.RESTING_INK_ALPHA))
+        )
     }
 }
 
