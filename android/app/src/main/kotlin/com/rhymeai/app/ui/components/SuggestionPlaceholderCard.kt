@@ -131,7 +131,7 @@ fun SuggestionSlot(
 ) {
     val animationsEnabled = LocalAnimationsEnabled.current
     // The same short rise the iOS undo toast uses.
-    val arrivalRisePx = with(LocalDensity.current) { 24.dp.roundToPx() }
+    val arrivalRisePx = with(LocalDensity.current) { DesignTokens.Spacing.xl.roundToPx() }
     val visible = line != null || pending
     val visibleState = remember { MutableTransitionState(appearsWithSection && visible) }
     visibleState.targetState = visible

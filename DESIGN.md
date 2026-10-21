@@ -412,12 +412,12 @@ components:
     borderColor: "{colors.outline}"
     rounded: "{rounded.ios-md}"
     padding: 24px
-    barColor: "primary ink at 0.08 resting, 0.34 while the stroke draws, 0.16 still under Reduce Motion"
+    barColor: "primary ink at 0.34 settling to 0.08 over the 420ms draw, then still at 0.08; 0.08 still under Reduce Motion"
   suggestion-placeholder-android:
     backgroundColor: "{colors.surface-container}"
     borderColor: "{colors.outline-strong}"
     rounded: "{rounded.lg}"
-    barColor: "on-surface at 0.08 resting, 0.34 while the stroke draws, 0.16 still when animations are off"
+    barColor: "on-surface at 0.34 settling to 0.08 over the 420ms draw, then still at 0.08; 0.08 still when animations are off"
   rewrite-chip-bar-ios:
     backgroundColor: "{colors.surface}"
     borderColor: "{colors.outline}"
