@@ -25,6 +25,7 @@ internal class OffsetMotionState(private val scope: CoroutineScope) {
         animationSpec: AnimationSpec<Float>,
         animationsEnabled: Boolean,
         initialVelocity: Float = 0f,
+        stopAtTarget: Boolean = false,
         onFinished: () -> Unit = {},
     ) {
         animationJob?.cancel()
@@ -34,7 +35,12 @@ internal class OffsetMotionState(private val scope: CoroutineScope) {
             return
         }
         animationJob = scope.launch {
-            Animatable(value).animateTo(target, animationSpec, initialVelocity) {
+            val animatable = Animatable(value)
+            // A bound at the target ends the animation on arrival instead of waiting out a spring's overshoot.
+            if (stopAtTarget) {
+                if (value <= target) animatable.updateBounds(upperBound = target) else animatable.updateBounds(lowerBound = target)
+            }
+            animatable.animateTo(target, animationSpec, initialVelocity) {
                 this@OffsetMotionState.value = value
             }
             onFinished()

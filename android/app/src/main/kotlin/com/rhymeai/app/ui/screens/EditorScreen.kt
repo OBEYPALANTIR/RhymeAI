@@ -345,7 +345,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             target = if (dismiss) fullSheetHeightPx else 0f,
             animationSpec = DesignTokens.Motion.settleSpring(visibilityThreshold = 0.5f),
             animationsEnabled = animationsEnabled,
-            initialVelocity = velocity
+            initialVelocity = velocity,
+            stopAtTarget = dismiss
         ) {
             if (dismiss) {
                 showBottomSheet = false
