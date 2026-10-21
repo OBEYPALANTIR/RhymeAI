@@ -153,8 +153,12 @@ struct EditorView: View {
             viewModel.clearInsertionFeedback()
         }
         .onChange(of: viewModel.voiceMemoService.isRecording) { _, isRecording in
-            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.recording) {
+            // Collapsing, the wordmark fades out on the feedback tier, ahead of the
+            // width spring, so the clip bites into an already-faded wordmark.
+            withAnimation(reduceMotion ? nil : (isRecording ? RhymeAITokens.Motion.feedback : RhymeAITokens.Motion.recording)) {
                 unblockWordmarkOpacity = isRecording ? EditorViewConstants.UnBlockChrome.hiddenWordmarkOpacity : EditorViewConstants.UnBlockChrome.visibleWordmarkOpacity
+            }
+            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.recording) {
                 unblockButtonWidth = isRecording ? RhymeAITokens.Touch.comfortable : EditorViewConstants.UnBlockChrome.expandedButtonWidth
                 unblockWordmarkWidth = isRecording ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : EditorViewConstants.UnBlockChrome.expandedWordmarkWidth
                 unblockCollapsed = isRecording
@@ -525,7 +529,7 @@ struct EditorView: View {
             }
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: EditorViewConstants.AssistantSheet.dragMinimumDistance, coordinateSpace: .local)
+                DragGesture(minimumDistance: EditorViewConstants.AssistantSheet.dragMinimumDistance, coordinateSpace: .global)
                     .onChanged { value in
                         assistantSheetDragOffset = min(max(EditorViewConstants.AssistantSheet.restingOffset, value.translation.height), sheetHeight)
                     }

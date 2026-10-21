@@ -436,7 +436,7 @@ struct SettingsCloudBackupSection: View {
     @State private var passphraseEntry = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
                 withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
                     isExpanded.toggle()
@@ -461,10 +461,18 @@ struct SettingsCloudBackupSection: View {
             .accessibilityIdentifier("cloudBackupDisclosure")
             .accessibilityLabel(isExpanded ? "Collapse cloud backup" : "Expand cloud backup")
 
-            if isExpanded {
-                backupControls
-                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            // Clipped so the controls reveal below the header instead of
+            // sliding over it and the card above.
+            VStack(spacing: 0) {
+                if isExpanded {
+                    backupControls
+                        .padding(.top, RhymeAITokens.Spacing.md)
+                        .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                }
             }
+            // Full width so the clip only grows downward, not from the leading edge.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
         }
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
