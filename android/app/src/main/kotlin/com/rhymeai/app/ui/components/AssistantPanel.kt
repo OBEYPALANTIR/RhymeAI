@@ -490,9 +490,9 @@ fun AssistantPanel(
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
-            // Suggestions. Three slots open as ghost cards when a request
-            // starts; each arriving line takes the next slot in place, lines
-            // past the third append below, and any slot still empty when
+            // Suggestions. One slot opens as a ghost card when a request
+            // starts; each arriving line takes the ghost's slot in place and
+            // the next ghost opens below it, and the ghost still waiting when
             // writing stops collapses.
             val isWriting = viewModel.isLoading
             val slotCount = SuggestionPlaceholderMotion.slotCount(viewModel.suggestions.size, isWriting)
@@ -551,14 +551,14 @@ fun AssistantPanel(
                     // Every slot opened while the section is up stays composed,
                     // so one emptied by the next request or left empty when
                     // writing stops collapses instead of vanishing.
-                    val slotsOpened = remember { mutableIntStateOf(SuggestionPlaceholderMotion.RESERVED_SLOTS) }
+                    val slotsOpened = remember { mutableIntStateOf(slotCount) }
                     val slotsComposed = maxOf(slotsOpened.intValue, slotCount)
                     SideEffect { slotsOpened.intValue = slotsComposed }
                     for (slot in 0 until slotsComposed) {
                         key(slot) {
                             SuggestionSlot(
                                 line = viewModel.suggestions.getOrNull(slot),
-                                pending = isWriting && slot < SuggestionPlaceholderMotion.RESERVED_SLOTS,
+                                pending = isWriting && slot == viewModel.suggestions.size,
                                 appearsWithSection = slot < slotsAtStart,
                                 modifier = Modifier.padding(top = DesignTokens.Spacing.sm),
                                 ghost = {

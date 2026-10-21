@@ -66,21 +66,18 @@ import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 
 /**
  * Slot arithmetic and timing for the placeholders shown while next-line
- * suggestions stream in. When a request starts, three slots open as ghost
- * cards; each streamed line takes the next slot in place, lines past the
- * third append below, and any slot still empty when the stream stops
- * collapses. While a ghost waits, its text bar is written like an ink line,
- * held, cleared and written again. Every step is one tier of the motion
- * ladder, so none passes the 500ms cap on utilitarian motion, and the ghosts
- * of one request start together, so their lines write in step.
+ * suggestions stream in. When a request starts, one slot opens as a ghost
+ * card; each streamed line takes the ghost's slot in place and the next ghost
+ * opens below it while the request is still writing, and the ghost still
+ * waiting when the stream stops collapses. While a ghost waits, its text bar
+ * is written like an ink line, held, cleared and written again. Every step is
+ * one tier of the motion ladder, so none passes the 500ms cap on utilitarian
+ * motion.
  *
  * iOS mirror: `SuggestionInkLineMotion` in
  * `Writers Block/Components/SuggestionPlaceholderCardView.swift`.
  */
 object SuggestionPlaceholderMotion {
-    /** Slots opened as ghost cards when a request starts. */
-    const val RESERVED_SLOTS = 3
-
     /** The iOS settle tier; Android settles with a spring and has no 420ms constant. */
     const val DRAW_MILLIS = 420
     const val HOLD_MILLIS = DesignTokens.Motion.standardMillis
@@ -97,9 +94,8 @@ object SuggestionPlaceholderMotion {
 
     val textBarFractions = listOf(0.72f, 0.56f, 0.64f)
 
-    /** Ghost cards still waiting for a line: the reserved slots not filled yet, none once the stream stops. */
-    fun placeholderCount(arrived: Int, isLoading: Boolean): Int =
-        if (isLoading) (RESERVED_SLOTS - arrived).coerceAtLeast(0) else 0
+    /** Ghost cards still waiting for a line: one while the request writes, none once the stream stops. */
+    fun placeholderCount(arrived: Int, isLoading: Boolean): Int = if (isLoading) 1 else 0
 
     /** Slots to lay out: every line that has arrived plus the ghosts still waiting. */
     fun slotCount(arrived: Int, isLoading: Boolean): Int = arrived + placeholderCount(arrived, isLoading)
