@@ -31,6 +31,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.Role
@@ -777,6 +778,32 @@ class NewFeatureUiTest {
         composeRule.onNodeWithTag("rewriteChipBar").assertDoesNotExist()
         composeRule.onNodeWithTag("unBlockAction").assertIsDisplayed()
         composeRule.onNodeWithTag("micButton").assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun selectionInAScrolledSongKeepsKeyboardUntilTheEditorIsDragged() {
+        openNewSong()
+        val lyrics = (1..14).joinToString("\n") { line -> "line $line goes here" }
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        editor.performClick().performTextInput(lyrics)
+        composeRule.waitUntil(timeoutMillis = 3_000) { imeBottomPx() > 0 }
+
+        // The chip bar takes the floating actions' place and the editor brings the selection into
+        // view; that scroll is not a drag and must not collapse the keyboard.
+        val start = lyrics.indexOf("goes here\nline 7")
+        val selection = TextRange(start, start + "goes".length)
+        editor.performTextInputSelection(selection)
+        composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        composeRule.waitForIdle()
+        assertTrue("The lyrics must keep focus after a selection", lyricsEditorFocused())
+        assertEquals(
+            selection,
+            editor.fetchSemanticsNode().config.getOrNull(SemanticsProperties.TextSelectionRange)
+        )
+
+        composeRule.onNodeWithTag("editorScrollContainer").performTouchInput { swipeDown() }
+        composeRule.waitUntil(timeoutMillis = 3_000) { !lyricsEditorFocused() }
     }
 
     @OptIn(ExperimentalTestApi::class)
