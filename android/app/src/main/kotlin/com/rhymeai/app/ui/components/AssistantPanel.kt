@@ -15,14 +15,19 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,7 +56,10 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,7 +70,9 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -477,30 +487,99 @@ fun AssistantPanel(
                 Text(it, color = colorScheme.error, fontSize = 12.sp)
             }
 
-            // Suggestions
-            if (viewModel.suggestions.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                    Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+            // Suggestions. Three slots open as ghost cards when a request
+            // starts; each arriving line takes the next slot in place, lines
+            // past the third append below, and any slot still empty when
+            // writing stops collapses.
+            val isWriting = viewModel.isLoading
+            val slotCount = SuggestionPlaceholderMotion.slotCount(viewModel.suggestions.size, isWriting)
+            // AnimatedVisibility keeps the section composed through its exit,
+            // so a request that ends with no lines still collapses on the
+            // dismiss tier instead of vanishing with its slots.
+            AnimatedVisibility(
+                visible = slotCount > 0,
+                enter = if (animationsEnabled) {
+                    fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) +
+                        expandVertically(DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top)
+                } else {
+                    EnterTransition.None
+                },
+                exit = if (animationsEnabled) {
+                    fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
+                        shrinkVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
+                } else {
+                    ExitTransition.None
+                }
+            ) {
+                // Children carry their own top spacing so a collapsing slot
+                // takes its gap with it.
+                Column {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                    ) {
+                        Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                        if (isWriting) {
+                            val writingLabel = stringResource(R.string.assistant_suggestions_writing_a11y)
+                            Text(
+                                stringResource(R.string.assistant_suggestions_writing),
+                                fontSize = 12.sp,
+                                color = subtleColor,
+                                modifier = Modifier
+                                    .testTag("suggestionsWriting")
+                                    .semantics {
+                                        liveRegion = LiveRegionMode.Polite
+                                        contentDescription = writingLabel
+                                    }
+                            )
+                        }
+                    }
                     Text(
                         stringResource(R.string.assistant_suggestions_caveat),
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant,
-                        fontStyle = FontStyle.Italic
+                        fontStyle = FontStyle.Italic,
+                        modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
                     )
-                    viewModel.suggestions.forEach { suggestedLine ->
-                        SuggestionCard(
-                            suggestion = suggestedLine.text,
-                            rhymeTier = suggestedLine.rhymeTier,
-                            isHook = suggestedLine.isHook,
-                            highlightRhyme = viewModel.isHighlightEnabled,
-                            showProsody = viewModel.isStressPreviewEnabled,
-                            onKeep = { viewModel.keepAlternate(suggestedLine.text) },
-                            isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
-                            onUse = {
-                                viewModel.insertSuggestion(suggestedLine.text)
-                                onSuggestionInserted()
+                    // Slots there when the section is composed (the request
+                    // opening it, or the sheet reopened or rotated) appear
+                    // with it; slots opened later animate on their own.
+                    val slotsAtStart = remember { slotCount }
+                    // Every slot opened while the section is up stays composed,
+                    // so one emptied by the next request or left empty when
+                    // writing stops collapses instead of vanishing.
+                    val slotsOpened = remember { mutableIntStateOf(SuggestionPlaceholderMotion.RESERVED_SLOTS) }
+                    val slotsComposed = maxOf(slotsOpened.intValue, slotCount)
+                    SideEffect { slotsOpened.intValue = slotsComposed }
+                    for (slot in 0 until slotsComposed) {
+                        key(slot) {
+                            SuggestionSlot(
+                                line = viewModel.suggestions.getOrNull(slot),
+                                pending = isWriting && slot < SuggestionPlaceholderMotion.RESERVED_SLOTS,
+                                appearsWithSection = slot < slotsAtStart,
+                                modifier = Modifier.padding(top = DesignTokens.Spacing.sm),
+                                ghost = {
+                                    SuggestionPlaceholderCard(
+                                        slot = slot,
+                                        showProsody = viewModel.isStressPreviewEnabled
+                                    )
+                                }
+                            ) { suggestedLine ->
+                                SuggestionCard(
+                                    suggestion = suggestedLine.text,
+                                    rhymeTier = suggestedLine.rhymeTier,
+                                    isHook = suggestedLine.isHook,
+                                    highlightRhyme = viewModel.isHighlightEnabled,
+                                    showProsody = viewModel.isStressPreviewEnabled,
+                                    onKeep = { viewModel.keepAlternate(suggestedLine.text) },
+                                    isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
+                                    onUse = {
+                                        viewModel.insertSuggestion(suggestedLine.text)
+                                        onSuggestionInserted()
+                                    }
+                                )
                             }
-                        )
+                        }
                     }
                 }
             }
@@ -598,7 +677,7 @@ fun AssistantPanel(
 
         val setupModel = !viewModel.isLoading &&
             viewModel.selectedProvider == com.rhymeai.app.service.AIProvider.LOCAL &&
-            !viewModel.localReady
+            !viewModel.localSuggestionsReady
         Button(
             onClick = {
                 when {
@@ -621,28 +700,61 @@ fun AssistantPanel(
                 disabledContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
         ) {
-            if (viewModel.isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
-                    color = colorScheme.onPrimary,
-                    strokeWidth = 2.dp
-                )
-                Spacer(Modifier.width(8.dp))
-            } else if (!setupModel) {
-                Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-            }
-            Text(
-                when {
-                    setupModel -> stringResource(R.string.assistant_set_up_model)
-                    viewModel.isLoading -> stringResource(R.string.assistant_stop)
-                    else -> stringResource(R.string.assistant_suggest_next_line)
+            // The label cross-fades in place on the state tier whenever the
+            // button's action changes; with animations off the swap is instant.
+            AnimatedContent(
+                targetState = when {
+                    setupModel -> PrimaryAction.SET_UP_MODEL
+                    viewModel.isLoading -> PrimaryAction.STOP
+                    else -> PrimaryAction.SUGGEST
                 },
-                fontWeight = FontWeight.Medium
-            )
+                transitionSpec = {
+                    if (animationsEnabled) {
+                        (fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) togetherWith
+                            fadeOut(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)))
+                            .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring() })
+                    } else {
+                        (EnterTransition.None togetherWith ExitTransition.None)
+                            .using(SizeTransform(clip = false) { _, _ -> snap() })
+                    }
+                },
+                contentAlignment = Alignment.Center,
+                label = "assistantPrimaryAction"
+            ) { action ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    when (action) {
+                        PrimaryAction.STOP -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
+                                color = colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        PrimaryAction.SUGGEST -> {
+                            Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        PrimaryAction.SET_UP_MODEL -> Unit
+                    }
+                    Text(
+                        stringResource(
+                            when (action) {
+                                PrimaryAction.SET_UP_MODEL -> R.string.assistant_set_up_model
+                                PrimaryAction.STOP -> R.string.assistant_stop
+                                PrimaryAction.SUGGEST -> R.string.assistant_suggest_next_line
+                            }
+                        ),
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
         }
     }
 }
+
+/** What the Assistant's primary button does right now; its label cross-fades between them. */
+private enum class PrimaryAction { SET_UP_MODEL, STOP, SUGGEST }
 
 private fun RhymeType.shortLabel(): String = when (this) {
     RhymeType.PERFECT -> "Perfect"

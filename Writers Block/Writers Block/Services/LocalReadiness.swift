@@ -18,6 +18,12 @@ struct LocalReadiness {
     let canGenerate: Bool
 
     @MainActor static func current() -> LocalReadiness {
+        #if DEBUG
+        // UI tests and simulator QA answer suggestions from a scripted stream.
+        if UITestFlags.scriptedSuggestionsEnabled() {
+            return LocalReadiness(title: "Ready", detail: "Scripted suggestions · UI test", canGenerate: true)
+        }
+        #endif
         if AIService.shouldUseGemma() {
             return LocalReadiness(title: "Ready", detail: "Gemma · on this device", canGenerate: true)
         }

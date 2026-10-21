@@ -260,8 +260,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var restoringDraft by mutableStateOf(false)
         private set
     val recentProject: SongProject? get() = projects.maxByOrNull { it.updatedAt }
+    /**
+     * Debug builds only: answers Suggest Next Line for UI tests and emulator QA
+     * (see [ScriptedSuggestionStream]). Null in normal use.
+     */
+    private var scriptedSuggestions by mutableStateOf<ScriptedSuggestionStream?>(null)
     val localReady: Boolean get() = localModelLoaded && !localModelLoading && localModelError == null
+    /** Suggest Next Line can run on the device: the local model is ready, or a scripted stream answers it. */
+    val localSuggestionsReady: Boolean get() = localReady || scriptedSuggestions != null
     val localReadinessLabel: String get() = when {
+        scriptedSuggestions != null -> "Scripted suggestions"
         localModelLoading -> "Loading model"
         localModelError != null -> "Model unavailable"
         localReady -> "Ready"
@@ -982,13 +990,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         localModelService.captureNextSyntheticRequestForTesting(capture)
     }
 
+    /**
+     * Debug builds only: Suggest Next Line answers from [script] instead of a
+     * provider, so UI tests and emulator QA can hold the loading state and
+     * deliver lines on a fixed schedule with no key, request or model. The
+     * request still runs through [getSuggestions], so the Assistant's real
+     * loading, arrival and cancellation states are what get exercised.
+     */
+    internal fun enableScriptedSuggestionsForTesting(script: ScriptedSuggestionStream = ScriptedSuggestionStream()) {
+        check(BuildConfig.DEBUG) { "Scripted suggestions are only available in debug builds." }
+        scriptedSuggestions = script
+    }
+
     fun getSuggestions() {
         if (lyrics.isEmpty()) return
-        if (selectedProvider == AIProvider.LOCAL && !localReady) {
-            errorMessage = if (localModelLoading) "Wait for your local model to finish loading." else "Choose a local model in Settings to get suggestions."
-            return
+        // A scripted stream never leaves the device, so the readiness and
+        // sharing gates, which are for real providers, do not apply to it.
+        val script = scriptedSuggestions
+        if (script == null) {
+            if (selectedProvider == AIProvider.LOCAL && !localReady) {
+                errorMessage = if (localModelLoading) "Wait for your local model to finish loading." else "Choose a local model in Settings to get suggestions."
+                return
+            }
+            if (!authorizeCloudAI("suggestions", ::getSuggestions)) return
         }
-        if (!authorizeCloudAI("suggestions", ::getSuggestions)) return
         val context = computeRhymeContext()
         cancelSuggestions()
         val revision = suggestionsRevision
@@ -1014,11 +1039,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val key = resolveApiKey(provider)
                 if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@launch
                 var emittedSuggestion = false
-                aiService.streamSuggestions(
+                val stream = script?.lines() ?: aiService.streamSuggestions(
                     provider, key, modelId, requestTheme, requestLyrics, context.targetLine,
                     requestRhymeType, requestScheme, context.currentLetter, context.currentSection,
                     requestComplexity, wholeSong, sectionRef, requestLyrics, cursorLine
-                ).collect { line ->
+                )
+                stream.collect { line ->
                     if (revision != suggestionsRevision || !isCurrentAIContext(requestContext)) return@collect
                     emittedSuggestion = true
                     suggestions = suggestions + line
