@@ -25,6 +25,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -113,9 +114,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
@@ -847,18 +845,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 } else {
                     maxSafeBottomPx
                 }
-                val collapseKeyboardOnScrollConnection = remember(
-                    keyboardVisible,
-                    lyricsFocused,
-                    focusManager
-                ) {
-                    object : NestedScrollConnection {
-                        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                            if (source == NestedScrollSource.UserInput && keyboardVisible && lyricsFocused) {
-                                focusManager.clearFocus(force = true)
-                            }
-                            return Offset.Zero
-                        }
+                // Only a finger drag on the editor collapses the keyboard: Compose's bring-into-view, which keeps
+                // the cursor or a new selection on screen, also scrolls as NestedScrollSource.UserInput.
+                val editorDragged by scrollState.interactionSource.collectIsDraggedAsState()
+                LaunchedEffect(editorDragged) {
+                    if (editorDragged && keyboardVisible && lyricsFocused) {
+                        focusManager.clearFocus(force = true)
                     }
                 }
 
@@ -899,7 +891,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxSize()
                         .testTag("editorScrollContainer")
-                        .nestedScroll(collapseKeyboardOnScrollConnection)
                         .verticalScroll(scrollState)
                         .padding(horizontal = DesignTokens.Editor.horizontalPadding)
                 ) {
