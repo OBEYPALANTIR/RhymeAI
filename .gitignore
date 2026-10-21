@@ -51,3 +51,6 @@ finetune/data/out/
 
 # Fine-tune training artifacts: prepared SFT data, adapters, GGUFs (do not commit)
 finetune/train/out/
+
+# graphify knowledge-graph output (see /graphify); regenerable, never committed
+graphify-out/
