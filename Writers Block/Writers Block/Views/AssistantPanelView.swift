@@ -8,9 +8,6 @@ struct AssistantPanelView: View {
     @State private var showModelSetup = false
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
-    /// When the current suggestion request started writing; each ghost of
-    /// the request reads it, so the ink line runs on unbroken from slot to slot.
-    @State private var writingStartedAt = Date()
     @AppStorage("assistant.targetLineStressExpanded") private var stressDetailExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
@@ -501,7 +498,11 @@ struct AssistantPanelView: View {
                             onKeep: { viewModel.keepAlternate(suggestion.text) },
                             isKept: viewModel.companion.alternates.contains(where: { $0.text == suggestion.text.trimmingCharacters(in: .whitespacesAndNewlines) })
                         )
-                        .transition(.opacity)
+                        // A landing line rises 24pt into its slot, the undo toast's travel.
+                        .transition(.asymmetric(
+                            insertion: reduceMotion ? .opacity : .offset(y: RhymeAITokens.Spacing.lg).combined(with: .opacity),
+                            removal: .opacity
+                        ))
                     }
 
                     // Identified by slot, so the filled slot's ghost fades out
@@ -509,8 +510,7 @@ struct AssistantPanelView: View {
                     ForEach(arrived..<(arrived + placeholderCount), id: \.self) { slot in
                         SuggestionPlaceholderCardView(
                             slot: slot,
-                            showProsody: viewModel.isStressPreviewEnabled,
-                            writingStartedAt: writingStartedAt
+                            showProsody: viewModel.isStressPreviewEnabled
                         )
                         .transition(.opacity)
                     }
@@ -528,7 +528,6 @@ struct AssistantPanelView: View {
             .rhymeAnimation(viewModel.isLoading ? RhymeAITokens.Motion.state : RhymeAITokens.Motion.dismiss, value: showsSuggestions)
             .onChange(of: viewModel.isLoading) { _, isLoading in
                 guard isLoading else { return }
-                writingStartedAt = .now
                 // A caption inserted into the hierarchy is not read on its own,
                 // so tell VoiceOver that writing has started, as the Word
                 // Inspector does for its results.

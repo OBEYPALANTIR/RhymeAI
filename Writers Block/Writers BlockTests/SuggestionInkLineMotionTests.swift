@@ -42,60 +42,17 @@ struct SuggestionInkLineMotionTests {
         #expect(SuggestionInkLineMotion.textBarFractions.allSatisfy { $0 >= 0.4 && $0 <= 0.9 })
     }
 
-    // MARK: - Ink line timing
+    // MARK: - Ink line
 
     @Test
-    func cycleIsBuiltFromTheMotionLadder() {
+    func theStrokeDrawsOnceOnTheSettleTierWithinTheUtilitarianCap() {
         #expect(SuggestionInkLineMotion.drawDuration == RhymeAITokens.Motion.settleDuration)
-        #expect(SuggestionInkLineMotion.holdDuration == RhymeAITokens.Motion.stateDuration)
-        #expect(SuggestionInkLineMotion.fadeDuration == RhymeAITokens.Motion.feedbackDuration)
-        #expect(SuggestionInkLineMotion.restDuration == RhymeAITokens.Motion.stateDuration)
-        #expect(abs(SuggestionInkLineMotion.cycleDuration - 1.10) < 0.0001)
+        #expect(SuggestionInkLineMotion.drawDuration <= 0.5)
     }
 
     @Test
-    func noStepPassesTheUtilitarianCap() {
-        let steps = [
-            SuggestionInkLineMotion.drawDuration,
-            SuggestionInkLineMotion.holdDuration,
-            SuggestionInkLineMotion.fadeDuration,
-            SuggestionInkLineMotion.restDuration,
-        ]
-        #expect(steps.allSatisfy { $0 <= 0.5 })
-    }
-
-    @Test
-    func aLoopStartsOnABlankBar() {
-        #expect(SuggestionInkLineMotion.phase(elapsed: 0) == 0)
-        #expect(SuggestionInkLineMotion.phase(elapsed: -1) == 0)
-        #expect(SuggestionInkLineMotion.strokeExtent(phase: 0) == 0)
-    }
-
-    @Test
-    func strokeDrawsThenHoldsThenFades() {
-        let midDraw = SuggestionInkLineMotion.strokeExtent(phase: SuggestionInkLineMotion.drawDuration / 2)
-        #expect(midDraw > 0 && midDraw < 1)
-        #expect(SuggestionInkLineMotion.strokeExtent(phase: SuggestionInkLineMotion.drawDuration) == 1)
-
-        let holdEnd = SuggestionInkLineMotion.drawDuration + SuggestionInkLineMotion.holdDuration
-        #expect(SuggestionInkLineMotion.strokeOpacity(phase: holdEnd - 0.001) == 1)
-        let midFade = SuggestionInkLineMotion.strokeOpacity(phase: holdEnd + SuggestionInkLineMotion.fadeDuration / 2)
-        #expect(midFade > 0 && midFade < 1)
-        #expect(SuggestionInkLineMotion.strokeOpacity(phase: holdEnd + SuggestionInkLineMotion.fadeDuration) == 0)
-        #expect(SuggestionInkLineMotion.strokeOpacity(phase: SuggestionInkLineMotion.cycleDuration - 0.001) == 0)
-    }
-
-    @Test
-    func theLoopWrapsAtTheEndOfEachCycle() {
-        let cycle = SuggestionInkLineMotion.cycleDuration
-        #expect(abs(SuggestionInkLineMotion.phase(elapsed: cycle)) < 0.0001)
-        #expect(abs(SuggestionInkLineMotion.phase(elapsed: cycle + 0.1) - 0.1) < 0.0001)
-        #expect(abs(SuggestionInkLineMotion.phase(elapsed: 3 * cycle + 0.25) - 0.25) < 0.0001)
-    }
-
-    @Test
-    func stillBarReadsMoreStronglyThanTheRestingBar() {
-        #expect(SuggestionInkLineMotion.staticInkOpacity > SuggestionInkLineMotion.restingInkOpacity)
-        #expect(SuggestionInkLineMotion.staticInkOpacity < SuggestionInkLineMotion.strokeInkOpacity)
+    func theStrokeSettlesToALighterRestingInk() {
+        #expect(SuggestionInkLineMotion.restingInkOpacity == 0.08)
+        #expect(SuggestionInkLineMotion.strokeInkOpacity > SuggestionInkLineMotion.restingInkOpacity)
     }
 }
