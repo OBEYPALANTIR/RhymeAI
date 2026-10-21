@@ -82,7 +82,7 @@ struct ProjectsDrawerView: View {
     }
 
     private func showUndoToast(_ message: String, undo: @escaping () -> Void) {
-        withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
+        withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
             undoToast = UndoToast(message: message, undo: undo)
         }
     }
@@ -226,7 +226,7 @@ struct ProjectsDrawerView: View {
                         trashBinPresented = false
                     }
                 })
-                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
                 .zIndex(2)
             }
 
@@ -240,7 +240,7 @@ struct ProjectsDrawerView: View {
                         .bottom,
                         RhymeAITokens.Touch.minimum + RhymeAITokens.Spacing.lg + RhymeAITokens.Spacing.sm
                     )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                     .zIndex(3)
             }
         }
@@ -270,7 +270,7 @@ struct ProjectsDrawerView: View {
                             .bottom,
                             RhymeAITokens.Touch.minimum + RhymeAITokens.Spacing.xl
                         )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
             }
         }
@@ -585,7 +585,7 @@ struct ProjectsDrawerView: View {
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .contentShape(Rectangle())
         .onTapGesture {
-            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.expressive) {
+            withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
                 if expandedFolders.contains(folder.id) {
                     expandedFolders.remove(folder.id)
                 } else {

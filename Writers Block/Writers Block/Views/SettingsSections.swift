@@ -463,7 +463,7 @@ struct SettingsCloudBackupSection: View {
 
             if isExpanded {
                 backupControls
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
             }
         }
         .padding(RhymeAITokens.Spacing.md)

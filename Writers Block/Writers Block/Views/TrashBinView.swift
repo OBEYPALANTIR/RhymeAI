@@ -418,7 +418,7 @@ struct TrashBinView: View {
                     // outgrow it at accessibility text sizes.
                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                     .foregroundStyle(appearance.palette.onAction)
-                    .transition(.scale(scale: 0.72).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.72).combined(with: .opacity))
             }
         }
         .frame(width: 26, height: 26)
