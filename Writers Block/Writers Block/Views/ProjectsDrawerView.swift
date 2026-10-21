@@ -240,7 +240,7 @@ struct ProjectsDrawerView: View {
                         .bottom,
                         RhymeAITokens.Touch.minimum + RhymeAITokens.Spacing.lg + RhymeAITokens.Spacing.sm
                     )
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .offset(y: RhymeAITokens.Spacing.lg).combined(with: .opacity))
                     .zIndex(3)
             }
         }
@@ -270,7 +270,7 @@ struct ProjectsDrawerView: View {
                             .bottom,
                             RhymeAITokens.Touch.minimum + RhymeAITokens.Spacing.xl
                         )
-                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                        .transition(reduceMotion ? .opacity : .offset(y: RhymeAITokens.Spacing.lg).combined(with: .opacity))
                 }
             }
         }
@@ -390,7 +390,9 @@ struct ProjectsDrawerView: View {
 
                 Button {
                     viewModel.purgeExpiredTrashedProjects()
-                    undoToast = nil
+                    withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                        undoToast = nil
+                    }
                     if let onOpenTrash {
                         onOpenTrash()
                     } else {
@@ -577,9 +579,10 @@ struct ProjectsDrawerView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Image(systemName: isRecordingFolderExpanded(folder) ? "chevron.down" : "chevron.right")
+            Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isRecordingFolderExpanded(folder) ? 90 : 0))
         }
         .frame(minHeight: RhymeAITokens.Touch.comfortable)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
@@ -816,7 +819,10 @@ struct ProjectsDrawerView: View {
             Button(role: .destructive) {
                 let title = project.title.isEmpty ? "Untitled Song" : project.title
                 let projectId = project.id
-                guard viewModel.moveProjectToTrash(project) else {
+                let moved = withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                    viewModel.moveProjectToTrash(project)
+                }
+                guard moved else {
                     // A refusal during a backup or restore is shown from the view
                     // model's notice, which clears itself when the operation ends.
                     drawerError = viewModel.projectDeletionNotice == nil ? viewModel.errorMessage : nil
