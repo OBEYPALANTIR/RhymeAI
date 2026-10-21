@@ -600,7 +600,7 @@ private fun SwipeToRevealDelete(
     val animationsEnabled = LocalAnimationsEnabled.current
 
     fun settleOffset(target: Float) {
-        offsetX.animateTo(target, DesignTokens.Motion.settleSpring(), animationsEnabled)
+        offsetX.animateTo(target, DesignTokens.Motion.settleSpring(visibilityThreshold = 0.5f), animationsEnabled)
     }
     // Only compose the red reveal layer when the rendered row offset is visibly open.
     // At rest the stationary container and moving foreground both paint the row surface,

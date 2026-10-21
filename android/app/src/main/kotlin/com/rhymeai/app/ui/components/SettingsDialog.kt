@@ -1,5 +1,7 @@
 package com.rhymeai.app.ui.components
 
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.ui.unit.IntSize
 import android.app.ActivityManager
 import android.content.Context
 import android.net.Uri
@@ -90,6 +92,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -1075,13 +1078,13 @@ internal fun SettingsDialog(
                         Icons.Default.KeyboardArrowDown,
                         contentDescription = if (syncSectionExpanded) "Collapse cloud sync" else "Expand cloud sync",
                         tint = colorScheme.onSurfaceVariant,
-                        modifier = Modifier.rotate(chevronRotation)
+                        modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
                     )
                 }
 
                 AnimatedVisibility(
                     visible = syncSectionExpanded,
-                    enter = expandVertically(animationSpec = DesignTokens.Motion.standardSpring(), expandFrom = Alignment.Top),
+                    enter = expandVertically(animationSpec = DesignTokens.Motion.standardSpring(IntSize.VisibilityThreshold), expandFrom = Alignment.Top),
                     exit = shrinkVertically(animationSpec = tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
                 ) {
                 Column {

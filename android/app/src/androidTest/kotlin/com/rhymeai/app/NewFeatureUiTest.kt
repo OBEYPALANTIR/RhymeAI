@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.captureToImage
@@ -29,6 +30,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.Role
@@ -605,6 +607,28 @@ class NewFeatureUiTest {
         composeRule.onNodeWithText("UnBlock").performClick()
 
         composeRule.onNodeWithContentDescription("Close assistant").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("unBlockAction").assertIsDisplayed()
+    }
+
+    @Test
+    fun assistantSheetFlingDismissesWhileSlowShortDragSettlesBack() {
+        composeRule.onNodeWithText("New Song").performClick()
+        composeRule.onNodeWithText("UnBlock").performClick()
+        // A quarter of the screen: well short of the half-travel dismiss threshold.
+        val travel = composeRule.onRoot().fetchSemanticsNode().size.height * 0.25f
+
+        composeRule.onNodeWithContentDescription("Close assistant").performTouchInput {
+            swipe(center, center + Offset(0f, travel), durationMillis = 2_000)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Close assistant").assertIsDisplayed()
+
+        // The same distance flung: the projected release passes the threshold.
+        composeRule.onNodeWithContentDescription("Close assistant").performTouchInput {
+            swipe(center, center + Offset(0f, travel), durationMillis = 60)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Close assistant").assertDoesNotExist()
         composeRule.onNodeWithTag("unBlockAction").assertIsDisplayed()
     }
 

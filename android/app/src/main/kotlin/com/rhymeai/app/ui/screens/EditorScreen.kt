@@ -9,6 +9,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.calculateTargetValue
+import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.animateFloat
@@ -100,7 +103,6 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
@@ -115,6 +117,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -253,6 +257,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val assistantSheetCloseThresholdPx =
         ((fullSheetHeightPx - assistantSheetHandleHeightPx).coerceAtLeast(0f)) * 0.5f
     val assistantSheetOffset = remember(scope) { OffsetMotionState(scope) }
+    val assistantSheetDecay = rememberSplineBasedDecay<Float>()
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
     var pendingAssistantSheet by remember { mutableStateOf(false) }
     var rewriteChipBarHeightPx by remember { mutableIntStateOf(0) }
@@ -327,14 +332,19 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
     }
 
-    fun settleAssistantSheetDrag() {
-        if (assistantSheetOffset.value >= assistantSheetCloseThresholdPx) {
+    fun settleAssistantSheetDrag(velocity: Float) {
+        // Like iOS predictedEndTranslation: a downward fling dismisses even when released short of the threshold.
+        val projectedOffset = assistantSheetDecay.calculateTargetValue(assistantSheetOffset.value, velocity)
+        if (assistantSheetOffset.value >= assistantSheetCloseThresholdPx ||
+            projectedOffset >= assistantSheetCloseThresholdPx
+        ) {
             dismissAssistantSheet()
         } else {
             assistantSheetOffset.animateTo(
                 target = 0f,
-                animationSpec = DesignTokens.Motion.settleSpring(),
-                animationsEnabled = animationsEnabled
+                animationSpec = DesignTokens.Motion.settleSpring(visibilityThreshold = 0.5f),
+                animationsEnabled = animationsEnabled,
+                initialVelocity = velocity
             )
         }
     }
@@ -956,7 +966,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .onSizeChanged { metadataHeightPx = it.height }
-                            .alpha(secondaryContentAlpha * if (visibleLyricStats == null) 0f else 1f)
+                            .graphicsLayer { alpha = secondaryContentAlpha * if (visibleLyricStats == null) 0f else 1f }
                             .then(
                                 if (focusMode || visibleLyricStats == null) {
                                     Modifier.clearAndSetSemantics { }
@@ -1188,12 +1198,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 // phases instead of recomposing the whole action group.
                 val pillWidth = micTransition.animateDp(
                     label = "pillWidth",
-                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring(Dp.VisibilityThreshold) }
                 ) { recording -> if (recording) micRecordingWidth else DesignTokens.EditorChrome.fabSize }
 
                 val unBlockWidth = micTransition.animateDp(
                     label = "unBlockWidth",
-                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring(Dp.VisibilityThreshold) }
                 ) { recording -> if (recording) DesignTokens.EditorChrome.fabSize else unBlockExtendedWidth }
 
                 val unBlockWordmarkAlpha = micTransition.animateFloat(
@@ -1203,7 +1213,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
                 val unBlockWordmarkWidth = micTransition.animateDp(
                     label = "unBlockWordmarkWidth",
-                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
+                    transitionSpec = { DesignTokens.Motion.expressiveSpring(Dp.VisibilityThreshold) }
                 ) { recording -> if (recording) 0.dp else unBlockExpandedWordmarkWidth }
 
                 val recProgress = micTransition.animateFloat(
@@ -1224,8 +1234,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             .animatedWidth(unBlockWidth)
                             .height(DesignTokens.EditorChrome.fabSize)
                             .graphicsLayer {
-                                scaleX = unBlockPressScale
-                                scaleY = unBlockPressScale
+                                scaleX = unBlockPressScale.value
+                                scaleY = unBlockPressScale.value
                             }
                             .clip(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
@@ -1280,8 +1290,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             .animatedWidth(pillWidth)
                             .height(DesignTokens.EditorChrome.fabSize)
                             .graphicsLayer {
-                                scaleX = micPressScale
-                                scaleY = micPressScale
+                                scaleX = micPressScale.value
+                                scaleY = micPressScale.value
                             }
                             .background(
                                 colorScheme.surfaceContainerHigh,
@@ -1480,7 +1490,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .offset { IntOffset(x = 0, y = assistantSheetOffset.value.roundToInt()) }
+                    // Clamped so an upward release cannot spring the sheet past the top edge.
+                    .offset { IntOffset(x = 0, y = assistantSheetOffset.value.roundToInt().coerceAtLeast(0)) }
                     .appWritingSurface()
                     .semantics {
                         paneTitle = "Assistant"
@@ -1493,17 +1504,22 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         .statusBarsPadding()
                         .height(DesignTokens.Sheet.handleArea)
                         .pointerInput(showBottomSheet, fullSheetHeightPx, animationsEnabled) {
+                            val velocityTracker = VelocityTracker()
                             detectVerticalDragGestures(
-                                onDragStart = { assistantSheetOffset.snapTo(assistantSheetOffset.value) },
+                                onDragStart = {
+                                    velocityTracker.resetTracking()
+                                    assistantSheetOffset.snapTo(assistantSheetOffset.value)
+                                },
                                 onVerticalDrag = { change, dragAmount ->
                                     change.consume()
+                                    velocityTracker.addPointerInputChange(change)
                                     assistantSheetOffset.snapTo(
                                         (assistantSheetOffset.value + dragAmount)
                                             .coerceIn(0f, fullSheetHeightPx)
                                     )
                                 },
-                                onDragEnd = { settleAssistantSheetDrag() },
-                                onDragCancel = { settleAssistantSheetDrag() }
+                                onDragEnd = { settleAssistantSheetDrag(velocityTracker.calculateVelocity().y) },
+                                onDragCancel = { settleAssistantSheetDrag(0f) }
                             )
                         },
                     contentAlignment = Alignment.Center
@@ -1743,7 +1759,7 @@ private fun SavedFlourish(
 }
 
 @Composable
-private fun rememberPressScale(interactionSource: MutableInteractionSource): Float {
+private fun rememberPressScale(interactionSource: MutableInteractionSource): androidx.compose.runtime.State<Float> {
     val pressed by interactionSource.collectIsPressedAsState()
     val animationsEnabled = LocalAnimationsEnabled.current
     return animateFloatAsState(
@@ -1757,7 +1773,7 @@ private fun rememberPressScale(interactionSource: MutableInteractionSource): Flo
             snap()
         },
         label = "writerActionPress"
-    ).value
+    )
 }
 
 @Composable
