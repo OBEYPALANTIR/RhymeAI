@@ -1,6 +1,6 @@
 # Cloud backup setup
 
-Writers Block backs up to Google Drive's private `appDataFolder` on both Android and iOS, with the `drive.appdata` scope only. Backups are plain JSON and raw audio protected by the Google account and Drive's encryption at rest; there is no passphrase. API keys are never included.
+Writers Block backs up to Google Drive's private `appDataFolder`, with the `drive.appdata` scope only. Android implements the v4 contract below; the iOS side is pending its companion PR. Backups are plain JSON and raw audio protected by the Google account and Drive's encryption at rest; there is no passphrase. API keys are never included.
 
 ## Google Cloud project
 
@@ -55,43 +55,56 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
 - **Connect Google Drive** asks for Drive access and, if Drive already holds
   songs, offers "Restore your songs?" with Restore and Not now. The same offer
   appears at launch when Drive is connected and the library is empty.
-- **Back up now** and the automatic backup (30 seconds after the last change,
-  and when leaving the app) merge this device into Drive and never change local
-  data. Failures retry after 1, 2, 4, 8 … minutes, capped at an hour.
+- **Back up now** and the automatic backup (30 seconds after the last change to
+  songs, trash, tombstones or recordings, and when leaving the app) merge this
+  device into Drive and never change local data. Each manifest write is read
+  back and its hash compared; if another device wrote in between, the backup
+  merges again (up to three times, then "Backup conflict, will retry").
+  Failures retry after 1, 2, 4, 8 … minutes, capped at an hour.
 - **Restore from backup** merges both ways, uploads local-only items, then
-  downloads recordings this device lacks. A local recording is never replaced;
-  a download whose SHA-256 does not match the manifest is discarded and counted.
-  Recordings over 16 MiB are skipped with a visible count.
+  downloads recordings this device lacks, keeping any edit saved meanwhile. A
+  download is written only where no file exists when it commits; one whose
+  SHA-256 does not match the manifest is discarded and counted. Recordings over
+  16 MiB are skipped with a visible count.
 - **Disconnect** revokes the grant at `https://oauth2.googleapis.com/revoke`
-  (Android with the current access token, iOS with the refresh token), then
-  clears local state. If Google cannot be reached it still disconnects and says
-  so; the grant can then be removed from the Google Account's third-party access.
+  (Android with the current access token, iOS with the refresh token) and
+  always clears local state. Only a successful revoke counts; otherwise it says
+  "Disconnected on this device, but Google still lists the app; remove it at
+  myaccount.google.com/permissions."
 - **Export all songs…** writes `WritersBlock-backup-<date>.zip` (`manifest.json`,
   `songs/<title or id>.txt`, `songs/<id>.json`, `recordings/<projectId>/<fileName>`)
   through the system save sheet, for any storage provider. **Import from file…**
-  takes that zip or a bare v4 `manifest.json` and merges it.
+  takes that zip or a bare v4 `manifest.json`, refuses archives with unsafe or
+  unexpected entry names, and merges it.
 
-Tombstones work as before: Delete Forever and expiry purge write a project
-tombstone in the same DataStore transaction that removes the song, tombstones
-are never pruned, and a tombstoned song and its recordings stay deleted even if
-an older copy was edited later. Android does not erase recording bytes already
-in Drive when a song is deleted; iOS does, so the platforms differ there.
+Tombstones apply by timestamp: Delete Forever and expiry purge write a project
+tombstone in the same DataStore transaction that removes the song, and a
+tombstone removes a song only when it is newer than the song's `updatedAt` (a
+recording: newer than its `uploadedAt`). A copy edited after the deletion
+survives and the tombstone is dropped. Android does not erase recording bytes
+already in Drive when a song is deleted.
+
+The Drive and revoke hosts are certificate-pinned fail-closed (GTS Root R4 with
+GTS R1-R3 and GlobalSign as backups, no expiration); rotate those pins before
+Google moves the hosts to another CA.
 
 ## Older encrypted backups
 
 Builds before v4 wrote a passphrase-encrypted `rhymeai-projects.json` (RAI3, or
 RAI2/RAI1 from older builds) and RAI1-encrypted `rec_*.enc` recordings. The app
-now only reads them, to migrate:
+now only reads them, to migrate them into Drive; migration never changes this
+device:
 
 | Old backup in Drive | Passphrase stored on the device | What happens |
 | --- | --- | --- |
-| yes | yes | On the next backup: decrypt, merge into this device, write v4, download v4 again and check its hash and songs, delete the old manifest and the old recordings that reached v4, clear the passphrase. Status: "Your older encrypted backup was moved to the new format." |
+| yes | yes | On each backup: decrypt, upload the old recordings raw, merge the old songs into v4, read v4 back and check its hash. Only when every old song is there (same content or a newer edit) and every old recording is a raw file with matching hash and size are the old manifest, the old recordings and the passphrase removed. Status: "Your older encrypted backup was moved to the new format." Otherwise everything old is kept and Settings counts what could not move. |
 | yes | no | The old files are left untouched; v4 starts from local data. Settings shows "Migrate older encrypted backup…", which asks for the passphrase once (it is not stored); cancelling keeps the row. |
 | no | yes | The stored passphrase is removed. |
 | no | no | Nothing to do. |
 
-Old recordings that could not move (over 16 MiB, or failing their hash) stay in
-Drive rather than being deleted.
+Old recordings that cannot move (over 16 MiB, unreadable, missing, or a
+different recording under the same name) keep the old backup in Drive and the
+migration row available.
 
 ## Manual verification
 
@@ -101,6 +114,6 @@ After both OAuth clients exist:
 2. Android restore: clear app data or install on a second device, connect the same Google account, accept "Restore your songs?", and confirm projects, trash, and voice recordings reappear.
 3. iOS: run the same connect, backup and restore flow from Settings.
 4. Cross-platform: back up on one platform and restore on the other. Confirm at least one project and one `.m4a` voice recording round-trip.
-5. Migration: on a device that still has an older encrypted backup, confirm the old `rhymeai-projects.json` disappears from `appDataFolder` only after `rhymeai-manifest.json` exists.
+5. Migration: on a device that still has an older encrypted backup, confirm the old `rhymeai-projects.json` disappears from `appDataFolder` only after `rhymeai-manifest.json` lists every old song and recording, and that the device's own library did not change.
 
 If any OAuth client is missing, the code can still build and unit-test, but the live end-to-end backup gate is not complete.
