@@ -670,7 +670,11 @@ object RecordingFileStore {
      * Nothing already in place is ever replaced or removed, so a failure part-way
      * leaves only complete recordings behind. Returns how many destinations were taken.
      */
-    internal fun commitStagedRestores(filesDir: File, staged: List<StagedRecording>): Int {
+    internal fun commitStagedRestores(
+        filesDir: File,
+        staged: List<StagedRecording>,
+        placed: MutableList<RecordingManifestEntry>? = null
+    ): Int {
         if (staged.isEmpty()) return 0
         var taken = 0
         val touchedDirectories = linkedSetOf<File>()
@@ -683,7 +687,12 @@ object RecordingFileStore {
             }
             if (item.entry.modifiedAt > 0L) item.file.setLastModified(item.entry.modifiedAt)
             syncFile(item.file)
-            if (moveIfAbsent(item.file, target)) touchedDirectories += directory else taken++
+            if (moveIfAbsent(item.file, target)) {
+                touchedDirectories += directory
+                placed?.add(item.entry)
+            } else {
+                taken++
+            }
         }
         touchedDirectories.forEach(::syncDirectory)
         staged.first().file.parentFile?.deleteRecursively()
@@ -778,6 +787,43 @@ internal fun knownRecordingNames(filesDir: File, projectId: String): List<String
         ?.filter { RecordingFiles.isMemoFile(it) }
         ?.mapNotNull { VoiceMemoService.parseTrashedName(it.name)?.second }.orEmpty()
     return (live + trashed).distinct().filter { runCatching { SyncIdentity.validateFileName(it) }.isSuccess }
+}
+
+/** Recordings sitting in the local Trash, under their original names. */
+internal fun snapshotTrashedRecordingFiles(filesDir: File): List<LocalRecordingFile> {
+    val root = RecordingFiles.trashRoot(filesDir)
+    return root.listFiles().orEmpty().filter { it.isDirectory }.flatMap { projectDir ->
+        projectDir.listFiles().orEmpty().filter { RecordingFiles.isMemoFile(it) }.mapNotNull { file ->
+            val original = VoiceMemoService.parseTrashedName(file.name)?.second ?: return@mapNotNull null
+            runCatching {
+                LocalRecordingFile(
+                    RecordingManifestEntry(
+                        projectId = projectDir.name, fileName = original, sizeBytes = file.length(),
+                        modifiedAt = file.lastModified(), sha256 = RecordingFileStore.sha256Hex(file)
+                    ).also(RecordingManifestEntry::validate),
+                    file
+                )
+            }.getOrNull()
+        }
+    }.distinctBy { it.entry.identityKey }
+}
+
+/**
+ * Live recordings with their persisted precedence time (A20). A file seen for the
+ * first time, live or in Trash, is stamped once with its file time; after that the
+ * stored record decides, and file times are never read as precedence again.
+ */
+internal suspend fun snapshotLocalRecordings(
+    repository: ProjectRepository,
+    filesDir: File,
+    pendingDeletionIds: Set<String>
+): List<LocalRecordingFile> {
+    val live = snapshotLocalRecordingFiles(filesDir, pendingDeletionIds)
+    val records = repository.stampRecordings((live + snapshotTrashedRecordingFiles(filesDir)).map { it.entry })
+    return live.map { local ->
+        val time = records[local.entry.identityKey]?.uploadedAt ?: local.entry.modifiedAt
+        local.copy(entry = local.entry.copy(uploadedAt = time))
+    }
 }
 
 /** Never turn a pending local deletion into a durable remote recording. */
@@ -906,7 +952,7 @@ class DriveSyncService(
             .filter { it.name == BackupManifest.FILE_NAME }
             .mapTo(HashSet()) { Triple(it.id, it.version, it.modifiedTime) }
 
-    private class LegacyMove(val moved: List<RecordingManifestEntry>, val damaged: Int)
+    private class LegacyMove(val moved: Set<String>, val damaged: Int)
 
     suspend fun backUp(repository: ProjectRepository): SyncResult = run(repository, Mode.BACKUP, null)
 
@@ -979,7 +1025,7 @@ class DriveSyncService(
                     LegacyBackupAction.MIGRATE -> {
                         legacy = openLegacyManifest(token, legacyFile!!, passphrase!!)
                         if (legacy == null && typedPassphrase != null) return@guarded SyncResult.WrongPassphrase
-                        if (legacy != null) move = moveLegacyRecordings(token, repository, legacy, passphrase)
+                        if (legacy != null) move = moveLegacyRecordings(token, legacy, passphrase)
                     }
                     LegacyBackupAction.FORGET_PASSPHRASE -> if (storedPassphrase.isNotEmpty()) {
                         secureKeyStore.removeKey(LEGACY_PASSPHRASE_KEY)
@@ -992,8 +1038,11 @@ class DriveSyncService(
                     token = token,
                     repository = repository,
                     applyLocally = mode == Mode.RESTORE,
-                    extraRemote = legacy?.copy(recordings = move?.moved.orEmpty()),
-                    requireRemote = mode == Mode.RESTORE
+                    // Every older recording, with its original time, joins the gathered inputs so
+                    // tombstones resolve against all of them at once.
+                    extraRemote = legacy?.copy(recordings = legacy.recordings.map { it.copy(uploadedAt = it.precedenceTime) }),
+                    requireRemote = mode == Mode.RESTORE,
+                    unlistable = legacy?.recordings.orEmpty().map { it.identityKey }.filterNot { it in move?.moved.orEmpty() }.toSet()
                 ) ?: return@guarded SyncResult.NoBackup
 
                 var migrated = false
@@ -1062,14 +1111,15 @@ class DriveSyncService(
         repository: ProjectRepository,
         applyLocally: Boolean,
         extraRemote: SyncBlob?,
-        requireRemote: Boolean
+        requireRemote: Boolean,
+        unlistable: Set<String> = emptySet()
     ): PushOutcome? {
         // Every input seen by an earlier attempt (its local, remote and any conflicting
         // read-back) is carried forward unresolved, so nothing seen once is dropped.
         var seen: SyncBlob? = null
         repeat(MAX_MANIFEST_WRITE_ATTEMPTS) {
             val base = repository.snapshotLocalSyncBase()
-            val localFiles = snapshotLocalRecordingFiles(filesDir, base.pendingIds)
+            val localFiles = snapshotLocalRecordings(repository, filesDir, base.pendingIds)
             val localRecordings = localFiles.map { it.entry }
             // Unfiltered by tombstones: resolution decides once, with every input present.
             val local = base.blob.copy(
@@ -1082,6 +1132,12 @@ class DriveSyncService(
             // Gather everything first, then resolve tombstones once.
             val gathered = SyncMerger.gather(*listOfNotNull(seen, local, extraRemote, remote.blob).toTypedArray())
             var merged = SyncMerger.resolve(gathered).copy(savedByClientId = clientId())
+            // Older recordings that could not move raw shape tombstones but are not listed,
+            // unless this device or Drive holds the same identity too.
+            if (unlistable.isNotEmpty()) {
+                val held = (local.recordings + remote.blob?.recordings.orEmpty()).mapTo(HashSet()) { it.identityKey }
+                merged = merged.copy(recordings = merged.recordings.filterNot { it.identityKey in unlistable && it.identityKey !in held })
+            }
             val driveFiles = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX)
                 .associateBy { it.name }
             // A raw file counts only when its appProperties carry the listed hash and size.
@@ -1116,13 +1172,10 @@ class DriveSyncService(
             }
 
             val writtenAt = now()
-            val remoteRecordings = remote.blob?.recordings.orEmpty().associateBy { it.identityKey }
+            // Every entry keeps its own precedence time (the stored record, Drive's entry or
+            // the older backup's); only an entry with none is stamped with this upload.
             merged = merged.copy(
-                recordings = merged.recordings.map { entry ->
-                    val listed = remoteRecordings[entry.identityKey]
-                    if (listed != null && listed.sha256 == entry.sha256 && listed.uploadedAt > 0L) listed
-                    else entry.copy(uploadedAt = writtenAt)
-                }
+                recordings = merged.recordings.map { if (it.uploadedAt > 0L) it else it.copy(uploadedAt = writtenAt) }
             )
             val bytes = BackupManifest.encode(merged, writtenAt, clientId())
             if (bytes.size > MAX_SYNC_BLOB_BYTES) throw DriveNetworkException("Drive backup exceeds the allowed size")
@@ -1147,7 +1200,7 @@ class DriveSyncService(
             var committed = merged
             if (applyLocally) {
                 damaged = restoreRemoteRecordings(
-                    token, merged.recordings, driveFiles.mapValues { it.value.id } + uploaded, localRecordings
+                    token, repository, merged.recordings, driveFiles.mapValues { it.value.id } + uploaded, localRecordings
                 )
                 committed = repository.applySyncResult(merged, base)
             }
@@ -1183,16 +1236,12 @@ class DriveSyncService(
      */
     private suspend fun moveLegacyRecordings(
         token: String,
-        repository: ProjectRepository,
         legacy: SyncBlob,
         passphrase: CharArray
     ): LegacyMove {
-        val deletions = legacy.deletions + repository.snapshotLocalSyncBase().blob.deletions +
-            readRemote(token).blob?.deletions.orEmpty()
-        val live = recordingsAllowedForUpload(legacy.recordings, deletions, emptyList()).mapTo(HashSet()) { it.identityKey }
         val driveFiles = driveClient.listFilesByNamePrefix(token, RecordingManifestEntry.DRIVE_PREFIX)
             .associateBy { it.name }
-        val moved = mutableListOf<RecordingManifestEntry>()
+        val moved = HashSet<String>()
         var damaged = 0
         for (entry in legacy.recordings) {
             if (!entry.isTransferable) continue
@@ -1214,7 +1263,7 @@ class DriveSyncService(
             } else if (existing.appProperties["sha256"] != entry.sha256 || existing.appProperties["bytes"] != entry.sizeBytes.toString()) {
                 continue // A different recording holds that name; verification counts it as unmoved.
             }
-            if (entry.identityKey in live) moved += entry.copy(uploadedAt = now())
+            moved += entry.identityKey
         }
         return LegacyMove(moved, damaged)
     }
@@ -1270,6 +1319,7 @@ class DriveSyncService(
     /** Returns how many downloads were discarded because their bytes did not match the manifest. */
     private suspend fun restoreRemoteRecordings(
         token: String,
+        repository: ProjectRepository,
         remoteManifest: List<RecordingManifestEntry>,
         remoteFilesByName: Map<String, String>,
         localManifest: List<RecordingManifestEntry>
@@ -1295,12 +1345,12 @@ class DriveSyncService(
         // committed; the next restore plans only what is still missing.
         var damaged = 0
         for (chunk in RecordingSyncPlanner.chunkRestores(plan)) {
-            damaged += restoreRecordingChunk(token, chunk)
+            damaged += restoreRecordingChunk(token, repository, chunk)
         }
         return damaged
     }
 
-    private suspend fun restoreRecordingChunk(token: String, chunk: List<RecordingRestorePlan>): Int {
+    private suspend fun restoreRecordingChunk(token: String, repository: ProjectRepository, chunk: List<RecordingRestorePlan>): Int {
         val stageDirectory = Files.createTempDirectory(filesDir.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
         var damaged = 0
         try {
@@ -1313,7 +1363,10 @@ class DriveSyncService(
                 RecordingFileStore.stageRestore(stageDirectory, index, restore.entry, bytes)
             }
             // A destination that appeared since planning is kept; its download is dropped.
-            RecordingFileStore.commitStagedRestores(filesDir, staged)
+            val placed = mutableListOf<RecordingManifestEntry>()
+            RecordingFileStore.commitStagedRestores(filesDir, staged, placed)
+            // A restored file keeps the backup entry's time, never the file time it was written at.
+            placed.forEach { repository.putRecordingRecord(it.toRecord(RecordingRecord.RESTORED)) }
         } finally {
             stageDirectory.deleteRecursively()
         }

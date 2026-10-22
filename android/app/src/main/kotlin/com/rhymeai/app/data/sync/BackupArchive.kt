@@ -53,11 +53,9 @@ object BackupArchive {
         savedAtMillis: Long,
         clientId: String
     ): ExportSummary {
+        // Entries come from snapshotLocalRecordings, so each carries its stored precedence time.
         val included = files.filter { it.entry.isTransferable }
-        // A recording not yet in a backup carries its file time as its upload time.
-        val manifest = blob.copy(
-            recordings = included.map { it.entry.let { e -> if (e.uploadedAt > 0L) e else e.copy(uploadedAt = e.modifiedAt) } }
-        )
+        val manifest = blob.copy(recordings = included.map { it.entry })
         ZipOutputStream(output).use { zip ->
             zip.putNextEntry(ZipEntry(MANIFEST_ENTRY))
             zip.write(BackupManifest.encode(manifest, savedAtMillis, clientId))
@@ -134,7 +132,7 @@ object BackupArchive {
         // Finish or roll back an interrupted restore before reading what is on disk.
         RecordingFileStore.recoverInterruptedRestores(filesDir)
         val base = repository.snapshotLocalSyncBase()
-        val localFiles = snapshotLocalRecordingFiles(filesDir, base.pendingIds)
+        val localFiles = snapshotLocalRecordings(repository, filesDir, base.pendingIds)
         // Gather this device and the archive, recordings included, then resolve once.
         val merged = SyncMerger.resolve(
             SyncMerger.gather(base.blob.copy(recordings = localFiles.map { it.entry }), contents.manifest)
@@ -148,7 +146,11 @@ object BackupArchive {
         var added = 0
         for (entry in wanted) {
             val bytes = contents.recordings[entry.identityKey] ?: continue
-            if (RecordingFileStore.writeIfAbsent(filesDir, entry, bytes)) added++
+            if (RecordingFileStore.writeIfAbsent(filesDir, entry, bytes)) {
+                // The imported file keeps the archive entry's time, never the time it was written.
+                repository.putRecordingRecord(entry.toRecord(RecordingRecord.IMPORTED))
+                added++
+            }
         }
         repository.applySyncResult(merged, base)
         return ImportSummary(

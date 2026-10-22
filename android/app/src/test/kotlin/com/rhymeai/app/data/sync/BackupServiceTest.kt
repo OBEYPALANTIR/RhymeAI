@@ -100,7 +100,9 @@ class BackupServiceTest {
         assertEquals(setOf("here", "elsewhere"), remote().projects.map { it.id }.toSet())
         val listed = remote().recordings.single()
         assertEquals(memo.identityKey, listed.identityKey)
-        assertEquals(clock, listed.uploadedAt)
+        // A memo from before records existed is stamped once with its file time (A20).
+        assertEquals(1_000L, listed.uploadedAt)
+        assertEquals(1_000L, repository.recordingRecords().getValue(memo.identityKey).uploadedAt)
         val uploaded = drive.file("rec_here_take.m4a")!!
         assertContentEquals("raw audio".toByteArray(), uploaded.bytes)
         assertEquals(
@@ -114,7 +116,9 @@ class BackupServiceTest {
         val uploadsBefore = drive.uploads
         service.backUp(repository)
         assertEquals(uploadsBefore, drive.uploads)
-        assertEquals(clock, remote().recordings.single().uploadedAt)
+        RecordingFileStore.targetFile(filesDir, "here", "take.m4a").setLastModified(99_000L)
+        service.backUp(repository)
+        assertEquals(1_000L, remote().recordings.single().uploadedAt)
     }
 
     @Test
@@ -403,6 +407,66 @@ class BackupServiceTest {
         assertIs<SyncResult.Success>(service.restore(repository))
         assertFalse(stage.exists())
         assertContentEquals("mine".toByteArray(), RecordingFileStore.targetFile(filesDir, mine.projectId, mine.fileName).readBytes())
+    }
+
+    @Test
+    fun migrationGathersOlderRecordingsWithTheirOwnTimesBeforeResolving() = runBlocking<Unit> {
+        keys.setKey(DriveSyncService.LEGACY_PASSPHRASE_KEY, passphrase)
+        val audio = "legacy take".toByteArray()
+        val old = entry("x", "take.m4a", audio, uploadedAt = 0L).copy(modifiedAt = 1_000L)
+        putLegacy(SyncBlob(projects = listOf(song("x", updatedAt = 100L)), recordings = listOf(old)), mapOf(old to audio))
+        putRemote(SyncBlob(deletions = listOf(SyncDeletion("x", deletedAt = 5_000L))))
+        repository.saveProjects(listOf(song("x", updatedAt = 9_000L)))
+
+        repeat(2) { round ->
+            assertIs<SyncResult.Success>(service.backUp(repository), "backup ${round + 1}")
+            assertEquals(listOf("x"), remote().projects.map { it.id }, "backup ${round + 1}")
+            assertTrue(remote().recordings.isEmpty(), "backup ${round + 1}")
+            assertEquals(listOf(SyncDeletion("x", "take.m4a", 5_000L)), remote().deletions, "backup ${round + 1}")
+        }
+        // Its bytes are kept raw, and the older backup could be retired.
+        assertContentEquals(audio, drive.bytes("rec_x_take.m4a"))
+        assertNull(drive.bytes(SyncBlob.DRIVE_FILE_NAME))
+    }
+
+    @Test
+    fun aSongTombstoneAppliedOnRestoreAlsoCoversATakeKnownOnlyInTrash() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("x", updatedAt = 100L)))
+        val audio = "trashed take".toByteArray()
+        val trashDir = com.rhymeai.app.data.recording.RecordingFiles.trashDirectory(filesDir, "x").also { it.mkdirs() }
+        File(trashDir, "1500__take.m4a").apply { writeBytes(audio); setLastModified(1_000L) }
+        putRemote(SyncBlob(projects = listOf(song("keep")), deletions = listOf(SyncDeletion("x", deletedAt = 5_000L))))
+
+        assertIs<SyncResult.Success>(service.restore(repository))
+        assertTrue(SyncDeletion("x", "take.m4a", 5_000L) in repository.snapshotLocalSyncBase().blob.deletions)
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        // A bare manifest revives the song with a newer edit.
+        val bare = File(root, "revive.json").apply {
+            writeBytes(BackupManifest.encode(SyncBlob(projects = listOf(song("x", updatedAt = 9_000L))), 0L, "elsewhere"))
+        }
+        BackupArchive.import(BackupArchive.read(bare), repository, filesDir)
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals(setOf("keep", "x"), remote().projects.map { it.id }.toSet())
+
+        // An offline device that kept the take live backs up later.
+        val offlineRoot = kotlin.io.path.createTempDirectory("rhymeai-offline-trash").toFile()
+        try {
+            val offlineFiles = File(offlineRoot, "files").also { it.mkdirs() }
+            val offlineRepo = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = scope) { File(offlineRoot, "prefs.preferences_pb") }, MemoryKeyStore()
+            )
+            offlineRepo.saveProjects(listOf(song("x", updatedAt = 100L)))
+            RecordingFileStore.targetFile(offlineFiles, "x", "take.m4a").apply { parentFile!!.mkdirs(); writeBytes(audio); setLastModified(1_000L) }
+            val offline = DriveSyncService(offlineFiles, MemoryKeyStore(), drive, auth, clientId = { "offline" }, now = { clock })
+
+            assertIs<SyncResult.Success>(offline.backUp(offlineRepo))
+
+            assertTrue(remote().recordings.none { it.identityKey == "x/take.m4a" })
+            assertTrue(SyncDeletion("x", "take.m4a", 5_000L) in remote().deletions)
+        } finally {
+            offlineRoot.deleteRecursively()
+        }
     }
 
     @Test
