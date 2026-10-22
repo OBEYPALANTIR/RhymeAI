@@ -26,8 +26,9 @@ struct RhymeMatchTextTests {
         #expect(highlightedRuns(result) == ["shore"])
 
         let word = try #require(result.runs.first { $0[SwiftUIKeys.ForegroundColorAttribute.self] == violet })
-        #expect(word[SwiftUIKeys.UnderlineStyleAttribute.self] == .single)
-        #expect(word[UIKitKeys.UnderlineColorAttribute.self] != nil)
+        #expect(word[SwiftUIKeys.UnderlineStyleAttribute.self] == Text.LineStyle(pattern: .solid, color: violet.opacity(0.6)))
+        #expect(word[SwiftUIKeys.UnderlineStyleAttribute.self] != Text.LineStyle(pattern: .solid, color: violet))
+        #expect(word[UIKitKeys.UnderlineColorAttribute.self] == nil)
         #expect(word[SwiftUIKeys.FontAttribute.self] == Font.system(.body, design: .serif).weight(.semibold))
 
         let prefix = try #require(result.runs.first)
