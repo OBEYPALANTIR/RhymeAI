@@ -15,6 +15,7 @@ struct TrashBinView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var onDismiss: (() -> Void)? = nil
 
@@ -66,30 +67,37 @@ struct TrashBinView: View {
             VStack(spacing: 0) {
                 topBar
 
-                Picker("Trash Tab", selection: $activeTab) {
-                    ForEach(TrashTab.allCases, id: \.self) { tab in
-                        Text(tab.rawValue).tag(tab)
+                VStack(spacing: 0) {
+                    Picker("Trash Tab", selection: $activeTab) {
+                        ForEach(TrashTab.allCases, id: \.self) { tab in
+                            Text(tab.rawValue).tag(tab)
+                        }
                     }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, RhymeAITokens.Spacing.md)
-                .padding(.top, RhymeAITokens.Spacing.sm)
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("trashTabPicker")
+                    .padding(.horizontal, RhymeAITokens.Spacing.md)
+                    .padding(.top, RhymeAITokens.Spacing.sm)
 
-                if activeTab == .projects {
-                    if trashedProjects.isEmpty {
-                        emptyState
+                    if activeTab == .projects {
+                        if trashedProjects.isEmpty {
+                            emptyState
+                        } else {
+                            trashList
+                        }
                     } else {
-                        trashList
-                    }
-                } else {
-                    if trashedMemos.isEmpty {
-                        recordingsEmptyState
-                    } else {
-                        recordingsTrashList
+                        if trashedMemos.isEmpty {
+                            recordingsEmptyState
+                        } else {
+                            recordingsTrashList
+                        }
                     }
                 }
+                .frame(maxWidth: contentMaxWidth)
             }
         }
+        // The background opts out of hit testing; without a shape, taps on
+        // blank parts of the screen reach the songs drawer underneath.
+        .contentShape(Rectangle())
         .navigationBarHidden(true)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomActionBar
@@ -140,6 +148,8 @@ struct TrashBinView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.md)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
+        .frame(maxWidth: contentMaxWidth)
+        .frame(maxWidth: .infinity)
         .liquidGlassSurface(cornerRadius: 0)
         .overlay(Divider().opacity(0.18), alignment: .bottom)
     }
@@ -375,7 +385,14 @@ struct TrashBinView: View {
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
+        .frame(maxWidth: contentMaxWidth)
+        .frame(maxWidth: .infinity)
         .liquidGlassSurface(cornerRadius: 0)
+    }
+
+    /// On regular width the screen keeps the editor's 740pt column, centred.
+    private var contentMaxWidth: CGFloat {
+        horizontalSizeClass == .regular ? RhymeAITokens.Layout.editorMaxWidth : .infinity
     }
 
     private func restoreSelected() {

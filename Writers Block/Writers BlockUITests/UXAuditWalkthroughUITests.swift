@@ -216,7 +216,9 @@ final class UXAuditWalkthroughUITests: XCTestCase {
                     tap(app.alerts.buttons["Cancel"], "alert Cancel")
                 }
             }
-            if tap(app.buttons["Recordings"], "trash Recordings tab") {
+            // The drawer's own Songs/Recordings switch stays in the UI test
+            // tree under the Trash screen, so scope the query to Trash's picker.
+            if tap(app.segmentedControls["trashTabPicker"].buttons["Recordings"], "trash Recordings tab") {
                 shot(app, "trash-recordings-empty")
             }
             tap(app.buttons["Back to songs"], "Back to songs")

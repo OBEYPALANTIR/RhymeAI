@@ -191,10 +191,12 @@ final class Writers_BlockUITests: XCTestCase {
             waitForStableFrame(of: closeDrawer, matching: { _ in closeDrawer.isHittable }),
             "The songs drawer did not settle open"
         )
-        let window = app.windows.firstMatch.frame
         // Empty panel padding just above the search row, inside the drawer.
+        // The panel runs from the leading edge to just past the close button
+        // (full width on compact, a side panel on regular width), so halfway
+        // to the button's trailing edge is the panel's middle, not the scrim.
         app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: window.midX, dy: closeFrame.minY - 12))
+            .withOffset(CGVector(dx: closeFrame.maxX / 2, dy: closeFrame.minY - 12))
             .tap()
         // Outlast the dismissal animation so a closing drawer is caught.
         Thread.sleep(forTimeInterval: 1)
@@ -202,6 +204,33 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(
             closeDrawer.exists && closeDrawer.isHittable,
             "A tap on the drawer's own padding must not dismiss the drawer"
+        )
+    }
+
+    @MainActor
+    func testBlankTrashScreenDoesNotPassTapsToTheDrawer() throws {
+        let app = isolatedUITestApp()
+        app.launch()
+        createNewSong(in: app)
+        XCTAssertTrue(app.buttons["Open songs drawer"].waitForExistence(timeout: 5))
+        app.buttons["Open songs drawer"].tap()
+        let createNewSong = app.buttons["Create New Song"]
+        let createFrame = try XCTUnwrap(
+            waitForStableFrame(of: createNewSong, matching: { _ in createNewSong.isHittable }),
+            "The songs drawer did not settle open"
+        )
+        app.buttons["Open Trash Bin"].tap()
+        let emptyTrash = app.staticTexts["No Songs in Trash"]
+        XCTAssertTrue(emptyTrash.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        // Blank Trash space over the spot where Create New Song sits beneath.
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: max(createFrame.midX, 40), dy: createFrame.midY))
+            .tap()
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(
+            emptyTrash.exists && app.buttons["Back to songs"].isHittable,
+            "A tap on blank Trash space must not reach the songs drawer underneath"
         )
     }
 
