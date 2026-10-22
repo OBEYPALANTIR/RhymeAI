@@ -591,7 +591,7 @@ struct ProjectsDrawerView: View {
         .accessibilityElement(children: .combine)
         .accessibilityValue(isRecordingFolderExpanded(folder) ? "Expanded" : "Collapsed")
         .onTapGesture {
-            withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
+            withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                 if expandedFolders.contains(folder.id) {
                     expandedFolders.remove(folder.id)
                 } else {

@@ -562,7 +562,7 @@ struct AssistantPanelView: View {
     @ViewBuilder
     private func stressDisclosure(for targetLine: String) -> some View {
         Button {
-            withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
+            withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                 stressDetailExpanded.toggle()
             }
         } label: {

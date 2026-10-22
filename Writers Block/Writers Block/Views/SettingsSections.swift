@@ -438,7 +438,7 @@ struct SettingsCloudBackupSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
+                withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                     isExpanded.toggle()
                 }
             } label: {
