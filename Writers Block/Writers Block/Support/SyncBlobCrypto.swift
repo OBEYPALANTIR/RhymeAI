@@ -4,8 +4,6 @@ import CommonCrypto
 
 enum SyncBlobCryptoError: Error, Equatable {
     case emptyPassphrase
-    case invalidSaltLength
-    case invalidIVLength
     case truncatedEnvelope
     case unsupportedEnvelopeVersion
     case manifestVersionMismatch
@@ -15,6 +13,8 @@ enum SyncBlobCryptoError: Error, Equatable {
     case nonPortablePassphrase
 }
 
+/// Reads the passphrase-encrypted backups written before v4: RAI1 recordings
+/// and RAI1/RAI2/RAI3 manifests. Only migration uses it; nothing writes these.
 enum SyncBlobCrypto {
     private static let magic = Data("RAI1".utf8)
     private static let legacyManifestMagic = Data("RAI2".utf8)
@@ -25,28 +25,7 @@ enum SyncBlobCrypto {
     private static let keyByteCount = 32
     private static let pbkdf2Iterations = 210_000
 
-    static func seal(_ plaintext: Data, passphrase: String) throws -> Data {
-        let salt = randomData(count: saltByteCount)
-        let iv = randomData(count: ivByteCount)
-        return try seal(plaintext, passphrase: passphrase, salt: salt, iv: iv)
-    }
-
-    static func seal(_ plaintext: Data, passphrase: String, salt: Data, iv: Data) throws -> Data {
-        try seal(plaintext, passphrase: passphrase, salt: salt, iv: iv, magic: magic)
-    }
-
-    static func sealManifest(_ blob: SyncBlob, passphrase: String) throws -> Data {
-        try sealManifest(blob, passphrase: passphrase, salt: randomData(count: saltByteCount), iv: randomData(count: ivByteCount))
-    }
-
-    static func sealManifest(_ blob: SyncBlob, passphrase: String, salt: Data, iv: Data) throws -> Data {
-        guard blob.version == SyncBlob.currentVersion else { throw SyncBlobCryptoError.manifestVersionMismatch }
-        let canonical = try SyncMerger.merge(local: blob, remote: blob)
-        let plaintext = try SyncJSON.encoder.encode(canonical)
-        return try seal(plaintext, passphrase: passphrase, salt: salt, iv: iv, magic: manifestMagic)
-    }
-
-    static func openManifest(_ envelope: Data, passphrase: String) throws -> SyncBlob {
+    static func openManifest(_ envelope: Data, passphrase: String) throws -> LegacySyncBlob {
         guard envelope.count >= magic.count else { throw SyncBlobCryptoError.truncatedEnvelope }
         let envelopeMagic = Data(envelope.prefix(magic.count))
         let expectedVersion: Int
@@ -59,21 +38,9 @@ enum SyncBlobCrypto {
             throw SyncBlobCryptoError.unrecognizedEnvelope
         }
         let plaintext = try open(envelope, passphrase: passphrase, magic: envelopeMagic)
-        let blob = try SyncJSON.decoder.decode(SyncBlob.self, from: plaintext)
+        let blob = try SyncJSON.decoder.decode(LegacySyncBlob.self, from: plaintext)
         guard blob.version == expectedVersion else { throw SyncBlobCryptoError.manifestVersionMismatch }
         return blob
-    }
-
-    private static func seal(_ plaintext: Data, passphrase: String, salt: Data, iv: Data, magic: Data) throws -> Data {
-        try requirePortablePassphrase(passphrase)
-        guard salt.count == saltByteCount else { throw SyncBlobCryptoError.invalidSaltLength }
-        guard iv.count == ivByteCount else { throw SyncBlobCryptoError.invalidIVLength }
-
-        let header = magic + salt + iv
-        let key = try deriveKey(passphrase: passphrase, salt: salt)
-        let nonce = try AES.GCM.Nonce(data: iv)
-        let sealed = try AES.GCM.seal(plaintext, using: key, nonce: nonce, authenticating: header)
-        return header + sealed.ciphertext + sealed.tag
     }
 
     static func open(_ envelope: Data, passphrase: String) throws -> Data {
@@ -142,14 +109,5 @@ enum SyncBlobCrypto {
         }
         guard status == kCCSuccess else { throw SyncBlobCryptoError.keyDerivationFailed }
         return SymmetricKey(data: derived)
-    }
-
-    private static func randomData(count: Int) -> Data {
-        var bytes = Data(repeating: 0, count: count)
-        let status = bytes.withUnsafeMutableBytes { buffer in
-            SecRandomCopyBytes(kSecRandomDefault, count, buffer.bindMemory(to: UInt8.self).baseAddress!)
-        }
-        precondition(status == errSecSuccess, "Secure random generation failed")
-        return bytes
     }
 }
