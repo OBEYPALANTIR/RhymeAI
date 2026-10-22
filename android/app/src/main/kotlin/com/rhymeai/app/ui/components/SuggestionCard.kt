@@ -65,9 +65,9 @@ fun SuggestionCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(DesignTokens.Spacing.lg),
+                .padding(DesignTokens.Rhythm.standard),
             verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)
         ) {
         // Suggestion text with optional rhyme highlight
         val annotated = if (highlightRhyme) {
@@ -105,7 +105,7 @@ fun SuggestionCard(
 
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight)
         ) {
             Text(
                 text = annotated,
@@ -120,7 +120,7 @@ fun SuggestionCard(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight)
         ) {
             // Syllable count badge
             Surface(
@@ -132,7 +132,7 @@ fun SuggestionCard(
                     text = "${SyllableCounter.countText(suggestion)}",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
-                    modifier = Modifier.padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
+                    modifier = Modifier.padding(horizontal = DesignTokens.Rhythm.tight, vertical = DesignTokens.Spacing.xs)
                 )
             }
             // Rhyme tier pill, as on iOS — "hook" for chorus repeats, "slant" for
@@ -155,14 +155,14 @@ fun SuggestionCard(
                             colorScheme.tertiaryContainer,
                             RoundedCornerShape(4.dp)
                         )
-                        .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
+                        .padding(horizontal = DesignTokens.Rhythm.tight, vertical = 2.dp)
                 )
             }
         }
         }
         FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.xs),
-            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+            modifier = Modifier.fillMaxWidth().padding(start = DesignTokens.Rhythm.related, end = DesignTokens.Rhythm.related, bottom = DesignTokens.Rhythm.tight),
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight)
         ) {
             FilledTonalButton(onClick = onUse, modifier = Modifier.heightIn(min = DesignTokens.Touch.minTarget)) {
                 Text("Use line")
