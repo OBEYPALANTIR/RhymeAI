@@ -199,16 +199,44 @@ class BackupFlowInstrumentedTest {
         waitUntil { vm.backupStatus == BackupStatus.Pending }
     }
 
+    @Test fun importThatAddsOnlyRecordingsQueuesTheDebouncedBackup() {
+        val vm = launchConnectedWithEmptyLibrary()
+        waitForText("Restore your songs?")
+        compose.onNodeWithText("Not now").performClick()
+        waitUntil { vm.backupStatus is BackupStatus.Connected }
+
+        val audio = byteArrayOf(7, 7, 7)
+        val source = java.io.File(context.cacheDir, "import-source.m4a").apply { writeBytes(audio) }
+        val entry = com.rhymeai.app.data.sync.RecordingManifestEntry(
+            "solo", "imported.m4a", sizeBytes = 3L, modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(audio)
+        )
+        val zip = java.io.File(context.cacheDir, "recording-only.zip")
+        zip.outputStream().use {
+            com.rhymeai.app.data.sync.BackupArchive.write(
+                it, SyncBlob(), listOf(com.rhymeai.app.data.sync.LocalRecordingFile(entry, source)), 0L, "test"
+            )
+        }
+        try {
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice was ${vm.backupNotice}" }) { vm.backupNotice == "Imported 0 songs and added 1 recording." }
+            waitUntil { vm.backupStatus == BackupStatus.Pending }
+        } finally {
+            zip.delete()
+            source.delete()
+            com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, "solo").deleteRecursively()
+        }
+    }
+
     private fun waitForText(text: String) =
         compose.waitUntil(10_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
 
-    private fun waitUntil(condition: () -> Boolean) {
+    private fun waitUntil(detail: () -> String = { "" }, condition: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + 10_000
         while (SystemClock.uptimeMillis() < deadline) {
             if (condition()) return
             SystemClock.sleep(25)
         }
-        fail("Backup fixture did not reach the expected state")
+        fail("Backup fixture did not reach the expected state ${detail()}")
     }
 
     private class MemoryDrive : DriveClient {
