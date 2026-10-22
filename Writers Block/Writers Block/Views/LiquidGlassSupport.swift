@@ -63,6 +63,15 @@ enum RhymeAITokens {
         static func sideColumnWidth(for windowWidth: CGFloat) -> CGFloat {
             max(assistantColumnWidth, (windowWidth * (1 - RhymeAITokens.inversePhi)).rounded())
         }
+
+        /// The narrowest window that keeps the editor at least as wide as the
+        /// 380pt side column beside it (760pt). Narrower regular-width windows
+        /// (Split View, Stage Manager) use the single-column editor and sheet.
+        static let sideColumnMinimumWindowWidth: CGFloat = assistantColumnWidth * 2
+
+        static func fitsSideColumn(windowWidth: CGFloat) -> Bool {
+            windowWidth >= sideColumnMinimumWindowWidth
+        }
     }
 
     enum Motion {

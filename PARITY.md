@@ -110,7 +110,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 ## Regular-width layout
 
-- iOS-only, known difference: on a regular width (iPad) the inline assistant column and the songs drawer both take 38.2% of the window with a 380pt floor (`RhymeAITokens.Layout.sideColumnWidth(for:)`; 380pt portrait, 456–462pt landscape on the 11-inch), the drawer as a leading side panel over a scrim, and the Trash screen keeps a centred 740pt column. The Word Inspector opens as a centred form sheet on a regular width and keeps its medium/large detents on a compact width. Android has no side-panel layout: its assistant is a bottom panel capped at 584dp, and its drawer and Trash stay full-width on tablets.
+- iOS-only, known difference: on a regular width (iPad) the inline assistant column and the songs drawer both take 38.2% of the window with a 380pt floor (`RhymeAITokens.Layout.sideColumnWidth(for:)`; 380pt portrait, 456–462pt landscape on the 11-inch), the drawer as a leading side panel over a scrim, and the Trash screen keeps a centred 740pt column. Regular-width windows narrower than 760pt (Split View 1/2, small Stage Manager or windowed-app windows) drop the inline assistant column and open the assistant as the full-screen bottom panel, as on a compact width. The Word Inspector opens as a centred form sheet on a regular width and keeps its medium/large detents on a compact width. Android has no side-panel layout: its assistant is a bottom panel capped at 584dp, and its drawer and Trash stay full-width on tablets.
 
 ## Open parity checks
 
