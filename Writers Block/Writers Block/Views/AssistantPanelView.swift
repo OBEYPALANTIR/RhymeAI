@@ -634,12 +634,12 @@ struct AssistantPanelView: View {
         _ text: String,
         help: FeatureHelp,
         font: Font = .subheadline.weight(.medium),
-        color: Color = .secondary
+        color: Color? = nil
     ) -> some View {
         HStack(spacing: RhymeAITokens.Rhythm.tight) {
             Text(text)
                 .font(font)
-                .foregroundStyle(color)
+                .foregroundStyle(color ?? appearance.palette.secondaryInk)
                 .fixedSize(horizontal: false, vertical: true)
             helpButton(help)
         }
