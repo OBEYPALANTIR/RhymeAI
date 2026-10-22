@@ -27,7 +27,11 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+import com.rhymeai.app.data.recording.RecordingCatalog
 import com.rhymeai.app.data.recording.RecordingFiles
+import com.rhymeai.app.data.recording.RecordingTransitions
+import com.rhymeai.app.data.sync.RecordingManifestEntry
+import com.rhymeai.app.data.sync.RecordingRecord
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -158,13 +162,15 @@ class VoiceMemoService(private val context: Context) {
         if (!dir.exists() && !dir.mkdirs()) {
             throw IllegalStateException("Could not create voice memo directory: ${dir.absolutePath}")
         }
-        // Reserve a free name so a restore or import can never land on the take being recorded.
-        val file = synchronized(RecordingFiles.mutationLock) {
-            var timestamp = System.currentTimeMillis()
-            var candidate = File(dir, "$timestamp.m4a")
-            while (!candidate.createNewFile()) candidate = File(dir, "${++timestamp}.m4a")
-            candidate
+        // A22: the take is written in staging, outside the published memo folder, and
+        // published with its record only when recording finishes successfully.
+        val staging = RecordingFiles.stagingDirectory(context.filesDir, projectId)
+        if (!staging.exists() && !staging.mkdirs()) {
+            throw IllegalStateException("Could not create voice memo staging directory")
         }
+        var timestamp = System.currentTimeMillis()
+        var file = File(staging, "$timestamp.m4a")
+        while (!file.createNewFile()) file = File(staging, "${++timestamp}.m4a")
 
         val rec = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(context)
@@ -239,8 +245,12 @@ class VoiceMemoService(private val context: Context) {
             return@withContext null
         }
 
-        file.parentFile?.name?.let { projectId -> recordMetadata { recordingCreatedRecorder?.invoke(projectId, file) } }
-        memoFromFile(file).also { memoChangeEvents.tryEmit(Unit) }
+        val projectId = file.parentFile?.name ?: return@withContext null
+        val published = RecordingTransitions.publish(
+            catalog, context.filesDir, file, projectId, file.name,
+            RecordingManifestEntry.newRecordingId(), System.currentTimeMillis(), RecordingRecord.RECORDED
+        ) ?: return@withContext null
+        memoFromFile(published).also { memoChangeEvents.tryEmit(Unit) }
     }
 
     /**
@@ -329,7 +339,7 @@ class VoiceMemoService(private val context: Context) {
 
     /** Copy a selected document into this song; no microphone permission is needed. */
     suspend fun importRecording(projectId: String, uri: Uri): VoiceMemo {
-        var imported: File? = null
+        var staged: File? = null
         try {
             return withContext(Dispatchers.IO) {
                 val resolver = context.contentResolver
@@ -340,9 +350,9 @@ class VoiceMemoService(private val context: Context) {
                 val coroutineContext = currentCoroutineContext()
                 val source = resolver.openInputStream(uri)
                     ?: throw java.io.IOException("Cannot open audio")
-                val file = RecordingImportStore.copy(
+                val pending = RecordingImportStore.stage(
                         input = source,
-                        directory = RecordingFiles.memoDirectory(context.filesDir, projectId),
+                        directory = RecordingFiles.stagingDirectory(context.filesDir, projectId),
                         displayName = name,
                         checkCancellation = { coroutineContext.ensureActive() },
                         validate = { candidate ->
@@ -359,13 +369,16 @@ class VoiceMemoService(private val context: Context) {
                             require(probeAudioDurationMs(candidate) > 0) { "Audio cannot be played" }
                         }
                     )
-                imported = file
-                recordMetadata { recordingCreatedRecorder?.invoke(projectId, file) }
+                staged = pending.file
+                // A new recording with its own id and time, even if identical bytes were deleted before (A21).
+                val file = RecordingTransitions.publish(
+                    catalog, context.filesDir, pending.file, projectId, pending.desiredName,
+                    RecordingManifestEntry.newRecordingId(), System.currentTimeMillis(), RecordingRecord.RECORDED
+                ) ?: throw java.io.IOException("Recording could not be published")
                 memoFromFile(file)
             }.also { memoChangeEvents.tryEmit(Unit) }
-        } catch (error: Exception) {
-            imported?.delete()
-            throw error
+        } finally {
+            staged?.takeIf { it.exists() }?.delete()
         }
     }
 
@@ -373,7 +386,9 @@ class VoiceMemoService(private val context: Context) {
     suspend fun deleteMemo(memo: VoiceMemo): Boolean {
         if (playingFile == memo.file) stopPlayback()
         return withContext(Dispatchers.IO) {
-            deleteMemoFile(memo.file)
+            deleteMemoFile(memo.file).also { deleted ->
+                if (deleted) forgetRecord(memo.file)
+            }
         }.also { if (it) memoChangeEvents.tryEmit(Unit) }
     }
 
@@ -396,13 +411,20 @@ class VoiceMemoService(private val context: Context) {
             if (!dir.exists() && !dir.mkdirs()) return@withContext null
             // Bump the timestamp on collision so renameTo never overwrites an
             // existing trashed file (same name trashed twice in one millisecond).
-            var deletedAt = System.currentTimeMillis()
-            var target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
-            while (target.exists()) {
-                deletedAt++
-                target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
-            }
-            if (memo.file.renameTo(target)) trashedMemoFromFile(target, projectId) else null
+            val moved = RecordingTransitions.move(
+                catalog, context.filesDir, memo.file, projectId, memo.file.name,
+                pick = {
+                    var deletedAt = System.currentTimeMillis()
+                    var target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
+                    while (target.exists()) {
+                        deletedAt++
+                        target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
+                    }
+                    target
+                },
+                renamesTo = { null }
+            )
+            moved?.let { trashedMemoFromFile(it, projectId) }
         }.also { if (it != null) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) } }
     }
 
@@ -431,11 +453,11 @@ class VoiceMemoService(private val context: Context) {
         val dir = RecordingFiles.memoDirectory(context.filesDir, trashed.projectId)
         if (!dir.exists() && !dir.mkdirs()) return@withContext false
         val original = File(trashed.originalName)
-        val restoredAs = synchronized(RecordingFiles.mutationLock) {
-            RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension)
-                .takeIf { trashed.file.renameTo(it) }
-        }
-        restoredAs?.let { recordMetadata { recordingRenamedRecorder?.invoke(trashed.projectId, trashed.originalName, it.name) } }
+        val restoredAs = RecordingTransitions.move(
+            catalog, context.filesDir, trashed.file, trashed.projectId, trashed.originalName,
+            pick = { RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension) },
+            renamesTo = { it.name }
+        )
         (restoredAs != null).also {
             cleanUpEmptyTrashDir(trashed.file.parentFile)
             if (it) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
@@ -446,36 +468,38 @@ class VoiceMemoService(private val context: Context) {
      * Records a permanent recording deletion for Drive sync (projectId, original file
      * name, deletedAt). Runs before the file is removed; a throw keeps the file in Trash.
      */
-    var recordingDeletionRecorder: (suspend (String, String, Long) -> Unit)? = null
+    var recordingDeletionRecorder: (suspend (projectId: String, fileName: String, recordingId: String, deletedAt: Long) -> Unit)? = null
 
-    /** Stores a new take's precedence time (projectId, file) once it is saved or imported. */
-    var recordingCreatedRecorder: (suspend (String, File) -> Unit)? = null
+    /**
+     * Where recording records live (A20/A21); every file transition writes its record
+     * intent first and fails if that write fails (A24). Null only in tests.
+     */
+    var catalog: RecordingCatalog? = null
 
-    /** Moves a recording's stored record when its name changes (projectId, from, to). */
-    var recordingRenamedRecorder: (suspend (String, String, String) -> Unit)? = null
-
-    /** A failed record write never undoes the file operation; the take is stamped at first sight instead. */
-    private suspend fun recordMetadata(write: suspend () -> Unit) {
-        try {
-            write()
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-        }
+    /** Drops the record of a file that is gone; a failed write is cleaned up by the next snapshot. */
+    private suspend fun forgetRecord(file: File) {
+        val path = RecordingTransitions.relativePath(context.filesDir, file)
+        runCatching { catalog?.updateRecordingRecords { records -> records.filterNot { it.path == path } } }
     }
 
     /** Permanently delete a trashed recording. */
     suspend fun permanentlyDeleteTrashedMemo(trashed: TrashedVoiceMemo): Boolean {
         if (playingFile == trashed.file) stopPlayback()
         try {
-            recordingDeletionRecorder?.invoke(trashed.projectId, trashed.originalName, System.currentTimeMillis())
+            val recordingId = catalog?.let {
+                RecordingTransitions.recordFor(it, context.filesDir, trashed.file, trashed.projectId, trashed.originalName).id
+            } ?: RecordingManifestEntry.newRecordingId()
+            recordingDeletionRecorder?.invoke(trashed.projectId, trashed.originalName, recordingId, System.currentTimeMillis())
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             return false
         }
         return withContext(Dispatchers.IO) {
-            deleteMemoFile(trashed.file).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
+            deleteMemoFile(trashed.file).also {
+                if (it) forgetRecord(trashed.file)
+                cleanUpEmptyTrashDir(trashed.file.parentFile)
+            }
         }.also { if (it) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) } }
     }
 
@@ -512,13 +536,14 @@ class VoiceMemoService(private val context: Context) {
 
         return withContext(Dispatchers.IO) {
             val dir = memo.file.parentFile ?: return@withContext null
-            val targetFile = synchronized(RecordingFiles.mutationLock) {
-                RecordingFiles.resolveCollision(dir, sanitized, memo.file.extension)
-                    .takeIf { memo.file.renameTo(it) }
-            }
+            // A rename changes only the file name; the recording keeps its id and time (A21).
+            val targetFile = RecordingTransitions.move(
+                catalog, context.filesDir, memo.file, dir.name, memo.file.name,
+                pick = { RecordingFiles.resolveCollision(dir, sanitized, memo.file.extension) },
+                renamesTo = { it.name }
+            )
 
             if (targetFile != null) {
-                recordMetadata { recordingRenamedRecorder?.invoke(dir.name, memo.file.name, targetFile.name) }
                 memoFromFile(targetFile)
             } else {
                 null

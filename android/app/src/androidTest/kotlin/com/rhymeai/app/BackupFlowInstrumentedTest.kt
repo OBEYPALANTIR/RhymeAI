@@ -183,7 +183,9 @@ class BackupFlowInstrumentedTest {
         waitUntil { vm.backupStatus is BackupStatus.Connected }
 
         // A recording tombstone alone changes no song list.
-        runBlocking { repo.recordRecordingDeletion("drive-a", "take.m4a", System.currentTimeMillis()) }
+        runBlocking {
+            repo.recordRecordingDeletion("drive-a", "take.m4a", java.util.UUID.randomUUID().toString(), System.currentTimeMillis())
+        }
         waitUntil { vm.backupStatus == BackupStatus.Pending }
 
         instrumentation.runOnMainSync { vm.backUpNow() }
@@ -232,8 +234,10 @@ class BackupFlowInstrumentedTest {
         val dir = com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, "stamped").also { it.mkdirs() }
         val memo = java.io.File(dir, "old take.m4a").apply { writeBytes(byteArrayOf(4, 5, 6)); setLastModified(1_000_000L) }
         try {
-            runBlocking { com.rhymeai.app.data.sync.snapshotLocalRecordings(repo, context.filesDir, emptySet()) }
-            assertEquals(1_000_000L, runBlocking { repo.recordingRecords().getValue("stamped/old take.m4a").uploadedAt })
+            val stamped = runBlocking { com.rhymeai.app.data.sync.snapshotLocalRecordings(repo, context.filesDir, emptySet()) }
+                .single { it.entry.projectId == "stamped" }.entry
+            assertEquals(1_000_000L, stamped.uploadedAt)
+            fun record(r: ProjectRepository) = runBlocking { r.recordingRecords() }.single { it.id == stamped.id }
 
             // The file time changes, the activity and view model are recreated, and a fresh
             // repository reads the stored record: the stamp does not move.
@@ -245,16 +249,16 @@ class BackupFlowInstrumentedTest {
             }
             val reopened = ProjectRepository(context)
             runBlocking { com.rhymeai.app.data.sync.snapshotLocalRecordings(reopened, context.filesDir, emptySet()) }
-            assertEquals(1_000_000L, runBlocking { reopened.recordingRecords().getValue("stamped/old take.m4a").uploadedAt })
+            assertEquals(1_000_000L, record(reopened).uploadedAt)
 
             // A rename through the app moves the record and keeps its time.
             runBlocking {
                 val live = vm.voiceMemoService.memosForProject("stamped").single()
                 checkNotNull(vm.voiceMemoService.renameMemo(live, "renamed take"))
             }
-            val records = runBlocking { reopened.recordingRecords() }
-            assertEquals(1_000_000L, records.getValue("stamped/renamed take.m4a").uploadedAt)
-            assertFalse("stamped/old take.m4a" in records)
+            // Same id and time; only the file name changed.
+            assertEquals(1_000_000L, record(reopened).uploadedAt)
+            assertEquals("renamed take.m4a", record(reopened).fileName)
         } finally {
             dir.deleteRecursively()
         }

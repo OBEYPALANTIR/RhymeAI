@@ -113,20 +113,22 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun syncMergerUnionsRecordingsAndKeepsTheBackedUpCopyPerIdentity() {
+    fun syncMergerUnionsRecordingsByIdAndKeepsTheBackedUpCopy() {
         val localOnly = recording("p1", "local.m4a", modifiedAt = 100L, sha256 = "local")
         val localCopy = recording("p1", "shared.m4a", modifiedAt = 900L, sha256 = "here")
-        val backedUp = recording("p1", "shared.m4a", modifiedAt = 0L, sha256 = "drive")
+        val backedUp = localCopy.copy(uploadedAt = 50L)
         val remoteOnly = recording("p2", "remote.m4a", modifiedAt = 200L, sha256 = "remote")
+        // Same name, different recording: a separate id, so both are kept.
+        val sameNameOther = recording("p1", "local.m4a", modifiedAt = 300L, sha256 = "other")
 
         val merged = SyncMerger.merge(
             local = SyncBlob(recordings = listOf(localOnly, localCopy)),
-            remote = SyncBlob(recordings = listOf(backedUp, remoteOnly))
+            remote = SyncBlob(recordings = listOf(backedUp, remoteOnly, sameNameOther))
         )
 
-        assertEquals(setOf("p1/local.m4a", "p1/shared.m4a", "p2/remote.m4a"), merged.recordings.map { it.identityKey }.toSet())
-        // Recordings are immutable and v4 has no recording timestamps: Drive's copy wins.
-        assertEquals("drive", merged.recordings.first { it.projectId == "p1" && it.fileName == "shared.m4a" }.sha256)
+        assertEquals(setOf(localOnly.id, localCopy.id, remoteOnly.id, sameNameOther.id), merged.recordings.map { it.id }.toSet())
+        // Per id, Drive's entry wins.
+        assertEquals(50L, merged.recordings.single { it.id == localCopy.id }.uploadedAt)
     }
 
     @Test
@@ -139,7 +141,7 @@ class RecordingSyncTest {
         val plan = RecordingSyncPlanner.planUploads(
             local = listOf(onDrive, missingOnDrive, diverged, tombstoned),
             manifest = listOf(onDrive, missingOnDrive, diverged.copy(sha256 = "remote")),
-            remoteDriveNames = setOf(BackupManifest.recordingDriveName("p1", "same.m4a"))
+            remoteDriveNames = setOf(BackupManifest.recordingDriveName(onDrive.id))
         )
 
         assertEquals(listOf(missingOnDrive), plan)
@@ -157,8 +159,8 @@ class RecordingSyncTest {
             local = listOf(localOnly, localDiverged),
             remoteManifest = listOf(remoteDiverged, remoteOnly, remoteWithoutFile),
             remoteFilesByName = mapOf(
-                BackupManifest.recordingDriveName("p1", "diverged.m4a") to "drive-diverged",
-                BackupManifest.recordingDriveName("p2", "remote-only.m4a") to "drive-only"
+                BackupManifest.recordingDriveName(remoteDiverged.id) to "drive-diverged",
+                BackupManifest.recordingDriveName(remoteOnly.id) to "drive-only"
             )
         )
 
@@ -175,7 +177,7 @@ class RecordingSyncTest {
             local = emptyList(),
             remoteManifest = listOf(trashedHere, remoteOnly),
             remoteFilesByName = listOf(trashedHere to "drive-trashed", remoteOnly to "drive-only")
-                .associate { (entry, id) -> BackupManifest.recordingDriveName(entry.projectId, entry.fileName) to id },
+                .associate { (entry, id) -> BackupManifest.recordingDriveName(entry.id) to id },
             locallyTrashed = setOf(trashedHere.identityKey)
         )
 
@@ -186,7 +188,10 @@ class RecordingSyncTest {
     fun trashedRecordingIdentitiesComeFromTrashFolderNamesOnly() {
         val filesDir = Files.createTempDirectory("rhymeai-trash-identities").toFile()
         try {
-            assertEquals(emptySet(), snapshotTrashedRecordingIdentities(filesDir))
+            fun trashed() = kotlinx.coroutines.runBlocking {
+                com.rhymeai.app.data.recording.RecordingTransitions.snapshot(MemoryCatalog(), filesDir, emptySet())
+            }.filter { it.inTrash }.mapTo(HashSet()) { it.entry.nameKey }
+            assertEquals(emptySet(), trashed())
             val trash = RecordingFiles.trashDirectory(filesDir, "p1").also { it.mkdirs() }
             File(trash, "1700000000000__take.m4a").writeBytes(byteArrayOf(1))
             File(trash, "1700000000001__Take two.m4a").writeBytes(byteArrayOf(1))
@@ -195,16 +200,17 @@ class RecordingSyncTest {
             // Live memos never count as trashed.
             RecordingFiles.memoDirectory(filesDir, "p1").also { it.mkdirs() }.let { File(it, "live.m4a").writeBytes(byteArrayOf(1)) }
 
-            assertEquals(setOf("p1/take.m4a", "p1/Take two.m4a"), snapshotTrashedRecordingIdentities(filesDir))
+            assertEquals(setOf("p1/take.m4a", "p1/Take two.m4a"), trashed())
         } finally {
             filesDir.deleteRecursively()
         }
     }
 
     @Test
-    fun recordingFileStoreWritesOnlyNewFilesAndKeepsExistingOnes() {
+    fun importPublishesWithItsRecordAndNeverReplacesAnotherRecording() = kotlinx.coroutines.runBlocking<Unit> {
         val root = Files.createTempDirectory("rhymeai-recording-store").toFile()
         try {
+            val catalog = MemoryCatalog()
             val existing = RecordingFileStore.targetFile(root, "p1", "clip.m4a")
             existing.parentFile?.mkdirs()
             existing.writeText("local stays")
@@ -213,22 +219,24 @@ class RecordingSyncTest {
             val entry = recording(
                 projectId = "p1",
                 fileName = "clip.m4a",
-                modifiedAt = 700_000L,
+                modifiedAt = 700_123L,
                 sha256 = sha256Hex(remoteBytes),
                 sizeBytes = remoteBytes.size.toLong()
             )
 
             assertFailsWith<DriveNetworkException> {
-                RecordingFileStore.writeIfAbsent(root, entry.copy(sizeBytes = remoteBytes.size + 1L), remoteBytes)
+                RecordingFileStore.importVerified(catalog, root, entry.copy(sizeBytes = remoteBytes.size + 1L), remoteBytes, RecordingRecord.IMPORTED)
             }
-            assertFalse(RecordingFileStore.writeIfAbsent(root, entry, remoteBytes))
+            // A different recording holds the name: the import gets a free variant, the original stays.
+            assertTrue(RecordingFileStore.importVerified(catalog, root, entry, remoteBytes, RecordingRecord.IMPORTED))
             assertEquals("local stays", existing.readText())
-
-            val fresh = entry.copy(fileName = "fresh.m4a")
-            assertTrue(RecordingFileStore.writeIfAbsent(root, fresh, remoteBytes))
-            val written = RecordingFileStore.targetFile(root, "p1", "fresh.m4a")
-            assertEquals("remote copy", written.readText())
-            assertEquals(700_000L, written.lastModified())
+            val record = catalog.records.single()
+            assertEquals(entry.id, record.id)
+            assertEquals(700_123L, record.uploadedAt)
+            assertEquals("clip 2.m4a", record.fileName)
+            assertEquals("remote copy", File(root, record.path!!).readText())
+            // The same recording id is never imported twice.
+            assertFalse(RecordingFileStore.importVerified(catalog, root, entry, remoteBytes, RecordingRecord.IMPORTED))
             assertFalse(existing.parentFile?.listFiles()?.any { it.name.endsWith(".tmp") } ?: false)
         } finally {
             root.deleteRecursively()
@@ -236,10 +244,30 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun restoreCommitKeepsADestinationThatAppearedAfterPlanning() {
+    fun aMetadataWriteFailureFailsTheImportAndPublishesNothing() = kotlinx.coroutines.runBlocking<Unit> {
+        val root = Files.createTempDirectory("rhymeai-recording-fail").toFile()
+        try {
+            val catalog = MemoryCatalog().apply { failWrites = true }
+            val bytes = "remote copy".toByteArray()
+            val entry = recording("p1", "clip.m4a", 1_000L, sha256Hex(bytes), bytes.size.toLong())
+
+            assertFailsWith<java.io.IOException> {
+                RecordingFileStore.importVerified(catalog, root, entry, bytes, RecordingRecord.IMPORTED)
+            }
+
+            assertFalse(RecordingFileStore.targetFile(root, "p1", "clip.m4a").exists())
+            assertTrue(catalog.records.isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun restoreCommitKeepsADestinationThatAppearedAfterPlanning() = kotlinx.coroutines.runBlocking<Unit> {
         val root = Files.createTempDirectory("rhymeai-recording-late").toFile()
         val stage = Files.createTempDirectory(root.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
         try {
+            val catalog = MemoryCatalog()
             val bytes = "downloaded".toByteArray()
             val planned = recording("p1", "take.m4a", 2L, sha256Hex(bytes), bytes.size.toLong())
             val other = recording("p1", "other.m4a", 2L, sha256Hex(bytes), bytes.size.toLong())
@@ -251,10 +279,13 @@ class RecordingSyncTest {
             val target = RecordingFileStore.targetFile(root, "p1", "take.m4a").also { it.parentFile?.mkdirs() }
             target.writeText("renamed memo")
 
-            assertEquals(1, RecordingFileStore.commitStagedRestores(root, staged))
+            assertEquals(listOf(planned, other), RecordingFileStore.commitStagedRestores(catalog, root, staged))
 
+            // Both recordings are kept: the download takes a free name.
             assertEquals("renamed memo", target.readText())
+            assertEquals("downloaded", RecordingFileStore.targetFile(root, "p1", "take 2.m4a").readText())
             assertEquals("downloaded", RecordingFileStore.targetFile(root, "p1", "other.m4a").readText())
+            assertEquals(setOf(planned.id, other.id), catalog.records.mapTo(HashSet()) { it.id })
             assertFalse(stage.exists())
         } finally {
             root.deleteRecursively()
@@ -262,7 +293,7 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun aFailedCommitKeepsEverythingAlreadyInPlace() {
+    fun aFailedCommitKeepsEverythingAlreadyInPlace() = kotlinx.coroutines.runBlocking<Unit> {
         val root = Files.createTempDirectory("rhymeai-recording-batch").toFile()
         val stage = Files.createTempDirectory(root.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
         try {
@@ -270,7 +301,6 @@ class RecordingSyncTest {
             firstTarget.parentFile?.mkdirs()
             firstTarget.writeText("original")
             val bytes = "download".toByteArray()
-            val stagedFirst = RecordingFileStore.stageRestore(stage, 0, recording("p1", "first.m4a", 2L, sha256Hex(bytes), bytes.size.toLong()), bytes)
             val stagedNew = RecordingFileStore.stageRestore(stage, 1, recording("p1", "new.m4a", 2L, sha256Hex(bytes), bytes.size.toLong()), bytes)
             val missingThird = RecordingFileStore.StagedRecording(
                 recording("p2", "third.m4a", 3L, sha256Hex("third".toByteArray()), 5L),
@@ -278,7 +308,7 @@ class RecordingSyncTest {
             )
 
             assertFailsWith<java.io.IOException> {
-                RecordingFileStore.commitStagedRestores(root, listOf(stagedFirst, stagedNew, missingThird))
+                RecordingFileStore.commitStagedRestores(MemoryCatalog(), root, listOf(stagedNew, missingThird))
             }
 
             // Nothing is replaced or removed: the original stays and the complete new take stays.

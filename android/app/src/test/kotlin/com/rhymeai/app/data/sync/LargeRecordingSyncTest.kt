@@ -39,7 +39,7 @@ class LargeRecordingSyncTest {
         wire(BackupManifest.decode(BackupManifest.encode(decision.merged, 0L, "device")).recordings)
 
     private fun v4Names(vararg pairs: Pair<RecordingManifestEntry, String>) =
-        pairs.associate { (entry, id) -> BackupManifest.recordingDriveName(entry.projectId, entry.fileName) to id }
+        pairs.associate { (entry, id) -> BackupManifest.recordingDriveName(entry.id) to id }
 
     @Test
     fun remoteManifestWithOversizeEntryMergesRetainsItAndPlansNoDownload() {
@@ -91,17 +91,19 @@ class LargeRecordingSyncTest {
     }
 
     @Test
-    fun newerRemoteRecordingDoesNotReplaceLocalFileThatWasTooLargeToUpload() {
+    fun aLargeLocalRecordingIsNeverDownloadedOverButADifferentRecordingWithItsNameIs() {
         val localLarge = recording("p1", "session.wav", sizeBytes = limit + 1L, modifiedAt = 1L, sha256 = BackupManifest.sha256Hex("local".toByteArray()))
-        val remoteNewer = recording("p1", "session.wav", modifiedAt = 2L, sha256 = BackupManifest.sha256Hex("remote".toByteArray()))
+        val sameRecordingRemote = localLarge.copy(sizeBytes = 12L)
+        val differentRecording = recording("p1", "session.wav", modifiedAt = 2L, sha256 = BackupManifest.sha256Hex("remote".toByteArray()))
 
+        // Same id: held here, never downloaded. Different id: a separate recording, restored beside it.
         assertEquals(
-            emptyList<RecordingRestorePlan>(),
+            listOf(differentRecording),
             RecordingSyncPlanner.planRestores(
                 local = listOf(localLarge),
-                remoteManifest = listOf(remoteNewer),
-                remoteFilesByName = v4Names(remoteNewer to "remote-file")
-            )
+                remoteManifest = listOf(sameRecordingRemote, differentRecording),
+                remoteFilesByName = v4Names(sameRecordingRemote to "same", differentRecording to "remote-file")
+            ).map { it.entry }
         )
     }
 

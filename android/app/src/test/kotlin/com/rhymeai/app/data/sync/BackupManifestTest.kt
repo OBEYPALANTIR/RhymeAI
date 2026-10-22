@@ -109,10 +109,29 @@ class BackupManifestTest {
     }
 
     @Test
+    fun millisecondPrecisionSurvivesTheRoundTripSoAnOlderTombstoneCannotWin() {
+        val entry = RecordingManifestEntry("p1", "take.m4a", sizeBytes = 3L, modifiedAt = 0L,
+            sha256 = BackupManifest.sha256Hex(byteArrayOf(1, 2, 3)), uploadedAt = 5_900L)
+        val tombstone = SyncDeletion("p1", "take.m4a", 5_500L, recordingId = entry.id)
+        val blob = SyncBlob(
+            projects = listOf(SongProject(id = "p1", title = "t", updatedAt = 1_234_567L)),
+            recordings = listOf(entry)
+        )
+
+        val decoded = BackupManifest.decode(BackupManifest.encode(blob, 1_792_702_991_123L, "device"))
+
+        assertEquals(5_900L, decoded.recordings.single().uploadedAt)
+        assertEquals(1_234_567L, decoded.projects.single().updatedAt)
+        assertEquals(1_792_702_991_123L, decoded.savedAt)
+        assertEquals(listOf(entry.id), SyncMerger.merge(decoded, SyncBlob(deletions = listOf(tombstone))).recordings.map { it.id })
+    }
+
+    @Test
     fun recordingNamesAreRawAndDistinctFromTheEncryptedOnes() {
-        assertEquals("rec_p1_take.m4a", BackupManifest.recordingDriveName("p1", "take.m4a"))
+        assertEquals("rec_0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", BackupManifest.recordingDriveName("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"))
         assertEquals("rec_p1_take.m4a.enc", RecordingManifestEntry.driveNameFor("p1", "take.m4a"))
-        assertEquals("2026-10-22T21:03:11Z", BackupManifest.isoSeconds(1_792_702_991_999L))
+        assertEquals("2026-10-22T21:03:11.999Z", BackupManifest.isoMillis(1_792_702_991_999L))
+        assertEquals("2026-10-22T21:03:11.000Z", BackupManifest.isoMillis(1_792_702_991_000L))
     }
 
     @Test

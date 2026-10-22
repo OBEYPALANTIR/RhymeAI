@@ -10,12 +10,7 @@ internal object RecordingFiles {
     private const val MEMOS_TRASH_ROOT_DIR = "voice-memos-trash"
     val SUPPORTED_AUDIO_EXTENSIONS = setOf("m4a", "mp3", "wav", "aac")
 
-    /**
-     * Held while a file is placed into a memo folder (record, import, rename, restore
-     * from Trash, Drive restore, archive import) so "is this name free" and "put the
-     * file there" happen as one step: nothing ever overwrites another recording.
-     */
-    val mutationLock = Any()
+    private const val MEMOS_STAGING_ROOT_DIR = "voice-memos-staging"
 
     fun isMemoFile(file: File): Boolean =
         file.isFile && file.extension.lowercase(Locale.ROOT) in SUPPORTED_AUDIO_EXTENSIONS
@@ -25,6 +20,13 @@ internal object RecordingFiles {
 
     fun trashRoot(filesDir: File): File =
         File(filesDir, MEMOS_TRASH_ROOT_DIR)
+
+    /** Unfinished recordings and pending imports; never listed or backed up (A22). */
+    fun stagingRoot(filesDir: File): File =
+        File(filesDir, MEMOS_STAGING_ROOT_DIR)
+
+    fun stagingDirectory(filesDir: File, projectId: String): File =
+        safeProjectDirectory(stagingRoot(filesDir), projectId)
 
     fun memoDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(memosRoot(filesDir), projectId)

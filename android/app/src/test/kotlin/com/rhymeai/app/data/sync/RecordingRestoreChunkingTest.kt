@@ -97,6 +97,7 @@ class RecordingRestoreChunkingTest {
     @Test
     fun failedChunkKeepsEarlierChunksAndNextPlanResumesWithOnlyTheRemainder() {
         val root = Files.createTempDirectory("rhymeai-chunked-restore").toFile()
+        val catalog = MemoryCatalog()
         try {
             val contents = List(3) { index -> ByteArray(8) { (index * 16 + it).toByte() } }
             val remote = contents.mapIndexed { index, bytes ->
@@ -108,17 +109,17 @@ class RecordingRestoreChunkingTest {
                     sha256 = sha256Hex(bytes)
                 )
             }
-            val remoteFilesByName = remote.associate { BackupManifest.recordingDriveName(it.projectId, it.fileName) to "id-${it.projectId}" }
+            val remoteFilesByName = remote.associate { BackupManifest.recordingDriveName(it.id) to "id-${it.projectId}" }
             val bytesByFileId = remote.indices.associate { "id-${remote[it].projectId}" to contents[it] }
 
             val plan = RecordingSyncPlanner.planRestores(emptyList(), remote, remoteFilesByName)
             val chunks = RecordingSyncPlanner.chunkRestores(plan, maxChunkBytes = 16L)
             assertEquals(listOf(2, 1), chunks.map { it.size })
 
-            commitChunk(root, chunks[0]) { bytesByFileId.getValue(it) }
+            commitChunk(catalog, root, chunks[0]) { bytesByFileId.getValue(it) }
             // The second chunk's download is damaged, so it fails integrity while staging.
             assertFailsWith<DriveNetworkException> {
-                commitChunk(root, chunks[1]) { ByteArray(8) }
+                commitChunk(catalog, root, chunks[1]) { ByteArray(8) }
             }
 
             assertContentEquals(contents[0], RecordingFileStore.targetFile(root, "project-0", "clip.m4a").readBytes())
@@ -129,14 +130,14 @@ class RecordingRestoreChunkingTest {
                 root.listFiles()!!.filter { it.name.startsWith(RecordingFileStore.RESTORE_STAGE_PREFIX) }
             )
 
-            val localAfterFailure = snapshotLocalRecordingFiles(root, emptySet()).map { it.entry }
+            val localAfterFailure = snapshotLocalRecordingFiles(root, emptySet(), catalog).map { it.entry }
             val resumed = RecordingSyncPlanner.planRestores(localAfterFailure, remote, remoteFilesByName)
             assertEquals(listOf(remote[2]), resumed.map { it.entry })
 
             RecordingSyncPlanner.chunkRestores(resumed, maxChunkBytes = 16L).forEach { chunk ->
-                commitChunk(root, chunk) { bytesByFileId.getValue(it) }
+                commitChunk(catalog, root, chunk) { bytesByFileId.getValue(it) }
             }
-            val localAfterResume = snapshotLocalRecordingFiles(root, emptySet()).map { it.entry }
+            val localAfterResume = snapshotLocalRecordingFiles(root, emptySet(), catalog).map { it.entry }
             assertEquals(emptyList(), RecordingSyncPlanner.planRestores(localAfterResume, remote, remoteFilesByName))
         } finally {
             root.deleteRecursively()
@@ -145,6 +146,7 @@ class RecordingRestoreChunkingTest {
 
     /** Mirrors one chunk transaction of DriveSyncService.restoreRemoteRecordings without Drive or crypto. */
     private fun commitChunk(
+        catalog: MemoryCatalog,
         filesDir: File,
         chunk: List<RecordingRestorePlan>,
         download: (String) -> ByteArray
@@ -157,7 +159,7 @@ class RecordingRestoreChunkingTest {
             val staged = chunk.mapIndexed { index, restore ->
                 RecordingFileStore.stageRestore(stageDirectory, index, restore.entry, download(restore.remoteFileId))
             }
-            RecordingFileStore.commitStagedRestores(filesDir, staged)
+            kotlinx.coroutines.runBlocking { RecordingFileStore.commitStagedRestores(catalog, filesDir, staged) }
         } finally {
             stageDirectory.deleteRecursively()
         }

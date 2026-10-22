@@ -54,7 +54,7 @@ object BackupArchive {
         clientId: String
     ): ExportSummary {
         // Entries come from snapshotLocalRecordings, so each carries its stored precedence time.
-        val included = files.filter { it.entry.isTransferable }
+        val included = files.filter { !it.inTrash && it.entry.isTransferable }
         val manifest = blob.copy(recordings = included.map { it.entry })
         ZipOutputStream(output).use { zip ->
             zip.putNextEntry(ZipEntry(MANIFEST_ENTRY))
@@ -79,7 +79,7 @@ object BackupArchive {
                 zip.closeEntry()
             }
         }
-        return ExportSummary(blob.projects.size, included.size, files.size - included.size)
+        return ExportSummary(blob.projects.size, included.size, files.count { !it.inTrash } - included.size)
     }
 
     /** Accepts an exported zip or a bare v4 `manifest.json`; throws [DamagedBackupException] otherwise. */
@@ -133,26 +133,22 @@ object BackupArchive {
         RecordingFileStore.recoverInterruptedRestores(filesDir)
         val base = repository.snapshotLocalSyncBase()
         val localFiles = snapshotLocalRecordings(repository, filesDir, base.pendingIds)
-        // Gather this device and the archive, recordings included, then resolve once.
-        val merged = SyncMerger.resolve(
-            SyncMerger.gather(base.blob.copy(recordings = localFiles.map { it.entry }), contents.manifest)
-        )
-        val local = localFiles.mapTo(HashSet()) { it.entry.identityKey }
-        val trashed = snapshotTrashedRecordingIdentities(filesDir)
-        val imported = contents.manifest.recordings.associateBy { it.identityKey }
+        // Gather this device (live and Trash recordings) and the archive, then resolve once.
+        val gathered = SyncMerger.gather(base.blob.copy(recordings = localFiles.map { it.entry }), contents.manifest)
+        val merged = SyncMerger.resolve(gathered)
+        // A recording held here, live or in Trash, is never imported again.
+        val local = localFiles.mapTo(HashSet()) { it.entry.id }
+        val imported = contents.manifest.recordings.associateBy { it.id }
         val wanted = merged.recordings
-            .filter { it.identityKey in imported && it.identityKey !in local && it.identityKey !in trashed }
-            .map { imported.getValue(it.identityKey) }
+            .filter { it.id in imported && it.id !in local }
+            .map { imported.getValue(it.id) }
         var added = 0
         for (entry in wanted) {
-            val bytes = contents.recordings[entry.identityKey] ?: continue
-            if (RecordingFileStore.writeIfAbsent(filesDir, entry, bytes)) {
-                // The imported file keeps the archive entry's time, never the time it was written.
-                repository.putRecordingRecord(entry.toRecord(RecordingRecord.IMPORTED))
-                added++
-            }
+            val bytes = contents.recordings[entry.id] ?: continue
+            // Published with the archive entry's id and time, never the time it was written.
+            if (RecordingFileStore.importVerified(repository, filesDir, entry, bytes, RecordingRecord.IMPORTED)) added++
         }
-        repository.applySyncResult(merged, base)
+        repository.applySyncResult(gathered, base)
         return ImportSummary(
             songs = contents.manifest.projects.size,
             recordingsAdded = added,

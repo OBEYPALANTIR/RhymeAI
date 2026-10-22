@@ -71,7 +71,7 @@ class BackupArchiveTest {
             BackupManifest.encode(library.copy(recordings = listOf(take.entry)), 1_000L, "device"),
             BackupManifest.encode(contents.manifest, contents.manifest.savedAt, contents.manifest.savedByClientId)
         )
-        assertContentEquals("audio".toByteArray(), contents.recordings.getValue("a/take.m4a"))
+        assertContentEquals("audio".toByteArray(), contents.recordings.getValue(take.entry.id))
         val names = ZipFile(zipFile).use { zip -> zip.entries().toList().map { it.name } }
         assertEquals(
             listOf("manifest.json", "songs/Same_Name.txt", "songs/a.json", "songs/Same_Name (2).txt", "songs/b.json", "recordings/a/take.m4a"),
@@ -165,13 +165,21 @@ class BackupArchiveTest {
             BackupArchive.write(it, SyncBlob(projects = listOf(SongProject(id = "x", title = "Revived", updatedAt = 9_000L))), listOf(take), 0L, "other")
         }
 
-        // With the recording tombstone written at deletion, and without it (song tombstone only).
+        // With the recording known here (restored earlier, so its tombstone is written at
+        // deletion) and without it (song tombstone only; the merge derives the recording's).
         for (knowsTheRecording in listOf(true, false)) {
             val filesDir = File(root, "device-$knowsTheRecording").also { it.mkdirs() }
             val repo = repository("device-$knowsTheRecording")
-            if (knowsTheRecording) repo.recordingNamesFor = { id -> knownRecordingNames(filesDir, id) }
-            repo.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "x", updatedAt = 100L), deletedAt = 200L)))
-            memo(filesDir, "x", "take.m4a", audio)
+            if (knowsTheRecording) {
+                val earlier = File(root, "earlier.zip")
+                earlier.outputStream().use {
+                    BackupArchive.write(it, SyncBlob(projects = listOf(SongProject(id = "x", updatedAt = 100L))), listOf(take), 0L, "other")
+                }
+                BackupArchive.import(BackupArchive.read(earlier), repo, filesDir)
+                repo.moveProjectToTrash("x", 200L)
+            } else {
+                repo.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "x", updatedAt = 100L), deletedAt = 200L)))
+            }
             repo.permanentlyDeleteTrashedProject("x", now = 5_000L)
             RecordingFiles.memoDirectory(filesDir, "x").deleteRecursively()
 
@@ -179,9 +187,9 @@ class BackupArchiveTest {
 
             assertEquals(listOf("x"), repo.projectsFlow.first().map { it.id }, "knows=$knowsTheRecording")
             assertEquals(0, summary.recordingsAdded, "knows=$knowsTheRecording")
-            assertFalse(RecordingFileStore.targetFile(filesDir, "x", "take.m4a").exists(), "knows=$knowsTheRecording")
+            assertTrue(RecordingFiles.memoDirectory(filesDir, "x").listFiles().isNullOrEmpty(), "knows=$knowsTheRecording")
             assertEquals(
-                listOf(SyncDeletion("x", "take.m4a", 5_000L)),
+                listOf(SyncDeletion("x", "take.m4a", 5_000L, recordingId = take.entry.id)),
                 repo.snapshotLocalSyncBase().blob.deletions,
                 "knows=$knowsTheRecording"
             )

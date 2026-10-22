@@ -157,7 +157,7 @@ class SyncMergerTest {
         // A song edited after its tombstone survives and the tombstone is dropped.
         assertEquals(setOf("gone", "keep"), merged.projects.map { it.id }.toSet())
         assertEquals(emptySet(), merged.trashed.map { it.project.id }.toSet())
-        assertEquals(setOf("keep/new.m4a"), merged.recordings.map { it.identityKey }.toSet())
+        assertEquals(setOf("keep/new.m4a"), merged.recordings.map { it.nameKey }.toSet())
         assertEquals(
             listOf(
                 SyncDeletion("binned", deletedAt = 30L),
@@ -173,7 +173,7 @@ class SyncMergerTest {
         )) {
             assertEquals(merged.projects.map { it.id }.toSet(), next.projects.map { it.id }.toSet())
             assertEquals(merged.trashed.map { it.project.id }.toSet(), next.trashed.map { it.project.id }.toSet())
-            assertEquals(merged.recordings.map { it.identityKey }.toSet(), next.recordings.map { it.identityKey }.toSet())
+            assertEquals(merged.recordings.map { it.nameKey }.toSet(), next.recordings.map { it.nameKey }.toSet())
             assertEquals(merged.deletions, next.deletions)
         }
     }
