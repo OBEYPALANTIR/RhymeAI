@@ -152,10 +152,16 @@ data class RecordingManifestEntry(
     val driveName: String = driveNameFor(projectId, fileName),
     val sizeBytes: Long,
     val modifiedAt: Long,
-    val sha256: String
+    val sha256: String,
+    /** When this copy reached Drive (v4 `uploadedAt`); 0 for a local file not yet listed. */
+    val uploadedAt: Long = 0L
 ) {
     val identityKey: String
         get() = "$projectId/$fileName"
+
+    /** The time a tombstone must beat to remove this recording. */
+    val precedenceTime: Long
+        get() = if (uploadedAt > 0L) uploadedAt else modifiedAt
 
     /**
      * Whether this device can move the recording. Recordings are held whole in
@@ -186,47 +192,53 @@ data class RecordingManifestEntry(
 }
 
 /**
- * Merge content by update timestamps, then unconditionally suppress projects
- * and recordings named by the union of permanent-deletion tombstones. Active/
- * trash conflicts still compare timestamps, but a newer stale edit never
- * overrides a permanent deletion. Application order is local-first so that
- * a missing remote degrades gracefully to local data.
+ * Merge content by update timestamps, then apply permanent-deletion tombstones
+ * by timestamp precedence: a project tombstone removes a song only when its
+ * `deletedAt` is newer than the song (and the trash time); a recording tombstone,
+ * or the tombstone of its song, removes a recording only when newer than the
+ * recording's [RecordingManifestEntry.precedenceTime]. A tombstone beaten by a
+ * surviving song or recording is dropped. Application order is local-first so a
+ * missing remote degrades gracefully to local data.
  *
  * Pure function, no IO, no side effects. Tested without Android.
  */
 object SyncMerger {
+    data class Resolved(
+        val projects: List<SongProject>,
+        val trashed: List<TrashedSongProject>,
+        val recordings: List<RecordingManifestEntry>,
+        val deletions: List<SyncDeletion>
+    )
+
     fun merge(local: SyncBlob, remote: SyncBlob): SyncBlob {
         local.validate()
         remote.validate()
-        val deletions = mergeDeletions(local.deletions + remote.deletions)
-        val deletedProjects = deletions.filter { it.fileName == null }.mapTo(HashSet()) { it.projectId }
-        val deletedFiles = deletions.filter { it.fileName != null }
-            .mapTo(HashSet()) { it.projectId to it.fileName }
-        val mergedProjects = mergeProjects(local.projects, remote.projects)
-        val mergedTrashed = mergeTrash(local.trashed, remote.trashed)
-        val mergedRecordings = mergeRecordings(local.recordings, remote.recordings)
-
-        val (cleanProjects, cleanTrashed) = resolveActiveTrashConflicts(mergedProjects, mergedTrashed)
-
+        val (cleanProjects, cleanTrashed) = resolveActiveTrashConflicts(
+            mergeProjects(local.projects, remote.projects),
+            mergeTrash(local.trashed, remote.trashed)
+        )
+        val resolved = applyTombstones(
+            cleanProjects,
+            cleanTrashed,
+            mergeRecordings(local.recordings, remote.recordings),
+            mergeDeletions(local.deletions + remote.deletions)
+        )
         return SyncBlob(
             version = SyncBlob.CURRENT_VERSION,
-            projects = cleanProjects.filterNot { it.id in deletedProjects }.sortedByDescending { it.updatedAt },
-            trashed = cleanTrashed.filterNot { it.project.id in deletedProjects }.sortedByDescending { it.deletedAt },
-            recordings = mergedRecordings.filterNot {
-                it.projectId in deletedProjects || (it.projectId to it.fileName) in deletedFiles
-            }.sortedWith(compareBy<RecordingManifestEntry> { it.projectId }.thenBy { it.fileName }),
-            deletions = deletions,
+            projects = resolved.projects.sortedByDescending { it.updatedAt },
+            trashed = resolved.trashed.sortedByDescending { it.deletedAt },
+            recordings = resolved.recordings.sortedWith(compareBy<RecordingManifestEntry> { it.projectId }.thenBy { it.fileName }),
+            deletions = resolved.deletions,
             savedAt = System.currentTimeMillis(),
             savedByClientId = local.savedByClientId
         )
     }
 
+    /** Newest tombstone per identity. */
     fun mergeDeletions(deletions: List<SyncDeletion>): List<SyncDeletion> {
         deletions.forEach(SyncDeletion::validate)
-        val deletedProjects = deletions.filter { it.fileName == null }.mapTo(HashSet()) { it.projectId }
         val byIdentity = HashMap<Pair<String, String?>, SyncDeletion>(deletions.size)
         for (deletion in deletions) {
-            if (deletion.fileName != null && deletion.projectId in deletedProjects) continue
             val identity = deletion.projectId to deletion.fileName
             val existing = byIdentity[identity]
             if (existing == null || deletion.deletedAt > existing.deletedAt) {
@@ -234,6 +246,43 @@ object SyncMerger {
             }
         }
         return byIdentity.values.sortedWith(compareBy<SyncDeletion> { it.projectId }.thenBy { it.fileName ?: "" })
+    }
+
+    fun applyTombstones(
+        projects: List<SongProject>,
+        trashed: List<TrashedSongProject>,
+        recordings: List<RecordingManifestEntry>,
+        deletions: List<SyncDeletion>
+    ): Resolved {
+        val projectTombstones = deletions.filter { it.fileName == null }.associateBy { it.projectId }
+        val fileTombstones = deletions.filter { it.fileName != null }.associateBy { it.projectId to it.fileName }
+        val keptProjects = projects.filterNot { project ->
+            projectTombstones[project.id]?.let { it.deletedAt > project.updatedAt } == true
+        }
+        val keptTrash = trashed.filterNot { entry ->
+            projectTombstones[entry.project.id]?.let { it.deletedAt > maxOf(entry.project.updatedAt, entry.deletedAt) } == true
+        }
+        val keptRecordings = recordings.filterNot { removesRecording(it, projectTombstones, fileTombstones) }
+        val survivingSongs = buildSet {
+            keptProjects.forEach { add(it.id) }
+            keptTrash.forEach { add(it.project.id) }
+        }
+        val survivingRecordings = keptRecordings.mapTo(HashSet()) { it.projectId to it.fileName }
+        val keptDeletions = deletions.filterNot { deletion ->
+            if (deletion.fileName == null) deletion.projectId in survivingSongs
+            else (deletion.projectId to deletion.fileName) in survivingRecordings
+        }
+        return Resolved(keptProjects, keptTrash, keptRecordings, keptDeletions)
+    }
+
+    internal fun removesRecording(
+        entry: RecordingManifestEntry,
+        projectTombstones: Map<String, SyncDeletion>,
+        fileTombstones: Map<Pair<String, String?>, SyncDeletion>
+    ): Boolean {
+        val time = entry.precedenceTime
+        return projectTombstones[entry.projectId]?.let { it.deletedAt > time } == true ||
+            fileTombstones[entry.projectId to entry.fileName]?.let { it.deletedAt > time } == true
     }
 
     private fun mergeProjects(
@@ -274,8 +323,8 @@ object SyncMerger {
         local: List<RecordingManifestEntry>,
         remote: List<RecordingManifestEntry>
     ): List<RecordingManifestEntry> {
-        // Recordings are immutable once written (a rename is a new identity) and v4
-        // carries no recording timestamps, so the copy already backed up wins.
+        // Recordings are immutable once written (a rename is a new identity), so
+        // the copy already backed up wins.
         val byIdentity = HashMap<String, RecordingManifestEntry>(local.size + remote.size)
         for (entry in local) {
             byIdentity[entry.identityKey] = entry

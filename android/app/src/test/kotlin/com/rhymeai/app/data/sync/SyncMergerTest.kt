@@ -129,14 +129,14 @@ class SyncMergerTest {
     }
 
     @Test
-    fun permanentDeletionsConvergeAgainstNewerProjectTrashAndRecordingContent() {
+    fun tombstonesConvergeByTimestampPrecedence() {
         val later = 2_000_000_000_000L
         fun recording(id: String, file: String) = RecordingManifestEntry(
             projectId = id, fileName = file, sizeBytes = 3, modifiedAt = later, sha256 = "synthetic"
         )
         val content = SyncBlob(
-            projects = listOf(project("gone", "stale", later), project("keep", "current", later)),
-            trashed = listOf(TrashedSongProject(project("gone", "stale", later), later)),
+            projects = listOf(project("gone", "edited after its tombstones", later), project("keep", "current", later), project("old", "stale", 10L)),
+            trashed = listOf(TrashedSongProject(project("binned", "stale", 10L), 20L)),
             recordings = listOf(
                 recording("gone", "take.m4a"),
                 recording("keep", "removed.m4a"),
@@ -146,18 +146,24 @@ class SyncMergerTest {
         val tombstones = SyncBlob(deletions = listOf(
             SyncDeletion("gone", deletedAt = 1L),
             SyncDeletion("gone", deletedAt = 2L),
+            SyncDeletion("old", deletedAt = 2_000L),
+            SyncDeletion("binned", deletedAt = 30L),
             SyncDeletion("gone", fileName = "take.m4a", deletedAt = Long.MAX_VALUE),
-            SyncDeletion("keep", fileName = "removed.m4a", deletedAt = 3L)
+            SyncDeletion("keep", fileName = "removed.m4a", deletedAt = later + 1),
+            SyncDeletion("keep", fileName = "new.m4a", deletedAt = 3L)
         ))
         val merged = SyncMerger.merge(content, tombstones)
 
-        assertEquals(setOf("keep"), merged.projects.map { it.id }.toSet())
+        // A song edited after its tombstone survives and the tombstone is dropped.
+        assertEquals(setOf("gone", "keep"), merged.projects.map { it.id }.toSet())
         assertEquals(emptySet(), merged.trashed.map { it.project.id }.toSet())
         assertEquals(setOf("keep/new.m4a"), merged.recordings.map { it.identityKey }.toSet())
         assertEquals(
             listOf(
-                SyncDeletion("gone", deletedAt = 2L),
-                SyncDeletion("keep", fileName = "removed.m4a", deletedAt = 3L)
+                SyncDeletion("binned", deletedAt = 30L),
+                SyncDeletion("gone", fileName = "take.m4a", deletedAt = Long.MAX_VALUE),
+                SyncDeletion("keep", fileName = "removed.m4a", deletedAt = later + 1),
+                SyncDeletion("old", deletedAt = 2_000L)
             ),
             merged.deletions
         )

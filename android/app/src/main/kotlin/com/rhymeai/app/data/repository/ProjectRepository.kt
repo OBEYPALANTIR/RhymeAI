@@ -153,6 +153,11 @@ class ProjectRepository internal constructor(
         .map(trashedProjectsStore::decode)
         .flowOn(Dispatchers.Default)
 
+    /** Raw tombstone JSON; emits when a song or recording is permanently deleted (drives backup). */
+    val syncDeletionsFlow: Flow<String> = dataStore.data
+        .map { prefs -> prefs[SYNC_DELETIONS_KEY] ?: "[]" }
+        .distinctUntilChanged()
+
     val workspacesFlow: Flow<Map<String, SongWorkspace>> = dataStore.data.map { prefs ->
         workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
     }
@@ -386,46 +391,38 @@ class ProjectRepository internal constructor(
     }
 
     /**
-     * Reconcile the uploaded result with locally committed membership in one edit.
-     * IDs deleted after the base read stay deleted even if their cleanup marker
-     * was cleared before the upload finished. New local IDs stay in their place.
+     * Apply a merged backup in one edit against the data as it is now: the current
+     * songs, trash and tombstones are merged with [merged] again (newest `updatedAt`
+     * per id, tombstones by timestamp), so an edit saved after [base] was read is
+     * kept. IDs removed after the base read stay removed; new local IDs stay.
      */
     internal suspend fun applySyncResult(merged: SyncBlob, base: LocalSyncBase): SyncBlob =
         projectSaveMutex.withLock {
             lateinit var committed: SyncBlob
             dataStore.edit { prefs ->
-                val currentProjects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
-                val currentTrash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
-                val storedDeletions = SyncMerger.mergeDeletions(
-                    deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]") + merged.deletions
+                val current = SyncBlob(
+                    projects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]"),
+                    trashed = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]"),
+                    deletions = SyncMerger.mergeDeletions(deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]"))
                 )
-                val deletedProjects = storedDeletions.filter { it.fileName == null }
-                    .mapTo(HashSet()) { it.projectId }
                 val currentIds = buildSet {
-                    currentProjects.forEach { add(it.id) }
-                    currentTrash.forEach { add(it.project.id) }
+                    current.projects.forEach { add(it.id) }
+                    current.trashed.forEach { add(it.project.id) }
                 }
                 val removed = base.baseIds - currentIds
-                val mergedIds = buildSet {
-                    merged.projects.forEach { add(it.id) }
-                    merged.trashed.forEach { add(it.project.id) }
-                }
-                val addedProjects = currentProjects.filter { it.id !in base.baseIds && it.id !in mergedIds }
-                val addedTrash = currentTrash.filter { it.project.id !in base.baseIds && it.project.id !in mergedIds }
-                val nextProjects = (merged.projects.filterNot { it.id in removed } + addedProjects)
-                    .filterNot { it.id in deletedProjects }
-                val nextTrash = (merged.trashed.filterNot { it.project.id in removed } + addedTrash)
-                    .filterNot { it.project.id in deletedProjects }
+                val resolved = SyncMerger.merge(current, merged.copy(recordings = emptyList()))
+                val nextProjects = resolved.projects.filterNot { it.id in removed }
+                val nextTrash = resolved.trashed.filterNot { it.project.id in removed }
                 val writtenIds = buildSet {
                     nextProjects.forEach { add(it.id) }
                     nextTrash.forEach { add(it.project.id) }
                 }
                 prefs[PROJECTS_KEY] = json.encodeToString(nextProjects)
                 prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
-                prefs[SYNC_DELETIONS_KEY] = json.encodeToString(storedDeletions)
+                prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - writtenIds
-                committed = merged.copy(projects = nextProjects, trashed = nextTrash, deletions = storedDeletions)
+                committed = merged.copy(projects = nextProjects, trashed = nextTrash, deletions = resolved.deletions)
             }
             committed
         }

@@ -801,8 +801,9 @@ class ProjectRepositoryTest {
                 val base = reopened.snapshotLocalSyncBase()
                 assertEquals(listOf(song.id), base.blob.deletions.map { it.projectId })
                 assertEquals(null, base.blob.deletions.single().fileName)
+                // Copies older than the tombstone are removed everywhere.
                 val stale = SyncBlob(
-                    projects = listOf(song.copy(updatedAt = Long.MAX_VALUE)),
+                    projects = listOf(song),
                     trashed = listOf(TrashedSongProject(song, 20L)),
                     recordings = listOf(syncedRecording(song.id))
                 )
@@ -811,6 +812,10 @@ class ProjectRepositoryTest {
                 assertEquals(emptyList(), merged.trashed)
                 assertEquals(emptyList(), merged.recordings)
                 assertEquals(base.blob.deletions, merged.deletions)
+                // A copy edited after the tombstone survives, and the tombstone is dropped.
+                val edited = SyncMerger.merge(base.blob, SyncBlob(projects = listOf(song.copy(updatedAt = Long.MAX_VALUE))))
+                assertEquals(listOf(song.id), edited.projects.map { it.id })
+                assertEquals(emptyList(), edited.deletions)
             } finally {
                 reopenedScope.cancel()
             }
@@ -848,7 +853,7 @@ class ProjectRepositoryTest {
                 assertEquals(expired.map { it.id }.toSet(), base.blob.deletions.map { it.projectId }.toSet())
                 assertEquals(setOf(now), base.blob.deletions.map { it.deletedAt }.toSet())
                 val stale = SyncBlob(
-                    projects = expired.map { it.copy(updatedAt = Long.MAX_VALUE) },
+                    projects = expired,
                     trashed = expired.map { TrashedSongProject(it, 20L) },
                     recordings = expired.map { syncedRecording(it.id) }
                 )
@@ -899,7 +904,7 @@ class ProjectRepositoryTest {
                 val laterUpload = reopened.snapshotLocalSyncBase().blob
                 assertEquals(setOf(song.id, remoteTombstone.projectId),
                     laterUpload.deletions.map { it.projectId }.toSet())
-                val stalePeer = SyncBlob(version = 1, projects = listOf(song.copy(updatedAt = Long.MAX_VALUE)))
+                val stalePeer = SyncBlob(version = 1, projects = listOf(song))
                 assertEquals(emptyList(), SyncMerger.merge(laterUpload, stalePeer).projects)
             } finally {
                 reopenedScope.cancel()
@@ -924,10 +929,10 @@ class ProjectRepositoryTest {
             assertFailsWith<IllegalArgumentException> {
                 repository.recordRecordingDeletion("song-1", "../escape.m4a", 50L)
             }
-            repository.recordRecordingDeletion("song-1", recording.fileName, 50L)
+            repository.recordRecordingDeletion("song-1", recording.fileName, 5_000L)
 
             val base = repository.snapshotLocalSyncBase()
-            assertEquals(listOf(SyncDeletion("song-1", recording.fileName, 50L)), base.blob.deletions)
+            assertEquals(listOf(SyncDeletion("song-1", recording.fileName, 5_000L)), base.blob.deletions)
 
             // The remote manifest still lists the recording; the merge drops it and no
             // restore is planned, so the deleted take never comes back from Drive.
@@ -950,7 +955,7 @@ class ProjectRepositoryTest {
     }
 
     @Test
-    fun remoteProjectTombstoneRemovesPostSnapshotLocalSongAndRestorePlan() = runBlocking {
+    fun olderRemoteTombstoneKeepsASongEditedAfterTheSnapshot() = runBlocking {
         val directory = kotlin.io.path.createTempDirectory("rhymeai-sync-remote-delete-v2").toFile()
         val file = File(directory, "prefs.preferences_pb")
         val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -970,14 +975,10 @@ class ProjectRepositoryTest {
                     deletions = listOf(SyncDeletion(song.id, deletedAt = 1L))
                 )
             )
-            assertEquals(emptyList(), merged.recordings)
-            assertEquals(emptyList(), RecordingSyncPlanner.planRestores(
-                local = emptyList(),
-                remoteManifest = merged.recordings,
-                remoteFilesByName = mapOf(recording.driveName to "uploaded-byte-id")
-            ))
+            // The recording was uploaded after the tombstone, so it stays listed.
+            assertEquals(listOf(recording), merged.recordings)
             repository.applySyncResult(merged, base)
-            assertEquals(emptyList(), repository.projectsFlow.first())
+            assertEquals(listOf(song.id), repository.projectsFlow.first().map { it.id })
             firstScope.coroutineContext[Job]!!.cancelAndJoin()
 
             val reopenedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -985,14 +986,37 @@ class ProjectRepositoryTest {
                 val reopened = ProjectRepository(
                     PreferenceDataStoreFactory.create(scope = reopenedScope) { file }, testKeyStore()
                 )
-                assertEquals(emptyList(), reopened.projectsFlow.first())
-                assertEquals(listOf(SyncDeletion(song.id, deletedAt = 1L)),
-                    reopened.snapshotLocalSyncBase().blob.deletions)
+                assertEquals(listOf(song.id), reopened.projectsFlow.first().map { it.id })
+                assertEquals(emptyList(), reopened.snapshotLocalSyncBase().blob.deletions)
             } finally {
                 reopenedScope.cancel()
             }
         } finally {
             firstScope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun applyKeepsAnEditSavedBetweenSnapshotAndCommit() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-apply-race").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") }, testKeyStore()
+            )
+            val song = SongProject(id = "racing", title = "Song", lyrics = "first draft", updatedAt = 100L)
+            repository.saveProjects(listOf(song))
+            val base = repository.snapshotLocalSyncBase()
+            val merged = SyncMerger.merge(base.blob, SyncBlob(projects = listOf(song.copy(lyrics = "from backup", updatedAt = 200L))))
+            // The writer keeps typing while the restore runs.
+            repository.saveProjects(listOf(song.copy(lyrics = "newer lyrics", updatedAt = 300L)))
+
+            repository.applySyncResult(merged, base)
+
+            assertEquals("newer lyrics", repository.projectsFlow.first().single().lyrics)
+        } finally {
+            scope.cancel()
             directory.deleteRecursively()
         }
     }
