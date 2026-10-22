@@ -7,14 +7,17 @@ trash and recordings back up to Drive's private app storage on their own, about
 30 seconds after you stop editing and when you leave the app; the section shows
 when the last backup ran, or why it failed with a Retry. There is no passphrase
 any more. If you used Drive backup before, tap Connect Google Drive once after
-updating; if you used a passphrase, the next backup then moves the older encrypted backup to
-the new format and deletes it only after the new copy checks out; if this phone
-no longer has the passphrase, "Migrate older encrypted backup…" asks for it once
-and leaves the old backup untouched until then. On a new phone, connecting
+updating; if you used a passphrase, backups then copy the older encrypted
+backup into the new format in Drive, without changing what is on this phone,
+and delete it only after every song and recording in it checks out. Anything
+that cannot move keeps the old backup, and Settings says how much; if this
+phone no longer has the passphrase, "Migrate older encrypted backup…" asks for
+it once and leaves the old backup untouched until then. On a new phone, connecting
 Drive offers to restore your songs; nothing is restored without asking, and a
 recording already on the phone is never replaced. "Export all songs…" saves
 everything as one zip you can keep in any storage app, and "Import from file…"
-merges it back. Disconnect revokes Writers Block's Drive access at Google.
+merges it back. Disconnect revokes Writers Block's Drive access at Google, or
+says so when Google could not be reached.
 
 ## Larger text fits the Assistant, Notebook and Trash on iPad (iOS)
 
