@@ -239,6 +239,7 @@ class VoiceMemoService(private val context: Context) {
             return@withContext null
         }
 
+        file.parentFile?.name?.let { projectId -> recordMetadata { recordingCreatedRecorder?.invoke(projectId, file) } }
         memoFromFile(file).also { memoChangeEvents.tryEmit(Unit) }
     }
 
@@ -359,6 +360,7 @@ class VoiceMemoService(private val context: Context) {
                         }
                     )
                 imported = file
+                recordMetadata { recordingCreatedRecorder?.invoke(projectId, file) }
                 memoFromFile(file)
             }.also { memoChangeEvents.tryEmit(Unit) }
         } catch (error: Exception) {
@@ -429,10 +431,12 @@ class VoiceMemoService(private val context: Context) {
         val dir = RecordingFiles.memoDirectory(context.filesDir, trashed.projectId)
         if (!dir.exists() && !dir.mkdirs()) return@withContext false
         val original = File(trashed.originalName)
-        synchronized(RecordingFiles.mutationLock) {
-            val target = RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension)
-            trashed.file.renameTo(target)
-        }.also {
+        val restoredAs = synchronized(RecordingFiles.mutationLock) {
+            RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension)
+                .takeIf { trashed.file.renameTo(it) }
+        }
+        restoredAs?.let { recordMetadata { recordingRenamedRecorder?.invoke(trashed.projectId, trashed.originalName, it.name) } }
+        (restoredAs != null).also {
             cleanUpEmptyTrashDir(trashed.file.parentFile)
             if (it) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
         }
@@ -443,6 +447,22 @@ class VoiceMemoService(private val context: Context) {
      * name, deletedAt). Runs before the file is removed; a throw keeps the file in Trash.
      */
     var recordingDeletionRecorder: (suspend (String, String, Long) -> Unit)? = null
+
+    /** Stores a new take's precedence time (projectId, file) once it is saved or imported. */
+    var recordingCreatedRecorder: (suspend (String, File) -> Unit)? = null
+
+    /** Moves a recording's stored record when its name changes (projectId, from, to). */
+    var recordingRenamedRecorder: (suspend (String, String, String) -> Unit)? = null
+
+    /** A failed record write never undoes the file operation; the take is stamped at first sight instead. */
+    private suspend fun recordMetadata(write: suspend () -> Unit) {
+        try {
+            write()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+        }
+    }
 
     /** Permanently delete a trashed recording. */
     suspend fun permanentlyDeleteTrashedMemo(trashed: TrashedVoiceMemo): Boolean {
@@ -498,6 +518,7 @@ class VoiceMemoService(private val context: Context) {
             }
 
             if (targetFile != null) {
+                recordMetadata { recordingRenamedRecorder?.invoke(dir.name, memo.file.name, targetFile.name) }
                 memoFromFile(targetFile)
             } else {
                 null

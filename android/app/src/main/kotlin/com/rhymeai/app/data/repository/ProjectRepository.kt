@@ -14,6 +14,8 @@ import com.rhymeai.app.data.model.SongWorkspace
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
+import com.rhymeai.app.data.sync.RecordingManifestEntry
+import com.rhymeai.app.data.sync.RecordingRecord
 import com.rhymeai.app.data.sync.SyncBlob
 import com.rhymeai.app.data.sync.SyncDeletion
 import com.rhymeai.app.data.sync.SyncMerger
@@ -81,6 +83,7 @@ class ProjectRepository internal constructor(
         private val TRASHED_PROJECTS_KEY = stringPreferencesKey("trashed_projects_json")
         private val PENDING_RECORDING_DELETIONS_KEY = stringSetPreferencesKey("pending_recording_deletions")
         private val SYNC_DELETIONS_KEY = stringPreferencesKey("sync_deletions_json")
+        private val RECORDING_RECORDS_KEY = stringPreferencesKey("recording_records_json")
         private val CURRENT_PROJECT_ID_KEY = stringPreferencesKey("current_project_id")
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
@@ -127,6 +130,9 @@ class ProjectRepository internal constructor(
     }
     private val deletionsStore = FailClosedStoredJson("sync deletions") {
         json.decodeFromString<List<SyncDeletion>>(it)
+    }
+    private val recordsStore = FailClosedStoredJson("recording records") {
+        json.decodeFromString<List<RecordingRecord>>(it)
     }
     private val workspacesStore = FailClosedStoredJson("song notebook") {
         json.decodeFromString<Map<String, SongWorkspace>>(it)
@@ -309,6 +315,52 @@ class ProjectRepository internal constructor(
         committed
     }
 
+    suspend fun recordingRecords(): Map<String, RecordingRecord> =
+        recordsStore.decode(dataStore.data.first()[RECORDING_RECORDS_KEY] ?: "[]").associateBy { it.identityKey }
+
+    /**
+     * Gives each recording seen on disk without a matching record (same hash) a record
+     * stamped once with its file time, and returns every record. Pre-existing memos
+     * get their time here and keep it from then on.
+     */
+    suspend fun stampRecordings(seen: List<RecordingManifestEntry>): Map<String, RecordingRecord> =
+        projectSaveMutex.withLock {
+            lateinit var all: Map<String, RecordingRecord>
+            dataStore.edit { prefs ->
+                val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").associateByTo(LinkedHashMap()) { it.identityKey }
+                var changed = false
+                for (entry in seen) {
+                    if (records[entry.identityKey]?.sha256 == entry.sha256) continue
+                    records[entry.identityKey] = RecordingRecord(
+                        entry.projectId, entry.fileName, entry.modifiedAt, entry.sha256, entry.sizeBytes, RecordingRecord.RECORDED
+                    )
+                    changed = true
+                }
+                if (changed) prefs[RECORDING_RECORDS_KEY] = json.encodeToString(records.values.toList())
+                all = records
+            }
+            all
+        }
+
+    suspend fun putRecordingRecord(record: RecordingRecord) = projectSaveMutex.withLock {
+        dataStore.edit { prefs ->
+            val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").filterNot { it.identityKey == record.identityKey }
+            prefs[RECORDING_RECORDS_KEY] = json.encodeToString(records + record)
+        }
+    }
+
+    /** A rename or a restore under a new name keeps the recording's record and its time. */
+    suspend fun renameRecordingRecord(projectId: String, from: String, to: String) = projectSaveMutex.withLock {
+        if (from == to) return@withLock
+        dataStore.edit { prefs ->
+            val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
+            val moving = records.firstOrNull { it.projectId == projectId && it.fileName == from } ?: return@edit
+            prefs[RECORDING_RECORDS_KEY] = json.encodeToString(
+                records.filterNot { it.projectId == projectId && (it.fileName == from || it.fileName == to) } + moving.copy(fileName = to)
+            )
+        }
+    }
+
     /** Recording names known on this device for a song; their tombstones are written with the song's. */
     @Volatile var recordingNamesFor: (String) -> List<String> = { emptyList() }
 
@@ -412,9 +464,12 @@ class ProjectRepository internal constructor(
         projectSaveMutex.withLock {
             lateinit var committed: SyncBlob
             dataStore.edit { prefs ->
+                // Live and Trash recordings known here join the inputs, so a song tombstone
+                // being applied also tombstones takes this device holds only in Trash.
                 val current = SyncBlob(
                     projects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]"),
                     trashed = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]"),
+                    recordings = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").map { it.toEntry() },
                     deletions = SyncMerger.mergeDeletions(deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]"))
                 )
                 val currentIds = buildSet {

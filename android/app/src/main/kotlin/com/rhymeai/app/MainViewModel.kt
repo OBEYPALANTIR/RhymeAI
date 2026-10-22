@@ -43,7 +43,8 @@ import com.rhymeai.app.data.sync.RealDriveClient
 import com.rhymeai.app.data.sync.SyncResult
 import com.rhymeai.app.data.sync.UnsupportedBackupVersionException
 import com.rhymeai.app.data.sync.recordingsAllowedForUpload
-import com.rhymeai.app.data.sync.snapshotLocalRecordingFiles
+import com.rhymeai.app.data.sync.RecordingRecord
+import com.rhymeai.app.data.sync.snapshotLocalRecordings
 import com.rhymeai.app.data.repository.EncryptedPrefsKeyStore
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
@@ -199,6 +200,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Owns MediaRecorder/MediaPlayer resources; released in onCleared(). */
     val voiceMemoService = VoiceMemoService(application).also {
         it.recordingDeletionRecorder = repo::recordRecordingDeletion
+        // Each new take gets its precedence time now (A20); a rename or restore keeps it.
+        it.recordingCreatedRecorder = { projectId, file ->
+            withContext(Dispatchers.IO) {
+                repo.putRecordingRecord(
+                    RecordingRecord(
+                        projectId, file.name, System.currentTimeMillis(),
+                        com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(file), file.length(), RecordingRecord.RECORDED
+                    )
+                )
+            }
+        }
+        it.recordingRenamedRecorder = repo::renameRecordingRecord
     }
 
     // Editor state
@@ -908,7 +921,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             backupNotice = try {
                 val summary = withContext(Dispatchers.IO) {
                     val base = repo.snapshotLocalSyncBase()
-                    val files = snapshotLocalRecordingFiles(app.filesDir, base.pendingIds)
+                    val files = snapshotLocalRecordings(repo, app.filesDir, base.pendingIds)
                     val allowed = recordingsAllowedForUpload(files.map { it.entry }, base.blob.deletions, emptyList())
                         .mapTo(HashSet()) { it.identityKey }
                     app.contentResolver.openOutputStream(uri)?.use { output ->

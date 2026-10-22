@@ -189,6 +189,42 @@ class BackupArchiveTest {
     }
 
     @Test
+    fun aTakeKeepsItsTimeThroughImportAndReExportSoItsDeletionStillHolds() = runBlocking<Unit> {
+        val audio = "old take".toByteArray()
+        // Device 0 recorded the take at 1000 and exports it.
+        val firstDir = File(root, "device-0").also { it.mkdirs() }
+        val first = repository("device-0")
+        memo(firstDir, "x", "take.m4a", audio).file.setLastModified(1_000L)
+        first.saveProjects(listOf(SongProject(id = "x", updatedAt = 100L)))
+        val archive1 = File(root, "archive-1.zip")
+        archive1.outputStream().use {
+            BackupArchive.write(it, first.snapshotLocalSyncBase().blob, snapshotLocalRecordings(first, firstDir, emptySet()), 0L, "d0")
+        }
+
+        // Device B imports it later, edits the song at 9000 and exports again.
+        val secondDir = File(root, "device-b").also { it.mkdirs() }
+        val second = repository("device-b")
+        BackupArchive.import(BackupArchive.read(archive1), second, secondDir)
+        second.saveProjects(listOf(SongProject(id = "x", title = "Edited", updatedAt = 9_000L)))
+        val archive2 = File(root, "archive-2.zip")
+        archive2.outputStream().use {
+            BackupArchive.write(it, second.snapshotLocalSyncBase().blob, snapshotLocalRecordings(second, secondDir, emptySet()), 0L, "b")
+        }
+        assertEquals(1_000L, BackupArchive.read(archive2).manifest.recordings.single().uploadedAt)
+
+        // Device A deleted the song at 5000; importing B's archive revives it but not the take.
+        val thirdDir = File(root, "device-a").also { it.mkdirs() }
+        val third = repository("device-a")
+        third.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "x", updatedAt = 100L), deletedAt = 200L)))
+        third.permanentlyDeleteTrashedProject("x", now = 5_000L)
+        val summary = BackupArchive.import(BackupArchive.read(archive2), third, thirdDir)
+
+        assertEquals(listOf("Edited"), third.projectsFlow.first().map { it.title })
+        assertEquals(0, summary.recordingsAdded)
+        assertFalse(RecordingFileStore.targetFile(thirdDir, "x", "take.m4a").exists())
+    }
+
+    @Test
     fun exportFileNameUsesTheLocalDate() {
         assertEquals("WritersBlock-backup-2026-10-22.zip", BackupArchive.fileName(1_792_702_991_000L, ZoneOffset.UTC))
     }

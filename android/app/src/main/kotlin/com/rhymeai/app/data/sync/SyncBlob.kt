@@ -159,6 +159,9 @@ data class RecordingManifestEntry(
     val identityKey: String
         get() = "$projectId/$fileName"
 
+    fun toRecord(origin: String) =
+        RecordingRecord(projectId, fileName, precedenceTime, sha256, sizeBytes, origin)
+
     /** The time a tombstone must beat to remove this recording. */
     val precedenceTime: Long
         get() = if (uploadedAt > 0L) uploadedAt else modifiedAt
@@ -188,6 +191,37 @@ data class RecordingManifestEntry(
         fun driveNameFor(projectId: String, fileName: String): String {
             return "$DRIVE_PREFIX${projectId}_${fileName}.enc"
         }
+    }
+}
+
+/**
+ * What this device knows about one recording, kept in DataStore beside the songs:
+ * the precedence time tombstones are compared with ([uploadedAt]), its hash and
+ * size, and how it arrived. Written when a recording is recorded (finish time),
+ * restored or imported (the backup entry's own time, never the file time) or first
+ * seen without a record (its file time, once). File times are never read again.
+ */
+@Serializable
+data class RecordingRecord(
+    val projectId: String,
+    val fileName: String,
+    val uploadedAt: Long,
+    val sha256: String,
+    val bytes: Long,
+    val origin: String
+) {
+    val identityKey: String
+        get() = "$projectId/$fileName"
+
+    fun toEntry() = RecordingManifestEntry(
+        projectId = projectId, fileName = fileName, sizeBytes = bytes, modifiedAt = 0L, sha256 = sha256, uploadedAt = uploadedAt
+    )
+
+    companion object {
+        const val RECORDED = "recorded"
+        const val RESTORED = "restored"
+        const val IMPORTED = "imported"
+        const val MIGRATED = "migrated"
     }
 }
 
