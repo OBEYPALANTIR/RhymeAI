@@ -1,5 +1,9 @@
 # Release Notes
 
+## The rhyme you are matching is marked in violet (iOS and Android)
+
+With rhyme highlighting on, the last word of the Target Line and of each suggestion is now violet, semibold and underlined, so the sound being matched is easy to spot.
+
 ## The Assistant is spaced on a golden-ratio rhythm (iOS and Android)
 
 The Assistant panel and its suggestion cards now use one spacing scale of 8,

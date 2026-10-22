@@ -92,6 +92,10 @@ This tracks behavior that must stay aligned between Android and iOS.
   highlight off tints whole words semibold; with rhyme highlight on, syllable
   color moves to the underline.
 
+## Rhyme match highlight
+
+- The Target Line's last word and each suggestion card's last word are drawn in the violet rhyme family colour (`#6D28D9` Ink/Paper, `#C4B5FD` Graphite; Android `rhymeMatchColor` = `rhymePalette(isDark)[4]`, iOS `analysisRhymeHexValues[4]`), semibold and underlined, on both platforms, gated by the rhyme highlight setting. Known difference: the iOS underline is at 60% alpha, the Android underline is the full colour (Compose `SpanStyle` has no separate underline colour). Android unit-verified in `RhymeMatchTextTest`.
+
 ## Rewrite highlight
 
 - Pending-rewrite highlight: both platforms tint the selected lyric with the appearance's selection colour and a 1px strong-outline border while a rewrite (Harder Rhyme, Punch Up, and the rest) is pending or in flight, with no motion on the text; a failed rewrite uses the error colour. iOS previously used system indigo and teal with a 1.2s gradient sweep on a display link, Android the primary and success colours. iOS unit-verified in `RewriteRippleMotionTests` (palette colours per appearance, no layer animation while loading). Visual check on device pending on both.

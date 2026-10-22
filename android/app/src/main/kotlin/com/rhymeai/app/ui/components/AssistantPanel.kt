@@ -85,6 +85,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -101,6 +102,7 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.outlineStrongColorFor
 import com.rhymeai.app.ui.theme.placeholderColorFor
+import com.rhymeai.app.ui.theme.rhymeMatchColor
 import com.rhymeai.app.ui.theme.subtleColorFor
 import com.rhymeai.app.util.BeatGrid
 import com.rhymeai.app.util.SyllableCounter
@@ -266,8 +268,14 @@ fun AssistantPanel(
                 ) {
                     if (rhymeContext.targetLine != null) {
                         Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight)) {
+                            val quotedLine = "\"${rhymeContext.targetLine}\""
                             Text(
-                                "\"${rhymeContext.targetLine}\"",
+                                if (viewModel.isHighlightEnabled) {
+                                    // The closing quote falls outside the last word, so it keeps onSurface.
+                                    rhymeMatchAnnotated(quotedLine, rhymeMatchColor(appearance.isDark))
+                                } else {
+                                    AnnotatedString(quotedLine)
+                                },
                                 fontFamily = FontFamily.Serif,
                                 fontStyle = FontStyle.Italic,
                                 color = colorScheme.onSurface,
