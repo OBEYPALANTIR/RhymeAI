@@ -6,7 +6,11 @@ import android.content.ContextWrapper
 import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import android.net.Uri
+import android.provider.DocumentsContract
+import androidx.core.content.IntentCompat
 import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.ui.components.OpenAudioDocument
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -68,6 +72,15 @@ class RecordingImportInstrumentedTest {
             service.release()
             owned.deleteRecursively()
         }
+    }
+
+    @Test fun importPickerStartsOnTheAudioRootInsteadOfEmptyRecent() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val intent = OpenAudioDocument.createIntent(context, arrayOf("audio/*"))
+        val start = requireNotNull(IntentCompat.getParcelableExtra(intent, DocumentsContract.EXTRA_INITIAL_URI, Uri::class.java))
+        assertEquals("audio_root", DocumentsContract.getRootId(start))
+        // The provider must exist on the device, or the picker falls back to the empty Recent screen.
+        assertNotNull(context.packageManager.resolveContentProvider(requireNotNull(start.authority), 0))
     }
 
     private fun wav(): ByteArray {

@@ -1,5 +1,7 @@
 package com.rhymeai.app.ui.components
 
+import android.content.Context
+import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -19,6 +21,16 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.appWritingSurface
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+
+/**
+ * The system picker opens on Recent, which skips the media Audio root (it has no FLAG_SUPPORTS_RECENTS),
+ * so a first import showed an empty "No items" screen on devices full of audio. Start on Audio instead.
+ */
+internal object OpenAudioDocument : ActivityResultContracts.OpenDocument() {
+    val audioRoot = DocumentsContract.buildRootUri("com.android.providers.media.documents", "audio_root")
+    override fun createIntent(context: Context, input: Array<String>) =
+        super.createIntent(context, input).putExtra(DocumentsContract.EXTRA_INITIAL_URI, audioRoot)
+}
 
 /** A library bound to the song that opened it, including while the picker is away. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -64,7 +76,7 @@ fun SongRecordingsDialog(
         value = service.memosForProject(projectId)
     }
     DisposableEffect(service) { onDispose { service.stopPlayback() } }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    val picker = rememberLauncherForActivityResult(OpenAudioDocument) { uri ->
         if (uri != null) {
             importing = true
             scope.launch {
