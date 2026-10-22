@@ -106,7 +106,11 @@ exception is a recording that was never backed up and never on the deleting
 device (say, recorded on an offline phone); if the song is revived before that
 phone backs up, the recording is treated as new. Every merge gathers all its
 inputs (local, earlier attempts, fresh and conflicting manifests, an archive)
-before resolving tombstones once. Recordings are immutable: Drive's copy wins per identity, a
+before resolving tombstones once. Each recording's precedence time is stored on
+the device (A20): the moment it was recorded, or the backup entry's own time when
+it was restored or imported, or its file time once for a memo from before this
+version; file times are never read as precedence after that, so a take keeps its
+time through import, re-export and rename. Recordings are immutable: Drive's copy wins per identity, a
 download is written only where no file exists when it commits, and a download
 whose SHA-256 does not match the manifest is discarded and counted. Recordings
 over 16 MiB are skipped with a visible count.
