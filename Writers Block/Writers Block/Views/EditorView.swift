@@ -256,7 +256,9 @@ struct EditorView: View {
                         onOpenSettings: { viewModel.openSettingsFromInspector() },
                         onDismiss: { viewModel.dismissInspector() }
                     )
-                    .presentationDetents([.medium, .large])
+                    // A medium detent pins the sheet to the bottom edge on iPad;
+                    // large alone presents it as a centred form sheet there.
+                    .presentationDetents(horizontalSizeClass == .regular ? [.large] : [.medium, .large])
                     .presentationDragIndicator(.visible)
                 } else {
                     WordInspectorSheetView(
@@ -318,7 +320,9 @@ struct EditorView: View {
                     isInline: true,
                     onDismiss: hideInlineAssistant
                 )
-                .frame(width: RhymeAITokens.Layout.assistantColumnWidth)
+                .containerRelativeFrame(.horizontal) { windowWidth, _ in
+                    RhymeAITokens.Layout.sideColumnWidth(for: windowWidth)
+                }
                 .transition(.opacity)
             }
         }
@@ -755,7 +759,7 @@ struct EditorView: View {
                 TextField("Song Title...", text: $viewModel.title)
                     .font(.system(.largeTitle, design: .serif, weight: .bold))
                     .textFieldStyle(.plain)
-                    .padding(.horizontal, RhymeAITokens.Spacing.md)
+                    .padding(.horizontal, editorSidePadding)
                     .padding(.top, RhymeAITokens.Spacing.md)
                     .padding(.bottom, RhymeAITokens.Spacing.xxs)
                     .accessibilityIdentifier("songTitleEditor")
@@ -793,6 +797,11 @@ struct EditorView: View {
         .background(Color.clear)
     }
 
+    /// Regular width shares the assistant panel's 34pt section inset.
+    private var editorSidePadding: CGFloat {
+        horizontalSizeClass == .regular ? RhymeAITokens.Rhythm.section : RhymeAITokens.Spacing.md
+    }
+
     private var editorStats: some View {
         (
             Text("\(viewModel.wordCount)w")
@@ -805,7 +814,7 @@ struct EditorView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundColor(Color(hex: appearance.editorSyllableCountHexValue))
         )
-        .padding(.horizontal, RhymeAITokens.Spacing.md)
+        .padding(.horizontal, editorSidePadding)
         .padding(.bottom, RhymeAITokens.Spacing.md)
         .accessibilityIdentifier("editorStats")
         .opacity(isFocusMode ? 0 : 1)
@@ -841,7 +850,7 @@ struct EditorView: View {
             isEditable: !viewModel.hasActiveRewrite
         )
         .frame(minHeight: EditorViewConstants.EditorLayout.lyricsMinimumHeight)
-        .padding(.horizontal, RhymeAITokens.Spacing.md)
+        .padding(.horizontal, editorSidePadding)
         .onChange(of: viewModel.lyrics) {
             viewModel.triggerAutoSave()
         }

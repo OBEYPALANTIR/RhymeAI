@@ -44,6 +44,7 @@ struct ProjectsDrawerView: View {
     @State private var renameText: String = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.appAppearanceStyle) private var appearance
 
     init(
@@ -187,8 +188,7 @@ struct ProjectsDrawerView: View {
     private var overlaySurface: some View {
         ZStack {
             GeometryReader { proxy in
-                // Full-page drawer: cover the entire width instead of the 3/4 panel.
-                let drawerWidth = proxy.size.width
+                let drawerWidth = overlayPanelWidth(for: proxy.size.width)
 
                 ZStack(alignment: .leading) {
                     Color.black.opacity(drawerVisible ? 0.42 : 0)
@@ -215,10 +215,13 @@ struct ProjectsDrawerView: View {
                         // Push-style reveal: while the trash screen slides in from
                         // the right, the drawer slides toward the left like a
                         // navigation push instead of sitting still under an overlay.
-                        .offset(x: drawerVisible ? (trashBinPresented ? -proxy.size.width * 0.3 : 0) : -drawerWidth)
+                        .offset(x: drawerVisible ? (trashBinPresented ? -drawerWidth * 0.3 : 0) : -drawerWidth)
                 }
             }
             .ignoresSafeArea()
+            // The Trash screen covers the drawer; keep VoiceOver from reaching
+            // the drawer's controls beneath it.
+            .accessibilityHidden(trashBinPresented)
 
             if trashBinPresented {
                 TrashBinView(onDismiss: {
@@ -234,6 +237,11 @@ struct ProjectsDrawerView: View {
                 undoToastView(toast)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, RhymeAITokens.Spacing.lg)
+                    // Centre the toast on the panel, not the whole window.
+                    .containerRelativeFrame(.horizontal, alignment: .leading) { width, _ in
+                        overlayPanelWidth(for: width)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     // Clear the Import / Trash row (44pt plus the panel's
                     // bottom padding) instead of sitting on top of it.
                     .padding(
@@ -251,6 +259,14 @@ struct ProjectsDrawerView: View {
                 }
             }
         }
+    }
+
+    /// Full width on compact; on regular width a leading side panel on the
+    /// golden split, with the scrim over the rest of the window.
+    private func overlayPanelWidth(for windowWidth: CGFloat) -> CGFloat {
+        horizontalSizeClass == .regular
+            ? RhymeAITokens.Layout.sideColumnWidth(for: windowWidth)
+            : windowWidth
     }
 
     private var sidebarSurface: some View {

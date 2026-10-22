@@ -13,6 +13,7 @@ struct AssistantPanelView: View {
     @State private var burstStart: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var isInline: Bool = false
     /// Height the host keeps clear below the panel: the home-indicator inset,
     /// or the keyboard while it is up. The compact sheet ignores the safe
@@ -98,9 +99,12 @@ struct AssistantPanelView: View {
                     closeButton(label: "Hide Assistant", identifier: "hideInlineAssistantButton", action: onDismiss)
                 }
             }
+            // Same 44pt controls and 8pt vertical padding as the editor top
+            // bar, so the two bottom dividers meet as one line.
+            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .padding(.vertical, RhymeAITokens.Spacing.xs)
             .padding(.leading, RhymeAITokens.Rhythm.section)
             .padding(.trailing, RhymeAITokens.Rhythm.tight)
-            .frame(minHeight: RhymeAITokens.Touch.comfortable)
             .liquidGlassSurface(cornerRadius: 0, fallbackOpacity: 0.02)
             .overlay(Divider(), alignment: .bottom)
 
@@ -316,13 +320,28 @@ struct AssistantPanelView: View {
                     }
                 } label: {
                     HStack(spacing: RhymeAITokens.Rhythm.related) {
-                        Text("Rhyme Options")
+                        let title = Text("Rhyme Options")
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.secondary)
-                        Spacer()
-                        Text("\(viewModel.rhymeScheme.label) \u{00b7} \(viewModel.rhymeType.shortName) \u{00b7} \(viewModel.rhymeComplexity.label)")
+                        let summary = Text("\(viewModel.rhymeScheme.label) \u{00b7} \(viewModel.rhymeType.shortName) \u{00b7} \(viewModel.rhymeComplexity.label)")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(appearance.palette.action)
+                        if dynamicTypeSize.isAccessibilitySize {
+                            // Too wide for one row: stack and let both wrap.
+                            VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.tight) {
+                                title
+                                summary
+                            }
+                            Spacer(minLength: 0)
+                        } else {
+                            // The summary keeps one line; the title truncates first.
+                            title.lineLimit(1)
+                            Spacer(minLength: 0)
+                            summary
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                                .layoutPriority(1)
+                        }
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)

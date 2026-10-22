@@ -50,9 +50,6 @@ enum RhymeAITokens {
     enum Layout {
         static let drawerMinWidth: CGFloat = 300
         static let drawerMaxWidth: CGFloat = 360
-        static let drawerHorizontalMargin: CGFloat = 36
-        static let projectSidebarWidth: CGFloat = 320
-        static let threeColumnWorkspaceMinWidth: CGFloat = 1_100
         static let assistantColumnWidth: CGFloat = 380
         static let assistantReadableWidth: CGFloat = 420
         static let assistantSheetHandleArea: CGFloat = Touch.minimum
@@ -60,6 +57,12 @@ enum RhymeAITokens {
         static let assistantSheetHandleHeight: CGFloat = 4
         static let editorMaxWidth: CGFloat = 740
         static let editorBottomRest: CGFloat = 200
+
+        /// Regular-width side columns (the inline assistant, the songs drawer)
+        /// take the minor golden share (38.2%) of the window, never under 380pt.
+        static func sideColumnWidth(for windowWidth: CGFloat) -> CGFloat {
+            max(assistantColumnWidth, (windowWidth * (1 - RhymeAITokens.inversePhi)).rounded())
+        }
     }
 
     enum Motion {
