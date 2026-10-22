@@ -600,6 +600,7 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
         // Mic button visible alongside UnBlock when a project is open
         XCTAssertTrue(app.buttons["micButton"].waitForExistence(timeout: 5))
+        try requireCompactEditor(app)
         unblockButton.tap()
 
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
@@ -628,6 +629,7 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(micButton.waitForExistence(timeout: 5))
         XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
         XCTAssertTrue(redoButton.exists)
+        try requireCompactEditor(app)
         XCTAssertLessThan(unblockButton.frame.maxX, micButton.frame.minX)
 
         let window = app.windows.firstMatch.frame
@@ -1068,6 +1070,7 @@ final class Writers_BlockUITests: XCTestCase {
 
         let unblockButton = app.buttons["unblockButton"]
         XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        try requireCompactEditor(app)
         unblockButton.tap()
 
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
@@ -1094,6 +1097,7 @@ final class Writers_BlockUITests: XCTestCase {
 
         let unblockButton = app.buttons["unblockButton"]
         XCTAssertTrue(unblockButton.waitForExistence(timeout: 5))
+        try requireCompactEditor(app)
         unblockButton.tap()
 
         XCTAssertTrue(app.staticTexts["Assistant"].waitForExistence(timeout: 5))
@@ -1704,6 +1708,7 @@ final class Writers_BlockUITests: XCTestCase {
         app.launch()
         let mic = app.buttons["micButton"]
         XCTAssertTrue(mic.waitForExistence(timeout: 5))
+        try requireCompactEditor(app)
         mic.tap()
         XCTAssertTrue(app.buttons["Stop recording"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["focusModeButton"].isEnabled)
@@ -1926,6 +1931,15 @@ final class Writers_BlockUITests: XCTestCase {
     private func requirePhone() throws {
         guard !isRunningOnIPad else {
             throw XCTSkip("Phone-only assistant sheet test")
+        }
+    }
+
+    /// A large phone can report a regular width class and get the wide
+    /// editor, whose inline Assistant column shows its hide button; the
+    /// compact chrome and sheet assertions do not apply there.
+    private func requireCompactEditor(_ app: XCUIApplication) throws {
+        if app.buttons["hideInlineAssistantButton"].exists {
+            throw XCTSkip("Regular-width editor: the compact chrome and sheet assertions do not apply")
         }
     }
 
