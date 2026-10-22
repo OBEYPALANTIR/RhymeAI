@@ -950,6 +950,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         temp.delete()
                     }
                 }
+                // Recordings added by an import change no song list, so queue the backup here.
+                if (summary.recordingsAdded > 0) scheduleAutoBackup()
                 buildString {
                     append("Imported ${plural(summary.songs, "song")} and added ${plural(summary.recordingsAdded, "recording")}.")
                     if (summary.damagedRecordings > 0) {
