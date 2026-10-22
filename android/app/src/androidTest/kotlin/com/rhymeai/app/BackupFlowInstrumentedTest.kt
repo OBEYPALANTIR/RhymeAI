@@ -176,6 +176,29 @@ class BackupFlowInstrumentedTest {
         assertEquals(BackupStatus.NotConnected, vm.backupStatus)
     }
 
+    @Test fun tombstonesAndRecordingChangesQueueTheDebouncedBackup() {
+        val vm = launchConnectedWithEmptyLibrary()
+        waitForText("Restore your songs?")
+        compose.onNodeWithText("Not now").performClick()
+        waitUntil { vm.backupStatus is BackupStatus.Connected }
+
+        // A recording tombstone alone changes no song list.
+        runBlocking { repo.recordRecordingDeletion("drive-a", "take.m4a", System.currentTimeMillis()) }
+        waitUntil { vm.backupStatus == BackupStatus.Pending }
+
+        instrumentation.runOnMainSync { vm.backUpNow() }
+        waitUntil { vm.backupStatus is BackupStatus.Connected }
+
+        // So does a recording saved, renamed or deleted on disk.
+        val memoDir = com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, "drive-a").also { it.mkdirs() }
+        java.io.File(memoDir, "trigger.m4a").writeBytes(byteArrayOf(1, 2, 3))
+        runBlocking {
+            val memo = vm.voiceMemoService.memosForProject("drive-a").single { it.file.name == "trigger.m4a" }
+            vm.voiceMemoService.deleteMemo(memo)
+        }
+        waitUntil { vm.backupStatus == BackupStatus.Pending }
+    }
+
     private fun waitForText(text: String) =
         compose.waitUntil(10_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
 
@@ -206,7 +229,9 @@ class BackupFlowInstrumentedTest {
         override suspend fun uploadNewFile(
             accessToken: String, name: String, mimeType: String, content: ByteArray, appProperties: Map<String, String>
         ): String = "id-${nextId++}".also { files[it] = name to content }
-        override suspend fun updateFile(accessToken: String, fileId: String, mimeType: String, content: ByteArray) {
+        override suspend fun updateFile(
+            accessToken: String, fileId: String, mimeType: String, content: ByteArray, appProperties: Map<String, String>
+        ) {
             files[fileId] = files.getValue(fileId).first to content
         }
         override suspend fun deleteFile(accessToken: String, fileId: String) {

@@ -78,6 +78,12 @@ class VoiceMemoService(private val context: Context) {
     /** Emits after a recording is moved to Trash, restored or permanently deleted. */
     val trashChanges: SharedFlow<Unit> = trashChangeEvents.asSharedFlow()
 
+    private val memoChangeEvents = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** Emits after a recording is saved, imported, renamed, deleted, trashed or restored (drives backup). */
+    val memoChanges: SharedFlow<Unit> = memoChangeEvents.asSharedFlow()
+
     // --- Recording state (exposed to Compose as observable properties) ---
 
     var isRecording by mutableStateOf(false)
@@ -228,7 +234,7 @@ class VoiceMemoService(private val context: Context) {
             return@withContext null
         }
 
-        memoFromFile(file)
+        memoFromFile(file).also { memoChangeEvents.tryEmit(Unit) }
     }
 
     /**
@@ -349,7 +355,7 @@ class VoiceMemoService(private val context: Context) {
                     )
                 imported = file
                 memoFromFile(file)
-            }
+            }.also { memoChangeEvents.tryEmit(Unit) }
         } catch (error: Exception) {
             imported?.delete()
             throw error
@@ -361,7 +367,7 @@ class VoiceMemoService(private val context: Context) {
         if (playingFile == memo.file) stopPlayback()
         return withContext(Dispatchers.IO) {
             deleteMemoFile(memo.file)
-        }
+        }.also { if (it) memoChangeEvents.tryEmit(Unit) }
     }
 
     // ---------------------------------------------------------------------------
@@ -390,7 +396,7 @@ class VoiceMemoService(private val context: Context) {
                 target = File(dir, "$deletedAt$TRASH_NAME_SEPARATOR${memo.file.name}")
             }
             if (memo.file.renameTo(target)) trashedMemoFromFile(target, projectId) else null
-        }.also { if (it != null) trashChangeEvents.tryEmit(Unit) }
+        }.also { if (it != null) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) } }
     }
 
     /** All trashed recordings across every project, newest deletion first. */
@@ -421,7 +427,7 @@ class VoiceMemoService(private val context: Context) {
         val target = RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension)
         trashed.file.renameTo(target).also {
             cleanUpEmptyTrashDir(trashed.file.parentFile)
-            if (it) trashChangeEvents.tryEmit(Unit)
+            if (it) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
         }
     }
 
@@ -443,7 +449,7 @@ class VoiceMemoService(private val context: Context) {
         }
         return withContext(Dispatchers.IO) {
             deleteMemoFile(trashed.file).also { cleanUpEmptyTrashDir(trashed.file.parentFile) }
-        }.also { if (it) trashChangeEvents.tryEmit(Unit) }
+        }.also { if (it) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) } }
     }
 
     /** Delete expired trashed recordings on their own clock, reporting partial failures. */
@@ -486,7 +492,7 @@ class VoiceMemoService(private val context: Context) {
             } else {
                 null
             }
-        }
+        }.also { if (it != null) memoChangeEvents.tryEmit(Unit) }
     }
 
     /**
