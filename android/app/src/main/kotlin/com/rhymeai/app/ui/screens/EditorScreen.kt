@@ -1195,39 +1195,42 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     label = "unBlockWordmarkAlpha",
                     // Fades out on the feedback tier before any width moves (see widthTransition).
                     transitionSpec = {
-                        if (targetState) tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing)
+                        if (!animationsEnabled) snap()
+                        else if (targetState) tween(DesignTokens.Motion.feedbackMillis, easing = DesignTokens.Motion.standardEasing)
                         else DesignTokens.Motion.expressiveSpring()
                     }
                 ) { recording -> if (recording) 0f else 1f }
 
                 // The widths and the recording content wait for the wordmark to finish
                 // fading, so a collapse never clips a visible glyph; stopping expands at once.
-                val widthsRecording by remember {
-                    derivedStateOf { memoService.isRecording && unBlockWordmarkAlpha.value == 0f }
-                }
-                val widthTransition = updateTransition(targetState = widthsRecording, label = "micWidths")
+                // With animations off there is no fade to wait for and everything snaps.
+                val wordmarkFaded by remember { derivedStateOf { unBlockWordmarkAlpha.value == 0f } }
+                val widthTransition = updateTransition(
+                    targetState = memoService.isRecording && (!animationsEnabled || wordmarkFaded),
+                    label = "micWidths"
+                )
 
                 // State references (no `by`): the values are read inside layout
                 // and draw lambdas so each spring frame invalidates only those
                 // phases instead of recomposing the whole action group.
                 val pillWidth = widthTransition.animateDp(
                     label = "pillWidth",
-                    transitionSpec = { DesignTokens.Motion.expressiveSpring(Dp.VisibilityThreshold) }
+                    transitionSpec = { if (animationsEnabled) DesignTokens.Motion.expressiveSpring(Dp.VisibilityThreshold) else snap() }
                 ) { recording -> if (recording) micRecordingWidth else DesignTokens.EditorChrome.fabSize }
 
                 val unBlockWidth = widthTransition.animateDp(
                     label = "unBlockWidth",
-                    transitionSpec = { DesignTokens.Motion.expressiveSpring(Dp.VisibilityThreshold) }
+                    transitionSpec = { if (animationsEnabled) DesignTokens.Motion.expressiveSpring(Dp.VisibilityThreshold) else snap() }
                 ) { recording -> if (recording) DesignTokens.EditorChrome.fabSize else unBlockExtendedWidth }
 
                 val unBlockWordmarkWidth = widthTransition.animateDp(
                     label = "unBlockWordmarkWidth",
-                    transitionSpec = { DesignTokens.Motion.expressiveSpring(Dp.VisibilityThreshold) }
+                    transitionSpec = { if (animationsEnabled) DesignTokens.Motion.expressiveSpring(Dp.VisibilityThreshold) else snap() }
                 ) { recording -> if (recording) 0.dp else unBlockExpandedWordmarkWidth }
 
                 val recProgress = widthTransition.animateFloat(
                     label = "recProgress",
-                    transitionSpec = { DesignTokens.Motion.expressiveSpring() }
+                    transitionSpec = { if (animationsEnabled) DesignTokens.Motion.expressiveSpring() else snap() }
                 ) { recording -> if (recording) 1f else 0f }
 
                 Row(
