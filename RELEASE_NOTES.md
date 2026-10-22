@@ -1,5 +1,16 @@
 # Release Notes
 
+## The Assistant is spaced on a golden-ratio rhythm (iOS and Android)
+
+The Assistant panel and its suggestion cards now use one spacing scale of 8,
+13, 21, 34 and 55 points, each step with one job: tight inside a control,
+related between a heading and what it labels, standard inside and between
+cards, a wider step between sections, and the most room above the main button.
+The placeholder card is now exactly as tall as a one-line suggestion, so the
+list no longer shifts when a line arrives. On Android, keyboard focus now shows
+on the selected option of a segmented control, and the UnBlock label fades
+away completely before the button shrinks when recording starts.
+
 ## Placeholders scribble while suggestions are written, and the spinner bursts when they are done (iOS and Android)
 
 While the model writes, the one placeholder card waiting for the next line now
@@ -8,7 +19,8 @@ again, so a slow model still looks busy. Each line fades into the
 placeholder's place without moving, and a placeholder left empty when writing
 stops fades away as before. When writing finishes with at least one line, the
 Stop spinner bursts into a small spray of ink as the button turns back into
-Suggest Next Line; tapping Stop, an error or an empty answer does not burst.
+Suggest Next Line; tapping Stop, changing a setting or editing mid-stream, an
+error or an empty answer does not burst.
 With Reduce Motion on (iOS) or animations removed (Android) the scribble holds
 still, there is no burst, and lines simply appear.
 
