@@ -36,6 +36,10 @@ final class UXAuditWalkthroughUITests: XCTestCase {
         let sizes = filter(environment["UX_AUDIT_SIZES"], default: ["default", "ax3"])
         let scenes = filter(environment["UX_AUDIT_SCENES"], default: Scene.allCases.map(\.rawValue))
         let orientations = filter(environment["UX_AUDIT_ORIENTATIONS"], default: ["portrait", "landscape"])
+        // Unfiltered runs keep landscape to the default size and three scenes;
+        // naming the orientations captures every requested scene and size.
+        let explicitLandscape = environment["UX_AUDIT_ORIENTATIONS"]?.isEmpty == false
+        let landscapeScenes = explicitLandscape ? scenes : scenes.filter { ["editor", "drawer", "welcome"].contains($0) }
 
         for appearance in appearances {
             for size in sizes {
@@ -45,8 +49,8 @@ final class UXAuditWalkthroughUITests: XCTestCase {
                 if orientations.contains("portrait") {
                     run(scenes: scenes, orientation: .portrait)
                 }
-                if isRunningOnIPad, size == "default", orientations.contains("landscape") {
-                    run(scenes: scenes.filter { ["editor", "drawer", "welcome"].contains($0) }, orientation: .landscapeLeft)
+                if isRunningOnIPad, size == "default" || explicitLandscape, orientations.contains("landscape") {
+                    run(scenes: landscapeScenes, orientation: .landscapeLeft)
                 }
             }
         }
