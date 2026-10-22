@@ -47,6 +47,9 @@ final class AccessibilityAuditUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(openTrash, timeout: 8))
         openTrash.tap()
         XCTAssertTrue(app.buttons["Back to songs"].waitForExistence(timeout: 5))
+        // Audit the list, not the empty state the screen shows until the
+        // trashed song arrives.
+        XCTAssertTrue(app.staticTexts["UI Trash Song"].waitForExistence(timeout: 5))
         audit(app, "trash")
     }
 
@@ -114,6 +117,10 @@ final class AccessibilityAuditUITests: XCTestCase {
         XCTAssertTrue(open.waitForExistence(timeout: 8))
         open.tap()
         XCTAssertTrue(waitUntilHittable(app.buttons["Close drawer"], timeout: 5))
+        // The drawer is still sliding in when its close button turns hittable;
+        // a tap aimed at a row's trash button then lands on the row and opens
+        // the song instead.
+        Thread.sleep(forTimeInterval: 0.6)
     }
 
     @MainActor
@@ -205,6 +212,10 @@ final class AccessibilityAuditUITests: XCTestCase {
             return "segment of the represented system segmented control; frame does not match the drawn segment"
         case .contrast where !element.isHittable:
             return "covered by another view or scrolled out of sight; the audit samples the wrong pixels"
+        case .contrast where app.scrollViews.allElementsBoundByIndex.contains(where: {
+            $0.frame.intersects(element.frame) && !$0.frame.contains(element.frame)
+        }):
+            return "partly scrolled under the edge of its scroll view (such as the assistant's pinned bar); the audit samples the covering view"
         case .textClipped where element.elementType == .textField:
             return "single-line text field; its text scrolls, nothing is cut off"
         case .dynamicType where app.navigationBars.buttons[label].exists:
