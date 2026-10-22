@@ -87,7 +87,9 @@ survives and the tombstone is dropped, but the recordings that tombstone removed
 keep tombstones of their own; deleting a song also tombstones every recording
 this device knows for it in the same write. A recording never backed up and
 never on the deleting device is the one exception: revived before its device
-backs up, it is treated as new. Android does not erase recording bytes
+backs up, it is treated as new. Each device stores every recording's precedence
+time (recorded, restored or imported time, or a pre-existing memo's file time
+stamped once), so the time survives import, re-export and rename. Android does not erase recording bytes
 already in Drive when a song is deleted.
 
 The Drive and revoke hosts are certificate-pinned fail-closed (GTS Root R4 with

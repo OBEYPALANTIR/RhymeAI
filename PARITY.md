@@ -99,8 +99,7 @@ below is the contract it must meet, not verified behaviour.
   identity the newest `deletedAt` wins. Tombstones apply by timestamp: a song
   tombstone removes the song only when `deletedAt` is newer than its `updatedAt`
   (and, in Trash, its `trashedAt`); a recording tombstone, or its song's, removes
-  a recording only when newer than its `uploadedAt` (a local file not yet listed
-  uses its modification time). A song or recording newer than its tombstone
+  a recording only when newer than its `uploadedAt` (its stored precedence time, below). A song or recording newer than its tombstone
   survives and the tombstone is dropped. When a song tombstone removes a
   recording, that recording gets its own tombstone at the same time, and
   deleting a song (Delete Forever or Trash expiry) writes tombstones for every
@@ -120,6 +119,18 @@ below is the contract it must meet, not verified behaviour.
   `ProjectRepositoryTest`). Recordings are immutable, so Drive's entry wins per
   identity; a raw file counts as present only when its `appProperties` hash and
   size both match, otherwise the uploading device's copy is uploaded again.
+- Recording precedence time (A20): each device stores a record per recording
+  in DataStore beside the songs (project id + file name → `uploadedAt`,
+  `sha256`, `bytes`, origin recorded/restored/imported/migrated). It is written
+  when a take is recorded or imported from audio (that moment), restored from
+  Drive or imported from an archive (the backup entry's own `uploadedAt`, never
+  the file time), and follows a rename or a restore from Trash under a new name.
+  A recording with no record (a memo from before this version) is stamped once,
+  at first sight, with its file time and never changes after that. Snapshots,
+  exports, migration (the older entry's own time) and every merge read this
+  record; file times are otherwise never used as precedence. Restore also
+  gathers the records of recordings in the local Trash, so applying a song
+  tombstone tombstones takes known only there.
 - Back up versus restore: Back up now and the automatic backup merge this device
   into Drive and never change local data. Restore merges both ways, uploads
   local-only items, then downloads missing recordings. Restore and import apply
@@ -166,7 +177,10 @@ below is the contract it must meet, not verified behaviour.
   header as AAD), read only, and never applied to this device: with a stored
   passphrase each backup decrypts it, uploads its recordings raw (in memory) and
   merges its songs into the Drive manifest. Deleted old recordings are uploaded
-  raw too (unlisted), so nothing in the old backup is destroyed. The old
+  raw too (unlisted), so nothing in the old backup is destroyed. Every old
+  recording entry, with its original time, is gathered with all observed
+  tombstones before resolving, so a song revived past its tombstone keeps the
+  old takes that tombstone covered deleted. The old
   manifest, its `rec_*` files and the passphrase are removed only when the
   written manifest verifies, every old song not removed by a newer tombstone is
   in it with the same content or a newer edit, and every old recording, deleted
