@@ -678,9 +678,9 @@ internal fun SettingsDialog(
                                         label = "modelDownloadFill"
                                     )
                                     val isRecommended = model.fileName == recommendedModel.fileName
-                                    // Warn on the non-recommended model so users know it may thrash;
-                                    // downloading is still allowed — just not the best fit for this device.
-                                    val exceedsRam = !isRecommended
+                                    // Warn only when the model needs more RAM than this device has;
+                                    // downloading is still allowed.
+                                    val exceedsRam = gemmaModelNeedsMoreMemory(model, deviceTotalRamBytes)
                                     OutlinedButton(
                                         onClick = {
                                             if (isInstalled) {

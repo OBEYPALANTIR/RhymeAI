@@ -1,5 +1,9 @@
 # Release Notes
 
+## Memory warning only on models the phone cannot fit (Android)
+
+On phones with 10 GB of RAM or more, the AI setup no longer warns that Gemma E2B needs more memory; the warning now appears only on Gemma E4B when the phone has less than 10 GB.
+
 ## iPad works in narrow windows and reads better with VoiceOver (iOS)
 
 In Split View, Stage Manager and resized windows narrower than 760 points, the
