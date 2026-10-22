@@ -33,6 +33,15 @@ enum RecordingFiles {
         memosRoot().appendingPathComponent(projectId, isDirectory: true)
     }
 
+    /// Where the recorder writes; a recording is published into the memo folder
+    /// only when it finishes, so nothing reads it while it is being written.
+    nonisolated static func recorderStagingURL(for projectId: String) -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("recording-in-progress", isDirectory: true)
+            .appendingPathComponent(projectId, isDirectory: true)
+            .appendingPathComponent(newMemoURL(for: projectId).lastPathComponent)
+    }
+
     nonisolated static func newMemoURL(for projectId: String) -> URL {
         let folder = memoFolder(for: projectId)
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)

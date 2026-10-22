@@ -79,7 +79,7 @@ final class OpenRecordingSnapshot {
     private let snapshotFolder: URL
 
     init?(projectId: String, recordingsRoot: URL) throws {
-        let recordings = try RecordingBackupManifest.scan(projectIds: [projectId], memosRoot: recordingsRoot)
+        let recordings = try RecordingBackupManifest.scanFiles(projectId: projectId, memosRoot: recordingsRoot)
         guard !recordings.isEmpty else { return nil }
         self.recordingsRoot = recordingsRoot
         snapshotFolder = Self.stagingRoot(for: recordingsRoot)
@@ -88,8 +88,8 @@ final class OpenRecordingSnapshot {
         do {
             for recording in recordings {
                 try FileManager.default.copyItem(
-                    at: recording.localURL,
-                    to: snapshotFolder.appendingPathComponent(recording.entry.fileName)
+                    at: recording.url,
+                    to: snapshotFolder.appendingPathComponent(recording.fileName)
                 )
             }
         } catch {
@@ -696,7 +696,7 @@ final class EditorViewModel: ObservableObject {
             self?.reconcileRecordings()
             self?.scheduleAutomaticBackup()
         }
-        recordingLibrary?.filesInProgress = { [weak self] in Set([self?.voiceMemoService.activeRecordingURL].compactMap { $0 }) }
+        voiceMemoService.publisher = recordingLibrary
         refreshCloudBackupState()
     }
 
@@ -1551,7 +1551,10 @@ final class EditorViewModel: ObservableObject {
         guard let context = modelContext else { return false }
         let projectId = trashedProject.id
         do {
-            try upsertPermanentDeletion(projectId: projectId, in: context)
+            let deletedAt = Date()
+            try upsertPermanentDeletion(projectId: projectId, deletedAt: deletedAt, in: context)
+            // Each recording gets its own tombstone in the same save (A21).
+            _ = try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: deletedAt.epochMilliseconds, in: context)
             context.delete(trashedProject)
             try saveModelContext(context)
         } catch {
@@ -1583,9 +1586,10 @@ final class EditorViewModel: ObservableObject {
         do {
             for projectId in projectIDs {
                 try upsertPermanentDeletion(projectId: projectId, deletedAt: now, in: context)
+                _ = try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: now.epochMilliseconds, in: context)
             }
             for memo in expiredMemos {
-                try upsertPermanentDeletion(projectId: memo.projectId, fileName: memo.originalName, deletedAt: now, in: context)
+                try tombstoneTrashedMemo(memo, deletedAt: now, in: context)
             }
             expiredProjects.forEach(context.delete)
             try saveModelContext(context)
@@ -1606,7 +1610,7 @@ final class EditorViewModel: ObservableObject {
     func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
         guard let context = modelContext else { return false }
         do {
-            try upsertPermanentDeletion(projectId: trashed.projectId, fileName: trashed.originalName, in: context)
+            try tombstoneTrashedMemo(trashed, deletedAt: Date(), in: context)
             try saveModelContext(context)
         } catch {
             context.rollback()
@@ -1639,17 +1643,25 @@ final class EditorViewModel: ObservableObject {
                     deletedProjects.remove(project.id)
                 }
             }
+            // The deleted songs' recordings get their own tombstones in the same save.
+            for projectId in deletedProjects {
+                _ = try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: tombstones[projectId] ?? 0, in: context)
+            }
             try saveModelContext(context)
             for projectId in deletedProjects {
                 _ = RecordingFiles.deleteMemosFolder(for: projectId)
                 do { try companionStore.remove(projectId) } catch { companionError = "Could not remove this song’s local notebook." }
             }
+            // Recordings with rows are settled by the library from their stored times;
+            // only files that never had a row are judged here, for pre-id tombstones.
+            let owned = Set(try context.fetch(FetchDescriptor<Recording>()).filter { $0.trashedAt == nil }.map { "\($0.projectId)/\($0.fileName)" })
             for deletion in deletions {
-                guard let fileName = deletion.fileName, !deletedProjects.contains(deletion.projectId) else { continue }
+                guard deletion.recordingId == nil, let fileName = deletion.fileName, !deletedProjects.contains(deletion.projectId),
+                      !owned.contains("\(deletion.projectId)/\(fileName)") else { continue }
                 // A recording saved under that name after the tombstone stays.
                 if let live = try? RecordingFiles.localURL(projectId: deletion.projectId, fileName: fileName, memosRoot: RecordingFiles.memosRoot()),
                    FileManager.default.fileExists(atPath: live.path),
-                   !deletion.covers(projectId: deletion.projectId, fileName: fileName, modifiedAt: RecordingFiles.modificationDate(live)) { continue }
+                   !deletion.covers(projectId: deletion.projectId, recordingId: "", fileName: fileName, at: RecordingFiles.modificationDate(live)) { continue }
                 voiceMemoService.deletePermanentRecordingFiles(projectId: deletion.projectId, fileName: fileName)
             }
         } catch {
@@ -1660,19 +1672,26 @@ final class EditorViewModel: ObservableObject {
 
     private func upsertPermanentDeletion(
         projectId: String,
+        recordingId: String? = nil,
         fileName: String? = nil,
         deletedAt: Date = Date(),
         in context: ModelContext
     ) throws {
-        try SyncIdentity.validateProjectId(projectId)
-        if let fileName { try SyncIdentity.validateFileName(fileName) }
-        let timestamp = Int64((deletedAt.timeIntervalSince1970 * 1000).rounded())
-        let records = try context.fetch(FetchDescriptor<SyncDeletionRecord>())
-        if let existing = records.first(where: { $0.projectId == projectId && $0.fileName == fileName }) {
-            existing.deletedAt = max(existing.deletedAt, timestamp)
-        } else {
-            context.insert(SyncDeletionRecord(projectId: projectId, fileName: fileName, deletedAt: timestamp))
+        try RecordingLibrary.upsertTombstone(
+            SyncDeletion(projectId: projectId, recordingId: recordingId, fileName: fileName, deletedAt: deletedAt.epochMilliseconds),
+            in: context
+        )
+    }
+
+    /// A trashed recording deleted for good: tombstoned by its id (by name if it
+    /// never had a row) and its row removed, in the caller's save.
+    private func tombstoneTrashedMemo(_ trashed: TrashedVoiceMemo, deletedAt: Date, in context: ModelContext) throws {
+        let row = try context.fetch(FetchDescriptor<Recording>()).first {
+            $0.projectId == trashed.projectId && $0.fileName == trashed.originalName
+                && $0.trashedAt?.epochMilliseconds == trashed.deletedAt.epochMilliseconds
         }
+        try upsertPermanentDeletion(projectId: trashed.projectId, recordingId: row?.id, fileName: trashed.originalName, deletedAt: deletedAt, in: context)
+        if let row { context.delete(row) }
     }
 
     private func scheduleTrashPurge() {
@@ -2127,6 +2146,7 @@ final class EditorViewModel: ObservableObject {
     /// A failed scan changes nothing and is retried on the next trigger.
     func reconcileRecordings() {
         guard let recordingLibrary, let modelContext else { return }
+        recordingLibrary.context = modelContext
         if (try? recordingLibrary.reconcile(context: modelContext)) != nil {
             oversizedRecordingCount = recordingLibrary.oversizedCount
         }
