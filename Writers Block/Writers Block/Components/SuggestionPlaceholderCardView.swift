@@ -162,29 +162,29 @@ struct SuggestionPlaceholderCardView: View {
     }
 
     /// The serif line, held by one hidden line of the card's font so the slot
-    /// is at least as tall as the line that will land in it, with two
-    /// scribbled lines writing themselves over it. Under Reduce Motion the
-    /// timeline pauses on one still frame.
+    /// is exactly as tall as a one-line card, with two scribbled lines
+    /// writing themselves centred over it. The scribble is an overlay, so it
+    /// never sizes the slot: where it is taller than the line it runs into
+    /// the card's padding, and the slot grows only with the hidden text
+    /// (Dynamic Type). Under Reduce Motion the timeline pauses on one still frame.
     private func lineSlot(ink: Color) -> some View {
         let first = SuggestionInkLineMotion.textBarFraction(slot: slot)
-        return ZStack(alignment: .topLeading) {
-            Text(verbatim: "Placeholder")
-                .font(.system(.body, design: .serif))
-                .lineLimit(1)
-                .hidden()
-
-            TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { context in
-                let progress = reduceMotion
-                    ? SuggestionInkLineMotion.stillProgress
-                    : SuggestionInkLineMotion.lineProgress(elapsed: context.date.timeIntervalSince(appeared))
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                    scribble(widthShare: first, progress: progress.first, ink: ink)
-                    scribble(widthShare: first * SuggestionInkLineMotion.secondLineShare, progress: progress.second, ink: ink)
+        return Text(verbatim: "Placeholder")
+            .font(.system(.body, design: .serif))
+            .lineLimit(1)
+            .hidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) {
+                TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { context in
+                    let progress = reduceMotion
+                        ? SuggestionInkLineMotion.stillProgress
+                        : SuggestionInkLineMotion.lineProgress(elapsed: context.date.timeIntervalSince(appeared))
+                    VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                        scribble(widthShare: first, progress: progress.first, ink: ink)
+                        scribble(widthShare: first * SuggestionInkLineMotion.secondLineShare, progress: progress.second, ink: ink)
+                    }
                 }
-                .padding(.top, RhymeAITokens.Spacing.xxs)
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func scribble(widthShare: CGFloat, progress: CGFloat, ink: Color) -> some View {
