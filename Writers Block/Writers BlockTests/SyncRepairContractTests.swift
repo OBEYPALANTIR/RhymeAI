@@ -11,10 +11,10 @@ import Testing
 struct SyncRepairContractTests {
     @Test func permanentDeletionsConverge() throws { try SyncRepairContractChecks.deletions() }
     @Test func strictManifestSchemaAndPaths() throws { try SyncRepairContractChecks.validation() }
-    @Test func authenticatedEnvelopeVersions() throws { try SyncRepairContractChecks.crypto() }
+    @Test func authenticatedEnvelopeVersionsStillOpen() throws { try SyncRepairContractChecks.crypto() }
     @Test func legacyManifestsRemainReadable() throws { try SyncRepairContractChecks.legacyManifests() }
     @Test func androidWrittenV3ManifestOpens() throws { try SyncRepairContractChecks.androidWrittenManifest() }
-    @Test func importedAudioUsesV3ManifestAndRetainsDeletionSemantics() throws { try SyncRepairContractChecks.importedAudio() }
+    @Test func importedAudioKeepsDeletionSemanticsThroughTheV4Upgrade() throws { try SyncRepairContractChecks.importedAudio() }
 }
 #endif
 
@@ -35,18 +35,19 @@ enum SyncRepairContractChecks {
 
     static func deletions() throws {
         let later = Date(timeIntervalSince1970: 2_000_000_000)
+        let laterMs: Int64 = 2_000_000_000_000
         func project(_ id: String) -> SyncSongProject { SyncSongProject(id: id, title: id, lyrics: "synthetic", theme: "", updatedAt: later) }
-        func recording(_ id: String, _ file: String) -> SyncRecordingManifestEntry {
-            SyncRecordingManifestEntry(projectId: id, fileName: file, driveName: RecordingBackupManifest.driveName(projectId: id, fileName: file), sizeBytes: 3, modifiedAt: later, sha256: "synthetic")
+        func recording(_ id: String, _ file: String) -> SyncRecording {
+            SyncRecording(projectId: id, fileName: file, bytes: 3, sha256: String(repeating: "a", count: 64), uploadedAt: later)
         }
         let trash = SyncTrashedSongProject(id: "gone", title: "gone", lyrics: "synthetic", theme: "", updatedAt: later, deletedAt: later, deleteAfter: later)
         let content = SyncBlob(projects: [project("gone"), project("keep")], trashed: [trash], recordings: [recording("gone", "take.m4a"), recording("keep", "removed.m4a"), recording("keep", "new.m4a")], savedAt: later, savedByClientId: "stale")
-        let tombstones = SyncBlob(deletions: [SyncDeletion(projectId: "gone", deletedAt: 1), SyncDeletion(projectId: "gone", deletedAt: 2), SyncDeletion(projectId: "gone", fileName: "take.m4a", deletedAt: Int64.max), SyncDeletion(projectId: "keep", fileName: "removed.m4a", deletedAt: 3)], savedAt: later, savedByClientId: "deleter")
+        let tombstones = SyncBlob(deletions: [SyncDeletion(projectId: "gone", deletedAt: laterMs + 1), SyncDeletion(projectId: "gone", deletedAt: laterMs + 2), SyncDeletion(projectId: "gone", fileName: "take.m4a", deletedAt: Int64.max), SyncDeletion(projectId: "keep", fileName: "removed.m4a", deletedAt: laterMs + 3)], savedAt: later, savedByClientId: "deleter")
         let merged = try SyncMerger.merge(local: content, remote: tombstones)
-        try require(merged.projects.map(\.id) == ["keep"], "project tombstone lost to later content")
+        try require(merged.projects.map(\.id) == ["keep"], "newer project tombstone lost to older content")
         try require(merged.trashed.isEmpty, "project tombstone retained visible trash")
-        try require(merged.recordings.map(\.fileName) == ["new.m4a"], "recording tombstone lost to later manifest")
-        try require(merged.deletions == [SyncDeletion(projectId: "gone", deletedAt: 2), SyncDeletion(projectId: "keep", fileName: "removed.m4a", deletedAt: 3)], "tombstone union/deduplication failed")
+        try require(merged.recordings.map(\.fileName) == ["new.m4a"], "recording tombstone lost to older upload")
+        try require(merged.deletions == [SyncDeletion(projectId: "gone", deletedAt: laterMs + 2), SyncDeletion(projectId: "gone", fileName: "take.m4a", deletedAt: Int64.max), SyncDeletion(projectId: "keep", fileName: "removed.m4a", deletedAt: laterMs + 3)], "tombstone union/deduplication failed")
         try require(merged == SyncMerger.merge(local: tombstones, remote: content), "merge order changed output")
         try require(merged == SyncMerger.merge(local: merged, remote: merged), "merge was not idempotent")
         try require(merged == SyncMerger.merge(local: merged, remote: content), "repeat stale peer resurrected content")
@@ -55,13 +56,31 @@ enum SyncRepairContractChecks {
         var alternative = content
         alternative.projects[1].lyrics = "z synthetic conflict"
         try require(SyncMerger.merge(local: content, remote: alternative) == SyncMerger.merge(local: alternative, remote: content), "equal content timestamps must converge")
+        // Timestamps decide: content changed after its tombstone survives and the tombstone is dropped.
+        let stale = SyncBlob(deletions: [SyncDeletion(projectId: "keep", deletedAt: laterMs - 1), SyncDeletion(projectId: "keep", fileName: "new.m4a", deletedAt: laterMs - 1)])
+        let revived = try SyncMerger.merge(local: content, remote: stale)
+        try require(revived.projects.map(\.id).contains("keep") && revived.recordings.contains { $0.fileName == "new.m4a" }, "older tombstone removed newer content")
+        try require(revived.deletions.contains { $0.projectId == "keep" && $0.fileName == nil }, "a tombstone that lost was dropped; it must keep protecting older audio")
+
+        // A song edited after its tombstone survives, but audio uploaded before the
+        // tombstone stays deleted: on this backup, the next, and against a device
+        // that still holds the old take.
+        let oldTake = SyncRecording(projectId: "keep", fileName: "old.m4a", bytes: 3, sha256: String(repeating: "c", count: 64), uploadedAt: Date(timeIntervalSince1970: 1_900_000_000))
+        let tombstone = SyncDeletion(projectId: "keep", deletedAt: 1_950_000_000_000)
+        let first = try SyncMerger.merge(local: SyncBlob(projects: [project("keep")], recordings: [recording("keep", "new.m4a")]), remote: SyncBlob(deletions: [tombstone]))
+        let second = try SyncMerger.merge(local: first, remote: SyncBlob(projects: [project("keep")], recordings: [oldTake]))
+        let third = try SyncMerger.merge(local: SyncBlob(recordings: [oldTake]), remote: second)
+        for result in [first, second, third] {
+            try require(result.projects.map(\.id) == ["keep"] && result.recordings.map(\.fileName) == ["new.m4a"], "revived song resurrected audio its tombstone covered")
+            try require(result.deletions == [tombstone], "revived song lost its tombstone")
+        }
     }
 
     static func validation() throws {
-        let migrated = try SyncJSON.decoder.decode(SyncBlob.self, from: v1)
+        let migrated = try SyncJSON.decoder.decode(LegacySyncBlob.self, from: v1)
         try require(migrated.version == 1 && migrated.deletions.isEmpty, "v1 migration failed")
         for json in [#"{"version":2}"#, #"{"version":2,"deletions":null}"#, #"{"version":3}"#, #"{"version":3,"deletions":null}"#, #"{"version":4,"deletions":[]}"#, #"{"version":1,"deletions":[]}"#, #"{"deletions":[]}"#] {
-            try rejects("invalid version shape accepted") { _ = try SyncJSON.decoder.decode(SyncBlob.self, from: Data(json.utf8)) }
+            try rejects("invalid version shape accepted") { _ = try SyncJSON.decoder.decode(LegacySyncBlob.self, from: Data(json.utf8)) }
         }
         for value in ["", ".", "..", "../song", "a/b", "a\\b", "a\n", String(repeating: "é", count: 65)] {
             try rejects("invalid project ID accepted") { try SyncIdentity.validateProjectId(value) }
@@ -93,13 +112,13 @@ enum SyncRepairContractChecks {
     }
 
     static func crypto() throws {
-        let legacyEnvelope = try SyncBlobCrypto.seal(v1, passphrase: passphrase, salt: salt, iv: iv)
+        let legacyEnvelope = try rawEnvelope(v1, magic: "RAI1")
         try require(legacyEnvelope.base64EncodedString() == golden, "RAI1 cross-platform golden changed")
         try require(SyncBlobCrypto.openManifest(legacyEnvelope, passphrase: passphrase).version == 1, "v1 manifest reader failed")
-        let blob = SyncBlob(deletions: [SyncDeletion(projectId: "gone", deletedAt: 1700000000000)], savedAt: Date(timeIntervalSince1970: 1700000000), savedByClientId: "ios-fixture")
-        let envelope = try SyncBlobCrypto.sealManifest(blob, passphrase: passphrase, salt: salt, iv: iv)
-        try require(envelope.prefix(4) == Data("RAI3".utf8), "manifest did not write RAI3")
-        try require(SyncBlobCrypto.openManifest(envelope, passphrase: passphrase) == blob, "RAI3 manifest round trip failed")
+        let blob = LegacySyncBlob(deletions: [SyncDeletion(projectId: "gone", deletedAt: 1700000000000)], savedAt: Date(timeIntervalSince1970: 1700000000), savedByClientId: "ios-fixture")
+        let encodedV3 = try SyncJSON.encoder.encode(blob)
+        let envelope = try rawEnvelope(encodedV3, magic: "RAI3")
+        try require(SyncBlobCrypto.openManifest(envelope, passphrase: passphrase) == blob, "RAI3 manifest did not open")
         try rejects("legacy audio reader accepted RAI3") { _ = try SyncBlobCrypto.open(envelope, passphrase: passphrase) }
         for previous in [UInt8(ascii: "1"), UInt8(ascii: "2")] {
             var downgrade = envelope
@@ -115,8 +134,7 @@ enum SyncRepairContractChecks {
             _ = try SyncBlobCrypto.openManifest(future, passphrase: passphrase)
             throw Failure(message: "future magic accepted")
         } catch SyncBlobCryptoError.unsupportedEnvelopeVersion {}
-        let encodedV3 = try SyncJSON.encoder.encode(blob)
-        let mismatched = try SyncBlobCrypto.seal(encodedV3, passphrase: passphrase, salt: salt, iv: iv)
+        let mismatched = try rawEnvelope(encodedV3, magic: "RAI1")
         try rejects("RAI1/v3 pairing accepted") { _ = try SyncBlobCrypto.openManifest(mismatched, passphrase: passphrase) }
         for (magic, plaintext) in [("RAI2", v1), ("RAI2", encodedV3), ("RAI3", v1), ("RAI3", Data(#"{"version":2,"deletions":[]}"#.utf8))] {
             let authenticated = try rawEnvelope(plaintext, magic: magic)
@@ -124,8 +142,8 @@ enum SyncRepairContractChecks {
         }
         try rejects("wrong passphrase accepted") { _ = try SyncBlobCrypto.openManifest(envelope, passphrase: "wrong passphrase") }
         let audio = Data([0, 1, 2, 3])
-        let recording = try SyncBlobCrypto.seal(audio, passphrase: passphrase, salt: salt, iv: iv)
-        try require(recording.prefix(4) == Data("RAI1".utf8) && SyncBlobCrypto.open(recording, passphrase: passphrase) == audio, "recording compatibility failed")
+        let recording = try rawEnvelope(audio, magic: "RAI1")
+        try require(SyncBlobCrypto.open(recording, passphrase: passphrase) == audio, "recording compatibility failed")
     }
 
     static func androidWrittenManifest() throws {
@@ -146,42 +164,37 @@ enum SyncRepairContractChecks {
         try require(legacy.version == 2, "v2 manifest reader changed version")
         try require(legacy.recordings.map(\.fileName) == ["take.m4a"], "legacy M4A recording lost")
         try require(legacy.deletions == [SyncDeletion(projectId: "deleted-song", deletedAt: 1700000000000)], "legacy v2 deletion lost")
-        let upgraded = try SyncMerger.merge(local: legacy, remote: SyncBlob())
-        try require(upgraded.version == 3 && upgraded.deletions == legacy.deletions, "v2 merge lost deletion contract")
+        let upgraded = try SyncMerger.merge(local: legacy.upgraded, remote: SyncBlob())
+        try require(upgraded.deletions == legacy.deletions, "v2 upgrade lost deletion contract")
 
-        // Android currently emits imported names in RAI1/v1. Keep these transitional
-        // reads tolerant; Apple production writes must still advertise the new version.
+        // Android emitted imported names in RAI1/v1 and RAI2/v2; they still open for migration.
         for version in [1, 2] {
             let recordings = ["m4a", "mp3", "wav", "aac"].map { ext in
                 SyncRecordingManifestEntry(projectId: "song", fileName: "take.\(ext)", driveName: "rec_song_take.\(ext).enc", sizeBytes: 3, modifiedAt: Date(timeIntervalSince1970: 1700000000), sha256: "synthetic")
             }
-            let blob = SyncBlob(version: version, recordings: recordings, savedAt: Date(timeIntervalSince1970: 1700000000))
+            let blob = LegacySyncBlob(version: version, recordings: recordings, savedAt: Date(timeIntervalSince1970: 1700000000))
             let envelope = try rawEnvelope(SyncJSON.encoder.encode(blob), magic: "RAI\(version)")
             try require(SyncBlobCrypto.openManifest(envelope, passphrase: passphrase) == blob, "legacy imported-name read regressed")
-            do {
-                _ = try SyncBlobCrypto.sealManifest(blob, passphrase: passphrase)
-                throw Failure(message: "Apple writer emitted a legacy manifest")
-            } catch SyncBlobCryptoError.manifestVersionMismatch {}
         }
     }
 
     static func importedAudio() throws {
         let formats = ["aac", "m4a", "mp3", "wav"]
+        let hash = String(repeating: "b", count: 64)
         let recordings = formats.map { ext in
-            SyncRecordingManifestEntry(projectId: "song", fileName: "take.\(ext)", driveName: "rec_song_take.\(ext).enc", sizeBytes: 3, modifiedAt: Date(timeIntervalSince1970: 1700000000), sha256: "synthetic")
+            SyncRecordingManifestEntry(projectId: "song", fileName: "take.\(ext)", driveName: "rec_song_take.\(ext).enc", sizeBytes: 3, modifiedAt: Date(timeIntervalSince1970: 1700000000), sha256: hash)
         }
         let deleted = formats.map { SyncDeletion(projectId: "song", fileName: "deleted.\($0)", deletedAt: 1700000000000) }
-        let blob = SyncBlob(recordings: recordings, deletions: deleted, savedAt: Date(timeIntervalSince1970: 1700000000))
-        let encoded = try SyncJSON.encoder.encode(blob)
-        try require(SyncJSON.decoder.decode(SyncBlob.self, from: encoded) == blob, "v3 JSON lost recording deletions")
-        let envelope = try SyncBlobCrypto.sealManifest(blob, passphrase: passphrase, salt: salt, iv: iv)
-        try require(envelope.prefix(4) == Data("RAI3".utf8), "imported names did not advertise RAI3")
-        let opened = try SyncBlobCrypto.openManifest(envelope, passphrase: passphrase)
-        try require(opened == blob, "v3 import/deletion encrypted round trip failed")
-        let tombstoned = SyncBlob(recordings: recordings, deletions: [SyncDeletion(projectId: "song", fileName: "take.wav", deletedAt: 1)])
-        let merged = try SyncMerger.merge(local: blob, remote: tombstoned)
-        let reopened = try SyncBlobCrypto.openManifest(SyncBlobCrypto.sealManifest(merged, passphrase: passphrase), passphrase: passphrase)
-        try require(reopened.version == 3 && !reopened.recordings.contains { $0.fileName == "take.wav" }, "v3 merge/seal resurrected deleted imported audio")
+        let legacy = LegacySyncBlob(recordings: recordings, deletions: deleted, savedAt: Date(timeIntervalSince1970: 1700000000))
+        let opened = try SyncBlobCrypto.openManifest(rawEnvelope(SyncJSON.encoder.encode(legacy), magic: "RAI3"), passphrase: passphrase)
+        try require(opened == legacy, "v3 import/deletion encrypted read failed")
+        let upgraded = opened.upgraded
+        try require(upgraded.recordings.map(\.driveName) == formats.map { "rec_song_take.\($0)" }, "v4 Drive names wrong")
+        let reopened = try SyncBlob.decodeManifest(upgraded.encodedManifest())
+        try require(reopened.recordings == upgraded.recordings && reopened.deletions == deleted, "v4 round trip lost imported audio or deletions")
+        let tombstoned = SyncBlob(recordings: upgraded.recordings, deletions: [SyncDeletion(projectId: "song", fileName: "take.wav", deletedAt: Int64.max)])
+        let merged = try SyncMerger.merge(local: upgraded, remote: tombstoned)
+        try require(!merged.recordings.contains { $0.fileName == "take.wav" }, "v4 merge resurrected deleted imported audio")
     }
 
     static func rawEnvelope(_ plaintext: Data, magic: String) throws -> Data {

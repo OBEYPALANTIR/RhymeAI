@@ -231,6 +231,29 @@ enum RecordingFiles {
         return targetURL
     }
 
+    nonisolated static func modificationDate(_ url: URL) -> Date {
+        ((try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate) ?? Date()
+    }
+
+    /// Writes `data` beside `target`, then moves it into place only if nothing is
+    /// there at that moment. False (and nothing changed) when a file already exists.
+    @discardableResult
+    nonisolated static func commitIfAbsent(_ data: Data, to target: URL, modifiedAt: Date? = nil) throws -> Bool {
+        let folder = target.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let temp = folder.appendingPathComponent(".\(UUID().uuidString).partial")
+        try data.write(to: temp, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        if let modifiedAt { try? FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: temp.path) }
+        do {
+            // link(2) fails with EEXIST rather than replacing: create-if-absent in one step.
+            try FileManager.default.linkItem(at: temp, to: target)
+            return true
+        } catch CocoaError.fileWriteFileExists {
+            return false
+        }
+    }
+
     nonisolated static func projectURL(projectId: String, memosRoot: URL) throws -> URL {
         try SyncIdentity.validateProjectId(projectId)
         let root = memosRoot.standardizedFileURL.resolvingSymlinksInPath()
