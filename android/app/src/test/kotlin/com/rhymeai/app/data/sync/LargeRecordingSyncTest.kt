@@ -141,7 +141,7 @@ class LargeRecordingSyncTest {
             local = SyncBlob(recordings = listOf(localLarge)),
             remote = SyncBlob(
                 recordings = listOf(remoteLarge, keptLarge),
-                deletions = listOf(SyncDeletion("gone", deletedAt = 1L))
+                deletions = listOf(SyncDeletion("gone", deletedAt = 1_000L))
             )
         )
 

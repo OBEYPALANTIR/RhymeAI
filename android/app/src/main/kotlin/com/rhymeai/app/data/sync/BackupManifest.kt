@@ -34,7 +34,8 @@ class UnsupportedBackupVersionException(val version: Int) :
  * `shared/fixtures/sync-manifest-v4.json`. `manifestSha256` covers the canonical
  * form of the object without that key: keys sorted by code point, no whitespace,
  * only `\"`, `\\`, `\n`, `\r`, `\t` and lowercase `\u00xx` escapes, integers only.
- * Timestamps inside entries are epoch milliseconds, as in v3; `savedAt` is ISO-8601 UTC.
+ * Song, trash and tombstone timestamps are epoch milliseconds, as in v3; `savedAt`
+ * and each recording's `uploadedAt` are ISO-8601 UTC with whole seconds.
  */
 object BackupManifest {
     const val VERSION = 4
@@ -73,6 +74,7 @@ object BackupManifest {
                         put("fileName", entry.fileName)
                         put("bytes", entry.sizeBytes)
                         put("sha256", entry.sha256)
+                        put("uploadedAt", isoSeconds(entry.uploadedAt))
                     }
                 }
             }
@@ -126,7 +128,8 @@ object BackupManifest {
                         fileName = fields.string("fileName"),
                         sizeBytes = fields.long("bytes"),
                         modifiedAt = 0L,
-                        sha256 = sha
+                        sha256 = sha,
+                        uploadedAt = Instant.parse(fields.string("uploadedAt")).toEpochMilli()
                     )
                 },
                 deletions = root.array("deletions").map { element ->
@@ -148,6 +151,12 @@ object BackupManifest {
         } catch (e: Exception) {
             throw DamagedBackupException(e)
         }
+    }
+
+    /** The `manifestSha256` a manifest carries, after checking it against its canonical form. */
+    fun hashOf(bytes: ByteArray): String {
+        decode(bytes)
+        return Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject.getValue(HASH_KEY).jsonPrimitive.content
     }
 
     fun canonical(element: JsonElement): String = StringBuilder().also { writeCanonical(element, it) }.toString()
