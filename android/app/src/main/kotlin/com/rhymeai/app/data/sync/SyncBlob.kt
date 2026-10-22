@@ -210,27 +210,45 @@ object SyncMerger {
         val deletions: List<SyncDeletion>
     )
 
-    fun merge(local: SyncBlob, remote: SyncBlob): SyncBlob {
-        local.validate()
-        remote.validate()
-        val (cleanProjects, cleanTrashed) = resolveActiveTrashConflicts(
-            mergeProjects(local.projects, remote.projects),
-            mergeTrash(local.trashed, remote.trashed)
-        )
-        val resolved = applyTombstones(
-            cleanProjects,
-            cleanTrashed,
-            mergeRecordings(local.recordings, remote.recordings),
-            mergeDeletions(local.deletions + remote.deletions)
-        )
+    fun merge(local: SyncBlob, remote: SyncBlob): SyncBlob = resolve(gather(local, remote))
+
+    /**
+     * Collects every input's songs, trash, recordings and tombstones into one working
+     * set without resolving anything: per id the newest song or trash entry, per
+     * recording identity the last input's entry, per tombstone identity the newest.
+     * Resolve once, with [resolve], after every input is in, so no tombstone is
+     * dropped or recording filtered before all the evidence is present.
+     */
+    fun gather(vararg inputs: SyncBlob): SyncBlob {
+        inputs.forEach(SyncBlob::validate)
+        var projects = emptyList<SongProject>()
+        var trashed = emptyList<TrashedSongProject>()
+        var recordings = emptyList<RecordingManifestEntry>()
+        for (input in inputs) {
+            projects = mergeProjects(projects, input.projects)
+            trashed = mergeTrash(trashed, input.trashed)
+            recordings = mergeRecordings(recordings, input.recordings)
+        }
         return SyncBlob(
             version = SyncBlob.CURRENT_VERSION,
+            projects = projects,
+            trashed = trashed,
+            recordings = recordings,
+            deletions = mergeDeletions(inputs.flatMap { it.deletions }),
+            savedAt = System.currentTimeMillis(),
+            savedByClientId = inputs.firstOrNull()?.savedByClientId.orEmpty()
+        )
+    }
+
+    /** Applies active/trash conflicts and tombstone precedence once to a [gather]ed set. */
+    fun resolve(gathered: SyncBlob): SyncBlob {
+        val (cleanProjects, cleanTrashed) = resolveActiveTrashConflicts(gathered.projects, gathered.trashed)
+        val resolved = applyTombstones(cleanProjects, cleanTrashed, gathered.recordings, gathered.deletions)
+        return gathered.copy(
             projects = resolved.projects.sortedByDescending { it.updatedAt },
             trashed = resolved.trashed.sortedByDescending { it.deletedAt },
             recordings = resolved.recordings.sortedWith(compareBy<RecordingManifestEntry> { it.projectId }.thenBy { it.fileName }),
-            deletions = resolved.deletions,
-            savedAt = System.currentTimeMillis(),
-            savedByClientId = local.savedByClientId
+            deletions = resolved.deletions
         )
     }
 

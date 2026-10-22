@@ -766,6 +766,20 @@ internal fun snapshotTrashedRecordingIdentities(filesDir: File): Set<String> {
         ?: emptySet()
 }
 
+/**
+ * Recording names this device knows for a song, live or in Trash, so deleting the
+ * song can tombstone each of them in the same write (reviving the song later must
+ * not bring them back).
+ */
+internal fun knownRecordingNames(filesDir: File, projectId: String): List<String> {
+    val live = RecordingFiles.memoDirectory(filesDir, projectId).listFiles()
+        ?.filter { RecordingFiles.isMemoFile(it) }?.map { it.name }.orEmpty()
+    val trashed = RecordingFiles.trashDirectory(filesDir, projectId).listFiles()
+        ?.filter { RecordingFiles.isMemoFile(it) }
+        ?.mapNotNull { VoiceMemoService.parseTrashedName(it.name)?.second }.orEmpty()
+    return (live + trashed).distinct().filter { runCatching { SyncIdentity.validateFileName(it) }.isSuccess }
+}
+
 /** Never turn a pending local deletion into a durable remote recording. */
 internal fun snapshotLocalRecordingFiles(
     filesDir: File,
@@ -914,7 +928,7 @@ class DriveSyncService(
                 is DriveAuthorization.NeedsConsent -> return@guarded ProbeResult.Failed(SyncResult.AuthorizationRequired(auth.pendingIntent))
                 DriveAuthorization.Unavailable -> return@guarded ProbeResult.Failed(SyncResult.NotConfigured)
             }
-            val remote = readRemote(token).blob
+            val remote = readRemote(token).blob?.let(SyncMerger::resolve)
             val legacy = driveClient.findFileByName(token, SyncBlob.DRIVE_FILE_NAME) != null
             ProbeResult.Ready(BackupProbe(remote?.projects?.size ?: 0, remote?.recordings?.size ?: 0, legacy))
         }
@@ -1030,10 +1044,10 @@ class DriveSyncService(
             .filter { it.name == BackupManifest.FILE_NAME }
             .sortedBy { it.modifiedTime ?: "" }
         if (files.isEmpty()) return RemoteState(null, emptyList(), null)
-        // Oldest first, so the newest manifest's recording entries win.
-        val blob = files
-            .map { BackupManifest.decode(driveClient.downloadFile(token, it.id, MAX_SYNC_BLOB_BYTES)) }
-            .reduce { older, newer -> SyncMerger.merge(older, newer) }
+        // Gathered, not resolved: oldest first, so the newest manifest's recording entries win.
+        val blob = SyncMerger.gather(
+            *files.map { BackupManifest.decode(driveClient.downloadFile(token, it.id, MAX_SYNC_BLOB_BYTES)) }.toTypedArray()
+        )
         return RemoteState(files.last(), files.dropLast(1), blob)
     }
 
@@ -1050,23 +1064,24 @@ class DriveSyncService(
         extraRemote: SyncBlob?,
         requireRemote: Boolean
     ): PushOutcome? {
-        // What an earlier attempt merged is carried forward, so content seen once is never dropped.
-        var candidate: SyncBlob? = null
+        // Every input seen by an earlier attempt (its local, remote and any conflicting
+        // read-back) is carried forward unresolved, so nothing seen once is dropped.
+        var seen: SyncBlob? = null
         repeat(MAX_MANIFEST_WRITE_ATTEMPTS) {
             val base = repository.snapshotLocalSyncBase()
             val localFiles = snapshotLocalRecordingFiles(filesDir, base.pendingIds)
             val localRecordings = localFiles.map { it.entry }
+            // Unfiltered by tombstones: resolution decides once, with every input present.
             val local = base.blob.copy(
-                recordings = recordingsAllowedForUpload(localRecordings, base.blob.deletions, emptyList())
-                    .filter { it.isTransferable },
+                recordings = localRecordings.filter { it.isTransferable },
                 savedByClientId = clientId()
             )
             val remote = readRemote(token)
             if (requireRemote && remote.blob == null && extraRemote == null) return null
 
-            var merged = SyncMerger.merge(local, remote.blob ?: SyncBlob())
-            candidate?.let { merged = SyncMerger.merge(it, merged) }
-            if (extraRemote != null) merged = SyncMerger.merge(merged, extraRemote)
+            // Gather everything first, then resolve tombstones once.
+            val gathered = SyncMerger.gather(*listOfNotNull(seen, local, extraRemote, remote.blob).toTypedArray())
+            var merged = SyncMerger.resolve(gathered).copy(savedByClientId = clientId())
             val driveFiles = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX)
                 .associateBy { it.name }
             // A raw file counts only when its appProperties carry the listed hash and size.
@@ -1100,7 +1115,6 @@ class DriveSyncService(
                 }
             }
 
-            val unstamped = merged
             val writtenAt = now()
             val remoteRecordings = remote.blob?.recordings.orEmpty().associateBy { it.identityKey }
             merged = merged.copy(
@@ -1114,7 +1128,7 @@ class DriveSyncService(
             if (bytes.size > MAX_SYNC_BLOB_BYTES) throw DriveNetworkException("Drive backup exceeds the allowed size")
             // Another device wrote while recordings uploaded: merge its manifest before writing ours.
             if (manifestVersions(token) != remote.versions) {
-                candidate = unstamped
+                seen = gathered
                 return@repeat
             }
             val manifestId = remote.primary?.id?.also {
@@ -1124,7 +1138,7 @@ class DriveSyncService(
             // Read back: another device may have written between our read and our write.
             val readBack = driveClient.downloadFile(token, manifestId, MAX_SYNC_BLOB_BYTES)
             if (BackupManifest.hashOf(readBack) != BackupManifest.hashOf(bytes)) {
-                candidate = unstamped
+                seen = SyncMerger.gather(gathered, BackupManifest.decode(readBack))
                 return@repeat
             }
             remote.duplicates.forEach { driveClient.deleteFile(token, it.id) }

@@ -250,6 +250,40 @@ class BackupServiceTest {
     }
 
     @Test
+    fun aConflictingReadBackIsKeptEvenWhenAnotherWriterReplacesItBeforeTheRetry() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("L")))
+        putRemote(SyncBlob(projects = listOf(song("R"))))
+        drive.afterManifestWrite = {
+            putRemote(SyncBlob(projects = listOf(song("T"))))
+            // Our read-back sees T; then a stale writer replaces it with U before the retry reads.
+            drive.afterNextDownload = { putRemote(SyncBlob(projects = listOf(song("U")))) }
+        }
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertEquals(setOf("R", "L", "T", "U"), remote().projects.map { it.id }.toSet())
+    }
+
+    @Test
+    fun aStaleSongTombstoneSeenOnRetryStillDeletesTheOldTakeButNotTheNewerSong() = runBlocking<Unit> {
+        val old = "old take".toByteArray()
+        val listed = entry("x", "take.m4a", old, uploadedAt = 1_000L)
+        putRemote(SyncBlob(projects = listOf(song("x", updatedAt = 100L)), recordings = listOf(listed)))
+        putRaw(listed, old)
+        repository.saveProjects(listOf(song("x", updatedAt = 9_000L)))
+        writeMemo("x", "new.m4a", "new take".toByteArray(), modifiedAt = 9_500L)
+        // While the new take uploads, a stale device writes a song tombstone (5000) with no recording tombstone.
+        drive.onRecordingUpload = { putRemote(SyncBlob(deletions = listOf(SyncDeletion("x", deletedAt = 5_000L)))) }
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertEquals(listOf("x"), remote().projects.map { it.id })
+        assertEquals(listOf("x/new.m4a"), remote().recordings.map { it.identityKey })
+        assertEquals(listOf(SyncDeletion("x", "take.m4a", 5_000L)), remote().deletions)
+        assertEquals(1, drive.count("rec_x_new.m4a"))
+    }
+
+    @Test
     fun aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite() = runBlocking<Unit> {
         repository.saveProjects(listOf(song("doomed", updatedAt = 1_000L), song("kept")))
         writeMemo("doomed", "take.m4a", "audio".toByteArray(), modifiedAt = 1_000L)
@@ -591,6 +625,7 @@ class BackupServiceTest {
         var afterManifestWrite: (() -> Unit)? = null
         var keepInterfering: (() -> Unit)? = null
         var onRecordingUpload: (() -> Unit)? = null
+        var afterNextDownload: (() -> Unit)? = null
         val revoked = mutableListOf<String>()
 
         fun put(name: String, bytes: ByteArray, appProperties: Map<String, String> = emptyMap()) {
@@ -635,6 +670,7 @@ class BackupServiceTest {
             calls++
             val bytes = files.getValue(fileId).bytes
             if (bytes.size > maxBytes) throw DriveNetworkException("Drive download exceeds the allowed size")
+            afterNextDownload?.let { afterNextDownload = null; it() }
             return bytes
         }
         override suspend fun uploadNewFile(
