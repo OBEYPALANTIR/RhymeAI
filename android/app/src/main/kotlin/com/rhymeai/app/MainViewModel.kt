@@ -29,7 +29,9 @@ import com.rhymeai.app.data.repository.MissingActiveProjectException
 import com.rhymeai.app.data.sync.BackupArchive
 import com.rhymeai.app.data.sync.BackupManifest
 import com.rhymeai.app.data.sync.BackupProbe
-import com.rhymeai.app.data.sync.BackupSchedule
+import com.rhymeai.app.data.sync.BackupRunOutcome
+import com.rhymeai.app.data.sync.BackupScheduler
+import com.rhymeai.app.data.sync.actionAfterAuthorization
 import com.rhymeai.app.data.sync.BackupStatus
 import com.rhymeai.app.data.sync.DamagedBackupException
 import com.rhymeai.app.data.sync.DriveAuthorizer
@@ -130,6 +132,16 @@ internal enum class BackupAction { Connect, BackUp, Restore }
 
 internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction): String? = listOfNotNull(
     "Your older encrypted backup was moved to the new format.".takeIf { result.migratedLegacyBackup },
+    when (result.unmovedLegacyRecordings) {
+        0 -> null
+        1 -> "1 older recording could not be moved; the older backup was kept."
+        else -> "${result.unmovedLegacyRecordings} older recordings could not be moved; the older backup was kept."
+    },
+    when (result.unmovedLegacySongs) {
+        0 -> null
+        1 -> "1 older song could not be moved; the older backup was kept."
+        else -> "${result.unmovedLegacySongs} older songs could not be moved; the older backup was kept."
+    },
     if (action == BackupAction.Restore) {
         "Restored ${plural(result.merged.projects.size, "song")} and ${plural(result.merged.recordings.size, "recording")}."
     } else null,
@@ -157,7 +169,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         private const val AUTOSAVE_DEBOUNCE_MILLIS = 450L
         private const val SAVE_STATUS_VISIBLE_MILLIS = 700L
-        private const val BACKGROUND_SYNC_MIN_INTERVAL_MILLIS = 15 * 60 * 1000L
         private const val BACKUP_PREFS = "rhymeai_backup"
         private const val KEY_CONNECTED = "drive_connected"
         private const val KEY_LAST_BACKUP = "last_backup_at"
@@ -687,13 +698,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var syncPendingIntent by mutableStateOf<PendingIntent?>(null)
 
     private val backupMutex = kotlinx.coroutines.sync.Mutex()
-    private var autoBackupJob: Job? = null
-    private var backupRunning = false
-    private var backupDirty = false
-    private var backupFailures = 0
-    private var retryNotBeforeMillis = 0L
-    private var lastBackgroundBackupMillis = 0L
     private var pendingAuthAction: BackupAction? = null
+    private val backupScheduler = BackupScheduler(
+        scope = viewModelScope,
+        clock = System::currentTimeMillis,
+        isConnected = ::isBackupConnected,
+        onPending = { if (backupStatus !is BackupStatus.Failed) backupStatus = BackupStatus.Pending }
+    ) { interactive ->
+        backupStatus = BackupStatus.BackingUp
+        val result = backupMutex.withLock { driveSyncService.backUp(repo) }
+        when (handleBackupResult(result, BackupAction.BackUp, interactive)) {
+            true -> BackupRunOutcome.RETRY
+            false -> if (result is SyncResult.Success) BackupRunOutcome.SUCCEEDED else BackupRunOutcome.STOP
+        }
+    }
 
     private fun isBackupConnected(): Boolean = backupPrefs.getBoolean(KEY_CONNECTED, false)
 
@@ -717,14 +735,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnectDrive() {
-        autoBackupJob?.cancel()
+        backupScheduler.reset()
         backupPrefs.edit { remove(KEY_CONNECTED); remove(KEY_LAST_BACKUP) }
         lastBackupAt = null
         backupStatus = BackupStatus.NotConnected
         legacyBackupPresent = false
         restoreOffer = null
-        backupFailures = 0
-        retryNotBeforeMillis = 0L
         backupBusyLabel = "Disconnecting…"
         viewModelScope.launch {
             val revoked = backupMutex.withLock { driveSyncService.disconnect() }
@@ -732,7 +748,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             backupNotice = if (revoked) {
                 "Disconnected from Google Drive. Backups have stopped."
             } else {
-                "Disconnected on this device, but Google could not be reached to revoke access. You can remove Writers Block from your Google Account's third-party access."
+                "Disconnected on this device, but Google still lists the app; remove it at myaccount.google.com/permissions."
             }
         }
     }
@@ -780,7 +796,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun retryAfterDriveAuthorization() {
-        val action = pendingAuthAction ?: BackupAction.BackUp
+        val action = actionAfterAuthorization(pendingAuthAction, BackupAction.BackUp)
         pendingAuthAction = null
         syncPendingIntent = null
         when (action) {
@@ -791,54 +807,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Debounced automatic backup after a change; waits out any backoff. */
-    fun scheduleAutoBackup() {
-        if (!isBackupConnected()) return
-        if (backupRunning) {
-            backupDirty = true
-            return
-        }
-        if (backupStatus !is BackupStatus.Failed) backupStatus = BackupStatus.Pending
-        autoBackupJob?.cancel()
-        autoBackupJob = viewModelScope.launch {
-            delay(BackupSchedule.autoBackupDelayMillis(System.currentTimeMillis(), retryNotBeforeMillis))
-            autoBackupJob = null
-            startBackup(interactive = false)
-        }
-    }
+    fun scheduleAutoBackup() = backupScheduler.schedule()
 
     /** Leaving the app flushes a pending backup; otherwise at most every 15 minutes. */
-    fun triggerBackgroundDriveSync() {
-        if (!isBackupConnected()) return
-        val now = System.currentTimeMillis()
-        if (now < retryNotBeforeMillis) return
-        if (backupStatus !is BackupStatus.Pending && now - lastBackgroundBackupMillis < BACKGROUND_SYNC_MIN_INTERVAL_MILLIS) return
-        lastBackgroundBackupMillis = now
-        startBackup(interactive = false)
-    }
+    fun triggerBackgroundDriveSync() = backupScheduler.onBackground()
 
-    private fun startBackup(interactive: Boolean) {
-        if (!isBackupConnected()) return
-        autoBackupJob?.cancel()
-        autoBackupJob = null
-        if (backupRunning) {
-            backupDirty = true
-            return
-        }
-        backupRunning = true
-        backupStatus = BackupStatus.BackingUp
-        viewModelScope.launch {
-            val result = try {
-                backupMutex.withLock { driveSyncService.backUp(repo) }
-            } finally {
-                backupRunning = false
-            }
-            handleBackupResult(result, BackupAction.BackUp, interactive)
-            if (backupDirty) {
-                backupDirty = false
-                scheduleAutoBackup()
-            }
-        }
-    }
+    private fun startBackup(interactive: Boolean) = backupScheduler.runNow(interactive)
 
     private fun checkBackupAtLaunch() {
         viewModelScope.launch {
@@ -849,15 +823,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun handleBackupResult(result: SyncResult, action: BackupAction, interactive: Boolean) {
+    /** Renders [result]; true when an automatic retry with backoff should follow. */
+    private fun handleBackupResult(result: SyncResult, action: BackupAction, interactive: Boolean): Boolean {
         if (action != BackupAction.Connect && !isBackupConnected()) {
             backupStatus = BackupStatus.NotConnected
-            return
+            return false
         }
         val retry = when (result) {
             is SyncResult.Success -> {
-                backupFailures = 0
-                retryNotBeforeMillis = 0L
                 pendingAuthAction = null
                 val at = System.currentTimeMillis()
                 lastBackupAt = at
@@ -918,19 +891,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 backupNotice = (backupStatus as? BackupStatus.Failed)?.reason
             }
             backupStatus = BackupStatus.NotConnected
-            return
+            return false
         }
-        if (retry) {
-            backupFailures++
-            val delayMillis = BackupSchedule.retryDelayMillis(backupFailures)
-            retryNotBeforeMillis = System.currentTimeMillis() + delayMillis
-            autoBackupJob?.cancel()
-            autoBackupJob = viewModelScope.launch {
-                delay(delayMillis)
-                autoBackupJob = null
-                startBackup(interactive = false)
-            }
-        }
+        return retry
     }
 
     fun exportFileName(): String = BackupArchive.fileName(System.currentTimeMillis())
@@ -1204,10 +1167,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             launch {
                 voiceMemoService.trashChanges.collect { scheduleTrashPurge() }
             }
-            // Any change to songs, trash or tombstones queues a debounced Drive backup.
+            // Any change to songs, trash, tombstones or recordings queues the one debounced Drive backup.
+            launch { voiceMemoService.memoChanges.collect { scheduleAutoBackup() } }
             launch {
                 try {
-                    combine(repo.projectsFlow, repo.trashedProjectsFlow) { active, trash -> active to trash }
+                    combine(repo.projectsFlow, repo.trashedProjectsFlow, repo.syncDeletionsFlow) { active, trash, tombstones ->
+                        Triple(active, trash, tombstones)
+                    }
                         .distinctUntilChanged()
                         .drop(1)
                         .collect { scheduleAutoBackup() }

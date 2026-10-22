@@ -51,6 +51,10 @@ class BackupScheduleTest {
             backupResultNotice(SyncResult.Success(SyncBlob(), skippedLargeRecordings = 2, migratedLegacyBackup = true), BackupAction.BackUp)
         )
         assertEquals(
+            "3 older recordings could not be moved; the older backup was kept.",
+            backupResultNotice(SyncResult.Success(SyncBlob(), unmovedLegacyRecordings = 3), BackupAction.BackUp)
+        )
+        assertEquals(
             "Restored 0 songs and 0 recordings. 1 recording did not match its backup checksum and was not saved.",
             backupResultNotice(SyncResult.Success(SyncBlob(), damagedRecordings = 1), BackupAction.Restore)
         )
