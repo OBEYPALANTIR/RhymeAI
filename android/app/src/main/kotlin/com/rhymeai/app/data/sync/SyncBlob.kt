@@ -263,12 +263,20 @@ object SyncMerger {
             projectTombstones[entry.project.id]?.let { it.deletedAt > maxOf(entry.project.updatedAt, entry.deletedAt) } == true
         }
         val keptRecordings = recordings.filterNot { removesRecording(it, projectTombstones, fileTombstones) }
+        // Each recording a song tombstone removes gets its own tombstone, so reviving
+        // the song later (which drops the song tombstone) cannot bring the audio back.
+        val covered = recordings.mapNotNull { entry ->
+            val songTombstone = projectTombstones[entry.projectId] ?: return@mapNotNull null
+            if (songTombstone.deletedAt <= entry.precedenceTime) return@mapNotNull null
+            SyncDeletion(entry.projectId, entry.fileName, songTombstone.deletedAt)
+        }
+        val allDeletions = if (covered.isEmpty()) deletions else mergeDeletions(deletions + covered)
         val survivingSongs = buildSet {
             keptProjects.forEach { add(it.id) }
             keptTrash.forEach { add(it.project.id) }
         }
         val survivingRecordings = keptRecordings.mapTo(HashSet()) { it.projectId to it.fileName }
-        val keptDeletions = deletions.filterNot { deletion ->
+        val keptDeletions = allDeletions.filterNot { deletion ->
             if (deletion.fileName == null) deletion.projectId in survivingSongs
             else (deletion.projectId to deletion.fileName) in survivingRecordings
         }

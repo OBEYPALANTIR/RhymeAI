@@ -811,11 +811,18 @@ class ProjectRepositoryTest {
                 assertEquals(emptyList(), merged.projects)
                 assertEquals(emptyList(), merged.trashed)
                 assertEquals(emptyList(), merged.recordings)
-                assertEquals(base.blob.deletions, merged.deletions)
-                // A copy edited after the tombstone survives, and the tombstone is dropped.
-                val edited = SyncMerger.merge(base.blob, SyncBlob(projects = listOf(song.copy(updatedAt = Long.MAX_VALUE))))
+                // The removed recording gets its own tombstone at the song's deletion time.
+                val songTombstone = base.blob.deletions.single()
+                assertEquals(
+                    listOf(songTombstone, SyncDeletion(song.id, "take.m4a", songTombstone.deletedAt)),
+                    merged.deletions
+                )
+                // A copy edited after the tombstone survives and drops the song tombstone,
+                // but the recording tombstone keeps the old take deleted.
+                val edited = SyncMerger.merge(merged, SyncBlob(projects = listOf(song.copy(updatedAt = Long.MAX_VALUE)), recordings = listOf(syncedRecording(song.id))))
                 assertEquals(listOf(song.id), edited.projects.map { it.id })
-                assertEquals(emptyList(), edited.deletions)
+                assertEquals(emptyList(), edited.recordings)
+                assertEquals(listOf(SyncDeletion(song.id, "take.m4a", songTombstone.deletedAt)), edited.deletions)
             } finally {
                 reopenedScope.cancel()
             }
