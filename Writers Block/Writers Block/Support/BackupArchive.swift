@@ -1,3 +1,4 @@
+import Compression
 import Foundation
 
 enum BackupArchiveError: Error, Equatable {
@@ -50,8 +51,14 @@ enum BackupArchive {
         data.count >= 4 && data.prefix(4) == Data([0x50, 0x4b, 0x03, 0x04])
     }
 
-    /// Files by path; directories are skipped.
-    static func unzip(_ input: Data) throws -> [String: Data] {
+    /// Per-file and whole-archive limits for import; recordings are at most 16 MiB.
+    static let maxEntryBytes = 64 * 1024 * 1024
+    static let maxTotalBytes = 1024 * 1024 * 1024
+
+    /// Files by path; directories are skipped. Every entry, directories included,
+    /// must be a safe path that `allow` accepts, and declared sizes must fit the
+    /// limits, before anything is inflated; inflation stops at the declared size.
+    static func unzip(_ input: Data, allow: (String) -> Bool = { _ in true }) throws -> [String: Data] {
         let data = Data(input)
         func u16(_ offset: Int) throws -> Int {
             guard offset >= 0, offset + 2 <= data.count else { throw BackupArchiveError.unreadable }
@@ -66,39 +73,60 @@ enum BackupArchive {
         guard end >= 0, end >= data.count - 65_557 else { throw BackupArchiveError.unreadable }
         let count = try u16(end + 10)
         var cursor = try u32(end + 16)
-        var files: [String: Data] = [:]
+
+        var entries: [(name: String, method: Int, compressed: Int, size: Int, local: Int)] = []
+        var total = 0
         for _ in 0..<count {
             guard try u32(cursor) == 0x0201_4b50 else { throw BackupArchiveError.unreadable }
-            let method = try u16(cursor + 10)
-            let compressed = try u32(cursor + 20)
-            let size = try u32(cursor + 24)
             let nameLength = try u16(cursor + 28)
-            let extraLength = try u16(cursor + 30)
-            let commentLength = try u16(cursor + 32)
-            let local = try u32(cursor + 42)
             guard cursor + 46 + nameLength <= data.count,
                   let name = String(data: data[(cursor + 46)..<(cursor + 46 + nameLength)], encoding: .utf8) else {
                 throw BackupArchiveError.unreadable
             }
-            cursor += 46 + nameLength + extraLength + commentLength
-            guard isSafePath(name) else { throw BackupArchiveError.unsafePath }
-            guard !name.hasSuffix("/") else { continue }
-            guard try u32(local) == 0x0403_4b50 else { throw BackupArchiveError.unreadable }
-            let start = local + 30 + (try u16(local + 26)) + (try u16(local + 28))
-            guard start + compressed <= data.count else { throw BackupArchiveError.unreadable }
-            let body = data[start..<(start + compressed)]
-            switch method {
+            guard isSafePath(name), allow(name) else { throw BackupArchiveError.unsafePath }
+            let entry = (name: name, method: try u16(cursor + 10), compressed: try u32(cursor + 20), size: try u32(cursor + 24), local: try u32(cursor + 42))
+            guard entry.size <= maxEntryBytes, entry.compressed <= maxEntryBytes else { throw BackupArchiveError.tooLarge }
+            total += entry.size
+            guard total <= maxTotalBytes else { throw BackupArchiveError.tooLarge }
+            entries.append(entry)
+            cursor += 46 + nameLength + (try u16(cursor + 30)) + (try u16(cursor + 32))
+        }
+
+        var files: [String: Data] = [:]
+        for entry in entries where !entry.name.hasSuffix("/") {
+            guard try u32(entry.local) == 0x0403_4b50 else { throw BackupArchiveError.unreadable }
+            let start = entry.local + 30 + (try u16(entry.local + 26)) + (try u16(entry.local + 28))
+            guard start + entry.compressed <= data.count else { throw BackupArchiveError.unreadable }
+            let body = data[start..<(start + entry.compressed)]
+            switch entry.method {
             case 0:
-                files[name] = Data(body)
+                guard entry.compressed == entry.size else { throw BackupArchiveError.unreadable }
+                files[entry.name] = Data(body)
             case 8:
-                guard let inflated = try? (Data(body) as NSData).decompressed(using: .zlib) as Data,
-                      inflated.count == size else { throw BackupArchiveError.unreadable }
-                files[name] = inflated
+                files[entry.name] = try inflate(Data(body), expectedSize: entry.size)
             default:
                 throw BackupArchiveError.unreadable
             }
         }
         return files
+    }
+
+    /// Raw DEFLATE into a buffer one byte larger than declared: more output than
+    /// declared means the entry lies about its size and is refused.
+    private static func inflate(_ body: Data, expectedSize: Int) throws -> Data {
+        guard expectedSize > 0 else { return Data() }
+        var output = Data(count: expectedSize + 1)
+        let written = output.withUnsafeMutableBytes { destination in
+            body.withUnsafeBytes { source in
+                compression_decode_buffer(
+                    destination.bindMemory(to: UInt8.self).baseAddress!, expectedSize + 1,
+                    source.bindMemory(to: UInt8.self).baseAddress!, body.count,
+                    nil, COMPRESSION_ZLIB
+                )
+            }
+        }
+        guard written == expectedSize else { throw BackupArchiveError.unreadable }
+        return output.prefix(expectedSize)
     }
 
     /// Relative, forward-slash paths with no `..` or `.` parts and no drive letter.
