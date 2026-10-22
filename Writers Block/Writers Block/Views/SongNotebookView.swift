@@ -10,7 +10,10 @@ struct SongNotebookView: View {
     @State private var tab = 0
     @State private var draft = ""
     @State private var versionToRestore: DraftVersion?
-    @State private var expandedVersion: DraftVersion.ID?
+    /// Several versions can be open at once, to compare them.
+    @State private var expandedVersions: Set<DraftVersion.ID> = []
+    /// The version opened last; it scrolls to the top of the sheet.
+    @State private var openedVersion: DraftVersion.ID?
 
     var body: some View {
         NavigationStack {
@@ -89,8 +92,16 @@ struct SongNotebookView: View {
                             }
                             ForEach(viewModel.companion.versions) { version in
                                 DisclosureGroup(isExpanded: Binding(
-                                    get: { expandedVersion == version.id },
-                                    set: { expandedVersion = $0 ? version.id : nil }
+                                    get: { expandedVersions.contains(version.id) },
+                                    set: { isOpen in
+                                        if isOpen {
+                                            expandedVersions.insert(version.id)
+                                            openedVersion = version.id
+                                        } else {
+                                            expandedVersions.remove(version.id)
+                                            if openedVersion == version.id { openedVersion = nil }
+                                        }
+                                    }
                                 )) {
                                     // Restore comes before the lyrics so it sits right
                                     // under the opened version even when the lyrics run
@@ -116,7 +127,7 @@ struct SongNotebookView: View {
                 .background(AppWritingBackground())
                 // An opened version moves to the top of the sheet, so its Restore
                 // button is on screen even when the row was at the bottom edge.
-                .onChange(of: expandedVersion) { _, id in
+                .onChange(of: openedVersion) { _, id in
                     guard let id else { return }
                     withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) { proxy.scrollTo(id, anchor: .top) }
                 }
