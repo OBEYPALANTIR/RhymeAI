@@ -158,8 +158,13 @@ class VoiceMemoService(private val context: Context) {
         if (!dir.exists() && !dir.mkdirs()) {
             throw IllegalStateException("Could not create voice memo directory: ${dir.absolutePath}")
         }
-        val timestamp = System.currentTimeMillis()
-        val file = File(dir, "$timestamp.m4a")
+        // Reserve a free name so a restore or import can never land on the take being recorded.
+        val file = synchronized(RecordingFiles.mutationLock) {
+            var timestamp = System.currentTimeMillis()
+            var candidate = File(dir, "$timestamp.m4a")
+            while (!candidate.createNewFile()) candidate = File(dir, "${++timestamp}.m4a")
+            candidate
+        }
 
         val rec = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(context)
@@ -424,8 +429,10 @@ class VoiceMemoService(private val context: Context) {
         val dir = RecordingFiles.memoDirectory(context.filesDir, trashed.projectId)
         if (!dir.exists() && !dir.mkdirs()) return@withContext false
         val original = File(trashed.originalName)
-        val target = RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension)
-        trashed.file.renameTo(target).also {
+        synchronized(RecordingFiles.mutationLock) {
+            val target = RecordingFiles.resolveCollision(dir, original.nameWithoutExtension, original.extension)
+            trashed.file.renameTo(target)
+        }.also {
             cleanUpEmptyTrashDir(trashed.file.parentFile)
             if (it) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
         }
@@ -485,9 +492,12 @@ class VoiceMemoService(private val context: Context) {
 
         return withContext(Dispatchers.IO) {
             val dir = memo.file.parentFile ?: return@withContext null
-            val targetFile = RecordingFiles.resolveCollision(dir, sanitized, memo.file.extension)
+            val targetFile = synchronized(RecordingFiles.mutationLock) {
+                RecordingFiles.resolveCollision(dir, sanitized, memo.file.extension)
+                    .takeIf { memo.file.renameTo(it) }
+            }
 
-            if (memo.file.renameTo(targetFile)) {
+            if (targetFile != null) {
                 memoFromFile(targetFile)
             } else {
                 null

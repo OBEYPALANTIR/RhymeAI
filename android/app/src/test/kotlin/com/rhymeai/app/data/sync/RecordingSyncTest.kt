@@ -262,9 +262,9 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun failedCommitRemovesOnlyItsOwnLinks() {
+    fun aFailedCommitKeepsEverythingAlreadyInPlace() {
         val root = Files.createTempDirectory("rhymeai-recording-batch").toFile()
-        val stage = Files.createTempDirectory(root.toPath(), ".restore-").toFile()
+        val stage = Files.createTempDirectory(root.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
         try {
             val firstTarget = RecordingFileStore.targetFile(root, "p1", "first.m4a")
             firstTarget.parentFile?.mkdirs()
@@ -277,12 +277,13 @@ class RecordingSyncTest {
                 File(stage, "missing.tmp")
             )
 
-            assertFailsWith<DriveNetworkException> {
+            assertFailsWith<java.io.IOException> {
                 RecordingFileStore.commitStagedRestores(root, listOf(stagedFirst, stagedNew, missingThird))
             }
 
+            // Nothing is replaced or removed: the original stays and the complete new take stays.
             assertEquals("original", firstTarget.readText())
-            assertFalse(RecordingFileStore.targetFile(root, "p1", "new.m4a").exists())
+            assertEquals("download", RecordingFileStore.targetFile(root, "p1", "new.m4a").readText())
             assertFalse(RecordingFileStore.targetFile(root, "p2", "third.m4a").exists())
         } finally {
             root.deleteRecursively()
@@ -290,28 +291,19 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun interruptedRestoreRollsBackItsOwnLinksAndKeepsEverythingElse() {
+    fun recoveryRemovesOnlyTheStagingFolder() {
         val root = Files.createTempDirectory("rhymeai-recording-recovery").toFile()
         val stage = Files.createTempDirectory(root.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
         try {
-            val firstTarget = RecordingFileStore.targetFile(root, "p1", "first.m4a")
-            val secondTarget = RecordingFileStore.targetFile(root, "p2", "second.m4a")
-            secondTarget.parentFile?.mkdirs()
-            secondTarget.writeText("second original")
-            val firstBytes = "first download".toByteArray()
-            val secondBytes = "second download".toByteArray()
-            val staged = listOf(
-                RecordingFileStore.stageRestore(stage, 0, recording("p1", "first.m4a", 2L, sha256Hex(firstBytes), firstBytes.size.toLong()), firstBytes),
-                RecordingFileStore.stageRestore(stage, 1, recording("p2", "second.m4a", 2L, sha256Hex(secondBytes), secondBytes.size.toLong()), secondBytes)
-            )
-            RecordingFileStore.prepareRestoreTransaction(root, stage, staged)
-            // The process died after linking the first recording.
-            Files.createLink(firstTarget.toPath(), staged.first().file.toPath())
+            val bytes = "download".toByteArray()
+            RecordingFileStore.stageRestore(stage, 0, recording("p1", "take.m4a", 2L, sha256Hex(bytes), bytes.size.toLong()), bytes)
+            // A memo the user renamed onto the planned name while the restore was interrupted.
+            val target = RecordingFileStore.targetFile(root, "p1", "take.m4a").also { it.parentFile?.mkdirs() }
+            target.writeText("user memo")
 
             RecordingFileStore.recoverInterruptedRestores(root)
 
-            assertFalse(firstTarget.exists())
-            assertEquals("second original", secondTarget.readText())
+            assertEquals("user memo", target.readText())
             assertFalse(stage.exists())
         } finally {
             root.deleteRecursively()

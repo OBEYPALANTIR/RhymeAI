@@ -25,11 +25,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import java.io.IOException
 import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
 import java.io.InputStream
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.io.File
@@ -605,11 +601,6 @@ object RecordingSyncPlanner {
 
 object RecordingFileStore {
     internal const val RESTORE_STAGE_PREFIX = ".recording-restore-"
-    private const val JOURNAL_FILE = "restore-journal"
-    private const val COMPLETE_FILE = "restore-complete"
-    private const val JOURNAL_MAGIC = 0x5248594D
-    private const val JOURNAL_VERSION = 2
-    private const val MAX_JOURNAL_ENTRIES = 10_000
 
     internal data class StagedRecording(
         val entry: RecordingManifestEntry,
@@ -638,7 +629,7 @@ object RecordingFileStore {
             }
             if (entry.modifiedAt > 0L) temp.setLastModified(entry.modifiedAt)
             syncFile(temp)
-            return linkIfAbsent(temp, target)
+            return moveIfAbsent(temp, target)
         } finally {
             if (temp.exists()) temp.delete()
         }
@@ -658,165 +649,52 @@ object RecordingFileStore {
         return StagedRecording(entry, staged)
     }
 
+    /**
+     * A staging folder left by an interrupted restore holds only downloaded temp
+     * files; every recording already moved into place is complete and verified, so
+     * recovery just removes the folder and never touches a memo.
+     */
     internal fun recoverInterruptedRestores(filesDir: File) {
         filesDir.listFiles()
             ?.filter { it.isDirectory && it.name.startsWith(RESTORE_STAGE_PREFIX) }
             ?.forEach { stageDirectory ->
-                val journal = File(stageDirectory, JOURNAL_FILE)
-                val complete = File(stageDirectory, COMPLETE_FILE)
-                when {
-                    complete.exists() -> stageDirectory.deleteRecursively()
-                    journal.exists() -> rollbackRestoreTransaction(filesDir, stageDirectory)
-                    else -> stageDirectory.deleteRecursively()
-                }
-                if (stageDirectory.exists()) {
+                if (!stageDirectory.deleteRecursively()) {
                     throw DriveNetworkException("Interrupted recording restore could not be cleaned up")
                 }
             }
     }
 
-    /** Journals which staged file is meant for which recording, before any is linked into place. */
-    internal fun prepareRestoreTransaction(
-        filesDir: File,
-        stageDirectory: File,
-        staged: List<StagedRecording>
-    ) {
-        syncDirectory(filesDir)
-        staged.forEach { item ->
-            if (item.file.parentFile != stageDirectory) {
-                throw DriveNetworkException("Recording restore staging files do not share one transaction")
-            }
-            val directory = targetFile(filesDir, item.entry.projectId, item.entry.fileName).parentFile
+    /**
+     * Moves each verified download into place only if its destination is still
+     * free; a file that appeared after planning is kept and the download dropped.
+     * Nothing already in place is ever replaced or removed, so a failure part-way
+     * leaves only complete recordings behind. Returns how many destinations were taken.
+     */
+    internal fun commitStagedRestores(filesDir: File, staged: List<StagedRecording>): Int {
+        if (staged.isEmpty()) return 0
+        var taken = 0
+        val touchedDirectories = linkedSetOf<File>()
+        for (item in staged) {
+            val target = targetFile(filesDir, item.entry.projectId, item.entry.fileName)
+            val directory = target.parentFile
                 ?: throw DriveNetworkException("Recording ${item.entry.fileName} has no parent directory")
             if (!directory.exists() && !directory.mkdirs()) {
                 throw DriveNetworkException("Could not create memo directory for ${item.entry.projectId}")
             }
+            if (item.entry.modifiedAt > 0L) item.file.setLastModified(item.entry.modifiedAt)
+            syncFile(item.file)
+            if (moveIfAbsent(item.file, target)) touchedDirectories += directory else taken++
         }
-        syncDirectory(stageDirectory)
-        writeJournal(stageDirectory, staged.map { RestoreJournalEntry(it.file.name, it.entry.projectId, it.entry.fileName) })
-    }
-
-    /**
-     * Links each staged recording into place only if its destination is still
-     * free: a file that appeared after planning is kept and the download dropped.
-     * Returns how many destinations were already taken.
-     */
-    internal fun commitStagedRestores(filesDir: File, staged: List<StagedRecording>): Int {
-        if (staged.isEmpty()) return 0
-        val stageDirectory = staged.first().file.parentFile
-            ?: throw DriveNetworkException("Recording restore staging directory is missing")
-        prepareRestoreTransaction(filesDir, stageDirectory, staged)
-        var taken = 0
-        try {
-            val touchedDirectories = linkedSetOf<File>()
-            for (item in staged) {
-                val target = targetFile(filesDir, item.entry.projectId, item.entry.fileName)
-                if (item.entry.modifiedAt > 0L) item.file.setLastModified(item.entry.modifiedAt)
-                syncFile(item.file)
-                if (!linkIfAbsent(item.file, target)) taken++
-                target.parentFile?.let(touchedDirectories::add)
-            }
-            touchedDirectories.forEach(::syncDirectory)
-            writeCompletionMarker(stageDirectory)
-        } catch (e: Exception) {
-            rollbackRestoreTransaction(filesDir, stageDirectory)
-            throw DriveNetworkException("Recording restore could not be committed", e)
-        }
-        stageDirectory.deleteRecursively()
+        touchedDirectories.forEach(::syncDirectory)
+        staged.first().file.parentFile?.deleteRecursively()
         return taken
     }
 
-    internal fun hasPreparedRestore(stageDirectory: File): Boolean =
-        File(stageDirectory, JOURNAL_FILE).exists()
-
-    /** Atomic create-if-absent: a hard link fails when the destination exists. */
-    private fun linkIfAbsent(source: File, target: File): Boolean = try {
-        try {
-            Files.createLink(target.toPath(), source.toPath())
-        } catch (_: UnsupportedOperationException) {
-            // No hard links on this file system: copy opens the target with CREATE_NEW.
-            Files.copy(source.toPath(), target.toPath(), StandardCopyOption.COPY_ATTRIBUTES)
-        }
-        syncFile(target)
+    /** Create-if-absent under [RecordingFiles.mutationLock]; memo renames and restores take the same lock. */
+    private fun moveIfAbsent(source: File, target: File): Boolean = synchronized(RecordingFiles.mutationLock) {
+        if (target.exists()) return@synchronized false
+        Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
         true
-    } catch (_: java.nio.file.FileAlreadyExistsException) {
-        false
-    }
-
-    private data class RestoreJournalEntry(
-        val stagedName: String,
-        val projectId: String,
-        val fileName: String
-    )
-
-    private fun writeJournal(stageDirectory: File, entries: List<RestoreJournalEntry>) {
-        val temp = File(stageDirectory, "$JOURNAL_FILE.tmp")
-        val output = FileOutputStream(temp)
-        DataOutputStream(output).use { data ->
-            data.writeInt(JOURNAL_MAGIC)
-            data.writeInt(JOURNAL_VERSION)
-            data.writeInt(entries.size)
-            entries.forEach { entry ->
-                data.writeUTF(entry.stagedName)
-                data.writeUTF(entry.projectId)
-                data.writeUTF(entry.fileName)
-            }
-            data.flush()
-            output.fd.sync()
-        }
-        Files.move(
-            temp.toPath(),
-            File(stageDirectory, JOURNAL_FILE).toPath(),
-            StandardCopyOption.REPLACE_EXISTING,
-            StandardCopyOption.ATOMIC_MOVE
-        )
-        syncDirectory(stageDirectory)
-    }
-
-    private fun readJournal(stageDirectory: File): List<RestoreJournalEntry> {
-        DataInputStream(FileInputStream(File(stageDirectory, JOURNAL_FILE))).use { data ->
-            require(data.readInt() == JOURNAL_MAGIC) { "Invalid recording restore journal" }
-            require(data.readInt() == JOURNAL_VERSION) { "Unsupported recording restore journal" }
-            val count = data.readInt()
-            require(count in 0..MAX_JOURNAL_ENTRIES) { "Invalid recording restore journal size" }
-            return List(count) {
-                RestoreJournalEntry(stagedName = data.readUTF(), projectId = data.readUTF(), fileName = data.readUTF())
-            }
-        }
-    }
-
-    /** Removes only destinations that are this transaction's own links; anything else is kept. */
-    private fun rollbackRestoreTransaction(filesDir: File, stageDirectory: File) {
-        try {
-            val touchedDirectories = linkedSetOf<File>()
-            readJournal(stageDirectory).asReversed().forEach { entry ->
-                val staged = File(stageDirectory, entry.stagedName)
-                val target = targetFile(filesDir, entry.projectId, entry.fileName)
-                if (staged.isFile && target.isFile && Files.isSameFile(staged.toPath(), target.toPath())) {
-                    Files.deleteIfExists(target.toPath())
-                    target.parentFile?.let(touchedDirectories::add)
-                }
-            }
-            touchedDirectories.forEach(::syncDirectory)
-            stageDirectory.deleteRecursively()
-        } catch (e: Exception) {
-            throw DriveNetworkException("Interrupted recording restore could not be recovered", e)
-        }
-    }
-
-    private fun writeCompletionMarker(stageDirectory: File) {
-        val temp = File(stageDirectory, "$COMPLETE_FILE.tmp")
-        FileOutputStream(temp).use { output ->
-            output.write(1)
-            output.fd.sync()
-        }
-        Files.move(
-            temp.toPath(),
-            File(stageDirectory, COMPLETE_FILE).toPath(),
-            StandardCopyOption.REPLACE_EXISTING,
-            StandardCopyOption.ATOMIC_MOVE
-        )
-        syncDirectory(stageDirectory)
     }
 
     private fun syncFile(file: File) {
@@ -893,7 +771,6 @@ internal fun snapshotLocalRecordingFiles(
     filesDir: File,
     pendingDeletionIds: Set<String>
 ): List<LocalRecordingFile> {
-    RecordingFileStore.recoverInterruptedRestores(filesDir)
     val root = RecordingFiles.memosRoot(filesDir)
     if (!root.exists()) return emptyList()
     return root.listFiles()
@@ -1005,9 +882,17 @@ class DriveSyncService(
         val primary: DriveFileMetadata?,
         val duplicates: List<DriveFileMetadata>,
         val blob: SyncBlob?
-    )
+    ) {
+        val versions: Set<Triple<String, String?, String?>>
+            get() = (listOfNotNull(primary) + duplicates).mapTo(HashSet()) { Triple(it.id, it.version, it.modifiedTime) }
+    }
 
-    private class LegacyMove(val moved: List<RecordingManifestEntry>, val unresolved: Int, val damaged: Int)
+    private suspend fun manifestVersions(token: String): Set<Triple<String, String?, String?>> =
+        driveClient.listFilesByNamePrefix(token, BackupManifest.FILE_NAME)
+            .filter { it.name == BackupManifest.FILE_NAME }
+            .mapTo(HashSet()) { Triple(it.id, it.version, it.modifiedTime) }
+
+    private class LegacyMove(val moved: List<RecordingManifestEntry>, val damaged: Int)
 
     suspend fun backUp(repository: ProjectRepository): SyncResult = run(repository, Mode.BACKUP, null)
 
@@ -1069,6 +954,8 @@ class DriveSyncService(
                     is DriveAuthorization.NeedsConsent -> return@guarded SyncResult.AuthorizationRequired(auth.pendingIntent)
                     DriveAuthorization.Unavailable -> return@guarded SyncResult.NotConfigured
                 }
+                // Only Restore may touch local recordings, so only it finishes an interrupted restore.
+                if (mode == Mode.RESTORE) RecordingFileStore.recoverInterruptedRestores(filesDir)
                 val legacyFile = driveClient.findFileByName(token, SyncBlob.DRIVE_FILE_NAME)
                 val storedPassphrase = secureKeyStore.getKey(LEGACY_PASSPHRASE_KEY)
                 val passphrase = typedPassphrase ?: storedPassphrase.takeIf { it.isNotEmpty() }?.toCharArray()
@@ -1100,7 +987,7 @@ class DriveSyncService(
                 var unmovedRecordings = 0
                 if (legacy != null && move != null) {
                     unmovedSongs = unpreservedLegacySongs(legacy, outcome.written)
-                    unmovedRecordings = move.unresolved + unverifiedMovedRecordings(token, move.moved, outcome.written)
+                    unmovedRecordings = unverifiedLegacyRecordings(token, legacy, outcome.written)
                     if (unmovedSongs == 0 && unmovedRecordings == 0) {
                         removeLegacyBackup(token, legacyFile!!, legacy)
                         secureKeyStore.removeKey(LEGACY_PASSPHRASE_KEY)
@@ -1163,6 +1050,8 @@ class DriveSyncService(
         extraRemote: SyncBlob?,
         requireRemote: Boolean
     ): PushOutcome? {
+        // What an earlier attempt merged is carried forward, so content seen once is never dropped.
+        var candidate: SyncBlob? = null
         repeat(MAX_MANIFEST_WRITE_ATTEMPTS) {
             val base = repository.snapshotLocalSyncBase()
             val localFiles = snapshotLocalRecordingFiles(filesDir, base.pendingIds)
@@ -1176,13 +1065,14 @@ class DriveSyncService(
             if (requireRemote && remote.blob == null && extraRemote == null) return null
 
             var merged = SyncMerger.merge(local, remote.blob ?: SyncBlob())
+            candidate?.let { merged = SyncMerger.merge(it, merged) }
             if (extraRemote != null) merged = SyncMerger.merge(merged, extraRemote)
             val driveFiles = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX)
                 .associateBy { it.name }
-            // A raw file counts only when its appProperties carry the listed bytes' hash.
+            // A raw file counts only when its appProperties carry the listed hash and size.
             fun onDrive(entry: RecordingManifestEntry): Boolean {
                 val file = driveFiles[BackupManifest.recordingDriveName(entry.projectId, entry.fileName)] ?: return false
-                return file.appProperties["sha256"].let { it == null || it == entry.sha256 }
+                return file.appProperties["sha256"] == entry.sha256 && file.appProperties["bytes"] == entry.sizeBytes.toString()
             }
             // A listed recording whose raw file never reached Drive takes this device's copy.
             val localByIdentity = local.recordings.associateBy { it.identityKey }
@@ -1210,6 +1100,7 @@ class DriveSyncService(
                 }
             }
 
+            val unstamped = merged
             val writtenAt = now()
             val remoteRecordings = remote.blob?.recordings.orEmpty().associateBy { it.identityKey }
             merged = merged.copy(
@@ -1221,13 +1112,21 @@ class DriveSyncService(
             )
             val bytes = BackupManifest.encode(merged, writtenAt, clientId())
             if (bytes.size > MAX_SYNC_BLOB_BYTES) throw DriveNetworkException("Drive backup exceeds the allowed size")
+            // Another device wrote while recordings uploaded: merge its manifest before writing ours.
+            if (manifestVersions(token) != remote.versions) {
+                candidate = unstamped
+                return@repeat
+            }
             val manifestId = remote.primary?.id?.also {
                 driveClient.updateFile(token, it, BackupManifest.MIME_TYPE, bytes)
             } ?: driveClient.uploadNewFile(token, BackupManifest.FILE_NAME, BackupManifest.MIME_TYPE, bytes)
 
             // Read back: another device may have written between our read and our write.
             val readBack = driveClient.downloadFile(token, manifestId, MAX_SYNC_BLOB_BYTES)
-            if (BackupManifest.hashOf(readBack) != BackupManifest.hashOf(bytes)) return@repeat
+            if (BackupManifest.hashOf(readBack) != BackupManifest.hashOf(bytes)) {
+                candidate = unstamped
+                return@repeat
+            }
             remote.duplicates.forEach { driveClient.deleteFile(token, it.id) }
 
             var damaged = 0
@@ -1263,9 +1162,10 @@ class DriveSyncService(
     }
 
     /**
-     * Decrypts each RAI1 recording of the older backup in memory and uploads it raw.
-     * Nothing is written to this device. A recording that is too large, unreadable,
-     * missing, or whose name already holds different bytes in Drive stays unresolved.
+     * Decrypts every RAI1 recording of the older backup in memory and uploads it raw,
+     * deleted ones included, so nothing in it is lost when it is removed. Nothing is
+     * written to this device. Returns the moved recordings that are still live (to
+     * list in the manifest) and how many failed decryption or their hash.
      */
     private suspend fun moveLegacyRecordings(
         token: String,
@@ -1275,46 +1175,34 @@ class DriveSyncService(
     ): LegacyMove {
         val deletions = legacy.deletions + repository.snapshotLocalSyncBase().blob.deletions +
             readRemote(token).blob?.deletions.orEmpty()
+        val live = recordingsAllowedForUpload(legacy.recordings, deletions, emptyList()).mapTo(HashSet()) { it.identityKey }
         val driveFiles = driveClient.listFilesByNamePrefix(token, RecordingManifestEntry.DRIVE_PREFIX)
             .associateBy { it.name }
         val moved = mutableListOf<RecordingManifestEntry>()
-        var unresolved = 0
         var damaged = 0
-        for (entry in recordingsAllowedForUpload(legacy.recordings, deletions, emptyList())) {
-            if (!entry.isTransferable) {
-                unresolved++
-                continue
-            }
+        for (entry in legacy.recordings) {
+            if (!entry.isTransferable) continue
             val name = BackupManifest.recordingDriveName(entry.projectId, entry.fileName)
             val existing = driveFiles[name]
-            if (existing != null) {
-                if (existing.appProperties["sha256"] == entry.sha256 && existing.appProperties["bytes"] == entry.sizeBytes.toString()) {
-                    moved += entry.copy(uploadedAt = now())
-                } else {
-                    unresolved++
+            if (existing == null) {
+                val legacyId = driveFiles[entry.driveName]?.id ?: continue
+                val envelope = driveClient.downloadFile(token, legacyId, SyncBlobCrypto.envelopeSizeForPlaintext(entry.sizeBytes))
+                val plaintext = try {
+                    SyncBlobCrypto.open(envelope, passphrase)
+                } catch (_: SyncBlobSealException) {
+                    null
                 }
-                continue
+                if (plaintext == null || plaintext.size.toLong() != entry.sizeBytes || BackupManifest.sha256Hex(plaintext) != entry.sha256) {
+                    damaged++
+                    continue
+                }
+                driveClient.uploadNewFile(token, name, BackupManifest.RECORDING_MIME_TYPE, plaintext, recordingAppProperties(entry))
+            } else if (existing.appProperties["sha256"] != entry.sha256 || existing.appProperties["bytes"] != entry.sizeBytes.toString()) {
+                continue // A different recording holds that name; verification counts it as unmoved.
             }
-            val legacyId = driveFiles[entry.driveName]?.id
-            if (legacyId == null) {
-                unresolved++
-                continue
-            }
-            val envelope = driveClient.downloadFile(token, legacyId, SyncBlobCrypto.envelopeSizeForPlaintext(entry.sizeBytes))
-            val plaintext = try {
-                SyncBlobCrypto.open(envelope, passphrase)
-            } catch (_: SyncBlobSealException) {
-                null
-            }
-            if (plaintext == null || plaintext.size.toLong() != entry.sizeBytes || BackupManifest.sha256Hex(plaintext) != entry.sha256) {
-                damaged++
-                unresolved++
-                continue
-            }
-            driveClient.uploadNewFile(token, name, BackupManifest.RECORDING_MIME_TYPE, plaintext, recordingAppProperties(entry))
-            moved += entry.copy(uploadedAt = now())
+            if (entry.identityKey in live) moved += entry.copy(uploadedAt = now())
         }
-        return LegacyMove(moved, unresolved, damaged)
+        return LegacyMove(moved, damaged)
     }
 
     /**
@@ -1334,28 +1222,34 @@ class DriveSyncService(
         }
     }
 
-    /** Moved recordings must be listed with the same hash and present raw with matching appProperties. */
-    private suspend fun unverifiedMovedRecordings(
-        token: String,
-        moved: List<RecordingManifestEntry>,
-        written: SyncBlob
-    ): Int {
-        if (moved.isEmpty()) return 0
+    /**
+     * Every recording of the older backup, deleted ones included, must be a raw file in
+     * Drive whose appProperties hash and size match; a live one must also be listed in
+     * the written manifest with that hash. Returns how many are not.
+     */
+    private suspend fun unverifiedLegacyRecordings(token: String, legacy: SyncBlob, written: SyncBlob): Int {
+        if (legacy.recordings.isEmpty()) return 0
         val listed = written.recordings.associateBy { it.identityKey }
         val raw = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX).associateBy { it.name }
-        return moved.count { entry ->
+        val live = recordingsAllowedForUpload(legacy.recordings, written.deletions, legacy.deletions)
+            .mapTo(HashSet()) { it.identityKey }
+        return legacy.recordings.count { entry ->
             val file = raw[BackupManifest.recordingDriveName(entry.projectId, entry.fileName)]
-            listed[entry.identityKey]?.sha256 != entry.sha256 ||
-                file?.appProperties?.get("sha256") != entry.sha256 ||
-                file.appProperties["bytes"] != entry.sizeBytes.toString()
+            val rawMatches = file != null && file.appProperties["sha256"] == entry.sha256 &&
+                file.appProperties["bytes"] == entry.sizeBytes.toString()
+            !rawMatches || (entry.identityKey in live && listed[entry.identityKey]?.sha256 != entry.sha256)
         }
     }
 
+    /** Deletes only encrypted recordings whose raw copy is verified in Drive, then the old manifest. */
     private suspend fun removeLegacyBackup(token: String, legacyFile: DriveFileMetadata, legacy: SyncBlob) {
-        val legacyNames = legacy.recordings.mapTo(HashSet()) { it.driveName }
-        driveClient.listFilesByNamePrefix(token, RecordingManifestEntry.DRIVE_PREFIX)
-            .filter { it.name in legacyNames }
-            .forEach { driveClient.deleteFile(token, it.id) }
+        val files = driveClient.listFilesByNamePrefix(token, RecordingManifestEntry.DRIVE_PREFIX).associateBy { it.name }
+        val moved = legacy.recordings.filter { entry ->
+            val raw = files[BackupManifest.recordingDriveName(entry.projectId, entry.fileName)]
+            raw != null && raw.appProperties["sha256"] == entry.sha256 && raw.appProperties["bytes"] == entry.sizeBytes.toString()
+        }
+        if (moved.size != legacy.recordings.size) throw DriveNetworkException("The older backup changed during migration; it was kept.")
+        moved.mapNotNull { files[it.driveName] }.forEach { driveClient.deleteFile(token, it.id) }
         driveClient.deleteFile(token, legacyFile.id)
     }
 
@@ -1406,11 +1300,9 @@ class DriveSyncService(
             }
             // A destination that appeared since planning is kept; its download is dropped.
             RecordingFileStore.commitStagedRestores(filesDir, staged)
-        } catch (e: Exception) {
-            if (!RecordingFileStore.hasPreparedRestore(stageDirectory)) stageDirectory.deleteRecursively()
-            throw e
+        } finally {
+            stageDirectory.deleteRecursively()
         }
-        if (stageDirectory.exists() && !RecordingFileStore.hasPreparedRestore(stageDirectory)) stageDirectory.deleteRecursively()
         return damaged
     }
 }
