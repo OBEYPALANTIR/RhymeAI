@@ -20,8 +20,8 @@ enum RhymeMatchText {
         // is carried here with the weight applied.
         word.font = font.weight(.semibold)
         word.foregroundColor = highlight
-        word.underlineStyle = .single
-        word.underlineColor = UIColor(highlight.opacity(0.6))
+        // SwiftUI ignores UIKit's underlineColor; the colour must ride on the line style.
+        word.underlineStyle = Text.LineStyle(pattern: .solid, color: highlight.opacity(0.6))
 
         var result = AttributedString()
         if let prefixRange = Range(match.range(at: 1), in: text) {
