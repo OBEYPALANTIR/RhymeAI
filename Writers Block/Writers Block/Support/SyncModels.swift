@@ -19,6 +19,14 @@ enum SyncIdentity {
         }
     }
 
+    /// A recording's stable id: it names the Drive file `rec_<id>`.
+    nonisolated static func validateRecordingId(_ value: String) throws {
+        guard !value.isEmpty, value.utf8.count <= 128, value != ".", value != "..",
+              !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || "/\\".unicodeScalars.contains($0) }) else {
+            throw SyncValidationError.invalidRecording
+        }
+    }
+
     nonisolated static func validateFileName(_ value: String) throws {
         let illegal = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
         guard !value.isEmpty, value.utf8.count <= 240, RecordingFiles.supportedAudioExtensions.contains((value as NSString).pathExtension),
@@ -29,39 +37,53 @@ enum SyncIdentity {
     }
 }
 
+/// A tombstone. Song tombstones have neither `recordingId` nor `fileName`;
+/// recording tombstones name the recording by `recordingId` (v4) and keep its
+/// `fileName` for display. A `fileName` without an id comes from before ids.
 struct SyncDeletion: Codable, Equatable, Hashable, Sendable {
     var projectId: String
+    var recordingId: String?
     var fileName: String?
     var deletedAt: Int64
 
-    init(projectId: String, fileName: String? = nil, deletedAt: Int64) {
+    init(projectId: String, recordingId: String? = nil, fileName: String? = nil, deletedAt: Int64) {
         self.projectId = projectId
+        self.recordingId = recordingId
         self.fileName = fileName
         self.deletedAt = deletedAt
     }
 
+    var isSongTombstone: Bool { recordingId == nil && fileName == nil }
+
+    /// One tombstone per song, per recording id, or per pre-id file name.
+    var identity: String {
+        "\(projectId)/" + (recordingId.map { "id:\($0)" } ?? fileName.map { "name:\($0)" } ?? "")
+    }
+
     func validate() throws {
         try SyncIdentity.validateProjectId(projectId)
+        if let recordingId { try SyncIdentity.validateRecordingId(recordingId) }
         if let fileName { try SyncIdentity.validateFileName(fileName) }
     }
 
-    /// A recording tombstone that is newer than the recording's upload.
+    /// True when this tombstone names the recording (or its whole song) and is
+    /// newer than the recording's precedence time.
     func covers(_ entry: SyncRecording) -> Bool {
-        fileName == entry.fileName && projectId == entry.projectId && deletedAt > entry.uploadedAt.epochMilliseconds
+        covers(projectId: entry.projectId, recordingId: entry.id, fileName: entry.fileName, at: entry.uploadedAt)
     }
 
-    /// True when this tombstone (song or recording) is newer than a local file
-    /// last changed at `modifiedAt`.
-    func covers(projectId: String, fileName: String, modifiedAt: Date) -> Bool {
-        self.projectId == projectId && (self.fileName == nil || self.fileName == fileName)
-            && deletedAt > modifiedAt.epochMilliseconds
+    func covers(projectId: String, recordingId: String, fileName: String, at time: Date) -> Bool {
+        guard self.projectId == projectId, deletedAt > time.epochMilliseconds else { return false }
+        if let id = self.recordingId { return id == recordingId }
+        return self.fileName == nil || self.fileName == fileName
     }
 
-    enum CodingKeys: String, CodingKey { case projectId, fileName, deletedAt }
+    enum CodingKeys: String, CodingKey { case projectId, recordingId, fileName, deletedAt }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         projectId = try container.decode(String.self, forKey: .projectId)
+        recordingId = try container.decodeIfPresent(String.self, forKey: .recordingId)
         fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
         deletedAt = try container.decode(Int64.self, forKey: .deletedAt)
         try validate()
@@ -71,6 +93,7 @@ struct SyncDeletion: Codable, Equatable, Hashable, Sendable {
         try validate()
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(projectId, forKey: .projectId)
+        if let recordingId { try container.encode(recordingId, forKey: .recordingId) }
         if let fileName {
             try container.encode(fileName, forKey: .fileName)
         } else {
@@ -326,18 +349,21 @@ struct SyncRecording: Equatable, Hashable, Sendable {
     /// Recordings above this stay on the device: not in the manifest, not on Drive, not in iCloud.
     static let maxBytes: Int64 = 16 * 1024 * 1024
 
+    /// Stable identity; a rename changes only `fileName`.
+    var id: String
     var projectId: String
     var fileName: String
     var bytes: Int64
     var sha256: String
-    /// When this audio reached Drive (before that, when it was recorded); a
-    /// recording tombstone removes it only when deleted after this.
+    /// The recording's precedence time (epoch milliseconds in the manifest); a
+    /// tombstone removes it only when deleted after this.
     var uploadedAt: Date
 
-    var key: String { "\(projectId)/\(fileName)" }
-    var driveName: String { RecordingBackupManifest.driveName(projectId: projectId, fileName: fileName) }
+    var key: String { id }
+    var driveName: String { RecordingBackupManifest.driveName(recordingId: id) }
 
     func validate() throws {
+        try SyncIdentity.validateRecordingId(id)
         try SyncIdentity.validateProjectId(projectId)
         try SyncIdentity.validateFileName(fileName)
         guard bytes >= 0, sha256.count == 64,
@@ -420,17 +446,20 @@ struct SyncBlob: Equatable, Sendable {
             }),
             "recordings": .array(recordings.map { entry in
                 .object([
+                    "id": .string(entry.id),
                     "projectId": .string(entry.projectId), "fileName": .string(entry.fileName),
                     "bytes": .int(entry.bytes), "sha256": .string(entry.sha256),
-                    "uploadedAt": .string(Self.formatSavedAt(entry.uploadedAt)),
+                    "uploadedAt": .int(entry.uploadedAt.epochMilliseconds),
                 ])
             }),
             "deletions": .array(deletions.map { deletion in
-                .object([
+                var fields: [String: JSONValue] = [
                     "projectId": .string(deletion.projectId),
                     "fileName": deletion.fileName.map(JSONValue.string) ?? .null,
                     "deletedAt": .int(deletion.deletedAt),
-                ])
+                ]
+                if let recordingId = deletion.recordingId { fields["recordingId"] = .string(recordingId) }
+                return .object(fields)
             }),
         ])
     }
@@ -481,19 +510,24 @@ struct SyncBlob: Equatable, Sendable {
                 },
                 recordings: try fields.array("recordings").map { entry in
                     SyncRecording(
+                        id: try entry.string("id"),
                         projectId: try entry.string("projectId"), fileName: try entry.string("fileName"),
                         bytes: try entry.int("bytes"), sha256: try entry.string("sha256"),
-                        uploadedAt: try parseSavedAt(try entry.string("uploadedAt"))
+                        uploadedAt: Date(millisecondsSince1970: try entry.int("uploadedAt"))
                     )
                 },
                 deletions: try fields.array("deletions").map { deletion in
-                    let fileName: String?
-                    switch deletion["fileName"] {
-                    case .string(let name)?: fileName = name
-                    case .null?, nil: fileName = nil
-                    default: throw SyncManifestError.damaged
+                    func optionalString(_ key: String) throws -> String? {
+                        switch deletion[key] {
+                        case .string(let value)?: return value
+                        case .null?, nil: return nil
+                        default: throw SyncManifestError.damaged
+                        }
                     }
-                    return SyncDeletion(projectId: try deletion.string("projectId"), fileName: fileName, deletedAt: try deletion.int("deletedAt"))
+                    return SyncDeletion(
+                        projectId: try deletion.string("projectId"), recordingId: try optionalString("recordingId"),
+                        fileName: try optionalString("fileName"), deletedAt: try deletion.int("deletedAt")
+                    )
                 },
                 savedAt: try parseSavedAt(try fields.string("savedAt")),
                 savedByClientId: try fields.string("savedByClientId"),
@@ -508,11 +542,11 @@ struct SyncBlob: Equatable, Sendable {
         }
     }
 
-    /// ISO-8601 UTC with whole seconds and a trailing Z (`savedAt`, `uploadedAt`).
+    /// `savedAt`: ISO-8601 UTC with milliseconds and a trailing Z.
     static func formatSavedAt(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: date)
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date(millisecondsSince1970: date.epochMilliseconds))
     }
 
     private static func parseSavedAt(_ text: String) throws -> Date {
@@ -526,15 +560,15 @@ struct SyncBlob: Equatable, Sendable {
 }
 
 extension LegacySyncBlob {
-    /// The same content in the v4 model; recording dates and Drive names are
-    /// dropped because v4 identifies a recording by project and file name.
-    var upgraded: SyncBlob {
+    /// The same content in the v4 model. Recordings get the ids `recordingId`
+    /// hands out (persisted by the caller, so an old entry keeps its id).
+    func upgraded(recordingId: (SyncRecordingManifestEntry) -> String) -> SyncBlob {
         SyncBlob(
             projects: projects,
             trashed: trashed,
             // An entry without a usable SHA-256 cannot be verified, so v4 does not carry it.
             recordings: recordings
-                .map { SyncRecording(projectId: $0.projectId, fileName: $0.fileName, bytes: $0.sizeBytes, sha256: $0.sha256.lowercased(), uploadedAt: $0.modifiedAt) }
+                .map { SyncRecording(id: recordingId($0), projectId: $0.projectId, fileName: $0.fileName, bytes: $0.sizeBytes, sha256: $0.sha256.lowercased(), uploadedAt: $0.modifiedAt) }
                 .filter { (try? $0.validate()) != nil },
             deletions: deletions,
             savedAt: savedAt,
@@ -667,42 +701,67 @@ enum SyncJSON {
 }
 
 enum SyncMerger {
-    /// Tombstones win only by time: a project tombstone removes the project only
-    /// when it is newer than the project's last change, and a tombstone removes a
-    /// recording only when it is newer than the recording's upload.
     static func merge(local: SyncBlob, remote: SyncBlob) throws -> SyncBlob {
-        try local.validate()
-        try remote.validate()
-        let candidates = try mergeDeletions(local.deletions + remote.deletions)
-        let resolved = resolveActiveTrashConflicts(
-            projects: mergeProjects(local: local.projects, remote: remote.projects),
-            trashed: mergeTrash(local: local.trashed, remote: remote.trashed)
-        )
-        var lastChange: [String: Int64] = [:]
-        for project in resolved.projects { lastChange[project.id] = max(lastChange[project.id] ?? .min, project.updatedAt.epochMilliseconds) }
-        for trash in resolved.trashed {
-            lastChange[trash.id] = max(lastChange[trash.id] ?? .min, trash.updatedAt.epochMilliseconds, trash.deletedAt.epochMilliseconds)
+        try resolve(try gather([local, remote]))
+    }
+
+    /// Collects every input into one working set without resolving anything: per
+    /// id the newest song and trash entry, per recording id the last input's entry
+    /// (the copy already backed up wins), per tombstone identity the newest. Resolve
+    /// once, after every input is in, so nothing is filtered or dropped early (A18).
+    static func gather(_ inputs: [SyncBlob]) throws -> SyncBlob {
+        for input in inputs { try input.validate() }
+        var recordings: [String: SyncRecording] = [:]
+        for input in inputs {
+            for entry in input.recordings { recordings[entry.id] = entry }
         }
-        let deletedProjects = Set(candidates.filter { $0.fileName == nil && $0.deletedAt > (lastChange[$0.projectId] ?? .min) }.map(\.projectId))
-        // A song tombstone that lost to a newer edit is kept: the recordings it
-        // covered (uploaded before it) stay deleted, so a device still holding that
-        // audio cannot bring it back.
-        let recordings = mergeRecordings(local: local.recordings, remote: remote.recordings).filter { entry in
-            !candidates.contains { $0.projectId == entry.projectId && ($0.fileName == nil || $0.fileName == entry.fileName) && $0.deletedAt > entry.uploadedAt.epochMilliseconds }
-        }
-        // A recording tombstone no newer than its song's tombstone adds nothing.
-        let deletions = candidates.filter { deletion in
-            deletion.fileName == nil || !candidates.contains { $0.fileName == nil && $0.projectId == deletion.projectId && $0.deletedAt >= deletion.deletedAt }
-        }
-        let newestSavedAt = max(local.savedAt, remote.savedAt)
+        let newest = inputs.max { ($0.savedAt, $0.savedByClientId) < ($1.savedAt, $1.savedByClientId) }
         return SyncBlob(
-            projects: resolved.projects.filter { !deletedProjects.contains($0.id) }.sorted { ($0.title.lowercased(), $0.id) < ($1.title.lowercased(), $1.id) },
-            trashed: resolved.trashed.filter { !deletedProjects.contains($0.id) }.sorted { $0.deletedAt == $1.deletedAt ? $0.id < $1.id : $0.deletedAt > $1.deletedAt },
-            recordings: recordings.sorted { ($0.projectId, $0.fileName) < ($1.projectId, $1.fileName) },
+            projects: mergeProjects(local: inputs.flatMap(\.projects), remote: []),
+            trashed: mergeTrash(local: inputs.flatMap(\.trashed), remote: []),
+            recordings: Array(recordings.values),
+            deletions: try mergeDeletions(inputs.flatMap(\.deletions)),
+            savedAt: newest?.savedAt ?? Date(),
+            savedByClientId: newest?.savedByClientId ?? "",
+            platform: inputs.first?.platform ?? "ios"
+        )
+    }
+
+    /// Applies A3 once to a gathered set. A song tombstone removes a song only when
+    /// newer than its last change and a recording only when newer than its
+    /// precedence time; each recording a song tombstone removes gets its own
+    /// tombstone, so reviving the song (which drops the song tombstone) cannot
+    /// bring the audio back. A tombstone whose song or recording survives is dropped.
+    static func resolve(_ gathered: SyncBlob) throws -> SyncBlob {
+        let resolved = resolveActiveTrashConflicts(projects: gathered.projects, trashed: gathered.trashed)
+        let songTombstones = Dictionary(gathered.deletions.filter(\.isSongTombstone).map { ($0.projectId, $0) }) { first, _ in first }
+        let projects = resolved.projects.filter { project in
+            !(songTombstones[project.id].map { $0.deletedAt > project.updatedAt.epochMilliseconds } ?? false)
+        }
+        let trashed = resolved.trashed.filter { trash in
+            !(songTombstones[trash.id].map { $0.deletedAt > max(trash.updatedAt, trash.deletedAt).epochMilliseconds } ?? false)
+        }
+        let recordings = gathered.recordings.filter { entry in !gathered.deletions.contains { $0.covers(entry) } }
+        let covered = gathered.recordings.compactMap { entry -> SyncDeletion? in
+            guard let song = songTombstones[entry.projectId], song.deletedAt > entry.uploadedAt.epochMilliseconds else { return nil }
+            return SyncDeletion(projectId: entry.projectId, recordingId: entry.id, fileName: entry.fileName, deletedAt: song.deletedAt)
+        }
+        let survivingSongs = Set(projects.map(\.id) + trashed.map(\.id))
+        let survivingIds = Set(recordings.map(\.id))
+        let survivingNames = Set(recordings.map { "\($0.projectId)/\($0.fileName)" })
+        let deletions = try mergeDeletions(gathered.deletions + covered).filter { deletion in
+            if deletion.isSongTombstone { return !survivingSongs.contains(deletion.projectId) }
+            if let id = deletion.recordingId { return !survivingIds.contains(id) }
+            return !survivingNames.contains("\(deletion.projectId)/\(deletion.fileName ?? "")")
+        }
+        return SyncBlob(
+            projects: projects.sorted { ($0.title.lowercased(), $0.id) < ($1.title.lowercased(), $1.id) },
+            trashed: trashed.sorted { $0.deletedAt == $1.deletedAt ? $0.id < $1.id : $0.deletedAt > $1.deletedAt },
+            recordings: recordings.sorted { ($0.projectId, $0.fileName, $0.id) < ($1.projectId, $1.fileName, $1.id) },
             deletions: deletions,
-            savedAt: newestSavedAt,
-            savedByClientId: local.savedAt == remote.savedAt ? max(local.savedByClientId, remote.savedByClientId) : (local.savedAt > remote.savedAt ? local.savedByClientId : remote.savedByClientId),
-            platform: local.platform
+            savedAt: gathered.savedAt,
+            savedByClientId: gathered.savedByClientId,
+            platform: gathered.platform
         )
     }
 
@@ -711,11 +770,10 @@ enum SyncMerger {
         for deletion in deletions { try deletion.validate() }
         var byIdentity: [String: SyncDeletion] = [:]
         for deletion in deletions {
-            let key = "\(deletion.projectId)/\(deletion.fileName ?? "")"
-            if let existing = byIdentity[key], existing.deletedAt >= deletion.deletedAt { continue }
-            byIdentity[key] = deletion
+            if let existing = byIdentity[deletion.identity], existing.deletedAt >= deletion.deletedAt { continue }
+            byIdentity[deletion.identity] = deletion
         }
-        return byIdentity.values.sorted { ($0.projectId, $0.fileName ?? "") < ($1.projectId, $1.fileName ?? "") }
+        return byIdentity.values.sorted { $0.identity < $1.identity }
     }
 
     private static func mergeProjects(local: [SyncSongProject], remote: [SyncSongProject]) -> [SyncSongProject] {
@@ -750,24 +808,30 @@ enum SyncMerger {
         return (resolvedProjects, resolvedTrash)
     }
 
-    /// v4 recordings carry no date: for the same name with different audio the
-    /// remote (Drive's) entry wins. Restore still never writes over a local file.
-    private static func mergeRecordings(local: [SyncRecording], remote: [SyncRecording]) -> [SyncRecording] {
-        var byIdentity: [String: SyncRecording] = [:]
-        for entry in local + remote { byIdentity[entry.key] = entry }
-        return Array(byIdentity.values)
-    }
 }
 
 enum RecordingBackupManifest {
     /// v4 Drive name for a recording's raw audio.
-    static func driveName(projectId: String, fileName: String) -> String {
-        "rec_\(projectId)_\(fileName)"
+    static func driveName(recordingId: String) -> String {
+        "rec_\(recordingId)"
     }
 
     /// v1–v3 Drive name for a recording's RAI1-encrypted audio.
     static func legacyDriveName(projectId: String, fileName: String) -> String {
         "rec_\(projectId)_\(fileName).enc"
+    }
+
+    /// The id of a recording from before v4: a name-based UUID (version 3, MD5,
+    /// as Java's `UUID.nameUUIDFromBytes`) of
+    /// "rhymeai-legacy-recording:<projectId>/<fileName>/<sha256>", so every
+    /// device derives the same id for the same old recording.
+    static func legacyRecordingId(projectId: String, fileName: String, sha256: String) -> String {
+        var bytes = Array(Insecure.MD5.hash(data: Data("rhymeai-legacy-recording:\(projectId)/\(fileName)/\(sha256.lowercased())".utf8)))
+        bytes[6] = (bytes[6] & 0x0f) | 0x30
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        let hex = bytes.map { String(format: "%02x", $0) }.joined()
+        let parts = [hex.prefix(8), hex.dropFirst(8).prefix(4), hex.dropFirst(12).prefix(4), hex.dropFirst(16).prefix(4), hex.dropFirst(20)]
+        return parts.map(String.init).joined(separator: "-")
     }
 
     static func sha256Hex(_ data: Data) -> String {
@@ -794,17 +858,6 @@ enum RecordingBackupManifest {
             }
     }
 
-    static func scan(projectIds: [String], memosRoot: URL = RecordingFiles.memosRoot()) throws -> [(entry: SyncRecording, localURL: URL)] {
-        try projectIds.flatMap { projectId in
-            try scanFiles(projectId: projectId, memosRoot: memosRoot).map { name, url in
-                let data = try Data(contentsOf: url)
-                let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? nil
-                let entry = SyncRecording(projectId: projectId, fileName: name, bytes: Int64(data.count), sha256: sha256Hex(data), uploadedAt: modified ?? Date())
-                try entry.validate()
-                return (entry, url)
-            }
-        }
-    }
 }
 
 private extension KeyedDecodingContainer {

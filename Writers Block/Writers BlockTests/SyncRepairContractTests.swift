@@ -38,7 +38,7 @@ enum SyncRepairContractChecks {
         let laterMs: Int64 = 2_000_000_000_000
         func project(_ id: String) -> SyncSongProject { SyncSongProject(id: id, title: id, lyrics: "synthetic", theme: "", updatedAt: later) }
         func recording(_ id: String, _ file: String) -> SyncRecording {
-            SyncRecording(projectId: id, fileName: file, bytes: 3, sha256: String(repeating: "a", count: 64), uploadedAt: later)
+            SyncRecording(id: "\(id)~\(file)", projectId: id, fileName: file, bytes: 3, sha256: String(repeating: "a", count: 64), uploadedAt: later)
         }
         let trash = SyncTrashedSongProject(id: "gone", title: "gone", lyrics: "synthetic", theme: "", updatedAt: later, deletedAt: later, deleteAfter: later)
         let content = SyncBlob(projects: [project("gone"), project("keep")], trashed: [trash], recordings: [recording("gone", "take.m4a"), recording("keep", "removed.m4a"), recording("keep", "new.m4a")], savedAt: later, savedByClientId: "stale")
@@ -47,7 +47,13 @@ enum SyncRepairContractChecks {
         try require(merged.projects.map(\.id) == ["keep"], "newer project tombstone lost to older content")
         try require(merged.trashed.isEmpty, "project tombstone retained visible trash")
         try require(merged.recordings.map(\.fileName) == ["new.m4a"], "recording tombstone lost to older upload")
-        try require(merged.deletions == [SyncDeletion(projectId: "gone", deletedAt: laterMs + 2), SyncDeletion(projectId: "gone", fileName: "take.m4a", deletedAt: Int64.max), SyncDeletion(projectId: "keep", fileName: "removed.m4a", deletedAt: laterMs + 3)], "tombstone union/deduplication failed")
+        // The song tombstone's recording gets its own tombstone by id.
+        try require(merged.deletions == [
+            SyncDeletion(projectId: "gone", deletedAt: laterMs + 2),
+            SyncDeletion(projectId: "gone", recordingId: "gone~take.m4a", fileName: "take.m4a", deletedAt: laterMs + 2),
+            SyncDeletion(projectId: "gone", fileName: "take.m4a", deletedAt: Int64.max),
+            SyncDeletion(projectId: "keep", fileName: "removed.m4a", deletedAt: laterMs + 3),
+        ], "tombstone union/deduplication failed: \(merged.deletions)")
         try require(merged == SyncMerger.merge(local: tombstones, remote: content), "merge order changed output")
         try require(merged == SyncMerger.merge(local: merged, remote: merged), "merge was not idempotent")
         try require(merged == SyncMerger.merge(local: merged, remote: content), "repeat stale peer resurrected content")
@@ -60,20 +66,31 @@ enum SyncRepairContractChecks {
         let stale = SyncBlob(deletions: [SyncDeletion(projectId: "keep", deletedAt: laterMs - 1), SyncDeletion(projectId: "keep", fileName: "new.m4a", deletedAt: laterMs - 1)])
         let revived = try SyncMerger.merge(local: content, remote: stale)
         try require(revived.projects.map(\.id).contains("keep") && revived.recordings.contains { $0.fileName == "new.m4a" }, "older tombstone removed newer content")
-        try require(revived.deletions.contains { $0.projectId == "keep" && $0.fileName == nil }, "a tombstone that lost was dropped; it must keep protecting older audio")
+        try require(!revived.deletions.contains { $0.projectId == "keep" }, "a tombstone that lost was kept")
 
-        // A song edited after its tombstone survives, but audio uploaded before the
-        // tombstone stays deleted: on this backup, the next, and against a device
-        // that still holds the old take.
-        let oldTake = SyncRecording(projectId: "keep", fileName: "old.m4a", bytes: 3, sha256: String(repeating: "c", count: 64), uploadedAt: Date(timeIntervalSince1970: 1_900_000_000))
+        // A song edited after its tombstone survives; audio uploaded before the
+        // tombstone gets its own tombstone, so the next backup and a device that
+        // still holds the old take cannot bring it back (A15).
+        let oldTake = SyncRecording(id: "old-take", projectId: "keep", fileName: "old.m4a", bytes: 3, sha256: String(repeating: "c", count: 64), uploadedAt: Date(timeIntervalSince1970: 1_900_000_000))
         let tombstone = SyncDeletion(projectId: "keep", deletedAt: 1_950_000_000_000)
-        let first = try SyncMerger.merge(local: SyncBlob(projects: [project("keep")], recordings: [recording("keep", "new.m4a")]), remote: SyncBlob(deletions: [tombstone]))
+        let first = try SyncMerger.merge(local: SyncBlob(projects: [project("keep")], recordings: [recording("keep", "new.m4a"), oldTake]), remote: SyncBlob(deletions: [tombstone]))
         let second = try SyncMerger.merge(local: first, remote: SyncBlob(projects: [project("keep")], recordings: [oldTake]))
         let third = try SyncMerger.merge(local: SyncBlob(recordings: [oldTake]), remote: second)
+        let protection = SyncDeletion(projectId: "keep", recordingId: "old-take", fileName: "old.m4a", deletedAt: 1_950_000_000_000)
         for result in [first, second, third] {
             try require(result.projects.map(\.id) == ["keep"] && result.recordings.map(\.fileName) == ["new.m4a"], "revived song resurrected audio its tombstone covered")
-            try require(result.deletions == [tombstone], "revived song lost its tombstone")
+            try require(result.deletions == [protection], "per-recording protection missing: \(result.deletions)")
         }
+        // Gather-then-resolve: local song 40 + song tombstone 20 + recording A at 30,
+        // remote same id B at 10 resolves once, with the copy already backed up.
+        let at = { (seconds: Double) in Date(timeIntervalSince1970: seconds) }
+        let a = SyncRecording(id: "same", projectId: "keep", fileName: "a.m4a", bytes: 3, sha256: String(repeating: "d", count: 64), uploadedAt: at(30))
+        let b = SyncRecording(id: "same", projectId: "keep", fileName: "a.m4a", bytes: 3, sha256: String(repeating: "d", count: 64), uploadedAt: at(10))
+        let local = SyncBlob(projects: [SyncSongProject(id: "keep", title: "k", lyrics: "", theme: "", updatedAt: at(40))], recordings: [a], deletions: [SyncDeletion(projectId: "keep", deletedAt: 20_000)])
+        let gathered = try SyncMerger.resolve(try SyncMerger.gather([local, SyncBlob(recordings: [b])]))
+        try require(gathered.recordings.isEmpty, "the backed-up copy (at 10) predates the tombstone (20)")
+        // The sync loop re-gathers the raw remote input with each new snapshot, so a refresh agrees.
+        try require(try SyncMerger.resolve(try SyncMerger.gather([local, SyncBlob(recordings: [b]), gathered])).recordings.isEmpty, "a refresh resurrected it")
     }
 
     static func validation() throws {
@@ -164,7 +181,7 @@ enum SyncRepairContractChecks {
         try require(legacy.version == 2, "v2 manifest reader changed version")
         try require(legacy.recordings.map(\.fileName) == ["take.m4a"], "legacy M4A recording lost")
         try require(legacy.deletions == [SyncDeletion(projectId: "deleted-song", deletedAt: 1700000000000)], "legacy v2 deletion lost")
-        let upgraded = try SyncMerger.merge(local: legacy.upgraded, remote: SyncBlob())
+        let upgraded = try SyncMerger.merge(local: legacy.upgraded(recordingId: { "\($0.projectId)~\($0.fileName)" }), remote: SyncBlob())
         try require(upgraded.deletions == legacy.deletions, "v2 upgrade lost deletion contract")
 
         // Android emitted imported names in RAI1/v1 and RAI2/v2; they still open for migration.
@@ -188,8 +205,8 @@ enum SyncRepairContractChecks {
         let legacy = LegacySyncBlob(recordings: recordings, deletions: deleted, savedAt: Date(timeIntervalSince1970: 1700000000))
         let opened = try SyncBlobCrypto.openManifest(rawEnvelope(SyncJSON.encoder.encode(legacy), magic: "RAI3"), passphrase: passphrase)
         try require(opened == legacy, "v3 import/deletion encrypted read failed")
-        let upgraded = opened.upgraded
-        try require(upgraded.recordings.map(\.driveName) == formats.map { "rec_song_take.\($0)" }, "v4 Drive names wrong")
+        let upgraded = opened.upgraded(recordingId: { "\($0.projectId)~\($0.fileName)" })
+        try require(upgraded.recordings.map(\.driveName) == formats.map { "rec_song~take.\($0)" }, "v4 Drive names wrong")
         let reopened = try SyncBlob.decodeManifest(upgraded.encodedManifest())
         try require(reopened.recordings == upgraded.recordings && reopened.deletions == deleted, "v4 round trip lost imported audio or deletions")
         let tombstoned = SyncBlob(recordings: upgraded.recordings, deletions: [SyncDeletion(projectId: "song", fileName: "take.wav", deletedAt: Int64.max)])
