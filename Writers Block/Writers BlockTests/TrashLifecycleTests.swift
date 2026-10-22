@@ -249,8 +249,8 @@ struct TrashLifecycleTests {
     @MainActor
     @Test func persistedTombstoneSuppressesStaleProjectOnRelaunch() throws {
         let harness = try Self.makeHarness()
-        harness.context.insert(SongProject(id: "gone", title: "Stale", lyrics: "stale lyric"))
-        harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 1))
+        harness.context.insert(SongProject(id: "gone", title: "Stale", lyrics: "stale lyric", updatedAt: Date(timeIntervalSince1970: 100)))
+        harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 200_000))
         try harness.context.save()
 
         let relaunched = EditorViewModel()
@@ -258,6 +258,19 @@ struct TrashLifecycleTests {
 
         #expect(try Self.fetchProjects(harness.context).isEmpty)
         #expect(try Self.fetchDeletions(harness.context).map(\.projectId) == ["gone"])
+    }
+
+    @MainActor
+    @Test func songEditedAfterItsTombstoneSurvivesRelaunch() throws {
+        let harness = try Self.makeHarness()
+        harness.context.insert(SongProject(id: "back", title: "Edited later", lyrics: "kept", updatedAt: Date(timeIntervalSince1970: 300)))
+        harness.context.insert(SyncDeletionRecord(projectId: "back", deletedAt: 200_000))
+        try harness.context.save()
+
+        let relaunched = EditorViewModel()
+        relaunched.modelContext = harness.context
+
+        #expect(try Self.fetchProjects(harness.context).map(\.id) == ["back"])
     }
 
     @MainActor

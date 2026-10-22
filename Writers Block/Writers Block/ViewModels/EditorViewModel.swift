@@ -10,19 +10,56 @@ enum SaveStatus {
 @MainActor
 protocol CloudBackupServicing: AnyObject {
     var isConfigured: Bool { get }
-    var hasStoredPassphrase: Bool { get }
+    var isConnected: Bool { get }
+    var lastBackupAt: Date? { get }
+    var hasLegacyBackupToMigrate: Bool { get }
+    var lastReport: BackupReport? { get }
     var backgroundBackupFailureDescription: String? { get }
     var recordingRecoveryRoot: URL? { get }
 
-    func updatePassphrase(_ passphrase: String) throws
+    func connect() async throws
+    func disconnect() async -> Bool
     func backupNow(modelContext: ModelContext) async throws
     func restoreNow(modelContext: ModelContext) async throws
     func backupInBackgroundIfPossible(modelContext: ModelContext) async
+    func migrateLegacyBackup(passphrase: String, modelContext: ModelContext) async throws
+    func remoteBackupSummary() async throws -> RemoteBackupSummary?
+    func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data)
+    func importArchive(_ data: Data, modelContext: ModelContext) throws
+    func reconcileRecordingLibrary(modelContext: ModelContext)
 }
 
 extension CloudBackupServicing {
+    var lastBackupAt: Date? { nil }
+    var hasLegacyBackupToMigrate: Bool { false }
+    var lastReport: BackupReport? { nil }
     var backgroundBackupFailureDescription: String? { nil }
     var recordingRecoveryRoot: URL? { nil }
+    func connect() async throws {}
+    func disconnect() async -> Bool { true }
+    func migrateLegacyBackup(passphrase: String, modelContext: ModelContext) async throws {}
+    func remoteBackupSummary() async throws -> RemoteBackupSummary? { nil }
+    func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data) {
+        throw BackupError.notConfigured
+    }
+    func importArchive(_ data: Data, modelContext: ModelContext) throws {}
+    func reconcileRecordingLibrary(modelContext: ModelContext) {}
+}
+
+/// Google Drive backup as Settings shows it; the same cases on Android.
+enum BackupStatus: Equatable {
+    case notConnected
+    case connected(lastBackupAt: Date?)
+    case pending
+    case backingUp
+    case failed(reason: String, lastBackupAt: Date?)
+}
+
+/// "We found N songs and M recordings in your Google Drive backup."
+struct FirstRunRestoreOffer: Identifiable, Equatable {
+    let id = UUID()
+    let songs: Int
+    let recordings: Int
 }
 
 extension BackupService: CloudBackupServicing {}
@@ -333,8 +370,18 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Cloud Backup
 
     @Published private(set) var cloudBackupConfigured: Bool = false
-    @Published private(set) var cloudBackupHasStoredPassphrase: Bool = false
+    @Published private(set) var cloudBackupConnected: Bool = false
     @Published private(set) var cloudBackupIsWorking: Bool = false
+    @Published private(set) var backupStatus: BackupStatus = .notConnected
+    /// An older passphrase-encrypted backup is on Drive and waits for its passphrase.
+    @Published private(set) var legacyBackupNeedsPassphrase: Bool = false
+    @Published var firstRunRestoreOffer: FirstRunRestoreOffer?
+    private var automaticBackupTask: Task<Void, Never>?
+    private var automaticBackupFailures = 0
+    private var automaticBackupRerunRequested = false
+    private var firstRunCheckedThisLaunch = false
+    /// Quiet period after the last saved change before an automatic backup.
+    var automaticBackupDebounce: TimeInterval = BackupSchedule.debounce
     private var activeCloudEditorOperation: CloudEditorOperation?
     private var pendingRecordingRecovery: OpenRecordingSnapshot?
     /// Why the last `beginCloudEditorOperation` refused, when it has a reason
@@ -347,7 +394,8 @@ final class EditorViewModel: ObservableObject {
     /// True once this session may write and remove its own recovery file: the
     /// library is on disk and any file left by an earlier session was set aside.
     private var draftRecoveryUsable = false
-    @Published private(set) var cloudBackupStatusText: String = "Google Drive backup is unavailable in this build."
+    /// The outcome of the last backup action, shown under the status line; empty when there is nothing to say.
+    @Published private(set) var cloudBackupStatusText: String = ""
     @Published private(set) var cloudBackupLastResultIsError: Bool = false
 
     // MARK: - Internal
@@ -361,10 +409,12 @@ final class EditorViewModel: ObservableObject {
         didSet {
             modelContainer = modelContext?.container
             applyPersistedDeletions()
+            if let modelContext { backupService?.reconcileRecordingLibrary(modelContext: modelContext) }
             purgeExpiredTrashedProjects()
             recoverInterruptedDraftIfNeeded()
             seedTrashProjectForUITestsIfNeeded()
             refreshCloudBackupState()
+            Task { await checkFirstRunRestoreOffer(afterConnecting: false) }
         }
     }
     private let aiService: AIService
@@ -413,7 +463,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     var canRunCloudBackup: Bool {
-        cloudBackupConfigured && cloudBackupHasStoredPassphrase && !cloudBackupIsWorking && modelContext != nil
+        cloudBackupConfigured && cloudBackupConnected && !cloudBackupIsWorking && modelContext != nil
     }
 
     func hasApiKey(for provider: AIProvider) -> Bool {
@@ -461,13 +511,20 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Init
 
-    private let saveModelContext: (ModelContext) throws -> Void
+    private let persistModelContext: (ModelContext) throws -> Void
+
+    /// Every library save goes through here, so a saved change starts the backup countdown.
+    private func saveModelContext(_ context: ModelContext) throws {
+        let changed = context.hasChanges
+        try persistModelContext(context)
+        if changed { scheduleAutomaticBackup() }
+    }
 
     init(aiService: AIService = AIService(), keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, companionStore: WritingCompanionStore? = nil, synonymService: (any SynonymProviding)? = nil, defaults: UserDefaults = .standard, draftRecoveryURL: URL? = nil, libraryIsCloudBacked: ((ModelContainer) -> Bool)? = nil, saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.aiService = aiService
         self.synonymService = synonymService ?? aiService
         self.defaults = defaults
-        self.saveModelContext = saveModelContext
+        self.persistModelContext = saveModelContext
         let runningUITestInMemory = UITestFlags.isEnabled(UITestFlags.inMemoryStore)
         let resolvedStore: KeychainStore = keychainStore
             ?? (runningUITestInMemory ? InMemoryKeychainStore() : SystemKeychainStore())
@@ -591,12 +648,14 @@ final class EditorViewModel: ObservableObject {
         if UITestFlags.isEnabled(UITestFlags.forceSaveFailed) {
             saveStatus = .failed
         }
+        voiceMemoService.onFilesChanged = { [weak self] in self?.scheduleAutomaticBackup() }
         refreshCloudBackupState()
     }
 
     deinit {
         trashSchedulerTask?.cancel()
         autoSaveTask?.cancel()
+        automaticBackupTask?.cancel()
         rewriteTask?.cancel()
         suggestionsTask?.cancel()
         derivedStateTask?.cancel()
@@ -1515,12 +1574,22 @@ final class EditorViewModel: ObservableObject {
             let records = try context.fetch(FetchDescriptor<SyncDeletionRecord>())
             let deletions = try SyncMerger.mergeDeletions(records.map(\.deletion))
             guard !deletions.isEmpty else { return }
-            let deletedProjects = Set(deletions.filter { $0.fileName == nil }.map(\.projectId))
-            for project in try context.fetch(FetchDescriptor<SongProject>()) where deletedProjects.contains(project.id) {
-                context.delete(project)
+            // A tombstone removes a song only when it is newer than the song's last change.
+            let tombstones = Dictionary(deletions.filter { $0.fileName == nil }.map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
+            var deletedProjects = Set(tombstones.keys)
+            for project in try context.fetch(FetchDescriptor<SongProject>()) where tombstones[project.id] != nil {
+                if tombstones[project.id]! > project.updatedAt.epochMilliseconds {
+                    context.delete(project)
+                } else {
+                    deletedProjects.remove(project.id)
+                }
             }
-            for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) where deletedProjects.contains(project.id) {
-                context.delete(project)
+            for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) where tombstones[project.id] != nil {
+                if tombstones[project.id]! > max(project.updatedAt, project.deletedAt).epochMilliseconds {
+                    context.delete(project)
+                } else {
+                    deletedProjects.remove(project.id)
+                }
             }
             try saveModelContext(context)
             for projectId in deletedProjects {
@@ -1529,6 +1598,10 @@ final class EditorViewModel: ObservableObject {
             }
             for deletion in deletions {
                 guard let fileName = deletion.fileName, !deletedProjects.contains(deletion.projectId) else { continue }
+                // A recording saved under that name after the tombstone stays.
+                if let live = try? RecordingFiles.localURL(projectId: deletion.projectId, fileName: fileName, memosRoot: RecordingFiles.memosRoot()),
+                   FileManager.default.fileExists(atPath: live.path),
+                   !deletion.covers(projectId: deletion.projectId, fileName: fileName, modifiedAt: RecordingFiles.modificationDate(live)) { continue }
                 voiceMemoService.deletePermanentRecordingFiles(projectId: deletion.projectId, fileName: fileName)
             }
         } catch {
@@ -2003,98 +2076,258 @@ final class EditorViewModel: ObservableObject {
 
     func refreshCloudBackupState() {
         cloudBackupConfigured = backupService?.isConfigured ?? false
-        cloudBackupHasStoredPassphrase = backupService?.hasStoredPassphrase ?? false
-
-        if !cloudBackupConfigured {
-            cloudBackupStatusText = "Google Drive backup is not configured in this build, so Back Up Now and Restore are unavailable."
-            cloudBackupLastResultIsError = true
-        } else if !cloudBackupHasStoredPassphrase {
-            cloudBackupStatusText = "Enter a backup passphrase to enable Google Drive backup."
-            cloudBackupLastResultIsError = false
-        } else if let backgroundFailure = backupService?.backgroundBackupFailureDescription, !backgroundFailure.isEmpty {
-            cloudBackupStatusText = "Background backup failed: \(backgroundFailure)"
-            cloudBackupLastResultIsError = true
-        } else if cloudBackupStatusText == "Google Drive backup is unavailable in this build."
-            || cloudBackupStatusText.contains("not configured")
-            || cloudBackupStatusText.contains("Enter a backup passphrase")
-            || cloudBackupStatusText.hasPrefix("Background backup failed:") {
-            cloudBackupStatusText = "Ready to back up projects, trash, and recordings."
-            cloudBackupLastResultIsError = false
+        cloudBackupConnected = backupService?.isConnected ?? false
+        legacyBackupNeedsPassphrase = backupService?.hasLegacyBackupToMigrate ?? false
+        guard let backupService, cloudBackupConnected else {
+            backupStatus = .notConnected
+            return
+        }
+        if cloudBackupIsWorking {
+            backupStatus = .backingUp
+        } else if let failure = backupService.backgroundBackupFailureDescription {
+            backupStatus = .failed(reason: failure, lastBackupAt: backupService.lastBackupAt)
+        } else if automaticBackupTask != nil {
+            backupStatus = .pending
+        } else {
+            backupStatus = .connected(lastBackupAt: backupService.lastBackupAt)
         }
     }
 
-    func updateCloudBackupPassphrase(_ passphrase: String) {
-        // Trim exactly the ASCII space/tab/CR/LF set (not Unicode whitespace) so the
-        // accepted passphrase matches Android's byte-for-byte trimming.
-        let trimmed = passphrase.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n"))
-        guard Self.isPortableBackupPassphrase(trimmed) else {
-            cloudBackupConfigured = backupService?.isConfigured ?? false
-            cloudBackupHasStoredPassphrase = backupService?.hasStoredPassphrase ?? false
-            cloudBackupStatusText = "Use at least 8 characters (printable ASCII) so your backup restores on any device."
+    func connectGoogleDrive() async {
+        guard let backupService, cloudBackupConfigured, !cloudBackupConnected else { return }
+        do {
+            try await backupService.connect()
+        } catch {
+            refreshCloudBackupState()
             cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Could not connect Google Drive: \(cloudBackupErrorDescription(error))"
             return
         }
+        cloudBackupStatusText = ""
+        cloudBackupLastResultIsError = false
+        refreshCloudBackupState()
+        await checkFirstRunRestoreOffer(afterConnecting: true)
+        scheduleAutomaticBackup()
+    }
 
-        do {
-            try backupService?.updatePassphrase(trimmed)
-        } catch {
-            cloudBackupConfigured = backupService?.isConfigured ?? false
-            cloudBackupHasStoredPassphrase = backupService?.hasStoredPassphrase ?? false
-            cloudBackupStatusText = (error as? LocalizedError)?.errorDescription
-                ?? "Could not securely store your backup passphrase. Try again."
-            cloudBackupLastResultIsError = true
+    /// Revokes the Google grant and clears this device's backup state. Backups stop.
+    func disconnectGoogleDrive() async {
+        guard let backupService, !cloudBackupIsWorking else { return }
+        automaticBackupTask?.cancel()
+        automaticBackupTask = nil
+        automaticBackupFailures = 0
+        automaticBackupRerunRequested = false
+        firstRunRestoreOffer = nil
+        let revoked = await backupService.disconnect()
+        refreshCloudBackupState()
+        cloudBackupLastResultIsError = !revoked
+        cloudBackupStatusText = revoked
+            ? "Disconnected from Google Drive."
+            : "Disconnected on this device, but Google still lists the app; remove it at myaccount.google.com/permissions"
+    }
+
+    /// Offers the Drive backup to a device that has none of it yet: after
+    /// connecting, or at launch when connected with an empty library. Never restores by itself.
+    func checkFirstRunRestoreOffer(afterConnecting: Bool) async {
+        guard let backupService, backupService.isConnected, let context = modelContext,
+              firstRunRestoreOffer == nil, afterConnecting || !firstRunCheckedThisLaunch else { return }
+        firstRunCheckedThisLaunch = true
+        if !afterConnecting {
+            let songs = (try? context.fetchCount(FetchDescriptor<SongProject>())) ?? 0
+            let trashed = (try? context.fetchCount(FetchDescriptor<TrashedSongProject>())) ?? 0
+            guard songs + trashed == 0 else { return }
+        }
+        guard let summary = try? await backupService.remoteBackupSummary(), summary.songs > 0 else { return }
+        automaticBackupTask?.cancel()
+        automaticBackupTask = nil
+        firstRunRestoreOffer = FirstRunRestoreOffer(songs: summary.songs, recordings: summary.recordings)
+        refreshCloudBackupState()
+    }
+
+    func acceptFirstRunRestore() async {
+        firstRunRestoreOffer = nil
+        await restoreBackupNow()
+    }
+
+    func declineFirstRunRestore() {
+        firstRunRestoreOffer = nil
+        refreshCloudBackupState()
+    }
+
+    /// Starts the quiet-period countdown to an automatic backup. Runs coalesce:
+    /// a change during a run asks for one more run after it.
+    func scheduleAutomaticBackup() {
+        guard let backupService, backupService.isConnected, modelContext != nil, firstRunRestoreOffer == nil else { return }
+        if cloudBackupIsWorking {
+            automaticBackupRerunRequested = true
             return
+        }
+        automaticBackupTask?.cancel()
+        let delay = max(automaticBackupDebounce, BackupSchedule.retryDelay(afterFailures: automaticBackupFailures))
+        automaticBackupTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            automaticBackupTask = nil
+            await runCloudBackupOnBackgroundIfPossible()
         }
         refreshCloudBackupState()
     }
 
-    private static func isPortableBackupPassphrase(_ passphrase: String) -> Bool {
-        guard passphrase.count >= 8 else { return false }
-        return passphrase.unicodeScalars.allSatisfy { scalar in
-            (0x20...0x7e).contains(Int(scalar.value))
+    func backUpNow() async {
+        await runCloudEditorOperation(
+            noun: "Backup",
+            changesLibrary: false,
+            success: "Backup complete.",
+            separateDraft: "Backup complete. Your edits were saved as a separate local draft; back up again to include them."
+        ) { service, context in
+            try await service.backupNow(modelContext: context)
         }
     }
 
-    func backUpNow() async {
-        guard let backupService, let context = modelContext, canRunCloudBackup else {
+    func restoreBackupNow() async {
+        await runCloudEditorOperation(
+            noun: "Restore",
+            success: "Restore complete. Projects, trash, and missing recordings were restored.",
+            separateDraft: "Restore complete. Your open edits were saved as a separate local draft."
+        ) { service, context in
+            try await service.restoreNow(modelContext: context)
+        }
+    }
+
+    /// Opens the older encrypted backup with a passphrase typed once; it is not kept.
+    func migrateLegacyBackup(passphrase: String) async {
+        await runCloudEditorOperation(
+            noun: "Migration",
+            changesLibrary: false,
+            success: "",
+            separateDraft: "Your open edits were saved as a separate local draft."
+        ) { service, context in
+            try await service.migrateLegacyBackup(passphrase: passphrase, modelContext: context)
+        }
+    }
+
+    /// Merges an exported zip or a v4 `manifest.json` into the library.
+    func importBackupFile(_ data: Data) async {
+        await runCloudEditorOperation(
+            noun: "Import",
+            requiresDrive: false,
+            success: "Import complete. Songs from the file were merged into your library.",
+            separateDraft: "Import complete. Your open edits were saved as a separate local draft."
+        ) { service, context in
+            try service.importArchive(data, modelContext: context)
+        }
+        // Imported recordings are files, which no library save announces.
+        scheduleAutomaticBackup()
+    }
+
+    /// The "Export all songs" zip, after saving the open song.
+    func exportAllSongs() -> (fileName: String, data: Data)? {
+        guard let backupService, let context = modelContext, !cloudBackupIsWorking, flushCurrentDraft() else {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Export failed: save the open song and try again."
+            return nil
+        }
+        do {
+            let archive = try backupService.exportArchive(modelContext: context, now: Date())
+            cloudBackupLastResultIsError = false
+            cloudBackupStatusText = reportNote(backupService.lastReport) ?? ""
+            return archive
+        } catch {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Export failed: \(cloudBackupErrorDescription(error))"
+            return nil
+        }
+    }
+
+    /// Runs a backup-family action while the library is held, then reconciles the open draft.
+    /// `changesLibrary` is false for backups: they only read the library, so the
+    /// open song is saved first and the editor stays free while they run.
+    private func runCloudEditorOperation(
+        noun: String,
+        requiresDrive: Bool = true,
+        changesLibrary: Bool = true,
+        success: String,
+        separateDraft: String,
+        action: (CloudBackupServicing, ModelContext) async throws -> Void
+    ) async {
+        guard let backupService, let context = modelContext,
+              requiresDrive ? canRunCloudBackup : !cloudBackupIsWorking else {
             refreshCloudBackupState()
             return
         }
-        guard beginCloudEditorOperation(in: context) else {
+        guard changesLibrary ? beginCloudEditorOperation(in: context) : flushCurrentDraft() else {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Backup canceled. "
+            cloudBackupStatusText = "\(noun) canceled. "
                 + (cloudOperationRefusalReason ?? "Save the open song before retrying; your edits remain open.")
             return
         }
-
+        automaticBackupTask?.cancel()
+        automaticBackupTask = nil
         cloudBackupIsWorking = true
         cloudBackupLastResultIsError = false
-        cloudBackupStatusText = "Encrypting backup for Google Drive..."
+        cloudBackupStatusText = ""
+        refreshCloudBackupState()
         defer {
             finishCloudEditorOperation()
             cloudBackupIsWorking = false
-            cloudBackupConfigured = backupService.isConfigured
-            cloudBackupHasStoredPassphrase = backupService.hasStoredPassphrase
+            refreshCloudBackupState()
+            finishAutomaticBackupRun()
         }
 
-        var backupFailure: Error?
+        var failure: Error?
         do {
-            try await backupService.backupNow(modelContext: context)
+            try await action(backupService, context)
         } catch {
-            backupFailure = error
+            failure = error
         }
-        guard let recovered = reconcileOpenDraftAfterCloudOperation(in: context) else {
+        guard let recovered = changesLibrary ? reconcileOpenDraftAfterCloudOperation(in: context) : false else {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Backup finished, but the open draft could not be saved. Keep this editor open and retry saving."
+            cloudBackupStatusText = "\(noun) finished, but the open draft could not be saved. Keep this editor open and retry saving."
             return
         }
-        if let backupFailure {
+        if let failure {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Backup failed: \(cloudBackupErrorDescription(backupFailure)). Your open edits remain in the local library."
-        } else if recovered {
-            cloudBackupStatusText = "Backup complete. Your edits were saved as a separate local draft; back up again to include them."
-        } else {
-            cloudBackupStatusText = "Backup complete. Projects, trash, and recordings are encrypted in Google Drive."
+            cloudBackupStatusText = "\(noun) failed: \(cloudBackupErrorDescription(failure)). Your open edits remain in the local library."
+            return
+        }
+        automaticBackupFailures = 0
+        let report = backupService.lastReport
+        cloudBackupLastResultIsError = !(report?.damagedRecordings.isEmpty ?? true)
+        cloudBackupStatusText = [recovered ? separateDraft : success, reportNote(report)]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    private func reportNote(_ report: BackupReport?) -> String? {
+        guard let report else { return nil }
+        var notes: [String] = []
+        if report.migratedLegacyBackup {
+            notes.append("Your older encrypted backup was moved to the new format.")
+        }
+        if !report.damagedRecordings.isEmpty {
+            let count = report.damagedRecordings.count
+            notes.append("\(count) \(count == 1 ? "recording" : "recordings") did not match the backup and \(count == 1 ? "was" : "were") not restored: \(report.damagedRecordings.joined(separator: ", ")).")
+        }
+        if report.unmovedLegacyRecordings > 0 {
+            let count = report.unmovedLegacyRecordings
+            notes.append("\(count) older \(count == 1 ? "recording" : "recordings") could not be moved; the older backup is kept.")
+        }
+        if report.oversizedRecordings > 0 {
+            let count = report.oversizedRecordings
+            notes.append("\(count) \(count == 1 ? "recording is" : "recordings are") over 16 MB and \(count == 1 ? "stays" : "stay") on this device only.")
+        }
+        return notes.isEmpty ? nil : notes.joined(separator: " ")
+    }
+
+    /// After any run: back off after an automatic failure, or run again for changes saved meanwhile.
+    private func finishAutomaticBackupRun() {
+        guard backupService?.isConnected == true else { return }
+        if backupService?.backgroundBackupFailureDescription != nil {
+            automaticBackupFailures += 1
+            automaticBackupRerunRequested = false
+            scheduleAutomaticBackup()
+        } else if automaticBackupRerunRequested {
+            automaticBackupRerunRequested = false
+            scheduleAutomaticBackup()
         }
     }
 
@@ -2230,49 +2463,6 @@ final class EditorViewModel: ObservableObject {
         }
         activeCloudEditorOperation = nil
         if projectDeletionNotice != nil { projectDeletionNotice = nil }
-    }
-
-    func restoreBackupNow() async {
-        guard let backupService, let context = modelContext, canRunCloudBackup else {
-            refreshCloudBackupState()
-            return
-        }
-        guard beginCloudEditorOperation(in: context) else {
-            cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Restore canceled. "
-                + (cloudOperationRefusalReason ?? "Save the open song before retrying; your edits remain open.")
-            return
-        }
-
-        cloudBackupIsWorking = true
-        cloudBackupLastResultIsError = false
-        cloudBackupStatusText = "Restoring encrypted Google Drive backup..."
-        defer {
-            finishCloudEditorOperation()
-            cloudBackupIsWorking = false
-            cloudBackupConfigured = backupService.isConfigured
-            cloudBackupHasStoredPassphrase = backupService.hasStoredPassphrase
-        }
-
-        var restoreFailure: Error?
-        do {
-            try await backupService.restoreNow(modelContext: context)
-        } catch {
-            restoreFailure = error
-        }
-        guard let recovered = reconcileOpenDraftAfterCloudOperation(in: context) else {
-            cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Restore finished, but the open draft could not be saved. Keep this editor open and retry saving."
-            return
-        }
-        if let restoreFailure {
-            cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Restore failed: \(cloudBackupErrorDescription(restoreFailure)). Your open edits remain in the local library."
-        } else if recovered {
-            cloudBackupStatusText = "Restore complete. Your open edits were saved as a separate local draft."
-        } else {
-            cloudBackupStatusText = "Restore complete. Projects, trash, and missing recordings were restored."
-        }
     }
 
     private func reconcileOpenDraftAfterCloudOperation(in context: ModelContext) -> Bool? {
@@ -2633,33 +2823,40 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    /// The automatic run: on the debounce after a save, on retry, and when the
+    /// app moves to the background. Failures are recorded, not thrown.
+    /// The automatic run: on the debounce after a change, on retry, and when the
+    /// app moves to the background. A backup only reads the library, so the
+    /// editor stays free. Failures are recorded, not thrown.
     func runCloudBackupOnBackgroundIfPossible() async {
         refreshCloudBackupState()
         guard let backupService,
               let context = modelContext,
               cloudBackupConfigured,
-              cloudBackupHasStoredPassphrase,
+              cloudBackupConnected,
+              firstRunRestoreOffer == nil,
               !cloudBackupIsWorking else {
             return
         }
-        guard beginCloudEditorOperation(in: context) else {
+        guard flushCurrentDraft() else {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Background backup canceled. "
-                + (cloudOperationRefusalReason ?? "Your open draft could not be saved.")
+            cloudBackupStatusText = "Background backup canceled. Your open draft could not be saved."
             return
         }
+        // After the flush, whose save would start another countdown: this run includes it.
+        automaticBackupTask?.cancel()
+        automaticBackupTask = nil
         cloudBackupIsWorking = true
+        refreshCloudBackupState()
         await backupService.backupInBackgroundIfPossible(modelContext: context)
-        let recovered = reconcileOpenDraftAfterCloudOperation(in: context)
-        finishCloudEditorOperation()
         cloudBackupIsWorking = false
         refreshCloudBackupState()
-        if recovered == nil {
-            cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "Background backup finished, but the open draft could not be saved. Keep this editor open."
-        } else if recovered == true, !cloudBackupLastResultIsError {
-            cloudBackupStatusText = "Background backup finished. Your edits were saved as a separate local draft; back up again to include them."
+        if backupService.backgroundBackupFailureDescription == nil {
+            automaticBackupFailures = 0
+            cloudBackupLastResultIsError = !(backupService.lastReport?.damagedRecordings.isEmpty ?? true)
+            cloudBackupStatusText = reportNote(backupService.lastReport) ?? ""
         }
+        finishAutomaticBackupRun()
     }
 
     #if DEBUG

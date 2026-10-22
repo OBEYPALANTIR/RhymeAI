@@ -103,6 +103,9 @@ final class VoiceMemoService {
     @ObservationIgnored private var audioIntentRevision: UInt64 = 0
     @ObservationIgnored private var recordingActivationRevision: UInt64?
     @ObservationIgnored private var pendingPlayURL: URL?
+    /// Called after a recording file is added, renamed, trashed, restored or
+    /// deleted, so the automatic backup can pick the change up.
+    @ObservationIgnored var onFilesChanged: (() -> Void)?
 
     init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared) {
         self.sessionTransitions = sessionTransitions
@@ -193,6 +196,7 @@ final class VoiceMemoService {
                 target = folder.appendingPathComponent("\(deletedAtMs)\(RecordingFiles.trashNameSeparator)\(url.lastPathComponent)")
             }
             try FileManager.default.moveItem(at: url, to: target)
+            onFilesChanged?()
             return TrashedVoiceMemo(
                 url: target,
                 projectId: projectId,
@@ -214,6 +218,7 @@ final class VoiceMemoService {
             let target = RecordingFiles.restoredURL(originalName: trashed.originalName, folder: folder)
             try FileManager.default.moveItem(at: trashed.url, to: target)
             RecordingFiles.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+            onFilesChanged?()
         } catch {
             lastError = "Couldn't restore recording: \(error.localizedDescription)"
         }
@@ -390,9 +395,11 @@ final class VoiceMemoService {
         meteringTimer = nil
         recordingStartTime = nil
         delegateForwarder = nil
+        let finishedRecording = isRecording
         isRecording = false
         recordingElapsed = 0
         averagePowerNormalized = 0
+        if finishedRecording { onFilesChanged?() }
 
         // Deactivate so other apps (Music, Podcast) can resume their sessions.
         if shouldDeactivateSession {
@@ -482,6 +489,7 @@ final class VoiceMemoService {
         if activePlayURL == url { stopPlayback() }
         do {
             try FileManager.default.removeItem(at: url)
+            onFilesChanged?()
         } catch {
             lastError = "Couldn't delete recording: \(error.localizedDescription)"
         }
@@ -507,6 +515,7 @@ final class VoiceMemoService {
         if activePlayURL == url { stopPlayback() }
 
         try FileManager.default.moveItem(at: url, to: targetURL)
+        onFilesChanged?()
         return targetURL
     }
 

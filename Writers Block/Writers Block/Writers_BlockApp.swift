@@ -5,11 +5,15 @@ import CloudKit
 import Combine
 import os
 
+/// iCloud sync for the library, with the reason when it is off.
 enum CloudSyncStatus: Equatable {
-    case syncing
-    case available
-    case localOnly
-    case accountUnavailable
+    case checking
+    case on
+    case noAccount
+    case restricted
+    /// The iCloud store could not be opened, so the library is local only.
+    case localOnlyFallback
+    case temporarilyUnavailable
 }
 
 final class AppPersistenceState: ObservableObject {
@@ -31,11 +35,11 @@ final class AppPersistenceState: ObservableObject {
 
     func refreshCloudSyncStatus() {
         guard usesCloudBackedStore else {
-            cloudSyncStatus = Self.nonCloudBackedStatus()
+            cloudSyncStatus = .localOnlyFallback
             return
         }
 
-        cloudSyncStatus = FileManager.default.ubiquityIdentityToken == nil ? .accountUnavailable : .syncing
+        cloudSyncStatus = FileManager.default.ubiquityIdentityToken == nil ? .noAccount : .checking
 
         CKContainer(identifier: cloudContainerIdentifier).accountStatus { [weak self] status, error in
             DispatchQueue.main.async {
@@ -45,32 +49,19 @@ final class AppPersistenceState: ObservableObject {
         }
     }
 
-    private static func nonCloudBackedStatus() -> CloudSyncStatus {
-        FileManager.default.ubiquityIdentityToken == nil ? .accountUnavailable : .localOnly
-    }
-
     static func initialCloudSyncStatus(usesCloudBackedStore: Bool) -> CloudSyncStatus {
-        guard usesCloudBackedStore else {
-            return nonCloudBackedStatus()
-        }
-        return FileManager.default.ubiquityIdentityToken == nil ? .accountUnavailable : .syncing
+        guard usesCloudBackedStore else { return .localOnlyFallback }
+        return FileManager.default.ubiquityIdentityToken == nil ? .noAccount : .checking
     }
 
-    private static func resolvedStatus(accountStatus: CKAccountStatus, error: Error?) -> CloudSyncStatus {
-        let hasUbiquityIdentity = FileManager.default.ubiquityIdentityToken != nil
-        if error != nil {
-            return hasUbiquityIdentity ? .localOnly : .accountUnavailable
-        }
-
+    static func resolvedStatus(accountStatus: CKAccountStatus, error: Error?) -> CloudSyncStatus {
+        if error != nil { return .temporarilyUnavailable }
         switch accountStatus {
-        case .available:
-            return hasUbiquityIdentity ? .available : .accountUnavailable
-        case .noAccount, .restricted:
-            return .accountUnavailable
-        case .couldNotDetermine, .temporarilyUnavailable:
-            return hasUbiquityIdentity ? .localOnly : .accountUnavailable
-        @unknown default:
-            return hasUbiquityIdentity ? .localOnly : .accountUnavailable
+        case .available: return .on
+        case .noAccount: return .noAccount
+        case .restricted: return .restricted
+        case .couldNotDetermine, .temporarilyUnavailable: return .temporarilyUnavailable
+        @unknown default: return .temporarilyUnavailable
         }
     }
 }
@@ -187,6 +178,7 @@ struct Writers_BlockApp: App {
                     viewModel.refreshCloudBackupState()
                     persistenceState.refreshCloudSyncStatus()
                 case .background:
+                    // Back up now rather than at the end of a pending countdown.
                     // Ask for run time past the move to the background so the backup
                     // can finish and reconcile the open draft instead of being
                     // suspended part-way. The system may still end it early.
@@ -224,6 +216,7 @@ struct Writers_BlockApp: App {
             SongProject.self,
             TrashedSongProject.self,
             SyncDeletionRecord.self,
+            Recording.self,
         ])
         let logger = Logger(subsystem: "ShaydeTree.Writers-Block", category: "storage")
 
@@ -234,7 +227,7 @@ struct Writers_BlockApp: App {
                 return ModelContainerBootstrap(
                     container: try ModelContainer(for: schema, configurations: [inMemory]),
                     persistenceDegraded: false,
-                    cloudSyncStatus: .localOnly,
+                    cloudSyncStatus: .localOnlyFallback,
                     usesCloudBackedStore: false
                 )
             } catch {
@@ -242,7 +235,7 @@ struct Writers_BlockApp: App {
                 return ModelContainerBootstrap(
                     container: nil,
                     persistenceDegraded: true,
-                    cloudSyncStatus: .localOnly,
+                    cloudSyncStatus: .localOnlyFallback,
                     usesCloudBackedStore: false
                 )
             }

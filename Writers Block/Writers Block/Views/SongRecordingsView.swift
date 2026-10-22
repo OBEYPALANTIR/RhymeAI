@@ -151,6 +151,7 @@ struct SongRecordingsView: View {
                     do {
                         _ = try await VoiceMemoService.importMemo(from: url, projectId: projectId)
                         reloadRecordings()
+                        viewModel.voiceMemoService.onFilesChanged?()
                     } catch is CancellationError {
                         // Cancelling leaves neither a recording nor a partial file.
                     } catch {

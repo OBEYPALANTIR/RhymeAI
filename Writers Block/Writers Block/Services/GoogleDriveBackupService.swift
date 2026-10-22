@@ -7,15 +7,17 @@ import UIKit
 enum BackupError: Error, Equatable {
     case notConfigured
     case authorizationRequired
-    case missingPassphrase
     case noRemoteBackup
     case network(String)
     case quotaExceeded
     case serverError(String)
     case invalidRequest
     case invalidResponse
-    case corruptRemoteOrWrongPassphrase
+    case damagedManifest
     case newerAppVersion
+    case wrongLegacyPassphrase
+    case backupConflict
+    case unsafeArchive
     case recordingIntegrityMismatch(String)
     case keychainWriteFailed(OSStatus)
 }
@@ -27,8 +29,6 @@ extension BackupError: LocalizedError {
             return "Google Drive backup is not configured on this device."
         case .authorizationRequired:
             return "Sign in to Google Drive again to continue backup."
-        case .missingPassphrase:
-            return "Enter your backup passphrase before using Google Drive backup."
         case .noRemoteBackup:
             return "No Google Drive backup was found."
         case .network(let message):
@@ -41,10 +41,16 @@ extension BackupError: LocalizedError {
             return "Google Drive backup could not build a valid request."
         case .invalidResponse:
             return "Google Drive returned an invalid response."
-        case .corruptRemoteOrWrongPassphrase:
-            return "Your Drive backup could not be decrypted or read. Check your passphrase; it was not overwritten."
+        case .damagedManifest:
+            return "Backup file is damaged; it was not merged."
         case .newerAppVersion:
             return "This backup was written by a newer version of Writers Block. Update the app before syncing."
+        case .wrongLegacyPassphrase:
+            return "That passphrase did not open the older backup."
+        case .backupConflict:
+            return "Backup conflict, will retry."
+        case .unsafeArchive:
+            return "This file is not a Writers Block backup; it was not imported."
         case .recordingIntegrityMismatch(let name):
             return "The recording \(name) did not match its backup manifest."
         case .keychainWriteFailed:
@@ -58,14 +64,26 @@ struct DriveAppDataFile: Equatable, Sendable, Decodable {
     var name: String
     var modifiedTime: String?
     var version: String?
+    var appProperties: [String: String]?
+    var sha256Checksum: String?
+
+    init(id: String, name: String, modifiedTime: String? = nil, version: String? = nil,
+         appProperties: [String: String]? = nil, sha256Checksum: String? = nil) {
+        self.id = id
+        self.name = name
+        self.modifiedTime = modifiedTime
+        self.version = version
+        self.appProperties = appProperties
+        self.sha256Checksum = sha256Checksum
+    }
 }
 
 protocol DriveAppDataClient: AnyObject {
     func findFile(named name: String, accessToken: String) async throws -> DriveAppDataFile?
     func listFiles(prefix: String, accessToken: String) async throws -> [DriveAppDataFile]
     func downloadFile(id: String, accessToken: String) async throws -> Data
-    func uploadNewFile(named name: String, mimeType: String, content: Data, accessToken: String) async throws -> DriveAppDataFile
-    func updateFile(id: String, mimeType: String, content: Data, accessToken: String) async throws
+    func uploadNewFile(named name: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile
+    func updateFile(id: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile
     func deleteFile(id: String, accessToken: String) async throws
 }
 
@@ -73,11 +91,15 @@ protocol OAuthAccessTokenProvider: AnyObject {
     var isConfigured: Bool { get }
     var hasRefreshToken: Bool { get }
     func accessToken(interactive: Bool) async throws -> String
+    /// Revokes the grant at Google, then forgets the tokens whatever the
+    /// outcome. False when the revoke request failed.
+    func revokeAndForget() async -> Bool
 }
 
 final class RealDriveAppDataClient: DriveAppDataClient {
     private let session: URLSession
     private let boundary = "rhymeai_boundary_ios_42"
+    private static let fileFields = "id,name,modifiedTime,version,appProperties,sha256Checksum"
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -106,53 +128,14 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         return try await data(for: request)
     }
 
-    func uploadNewFile(named name: String, mimeType: String, content: Data, accessToken: String) async throws -> DriveAppDataFile {
-        let metadata = DriveUploadMetadata(name: name, parents: ["appDataFolder"], mimeType: mimeType)
-        let body = try multipartBody(metadata: metadata, mimeType: mimeType, content: content)
-        guard var components = URLComponents(
-            url: try Self.uploadBaseURL().appendingPathComponent("files"),
-            resolvingAgainstBaseURL: false
-        ) else {
-            throw BackupError.invalidRequest
-        }
-        components.queryItems = [
-            URLQueryItem(name: "uploadType", value: "multipart"),
-            URLQueryItem(name: "fields", value: "id,name,modifiedTime,version")
-        ]
-        var request = try request(from: components)
-        request.httpMethod = "POST"
-        request.httpBody = body
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
-        let responseData = try await data(for: request)
-        do {
-            return try JSONDecoder().decode(DriveFileResponse.self, from: responseData).file
-        } catch {
-            throw BackupError.invalidResponse
-        }
+    func uploadNewFile(named name: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile {
+        let metadata = DriveUploadMetadata(name: name, parents: ["appDataFolder"], mimeType: mimeType, appProperties: appProperties)
+        return try await upload(path: "files", method: "POST", metadata: metadata, mimeType: mimeType, content: content, accessToken: accessToken)
     }
 
-    func updateFile(id: String, mimeType: String, content: Data, accessToken: String) async throws {
-        let metadata = DrivePatchMetadata(mimeType: mimeType)
-        let body = try multipartBody(metadata: metadata, mimeType: mimeType, content: content)
-        guard var components = URLComponents(
-            url: try Self.uploadBaseURL().appendingPathComponent("files/\(id)"),
-            resolvingAgainstBaseURL: false
-        ) else {
-            throw BackupError.invalidRequest
-        }
-        components.queryItems = [
-            URLQueryItem(name: "uploadType", value: "multipart"),
-            URLQueryItem(name: "fields", value: "id,name,modifiedTime,version")
-        ]
-        var request = try request(from: components)
-        request.httpMethod = "PATCH"
-        request.httpBody = body
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
-        _ = try await data(for: request)
+    func updateFile(id: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile {
+        let metadata = DrivePatchMetadata(mimeType: mimeType, appProperties: appProperties)
+        return try await upload(path: "files/\(id)", method: "PATCH", metadata: metadata, mimeType: mimeType, content: content, accessToken: accessToken)
     }
 
     func deleteFile(id: String, accessToken: String) async throws {
@@ -163,27 +146,62 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         _ = try await data(for: request)
     }
 
-    private func listFiles(query: String, accessToken: String) async throws -> [DriveAppDataFile] {
+    private func upload<T: Encodable>(path: String, method: String, metadata: T, mimeType: String, content: Data, accessToken: String) async throws -> DriveAppDataFile {
+        let body = try multipartBody(metadata: metadata, mimeType: mimeType, content: content)
         guard var components = URLComponents(
-            url: try Self.driveBaseURL().appendingPathComponent("files"),
+            url: try Self.uploadBaseURL().appendingPathComponent(path),
             resolvingAgainstBaseURL: false
         ) else {
             throw BackupError.invalidRequest
         }
         components.queryItems = [
-            URLQueryItem(name: "spaces", value: "appDataFolder"),
-            URLQueryItem(name: "fields", value: "files(id,name,modifiedTime,version)"),
-            URLQueryItem(name: "q", value: query)
+            URLQueryItem(name: "uploadType", value: "multipart"),
+            URLQueryItem(name: "fields", value: Self.fileFields)
         ]
         var request = try request(from: components)
-        request.httpMethod = "GET"
+        request.httpMethod = method
+        request.httpBody = body
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        // Recordings run to 16 MiB; give a slow upload time to finish.
+        request.timeoutInterval = 120
         let responseData = try await data(for: request)
         do {
-            return try JSONDecoder().decode(DriveFilesResponse.self, from: responseData).files
+            return try JSONDecoder().decode(DriveAppDataFile.self, from: responseData)
         } catch {
             throw BackupError.invalidResponse
         }
+    }
+
+    private func listFiles(query: String, accessToken: String) async throws -> [DriveAppDataFile] {
+        var files: [DriveAppDataFile] = []
+        var pageToken: String?
+        repeat {
+            guard var components = URLComponents(
+                url: try Self.driveBaseURL().appendingPathComponent("files"),
+                resolvingAgainstBaseURL: false
+            ) else {
+                throw BackupError.invalidRequest
+            }
+            components.queryItems = [
+                URLQueryItem(name: "spaces", value: "appDataFolder"),
+                URLQueryItem(name: "fields", value: "nextPageToken,files(\(Self.fileFields))"),
+                URLQueryItem(name: "pageSize", value: "1000"),
+                URLQueryItem(name: "q", value: query)
+            ] + (pageToken.map { [URLQueryItem(name: "pageToken", value: $0)] } ?? [])
+            var request = try request(from: components)
+            request.httpMethod = "GET"
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            let responseData = try await data(for: request)
+            do {
+                let page = try JSONDecoder().decode(DriveFilesResponse.self, from: responseData)
+                files += page.files
+                pageToken = page.nextPageToken
+            } catch {
+                throw BackupError.invalidResponse
+            }
+        } while pageToken != nil
+        return files
     }
 
     private func request(from components: URLComponents) throws -> URLRequest {
@@ -196,8 +214,7 @@ final class RealDriveAppDataClient: DriveAppDataClient {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw BackupError.invalidResponse }
             guard (200...299).contains(http.statusCode) else {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                throw Self.httpError(statusCode: http.statusCode, body: body)
+                throw Self.httpError(statusCode: http.statusCode)
             }
             return data
         } catch let error as BackupError {
@@ -238,7 +255,7 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         return url
     }
 
-    private static func urlError(_ error: URLError) -> BackupError {
+    static func urlError(_ error: URLError) -> BackupError {
         switch error.code {
         case .timedOut, .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost:
             return .network("Network connection failed. Check your connection and try again.")
@@ -247,7 +264,7 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         }
     }
 
-    private static func httpError(statusCode: Int, body: String) -> BackupError {
+    private static func httpError(statusCode: Int) -> BackupError {
         switch statusCode {
         case 401:
             return .authorizationRequired
@@ -268,25 +285,22 @@ final class RealDriveAppDataClient: DriveAppDataClient {
     }
 }
 
-private struct DriveFilesResponse: Decodable { var files: [DriveAppDataFile] }
-private struct DriveFileResponse: Decodable {
-    var id: String
-    var name: String
-    var modifiedTime: String?
-    var version: String?
-
-    var file: DriveAppDataFile {
-        DriveAppDataFile(id: id, name: name, modifiedTime: modifiedTime, version: version)
-    }
+private struct DriveFilesResponse: Decodable {
+    var files: [DriveAppDataFile]
+    var nextPageToken: String?
 }
 
 private struct DriveUploadMetadata: Encodable {
     var name: String
     var parents: [String]
     var mimeType: String
+    var appProperties: [String: String]?
 }
 
-private struct DrivePatchMetadata: Encodable { var mimeType: String }
+private struct DrivePatchMetadata: Encodable {
+    var mimeType: String
+    var appProperties: [String: String]?
+}
 
 struct GoogleDriveOAuthConfiguration: Equatable, Sendable {
     var clientID: String?
@@ -407,6 +421,23 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
         }
         guard interactive else { throw BackupError.authorizationRequired }
         return try await authorize(clientID: clientID, redirectScheme: redirectScheme).accessToken
+    }
+
+    func revokeAndForget() async -> Bool {
+        defer { tokenStore.deleteToken() }
+        guard let stored = tokenStore.loadToken() else { return true }
+        // The refresh token revokes the whole grant, access tokens included.
+        let token = stored.refreshToken?.nilIfBlank ?? stored.accessToken
+        guard let url = URL(string: "https://oauth2.googleapis.com/revoke"),
+              let body = ["token": token].formURLEncoded.data(using: .utf8) else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.timeoutInterval = 20
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        guard let (_, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse else { return false }
+        return (200...299).contains(http.statusCode)
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -619,21 +650,74 @@ final class KeychainBackupSecretStore: BackupSecretStore {
     }
 }
 
+/// What a backup, restore, migration or import did besides merging songs.
+struct BackupReport: Equatable, Sendable {
+    /// Recordings whose downloaded audio did not match the manifest; discarded.
+    var damagedRecordings: [String] = []
+    /// Local recordings over `SyncRecording.maxBytes`, kept on this device only.
+    var oversizedRecordings = 0
+    /// True once the older encrypted backup was moved to v4 and removed.
+    var migratedLegacyBackup = false
+    /// Older recordings that could not be moved (unreadable, missing or oversized); the old backup stays.
+    var unmovedLegacyRecordings = 0
+}
+
+struct RemoteBackupSummary: Equatable, Sendable {
+    var songs: Int
+    var recordings: Int
+}
+
+/// What to do with an older encrypted backup (`rhymeai-projects.json`) at sync time.
+enum LegacyMigrationDecision: Equatable {
+    /// No older backup: back up as v4 and forget any stored passphrase.
+    case none
+    /// Decrypt with the stored passphrase, merge, upload v4, verify, then remove the old files.
+    case migrate
+    /// Leave the old files alone, back up local data as v4, and offer "Migrate older encrypted backup…".
+    case askForPassphrase
+
+    static func decide(legacyBackupExists: Bool, hasPassphrase: Bool) -> Self {
+        guard legacyBackupExists else { return .none }
+        return hasPassphrase ? .migrate : .askForPassphrase
+    }
+}
+
+/// Backup schedule: a quiet period after the last change, then exponential
+/// backoff after failures (1, 2, 4, 8 … minutes, capped at an hour).
+enum BackupSchedule {
+    static let debounce: TimeInterval = 30
+
+    static func retryDelay(afterFailures failures: Int) -> TimeInterval {
+        guard failures > 0 else { return 0 }
+        return min(60, pow(2, Double(min(failures, 7) - 1))) * 60
+    }
+}
+
 @MainActor
 final class BackupService {
-    static let shared = BackupService()
+    static let shared: BackupService = {
+        #if DEBUG
+        if UITestFlags.isEnabled(UITestFlags.fakeDrive) {
+            return UITestFlags.makeFakeDriveBackupService()
+        }
+        #endif
+        return BackupService()
+    }()
 
     private static let passphraseKey = "drive-sync-passphrase"
     private static let clientIdKey = "drive-sync-client-id"
-
     private static let backgroundFailureKey = "drive-sync-last-background-failure"
+    private static let lastBackupKey = "drive-sync-last-backup-at"
+    private static let legacyPendingKey = "drive-sync-legacy-backup-pending"
+
     private let driveClient: DriveAppDataClient
     private let oauthProvider: OAuthAccessTokenProvider
     private let secretStore: BackupSecretStore
     private let defaults: UserDefaults
     private let memosRoot: URL
+    private let trashRoot: URL
     var recordingRecoveryRoot: URL? { memosRoot }
-    private typealias LocalRecording = (entry: SyncRecordingManifestEntry, localURL: URL)
+    private(set) var lastReport: BackupReport?
 
     convenience init() {
         self.init(
@@ -650,277 +734,465 @@ final class BackupService {
         oauthProvider: OAuthAccessTokenProvider,
         secretStore: BackupSecretStore,
         defaults: UserDefaults,
-        memosRoot: URL
+        memosRoot: URL,
+        trashRoot: URL = RecordingFiles.memosTrashRoot()
     ) {
         self.driveClient = driveClient
         self.oauthProvider = oauthProvider
         self.secretStore = secretStore
         self.defaults = defaults
         self.memosRoot = memosRoot
+        self.trashRoot = trashRoot
     }
 
     var isConfigured: Bool { oauthProvider.isConfigured }
-    var hasStoredPassphrase: Bool { storedPassphrase != nil }
+    var isConnected: Bool { oauthProvider.isConfigured && oauthProvider.hasRefreshToken }
+    var lastBackupAt: Date? {
+        defaults.object(forKey: Self.lastBackupKey) as? Date
+    }
     var backgroundBackupFailureDescription: String? {
         defaults.string(forKey: Self.backgroundFailureKey)?.nilIfBlank
     }
+    /// An older encrypted backup is on Drive and no stored passphrase can open it.
+    var hasLegacyBackupToMigrate: Bool {
+        isConnected && defaults.bool(forKey: Self.legacyPendingKey)
+    }
 
-    func updatePassphrase(_ passphrase: String) throws {
-        let trimmed = passphrase.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            secretStore.deleteString(for: Self.passphraseKey)
-        } else {
-            try secretStore.setString(trimmed, for: Self.passphraseKey)
+    func connect() async throws {
+        _ = try await oauthProvider.accessToken(interactive: true)
+    }
+
+    /// Revokes the grant and clears this device's backup state. False when the
+    /// revoke request failed; local state is cleared either way.
+    func disconnect() async -> Bool {
+        let revoked = await oauthProvider.revokeAndForget()
+        for key in [Self.lastBackupKey, Self.backgroundFailureKey, Self.legacyPendingKey] {
+            defaults.removeObject(forKey: key)
         }
+        lastReport = nil
+        return revoked
     }
 
     func backupNow(modelContext: ModelContext) async throws {
-        let passphrase = try requirePassphrase()
-        let accessToken = try await oauthProvider.accessToken(interactive: true)
-        try await backup(modelContext: modelContext, accessToken: accessToken, passphrase: passphrase)
+        try await recordingFailure {
+            let accessToken = try await oauthProvider.accessToken(interactive: true)
+            try await sync(modelContext: modelContext, accessToken: accessToken, restore: false)
+        }
     }
 
     func restoreNow(modelContext: ModelContext) async throws {
-        let passphrase = try requirePassphrase()
-        let accessToken = try await oauthProvider.accessToken(interactive: true)
-        try await restore(modelContext: modelContext, accessToken: accessToken, passphrase: passphrase)
+        try await recordingFailure {
+            let accessToken = try await oauthProvider.accessToken(interactive: true)
+            try await sync(modelContext: modelContext, accessToken: accessToken, restore: true)
+        }
     }
 
     func backupInBackgroundIfPossible(modelContext: ModelContext) async {
-        guard let passphrase = storedPassphrase, isConfigured, oauthProvider.hasRefreshToken else { return }
-        do {
+        guard isConnected else { return }
+        try? await recordingFailure {
             let accessToken = try await oauthProvider.accessToken(interactive: false)
-            try await backup(modelContext: modelContext, accessToken: accessToken, passphrase: passphrase)
-            clearBackgroundBackupFailure()
+            try await sync(modelContext: modelContext, accessToken: accessToken, restore: false)
+        }
+    }
+
+    func migrateLegacyBackup(passphrase: String, modelContext: ModelContext) async throws {
+        try await recordingFailure {
+            let accessToken = try await oauthProvider.accessToken(interactive: true)
+            try await sync(modelContext: modelContext, accessToken: accessToken, restore: false, enteredPassphrase: passphrase)
+        }
+    }
+
+    /// A failure stays as the status (with Retry) until a later run succeeds.
+    private func recordingFailure(_ operation: () async throws -> Void) async throws {
+        do {
+            try await operation()
         } catch {
             recordBackgroundBackupFailure(error)
+            throw error
         }
+    }
+
+    /// Songs and recordings in the v4 backup, or nil when there is none.
+    func remoteBackupSummary() async throws -> RemoteBackupSummary? {
+        guard isConnected else { return nil }
+        let accessToken = try await oauthProvider.accessToken(interactive: false)
+        guard let file = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken) else { return nil }
+        let blob = try await downloadManifest(file, accessToken: accessToken)
+        return RemoteBackupSummary(songs: blob.projects.count, recordings: blob.recordings.count)
+    }
+
+    // MARK: Sync
+
+    private typealias RemoteFiles = [String: DriveAppDataFile]
+    private static let manifestWriteAttempts = 3
+
+    /// Back up (`restore` false) merges this device into Drive and leaves local data
+    /// alone; a migration is a backup. Restore merges both ways: it applies the merge
+    /// here, uploads local-only items, then downloads missing recordings.
+    private func sync(modelContext: ModelContext, accessToken: String, restore: Bool, enteredPassphrase: String? = nil) async throws {
+        var report = BackupReport()
+        var remoteRecordings = try await recordingFiles(accessToken: accessToken)
+        let legacy = try await openLegacyBackupIfNeeded(
+            modelContext: modelContext, accessToken: accessToken,
+            remoteRecordings: remoteRecordings, enteredPassphrase: enteredPassphrase
+        )
+        report.oversizedRecordings = try reconcileRecordings(modelContext).oversizedCount
+
+        let manifests = try await manifestFiles(accessToken: accessToken)
+        if restore, manifests.isEmpty, legacy == nil { throw BackupError.noRemoteBackup }
+        var merged = try SyncMerger.merge(local: try makeSnapshot(modelContext: modelContext), remote: legacy?.blob ?? SyncBlob(savedAt: .distantPast))
+        for file in manifests {
+            merged = try SyncMerger.merge(local: merged, remote: try await downloadManifest(file, accessToken: accessToken))
+        }
+        try await uploadRecordings(of: &merged, modelContext: modelContext, legacyAudio: legacy?.audio ?? [:], remote: &remoteRecordings, accessToken: accessToken)
+
+        // Write, read back and compare. Another device writing in between shows up
+        // as a different hash: merge its manifest in and try again.
+        var target = manifests.max { ($0.modifiedTime ?? "") < ($1.modifiedTime ?? "") }
+        var verified = false
+        for _ in 0..<Self.manifestWriteAttempts {
+            // Edits saved while the requests above were in flight join this manifest.
+            merged = finalizedBlob(try SyncMerger.merge(local: try makeSnapshot(modelContext: modelContext), remote: merged))
+            try await uploadRecordings(of: &merged, modelContext: modelContext, legacyAudio: legacy?.audio ?? [:], remote: &remoteRecordings, accessToken: accessToken)
+            let content = try merged.encodedManifest()
+            if let current = target {
+                target = try await driveClient.updateFile(id: current.id, mimeType: SyncBlob.driveMimeType, content: content, appProperties: nil, accessToken: accessToken)
+            } else {
+                target = try await driveClient.uploadNewFile(named: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: content, appProperties: nil, accessToken: accessToken)
+            }
+            guard let written = target else { throw BackupError.invalidResponse }
+            let readBack = try await downloadManifest(written, accessToken: accessToken)
+            if readBack.manifestSha256 == merged.manifestSha256 {
+                verified = true
+                break
+            }
+            merged = try SyncMerger.merge(local: merged, remote: readBack)
+        }
+        guard verified, let target else { throw BackupError.backupConflict }
+        // Duplicates are folded into the verified manifest above; only now remove them.
+        for duplicate in manifests where duplicate.id != target.id {
+            try await driveClient.deleteFile(id: duplicate.id, accessToken: accessToken)
+        }
+
+        try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, remote: remoteRecordings, accessToken: accessToken)
+        if restore {
+            try apply(merged, to: modelContext)
+            try deleteLocalRecordingsCoveredByDeletions(merged.deletions)
+            report.damagedRecordings = try await downloadMissingRecordings(merged.recordings, remote: remoteRecordings, accessToken: accessToken)
+            try reconcileRecordings(modelContext)
+        }
+
+        if let legacy {
+            report.unmovedLegacyRecordings = legacy.unmovedRecordings
+            if try await legacyBackupIsPreserved(legacy, in: merged, remote: try await recordingFiles(accessToken: accessToken), accessToken: accessToken) {
+                let moved = Set(legacy.blob.recordings.map { RecordingBackupManifest.legacyDriveName(projectId: $0.projectId, fileName: $0.fileName) })
+                try await removeLegacyBackup(movedRecordingNames: moved, remoteRecordings: remoteRecordings, accessToken: accessToken)
+                report.migratedLegacyBackup = true
+            } else {
+                // Keep the old files, the passphrase and the row until everything is preserved.
+                if let enteredPassphrase {
+                    try? secretStore.setString(enteredPassphrase.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n")), for: Self.passphraseKey)
+                }
+                defaults.set(true, forKey: Self.legacyPendingKey)
+            }
+        }
+        defaults.set(Date(), forKey: Self.lastBackupKey)
+        clearBackgroundBackupFailure()
+        lastReport = report
+    }
+
+    // MARK: Migration from the encrypted backup
+
+    private struct LegacyBackup {
+        var blob: SyncBlob
+        /// Decrypted, verified audio by recording key; it goes to Drive, never to this device.
+        var audio: [String: Data]
+        /// Recordings that could not be read, are missing, or are over the size cap.
+        var unmovedRecordings: Int
     }
 
     private var storedPassphrase: String? {
         secretStore.string(for: Self.passphraseKey)?.nilIfBlank
     }
 
-    private func requirePassphrase() throws -> String {
-        guard let passphrase = storedPassphrase else { throw BackupError.missingPassphrase }
-        return passphrase
-    }
-
-    private func backup(modelContext: ModelContext, accessToken: String, passphrase: String) async throws {
-        var localSnapshot = try makeSnapshot(modelContext: modelContext)
-        let sourceRemoteFile = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken)
-        var sourceRemoteBlob: SyncBlob?
-        var merged = finalizedBlob(try canonicalized(localSnapshot.blob))
-
-        if let sourceRemoteFile {
-            let remoteBlob = try await downloadRemoteBlob(sourceRemoteFile, accessToken: accessToken, passphrase: passphrase)
-            sourceRemoteBlob = remoteBlob
-            merged = finalizedBlob(try SyncMerger.merge(local: localSnapshot.blob, remote: remoteBlob))
-        }
-
-        var localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
-        try await uploadLocalRecordings(
-            for: merged.recordings,
-            localRecordings: localRecordings,
-            remoteBlob: sourceRemoteBlob,
-            accessToken: accessToken,
-            passphrase: passphrase
-        )
-
-        let latestRemoteFile = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken)
-        if remoteMetadataChanged(original: sourceRemoteFile, latest: latestRemoteFile) {
-            localSnapshot = try makeSnapshot(modelContext: modelContext)
-            if let latestRemoteFile {
-                let latestRemoteBlob = try await downloadRemoteBlob(latestRemoteFile, accessToken: accessToken, passphrase: passphrase)
-                merged = finalizedBlob(try SyncMerger.merge(local: merged, remote: latestRemoteBlob))
-                try await uploadLocalRecordings(
-                    for: merged.recordings,
-                    localRecordings: localRecordings,
-                    remoteBlob: latestRemoteBlob,
-                    accessToken: accessToken,
-                    passphrase: passphrase
-                )
-            } else {
-                merged = finalizedBlob(localSnapshot.blob)
-                localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
-                try await uploadLocalRecordings(
-                    for: merged.recordings,
-                    localRecordings: localRecordings,
-                    remoteBlob: nil,
-                    accessToken: accessToken,
-                    passphrase: passphrase
-                )
+    private func openLegacyBackupIfNeeded(
+        modelContext: ModelContext, accessToken: String, remoteRecordings: RemoteFiles, enteredPassphrase: String?
+    ) async throws -> LegacyBackup? {
+        let legacyFile = try await driveClient.findFile(named: LegacySyncBlob.driveFileName, accessToken: accessToken)
+        let passphrase = enteredPassphrase.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n")) } ?? storedPassphrase
+        switch LegacyMigrationDecision.decide(legacyBackupExists: legacyFile != nil, hasPassphrase: passphrase?.isEmpty == false) {
+        case .none:
+            secretStore.deleteString(for: Self.passphraseKey)
+            defaults.set(false, forKey: Self.legacyPendingKey)
+            if enteredPassphrase != nil { throw BackupError.noRemoteBackup }
+            return nil
+        case .askForPassphrase:
+            defaults.set(true, forKey: Self.legacyPendingKey)
+            return nil
+        case .migrate:
+            guard let legacyFile, let passphrase else { return nil }
+            let legacy: LegacySyncBlob
+            do {
+                legacy = try SyncBlobCrypto.openManifest(try await driveClient.downloadFile(id: legacyFile.id, accessToken: accessToken), passphrase: passphrase)
+            } catch SyncBlobCryptoError.unsupportedEnvelopeVersion {
+                throw BackupError.newerAppVersion
+            } catch SyncValidationError.unsupportedVersion {
+                throw BackupError.newerAppVersion
+            } catch let error as BackupError {
+                throw error
+            } catch {
+                if enteredPassphrase != nil { throw BackupError.wrongLegacyPassphrase }
+                // The stored passphrase cannot open it, so it is no use; ask instead.
+                secretStore.deleteString(for: Self.passphraseKey)
+                defaults.set(true, forKey: Self.legacyPendingKey)
+                return nil
             }
+            let upgraded = legacy.upgraded
+            var audio: [String: Data] = [:]
+            var unmoved = 0
+            // Every listed recording counts, tombstoned ones too: only audio verified
+            // in v4 lets the old copy go.
+            for entry in legacy.recordings {
+                guard entry.sizeBytes <= SyncRecording.maxBytes, let file = remoteRecordings[entry.driveName],
+                      let opened = try? SyncBlobCrypto.open(try await driveClient.downloadFile(id: file.id, accessToken: accessToken), passphrase: passphrase),
+                      opened.count == entry.sizeBytes, RecordingBackupManifest.sha256Hex(opened) == entry.sha256.lowercased() else {
+                    unmoved += 1
+                    continue
+                }
+                audio["\(entry.projectId)/\(entry.fileName)"] = opened
+            }
+            return LegacyBackup(blob: upgraded, audio: audio, unmovedRecordings: unmoved)
         }
-
-        localSnapshot = try makeSnapshot(modelContext: modelContext)
-        merged = finalizedBlob(try SyncMerger.merge(local: localSnapshot.blob, remote: merged))
-        localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
-        try await uploadLocalRecordings(
-            for: merged.recordings,
-            localRecordings: localRecordings,
-            remoteBlob: merged,
-            accessToken: accessToken,
-            passphrase: passphrase
-        )
-        try await uploadManifest(merged, accessToken: accessToken, passphrase: passphrase)
-        try apply(merged, to: modelContext)
-        try await deleteRemoteRecordingsCoveredByDeletions(
-            merged.deletions,
-            accessToken: accessToken
-        )
-        try deleteLocalRecordingsCoveredByDeletions(merged.deletions)
-        try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
-        clearBackgroundBackupFailure()
     }
 
-    private func restore(modelContext: ModelContext, accessToken: String, passphrase: String) async throws {
-        guard let remoteFile = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken) else {
-            throw BackupError.noRemoteBackup
+    /// True only when the v4 backup on Drive holds everything the old one did:
+    /// every song not deleted there, at the same or a newer version, and every
+    /// recording as raw audio whose SHA-256 and size match.
+    private func legacyBackupIsPreserved(_ legacy: LegacyBackup, in merged: SyncBlob, remote: RemoteFiles, accessToken: String) async throws -> Bool {
+        guard legacy.unmovedRecordings == 0,
+              let uploaded = try await manifestFiles(accessToken: accessToken).first,
+              try await downloadManifest(uploaded, accessToken: accessToken).manifestSha256 == merged.manifestSha256 else { return false }
+        let kept = Dictionary((merged.projects.map { ($0.id, ($0.updatedAt, $0.lyrics)) } + merged.trashed.map { ($0.id, ($0.updatedAt, $0.lyrics)) })) { first, _ in first }
+        let deleted = Set(merged.deletions.filter { $0.fileName == nil }.map(\.projectId))
+        for project in legacy.blob.projects + legacy.blob.trashed.map({ SyncSongProject(id: $0.id, title: $0.title, lyrics: $0.lyrics, theme: $0.theme, updatedAt: $0.updatedAt) })
+        where !deleted.contains(project.id) {
+            // A newer edit of the same song supersedes the old copy.
+            guard let version = kept[project.id],
+                  version.0 > project.updatedAt || (version.0 == project.updatedAt && version.1 == project.lyrics) else { return false }
         }
-        let remoteBlob = try await downloadRemoteBlob(remoteFile, accessToken: accessToken, passphrase: passphrase)
-        var localSnapshot = try makeSnapshot(modelContext: modelContext)
-        var merged = finalizedBlob(try SyncMerger.merge(local: localSnapshot.blob, remote: remoteBlob))
-        var localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
-        try await uploadLocalRecordings(
-            for: merged.recordings,
-            localRecordings: localRecordings,
-            remoteBlob: remoteBlob,
-            accessToken: accessToken,
-            passphrase: passphrase
-        )
-        localSnapshot = try makeSnapshot(modelContext: modelContext)
-        merged = finalizedBlob(try SyncMerger.merge(local: localSnapshot.blob, remote: merged))
-        localRecordings = try localRecordingMap(projectIds: localSnapshot.allProjectIds)
-        try await uploadLocalRecordings(
-            for: merged.recordings,
-            localRecordings: localRecordings,
-            remoteBlob: merged,
-            accessToken: accessToken,
-            passphrase: passphrase
-        )
-        try await uploadManifest(merged, accessToken: accessToken, passphrase: passphrase)
-        try apply(merged, to: modelContext)
-        try await deleteRemoteRecordingsCoveredByDeletions(
-            merged.deletions,
-            accessToken: accessToken
-        )
-        try deleteLocalRecordingsCoveredByDeletions(merged.deletions)
-        try await restoreRecordings(from: merged.recordings, accessToken: accessToken, passphrase: passphrase)
-        clearBackgroundBackupFailure()
+        for old in legacy.blob.recordings {
+            guard let entry = merged.recordings.first(where: { $0.key == old.key }), entry.sha256 == old.sha256,
+                  let properties = remote[entry.driveName]?.appProperties,
+                  properties["sha256"] == old.sha256, properties["bytes"] == String(old.bytes) else { return false }
+        }
+        return true
     }
 
-    private func upsertDriveFile(name: String, mimeType: String, content: Data, accessToken: String) async throws -> DriveAppDataFile {
-        if let existing = try await driveClient.findFile(named: name, accessToken: accessToken) {
-            try await driveClient.updateFile(id: existing.id, mimeType: mimeType, content: content, accessToken: accessToken)
-            return try await driveClient.findFile(named: name, accessToken: accessToken) ?? existing
+    /// Deletes the old manifest and only the old recordings verified as moved.
+    private func removeLegacyBackup(movedRecordingNames: Set<String>, remoteRecordings: RemoteFiles, accessToken: String) async throws {
+        for file in remoteRecordings.values where movedRecordingNames.contains(file.name) {
+            try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
         }
-        return try await driveClient.uploadNewFile(named: name, mimeType: mimeType, content: content, accessToken: accessToken)
+        if let legacyFile = try await driveClient.findFile(named: LegacySyncBlob.driveFileName, accessToken: accessToken) {
+            try await driveClient.deleteFile(id: legacyFile.id, accessToken: accessToken)
+        }
+        secretStore.deleteString(for: Self.passphraseKey)
+        defaults.set(false, forKey: Self.legacyPendingKey)
     }
 
-    private func downloadRemoteBlob(_ file: DriveAppDataFile, accessToken: String, passphrase: String) async throws -> SyncBlob {
-        let encrypted = try await driveClient.downloadFile(id: file.id, accessToken: accessToken)
+    // MARK: Manifest and recordings on Drive
+
+    /// Every file named like the manifest; normally one.
+    private func manifestFiles(accessToken: String) async throws -> [DriveAppDataFile] {
+        try await driveClient.listFiles(prefix: SyncBlob.driveFileName, accessToken: accessToken)
+            .filter { $0.name == SyncBlob.driveFileName }
+    }
+
+    private func downloadManifest(_ file: DriveAppDataFile, accessToken: String) async throws -> SyncBlob {
+        let data = try await driveClient.downloadFile(id: file.id, accessToken: accessToken)
         do {
-            return try SyncBlobCrypto.openManifest(encrypted, passphrase: passphrase)
-        } catch SyncBlobCryptoError.unsupportedEnvelopeVersion {
-            throw BackupError.newerAppVersion
-        } catch SyncValidationError.unsupportedVersion {
+            return try SyncBlob.decodeManifest(data)
+        } catch SyncManifestError.newerVersion {
             throw BackupError.newerAppVersion
         } catch {
-            throw BackupError.corruptRemoteOrWrongPassphrase
+            throw BackupError.damagedManifest
         }
     }
 
-    private func uploadManifest(_ blob: SyncBlob, accessToken: String, passphrase: String) async throws {
-        let encrypted = try SyncBlobCrypto.sealManifest(blob, passphrase: passphrase)
-        _ = try await upsertDriveFile(name: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: encrypted, accessToken: accessToken)
+    private func upsertDriveFile(name: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile {
+        if let existing = try await driveClient.findFile(named: name, accessToken: accessToken) {
+            return try await driveClient.updateFile(id: existing.id, mimeType: mimeType, content: content, appProperties: appProperties, accessToken: accessToken)
+        }
+        return try await driveClient.uploadNewFile(named: name, mimeType: mimeType, content: content, appProperties: appProperties, accessToken: accessToken)
+    }
+
+    /// Every recording file in appDataFolder, v4 and legacy, by name.
+    private func recordingFiles(accessToken: String) async throws -> RemoteFiles {
+        Dictionary(try await driveClient.listFiles(prefix: "rec_", accessToken: accessToken).map { ($0.name, $0) }) { first, _ in first }
+    }
+
+    /// Uploads manifest recordings Drive lacks, from this device or the old backup,
+    /// and stamps their `uploadedAt`.
+    private func uploadRecordings(of merged: inout SyncBlob, modelContext: ModelContext, legacyAudio: [String: Data], remote: inout RemoteFiles, accessToken: String) async throws {
+        let rows = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.key, $0) }) { first, _ in first }
+        for index in merged.recordings.indices {
+            let entry = merged.recordings[index]
+            let present = remote[entry.driveName]?.appProperties
+            // Present only when both the hash and the size match.
+            guard present?["sha256"] != entry.sha256 || present?["bytes"] != String(entry.bytes) else { continue }
+            // Only audio that is the manifest's (winning) content is uploaded.
+            let audio: Data
+            if let row = rows[entry.key], row.sha256 == entry.sha256 {
+                audio = row.audio
+            } else if let migrated = legacyAudio[entry.key], RecordingBackupManifest.sha256Hex(migrated) == entry.sha256 {
+                audio = migrated
+            } else {
+                continue
+            }
+            let properties = ["projectId": entry.projectId, "fileName": entry.fileName, "sha256": entry.sha256, "bytes": String(entry.bytes)]
+            let uploaded = try await upsertDriveFile(name: entry.driveName, mimeType: "application/octet-stream", content: audio, appProperties: properties, accessToken: accessToken)
+            if let checksum = uploaded.sha256Checksum, checksum.lowercased() != entry.sha256 {
+                throw BackupError.recordingIntegrityMismatch(entry.fileName)
+            }
+            var file = uploaded
+            file.appProperties = properties
+            remote[entry.driveName] = file
+            merged.recordings[index].uploadedAt = Date()
+        }
+    }
+
+    /// Downloads recordings missing on this device. Never writes over a local
+    /// file; audio that does not match the manifest is discarded and named.
+    private func downloadMissingRecordings(_ entries: [SyncRecording], remote: RemoteFiles, accessToken: String) async throws -> [String] {
+        var damaged: [String] = []
+        for entry in entries where entry.bytes <= SyncRecording.maxBytes {
+            let target = try RecordingFiles.localURL(projectId: entry.projectId, fileName: entry.fileName, memosRoot: memosRoot)
+            guard !FileManager.default.fileExists(atPath: target.path), let file = remote[entry.driveName] else { continue }
+            let audio = try await driveClient.downloadFile(id: file.id, accessToken: accessToken)
+            guard audio.count == entry.bytes, RecordingBackupManifest.sha256Hex(audio) == entry.sha256 else {
+                damaged.append(entry.fileName)
+                continue
+            }
+            // A file that appeared here while downloading wins; the download is dropped.
+            try RecordingFiles.commitIfAbsent(audio, to: target)
+        }
+        return damaged
+    }
+
+    /// Removes Drive audio for recordings the merge dropped by tombstone.
+    private func deleteRemoteRecordingsCoveredByDeletions(_ deletions: [SyncDeletion], recordings: [SyncRecording], remote: RemoteFiles, accessToken: String) async throws {
+        let live = Set(recordings.map(\.driveName))
+        for file in remote.values.sorted(by: { $0.name < $1.name }) where !live.contains(file.name) && !file.name.hasSuffix(".enc") {
+            let projectId = file.appProperties?["projectId"]
+            let fileName = file.appProperties?["fileName"]
+            let covered = deletions.contains { deletion in
+                if let projectId, let fileName {
+                    return deletion.projectId == projectId && (deletion.fileName == nil || deletion.fileName == fileName)
+                }
+                // Files without properties: match their names.
+                guard let name = deletion.fileName else { return file.name.hasPrefix("rec_\(deletion.projectId)_") }
+                return file.name == RecordingBackupManifest.driveName(projectId: deletion.projectId, fileName: name)
+            }
+            if covered { try await driveClient.deleteFile(id: file.id, accessToken: accessToken) }
+        }
+    }
+
+    // MARK: Export and import
+
+    /// The "Export all songs" zip: `manifest.json` (v4), `songs/<title>.txt`,
+    /// `songs/<id>.json` and `recordings/<projectId>/<fileName>`.
+    func exportArchive(modelContext: ModelContext, now: Date = Date()) throws -> (fileName: String, data: Data) {
+        try reconcileRecordings(modelContext)
+        let blob = finalizedBlob(try SyncMerger.merge(local: try makeSnapshot(modelContext: modelContext), remote: SyncBlob(savedAt: .distantPast)))
+        var entries: [(path: String, data: Data)] = [("manifest.json", try blob.encodedManifest())]
+        var usedNames = Set<String>()
+        for project in try modelContext.fetch(FetchDescriptor<SongProject>()).sorted(by: { $0.id < $1.id }) {
+            var name = RecordingFiles.sanitizeName(project.title)
+            if name.isEmpty || name.hasPrefix(".") || usedNames.contains(name.lowercased()) { name = project.id }
+            usedNames.insert(name.lowercased())
+            entries.append(("songs/\(name).txt", try LyricsExporter.data(for: project, format: .txt)))
+            entries.append(("songs/\(project.id).json", try LyricsExporter.data(for: project, format: .json)))
+        }
+        let rows = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.key, $0) }) { first, _ in first }
+        for entry in blob.recordings {
+            guard let row = rows[entry.key] else { continue }
+            entries.append(("recordings/\(entry.projectId)/\(entry.fileName)", row.audio))
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return ("WritersBlock-backup-\(formatter.string(from: now)).zip", try BackupArchive.zip(entries))
+    }
+
+    /// Merges an exported zip, or a bare v4 `manifest.json`, into the library.
+    /// Recordings in the zip that are missing here are added; nothing local is replaced.
+    func importArchive(_ data: Data, modelContext: ModelContext) throws {
+        var report = BackupReport()
+        var files: [String: Data] = [:]
+        var manifestData = data
+        if BackupArchive.isZip(data) {
+            do {
+                files = try BackupArchive.unzip(data)
+            } catch BackupArchiveError.unsafePath {
+                throw BackupError.unsafeArchive
+            }
+            // Only the layout "Export all songs" writes is accepted.
+            guard files.keys.allSatisfy({ $0 == "manifest.json" || $0.hasPrefix("songs/") || $0.hasPrefix("recordings/") }) else {
+                throw BackupError.unsafeArchive
+            }
+            guard let manifest = files["manifest.json"] else { throw BackupError.damagedManifest }
+            manifestData = manifest
+        }
+        let imported: SyncBlob
+        do {
+            imported = try SyncBlob.decodeManifest(manifestData)
+        } catch SyncManifestError.newerVersion {
+            throw BackupError.newerAppVersion
+        } catch {
+            throw BackupError.damagedManifest
+        }
+        report.oversizedRecordings = try reconcileRecordings(modelContext).oversizedCount
+        let merged = try SyncMerger.merge(local: try makeSnapshot(modelContext: modelContext), remote: imported)
+        try apply(merged, to: modelContext)
+        try deleteLocalRecordingsCoveredByDeletions(merged.deletions)
+        for entry in merged.recordings {
+            guard let audio = files["recordings/\(entry.projectId)/\(entry.fileName)"] else { continue }
+            let target = try RecordingFiles.localURL(projectId: entry.projectId, fileName: entry.fileName, memosRoot: memosRoot)
+            guard !FileManager.default.fileExists(atPath: target.path) else { continue }
+            guard RecordingBackupManifest.sha256Hex(audio) == entry.sha256 else {
+                report.damagedRecordings.append(entry.fileName)
+                continue
+            }
+            try RecordingFiles.commitIfAbsent(audio, to: target)
+        }
+        try reconcileRecordings(modelContext)
+        lastReport = report
+    }
+
+    // MARK: Local library
+
+    /// Brings memo files and `Recording` rows in step; at launch this imports
+    /// existing memos the first time. A failure leaves both as they were.
+    func reconcileRecordingLibrary(modelContext: ModelContext) {
+        // shortcut: runs on the main actor and reads new memos whole; move off-main if first imports get large.
+        do {
+            try reconcileRecordings(modelContext)
+        } catch {
+            modelContext.rollback()
+        }
+    }
+
+    @discardableResult
+    private func reconcileRecordings(_ modelContext: ModelContext) throws -> RecordingLibrary.Result {
+        try RecordingLibrary.reconcile(context: modelContext, memosRoot: memosRoot, trashRoot: trashRoot, defaults: defaults)
     }
 
     private func finalizedBlob(_ blob: SyncBlob) -> SyncBlob {
         var finalized = blob
         finalized.savedAt = Date()
         finalized.savedByClientId = clientId
+        finalized.platform = "ios"
         return finalized
-    }
-
-    private func canonicalized(_ blob: SyncBlob) throws -> SyncBlob {
-        try SyncMerger.merge(
-            local: blob,
-            remote: SyncBlob(savedAt: .distantPast, savedByClientId: "")
-        )
-    }
-
-    private func remoteMetadataChanged(original: DriveAppDataFile?, latest: DriveAppDataFile?) -> Bool {
-        switch (original, latest) {
-        case (.none, .none):
-            return false
-        case (.none, .some), (.some, .none):
-            return true
-        case let (.some(original), .some(latest)):
-            return original.id != latest.id
-                || original.version != latest.version
-                || original.modifiedTime != latest.modifiedTime
-        }
-    }
-
-    private func localRecordingMap(projectIds: [String]) throws -> [String: LocalRecording] {
-        var recordings: [String: LocalRecording] = [:]
-        for recording in try RecordingBackupManifest.scan(projectIds: projectIds, memosRoot: memosRoot) {
-            let key = recordingKey(recording.entry)
-            if let existing = recordings[key],
-               Self.epochMilliseconds(existing.entry.modifiedAt) > Self.epochMilliseconds(recording.entry.modifiedAt) {
-                continue
-            }
-            recordings[key] = recording
-        }
-        return recordings
-    }
-
-    private func uploadLocalRecordings(
-        for mergedRecordings: [SyncRecordingManifestEntry],
-        localRecordings: [String: LocalRecording],
-        remoteBlob: SyncBlob?,
-        accessToken: String,
-        passphrase: String
-    ) async throws {
-        for entry in mergedRecordings {
-            let key = recordingKey(entry)
-            guard let local = localRecordings[key],
-                  recordingManifest(local.entry, matches: entry),
-                  try await shouldUploadLocalRecording(local.entry, remoteBlob: remoteBlob, accessToken: accessToken) else {
-                continue
-            }
-            let encrypted = try SyncBlobCrypto.seal(Data(contentsOf: local.localURL), passphrase: passphrase)
-            _ = try await upsertDriveFile(name: local.entry.driveName, mimeType: "application/octet-stream", content: encrypted, accessToken: accessToken)
-        }
-    }
-
-    private func shouldUploadLocalRecording(_ local: SyncRecordingManifestEntry, remoteBlob: SyncBlob?, accessToken: String) async throws -> Bool {
-        let remoteEntry = remoteBlob?.recordings.first(where: { recordingKey($0) == recordingKey(local) })
-        guard let remoteEntry else { return true }
-        let localMillis = Self.epochMilliseconds(local.modifiedAt)
-        let remoteMillis = Self.epochMilliseconds(remoteEntry.modifiedAt)
-        if localMillis < remoteMillis { return false }
-        if localMillis > remoteMillis { return true }
-        guard local.sha256 == remoteEntry.sha256,
-              local.sizeBytes == remoteEntry.sizeBytes,
-              local.driveName == remoteEntry.driveName else {
-            return true
-        }
-        return try await driveClient.findFile(named: local.driveName, accessToken: accessToken) == nil
-    }
-
-    private func recordingManifest(_ lhs: SyncRecordingManifestEntry, matches rhs: SyncRecordingManifestEntry) -> Bool {
-        lhs.projectId == rhs.projectId
-            && lhs.fileName == rhs.fileName
-            && lhs.driveName == rhs.driveName
-            && lhs.sizeBytes == rhs.sizeBytes
-            && Self.epochMilliseconds(lhs.modifiedAt) == Self.epochMilliseconds(rhs.modifiedAt)
-            && lhs.sha256 == rhs.sha256
-    }
-
-    private func recordingKey(_ entry: SyncRecordingManifestEntry) -> String {
-        "\(entry.projectId)/\(entry.fileName)"
     }
 
     private func recordBackgroundBackupFailure(_ error: Error) {
@@ -937,14 +1209,16 @@ final class BackupService {
         defaults.removeObject(forKey: Self.backgroundFailureKey)
     }
 
-    private func makeSnapshot(modelContext: ModelContext) throws -> BackupSnapshot {
+    private func makeSnapshot(modelContext: ModelContext) throws -> SyncBlob {
         let projects = try modelContext.fetch(FetchDescriptor<SongProject>())
         let trashed = try modelContext.fetch(FetchDescriptor<TrashedSongProject>())
         let deletionRecords = try modelContext.fetch(FetchDescriptor<SyncDeletionRecord>())
         let deletions = try SyncMerger.mergeDeletions(deletionRecords.map(\.deletion))
         let projectIds = Set(projects.map(\.id) + trashed.map(\.id))
-        let recordings = try RecordingBackupManifest.scan(projectIds: Array(projectIds), memosRoot: memosRoot).map(\.entry)
-        let blob = SyncBlob(
+        let recordings = try modelContext.fetch(FetchDescriptor<Recording>())
+            .filter { projectIds.contains($0.projectId) }
+            .map(\.syncEntry)
+        return SyncBlob(
             projects: projects.map(SyncSongProject.init(project:)),
             trashed: trashed.map(SyncTrashedSongProject.init(trashed:)),
             recordings: recordings,
@@ -952,11 +1226,10 @@ final class BackupService {
             savedAt: Date(),
             savedByClientId: clientId
         )
-        return BackupSnapshot(blob: blob, allProjectIds: Array(projectIds))
     }
 
     private func apply(_ blob: SyncBlob, to modelContext: ModelContext) throws {
-        let latestLocal = try makeSnapshot(modelContext: modelContext).blob
+        let latestLocal = try makeSnapshot(modelContext: modelContext)
         let blob = try SyncMerger.merge(local: latestLocal, remote: blob)
         try blob.validate()
         let activeById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, $0) })
@@ -964,7 +1237,9 @@ final class BackupService {
         let existingDeletionRecords = try modelContext.fetch(FetchDescriptor<SyncDeletionRecord>())
         let mergedActiveIds = Set(blob.projects.map(\.id))
         let mergedTrashIds = Set(blob.trashed.map(\.id))
+        // A kept tombstone of a song edited after it does not remove the song.
         let deletedProjectIds = Set(blob.deletions.filter { $0.fileName == nil }.map(\.projectId))
+            .subtracting(mergedActiveIds).subtracting(mergedTrashIds)
 
         for deletion in blob.deletions {
             if let existing = existingDeletionRecords.first(where: { $0.projectId == deletion.projectId && $0.fileName == deletion.fileName }) {
@@ -1019,102 +1294,19 @@ final class BackupService {
         try modelContext.save()
     }
 
-    private func deleteRemoteRecordingsCoveredByDeletions(
-        _ deletions: [SyncDeletion],
-        accessToken: String
-    ) async throws {
-        let deletedProjects = Set(deletions.filter { $0.fileName == nil }.map(\.projectId))
-        for projectId in deletedProjects.sorted() {
-            try SyncIdentity.validateProjectId(projectId)
-            let prefix = "rec_\(projectId)_"
-            for file in try await driveClient.listFiles(prefix: prefix, accessToken: accessToken) {
-                try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
-            }
-        }
-        for deletion in deletions {
-            guard let fileName = deletion.fileName,
-                  !deletedProjects.contains(deletion.projectId) else { continue }
-            try deletion.validate()
-            let driveName = RecordingBackupManifest.driveName(
-                projectId: deletion.projectId,
-                fileName: fileName
-            )
-            if let file = try await driveClient.findFile(named: driveName, accessToken: accessToken) {
-                try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
-            }
-        }
-    }
-
+    /// Removes local memo files (live and trashed) that a tombstone newer than the file covers.
     private func deleteLocalRecordingsCoveredByDeletions(_ deletions: [SyncDeletion]) throws {
-        let deletedProjects = Set(deletions.filter { $0.fileName == nil }.map(\.projectId))
-        for projectId in deletedProjects {
-            let live = try RecordingFiles.projectURL(projectId: projectId, memosRoot: memosRoot)
-            let trash = try RecordingFiles.projectURL(projectId: projectId, memosRoot: RecordingFiles.memosTrashRoot())
-            if FileManager.default.fileExists(atPath: live.path) { try FileManager.default.removeItem(at: live) }
-            if FileManager.default.fileExists(atPath: trash.path) { try FileManager.default.removeItem(at: trash) }
-        }
-        for deletion in deletions {
-            guard let fileName = deletion.fileName, !deletedProjects.contains(deletion.projectId) else { continue }
-            let live = try RecordingFiles.localURL(projectId: deletion.projectId, fileName: fileName, memosRoot: memosRoot)
-            if FileManager.default.fileExists(atPath: live.path) { try FileManager.default.removeItem(at: live) }
-            for trashed in RecordingFiles.trashedMemos() where trashed.projectId == deletion.projectId && trashed.originalName == fileName {
-                if FileManager.default.fileExists(atPath: trashed.url.path) { try FileManager.default.removeItem(at: trashed.url) }
+        for projectId in Set(deletions.map(\.projectId)) {
+            let tombstones = deletions.filter { $0.projectId == projectId }
+            for (fileName, url) in try RecordingBackupManifest.scanFiles(projectId: projectId, memosRoot: memosRoot)
+            where tombstones.contains(where: { $0.covers(projectId: projectId, fileName: fileName, modifiedAt: RecordingFiles.modificationDate(url)) }) {
+                try RecordingFiles.removeItemIfPresent(at: url, within: memosRoot)
             }
         }
-    }
-
-    private static func isDeleted(_ entry: SyncRecordingManifestEntry, by deletions: [SyncDeletion]) -> Bool {
-        deletions.contains {
-            $0.projectId == entry.projectId && ($0.fileName == nil || $0.fileName == entry.fileName)
+        for trashed in RecordingFiles.trashedMemos()
+        where deletions.contains(where: { $0.covers(projectId: trashed.projectId, fileName: trashed.originalName, modifiedAt: trashed.deletedAt) }) {
+            try RecordingFiles.removeItemIfPresent(at: trashed.url, within: RecordingFiles.memosTrashRoot())
         }
-    }
-
-    private func restoreRecordings(from recordings: [SyncRecordingManifestEntry], accessToken: String, passphrase: String) async throws {
-        for entry in recordings {
-            try entry.validate()
-            let folder = try RecordingFiles.projectURL(projectId: entry.projectId, memosRoot: memosRoot)
-            let target = try RecordingFiles.localURL(projectId: entry.projectId, fileName: entry.fileName, memosRoot: memosRoot)
-            let shouldRestore = try shouldRestoreRecording(entry: entry, localURL: target)
-            guard shouldRestore else { continue }
-            guard let remote = try await driveClient.findFile(named: entry.driveName, accessToken: accessToken) else { continue }
-            let encrypted = try await driveClient.downloadFile(id: remote.id, accessToken: accessToken)
-            let plaintext: Data
-            do {
-                plaintext = try SyncBlobCrypto.open(encrypted, passphrase: passphrase)
-            } catch {
-                throw BackupError.corruptRemoteOrWrongPassphrase
-            }
-            let digest = SHA256.hash(data: plaintext).map { String(format: "%02x", $0) }.joined()
-            guard digest == entry.sha256, plaintext.count == entry.sizeBytes else {
-                throw BackupError.recordingIntegrityMismatch(entry.driveName)
-            }
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let temp = folder.appendingPathComponent(".\(entry.fileName).tmp-\(UUID().uuidString)")
-            try plaintext.write(to: temp, options: [.atomic])
-            try FileManager.default.setAttributes([.modificationDate: entry.modifiedAt], ofItemAtPath: temp.path)
-            if FileManager.default.fileExists(atPath: target.path) {
-                _ = try FileManager.default.replaceItemAt(target, withItemAt: temp)
-            } else {
-                try FileManager.default.moveItem(at: temp, to: target)
-            }
-        }
-    }
-
-    private func shouldRestoreRecording(entry: SyncRecordingManifestEntry, localURL: URL) throws -> Bool {
-        guard FileManager.default.fileExists(atPath: localURL.path) else { return true }
-        let values = try localURL.resourceValues(forKeys: [.contentModificationDateKey])
-        guard let modifiedAt = values.contentModificationDate else { return true }
-        let localMillis = Self.epochMilliseconds(modifiedAt)
-        let remoteMillis = Self.epochMilliseconds(entry.modifiedAt)
-        if localMillis < remoteMillis { return true }
-        if localMillis > remoteMillis { return false }
-        let localData = try Data(contentsOf: localURL)
-        let localDigest = SHA256.hash(data: localData).map { String(format: "%02x", $0) }.joined()
-        return localDigest != entry.sha256
-    }
-
-    private static func epochMilliseconds(_ date: Date) -> Int64 {
-        Int64((date.timeIntervalSince1970 * 1000).rounded())
     }
 
     private var clientId: String {
@@ -1123,11 +1315,6 @@ final class BackupService {
         defaults.set(id, forKey: Self.clientIdKey)
         return id
     }
-}
-
-private struct BackupSnapshot {
-    var blob: SyncBlob
-    var allProjectIds: [String]
 }
 
 private extension String {

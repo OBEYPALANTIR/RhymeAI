@@ -433,8 +433,13 @@ struct SettingsCloudBackupSection: View {
     @EnvironmentObject private var persistenceState: AppPersistenceState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.openURL) private var openURL
     @State private var isExpanded = false
-    @State private var passphraseEntry = ""
+    @State private var migratePromptShown = false
+    @State private var migratePassphrase = ""
+    @State private var importerShown = false
+    @State private var exporterShown = false
+    @State private var pendingExport: (fileName: String, document: ExportDocument)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -445,8 +450,9 @@ struct SettingsCloudBackupSection: View {
             } label: {
                 HStack(spacing: RhymeAITokens.Spacing.md) {
                     VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                        SettingsSectionTitle("Cloud Backup", systemImage: "externaldrive.badge.icloud")
+                        SettingsSectionTitle("Backup", systemImage: "externaldrive.badge.icloud")
                         cloudSyncStatusRow
+                        providerStatusRow
                     }
 
                     Spacer(minLength: 0)
@@ -460,7 +466,7 @@ struct SettingsCloudBackupSection: View {
             }
             .buttonStyle(.rhymePress)
             .accessibilityIdentifier("cloudBackupDisclosure")
-            .accessibilityLabel(isExpanded ? "Collapse cloud backup" : "Expand cloud backup")
+            .accessibilityLabel(isExpanded ? "Collapse backup" : "Expand backup")
 
             // Clipped so the controls reveal below the header instead of
             // sliding over it and the card above.
@@ -477,121 +483,234 @@ struct SettingsCloudBackupSection: View {
         }
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
-        .onDisappear {
-            passphraseEntry = ""
+        .alert("Migrate older encrypted backup", isPresented: $migratePromptShown) {
+            SecureField("Backup passphrase", text: $migratePassphrase)
+                .accessibilityIdentifier("migratePassphrase")
+            Button("Cancel", role: .cancel) { migratePassphrase = "" }
+            Button("Migrate") {
+                let passphrase = migratePassphrase
+                migratePassphrase = ""
+                Task { await viewModel.migrateLegacyBackup(passphrase: passphrase) }
+            }
+        } message: {
+            Text("Enter the passphrase of your older encrypted backup. It is used once to move that backup to the new format and is not kept.")
+        }
+        .fileImporter(isPresented: $importerShown, allowedContentTypes: [.zip, .json], allowsMultipleSelection: false) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else { return }
+            Task { await viewModel.importBackupFile(data) }
+        }
+        .fileExporter(
+            isPresented: $exporterShown,
+            document: pendingExport?.document,
+            contentType: .zip,
+            defaultFilename: pendingExport?.fileName
+        ) { _ in
+            pendingExport = nil
         }
     }
 
     private var backupControls: some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
-            Text("Backs up projects, trash, and voice recordings to your Google Drive app data. API keys stay on this device and are never included.")
-                .font(.caption)
-                .foregroundStyle(appearance.palette.secondaryInk)
-
-            SecureField(
-                viewModel.cloudBackupHasStoredPassphrase ? "Stored passphrase ready" : "Backup passphrase",
-                text: $passphraseEntry
-            )
-            .textContentType(.password)
-            .autocorrectionDisabled()
-            .textInputAutocapitalization(.never)
-            .font(.system(.body, design: .rounded))
-            .padding(.horizontal, RhymeAITokens.Spacing.sm)
-            .frame(minHeight: RhymeAITokens.Touch.minimum)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
-            .accessibilityIdentifier("cloudBackupPassphrase")
-
-            HStack(spacing: RhymeAITokens.Spacing.sm) {
-                backupButton("Back Up Now", systemImage: "arrow.up.doc.fill", action: backUpNow)
-                backupButton("Restore", systemImage: "arrow.down.doc.fill", action: restoreNow)
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+            if case .failed = viewModel.backupStatus {
+                row("Retry", systemImage: "arrow.clockwise", id: "backupRetry", enabled: viewModel.canRunCloudBackup) {
+                    Task { await viewModel.backUpNow() }
+                }
             }
-            .disabled(!controlsEnabled)
-            .opacity(controlsEnabled ? 1 : 0.45)
+            if viewModel.cloudBackupConnected {
+                row("Disconnect", systemImage: "link.badge.minus", id: "disconnectGoogleDrive", enabled: !viewModel.cloudBackupIsWorking) {
+                    Task { await viewModel.disconnectGoogleDrive() }
+                }
+            } else {
+                row("Connect Google Drive", systemImage: "link.badge.plus", id: "connectGoogleDrive", enabled: viewModel.cloudBackupConfigured) {
+                    Task { await viewModel.connectGoogleDrive() }
+                }
+            }
+            row("Back up now", systemImage: "arrow.up.doc.fill", id: "backUpNow", enabled: viewModel.canRunCloudBackup) {
+                Task { await viewModel.backUpNow() }
+            }
+            row("Restore from backup", systemImage: "arrow.down.doc.fill", id: "restoreFromBackup", enabled: viewModel.canRunCloudBackup) {
+                Task { await viewModel.restoreBackupNow() }
+            }
+            if viewModel.legacyBackupNeedsPassphrase {
+                row("Migrate older encrypted backup…", systemImage: "lock.open", id: "migrateLegacyBackup", enabled: viewModel.canRunCloudBackup) {
+                    migratePromptShown = true
+                }
+            }
+            row("Export all songs…", systemImage: "square.and.arrow.up", id: "exportAllSongs", enabled: !viewModel.cloudBackupIsWorking) {
+                if let archive = viewModel.exportAllSongs() {
+                    pendingExport = (archive.fileName, ExportDocument(data: archive.data))
+                    exporterShown = true
+                }
+            }
+            row("Import from file…", systemImage: "square.and.arrow.down", id: "importBackupFile", enabled: !viewModel.cloudBackupIsWorking) {
+                importerShown = true
+            }
 
-            Label(viewModel.cloudBackupStatusText, systemImage: backupStatusIcon)
-                .font(.caption)
-                .foregroundStyle(backupStatusColor)
-                .accessibilityIdentifier("cloudBackupStatus")
-
-            Text("Background backup runs only after you set up Google Drive and save a passphrase here. Your songs and recordings also remain covered by iCloud backup and sync.")
+            if !viewModel.cloudBackupStatusText.isEmpty {
+                Label(viewModel.cloudBackupStatusText, systemImage: viewModel.cloudBackupLastResultIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(viewModel.cloudBackupLastResultIsError ? appearance.palette.error : appearance.palette.success)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("cloudBackupStatus")
+            }
+            if !viewModel.cloudBackupConfigured {
+                Text("Google Drive isn't set up in this build.")
+                    .font(.caption)
+                    .foregroundStyle(appearance.palette.secondaryInk)
+            }
+            Text("Songs, trash and recordings are backed up to your Google Drive's private app storage. API keys are never included. Songs and recordings also sync through iCloud.")
                 .font(.caption)
                 .foregroundStyle(appearance.palette.secondaryInk)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("backupFooter")
         }
     }
 
-    private func backupButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func row(_ title: String, systemImage: String, id: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
+                .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.rhymePress)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
+        .accessibilityIdentifier(id)
     }
 
+    /// "Last backed up 2 minutes ago · Google Drive"; refreshed while visible.
+    private var providerStatusRow: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            Label(providerStatusText(now: context.date), systemImage: providerStatusIcon)
+                .font(.caption)
+                .foregroundStyle(isFailed ? appearance.palette.error : appearance.palette.secondaryInk)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("backupProviderStatus")
+        }
+    }
+
+    private var isFailed: Bool {
+        if case .failed = viewModel.backupStatus { return true }
+        return false
+    }
+
+    private func providerStatusText(now: Date) -> String {
+        switch viewModel.backupStatus {
+        case .notConnected:
+            return "Google Drive not connected"
+        case .connected(let last):
+            return "\(lastBackedUp(last, now: now)) · Google Drive"
+        case .pending:
+            return "Waiting to back up · Google Drive"
+        case .backingUp:
+            return "Backing up… · Google Drive"
+        case .failed(let reason, _):
+            return reason
+        }
+    }
+
+    private func lastBackedUp(_ date: Date?, now: Date) -> String {
+        guard let date else { return "Not backed up yet" }
+        guard now.timeIntervalSince(date) >= 60 else { return "Last backed up just now" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return "Last backed up \(formatter.localizedString(for: date, relativeTo: now))"
+    }
+
+    private var providerStatusIcon: String {
+        switch viewModel.backupStatus {
+        case .notConnected: "externaldrive.badge.xmark"
+        case .connected: "checkmark.circle"
+        case .pending, .backingUp: "arrow.triangle.2.circlepath"
+        case .failed: "exclamationmark.triangle.fill"
+        }
+    }
+
+    @ViewBuilder
     private var cloudSyncStatusRow: some View {
-        Label(cloudSyncStatusText, systemImage: cloudSyncStatusIcon)
-            .font(.caption)
-            .foregroundStyle(appearance.palette.secondaryInk)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("iCloudSyncStatus")
+        HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Spacing.xs) {
+            Label(cloudSyncStatusText, systemImage: cloudSyncStatusIcon)
+                .font(.caption)
+                .foregroundStyle(appearance.palette.secondaryInk)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("iCloudSyncStatus")
+            if persistenceState.cloudSyncStatus == .noAccount,
+               let settings = URL(string: UIApplication.openSettingsURLString) {
+                Button("Open Settings") { openURL(settings) }
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("iCloudOpenSettings")
+            }
+        }
     }
 
     private var cloudSyncStatusText: String {
         switch persistenceState.cloudSyncStatus {
-        case .syncing: "iCloud sync: Checking…"
-        case .available: "iCloud sync: On"
-        case .localOnly, .accountUnavailable: "iCloud sync: Off"
+        case .checking: "iCloud sync: Checking…"
+        case .on: "iCloud sync: On"
+        case .noAccount: "iCloud sync: Off. Sign in to iCloud to sync songs."
+        case .restricted: "iCloud sync: Off. iCloud is restricted on this device."
+        case .localOnlyFallback: "iCloud sync: Off. The iCloud library could not be opened, so songs are saved on this device only."
+        case .temporarilyUnavailable: "iCloud sync: Paused. iCloud is temporarily unavailable."
         }
     }
 
     private var cloudSyncStatusIcon: String {
         switch persistenceState.cloudSyncStatus {
-        case .syncing: "arrow.triangle.2.circlepath"
-        case .available: "checkmark.icloud.fill"
-        case .localOnly, .accountUnavailable: "icloud.slash"
+        case .checking: "arrow.triangle.2.circlepath"
+        case .on: "checkmark.icloud.fill"
+        case .noAccount, .restricted, .localOnlyFallback, .temporarilyUnavailable: "icloud.slash"
         }
     }
+}
 
-    private var controlsEnabled: Bool {
-        viewModel.cloudBackupConfigured
-            && !viewModel.cloudBackupIsWorking
-            && (viewModel.cloudBackupHasStoredPassphrase || !trimmedPassphrase.isEmpty)
-    }
+/// "Restore your songs?" — offered once Drive holds songs this device lacks.
+struct FirstRunRestoreSheet: View {
+    @EnvironmentObject private var viewModel: EditorViewModel
+    @Environment(\.appAppearanceStyle) private var appearance
+    let offer: FirstRunRestoreOffer
 
-    private var backupStatusIcon: String {
-        if viewModel.cloudBackupIsWorking { return "arrow.triangle.2.circlepath" }
-        return viewModel.cloudBackupLastResultIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
-    }
-
-    private var backupStatusColor: Color {
-        if viewModel.cloudBackupIsWorking { return .secondary }
-        return viewModel.cloudBackupLastResultIsError ? appearance.palette.error : appearance.palette.success
-    }
-
-    private var trimmedPassphrase: String {
-        passphraseEntry.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func backUpNow() {
-        runCloudBackupAction(viewModel.backUpNow)
-    }
-
-    private func restoreNow() {
-        runCloudBackupAction(viewModel.restoreBackupNow)
-    }
-
-    private func runCloudBackupAction(_ action: @escaping @MainActor () async -> Void) {
-        let passphrase = trimmedPassphrase
-        if !passphrase.isEmpty {
-            viewModel.updateCloudBackupPassphrase(passphrase)
-        }
-
-        Task { @MainActor in
-            await action()
-            if !passphrase.isEmpty {
-                passphraseEntry = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.lg) {
+            Text("Restore your songs?")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(appearance.palette.primaryInk)
+            Text("We found \(count(offer.songs, "song")) and \(count(offer.recordings, "recording")) in your Google Drive backup.")
+                .font(.body)
+                .foregroundStyle(appearance.palette.secondaryInk)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("firstRunRestoreBody")
+            VStack(spacing: RhymeAITokens.Spacing.sm) {
+                Button {
+                    Task { await viewModel.acceptFirstRunRestore() }
+                } label: {
+                    Text("Restore")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("firstRunRestore")
+                Button {
+                    viewModel.declineFirstRunRestore()
+                } label: {
+                    Text("Not now")
+                        .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
+                }
+                .accessibilityIdentifier("firstRunNotNow")
             }
         }
+        .padding(RhymeAITokens.Spacing.lg)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(appearance.palette.canvas)
+        .presentationDetents([.medium])
+        .interactiveDismissDisabled()
+    }
+
+    private func count(_ value: Int, _ noun: String) -> String {
+        "\(value) \(noun)\(value == 1 ? "" : "s")"
     }
 }
 

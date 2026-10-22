@@ -16,7 +16,7 @@ struct DraftRecoveryTests {
         let viewModel = harness.makeViewModel(service: service)
         viewModel.loadProject(project)
 
-        Task { await viewModel.backUpNow() }
+        Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
         viewModel.lyrics = "typed during backup"
         viewModel.triggerAutoSave()
@@ -77,7 +77,7 @@ struct DraftRecoveryTests {
         let viewModel = harness.makeViewModel(service: service)
         viewModel.loadProject(project)
 
-        let operation = Task { await viewModel.backUpNow() }
+        let operation = Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
         viewModel.lyrics = "typed during backup"
         viewModel.triggerAutoSave()
@@ -104,7 +104,7 @@ struct DraftRecoveryTests {
         let viewModel = harness.makeViewModel(service: service)
         viewModel.loadProject(project)
 
-        Task { await viewModel.backUpNow() }
+        Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
         viewModel.lyrics = "old typed text"
         viewModel.triggerAutoSave()
@@ -132,7 +132,7 @@ struct DraftRecoveryTests {
         let viewModel = harness.makeViewModel(service: service)
         viewModel.loadProject(project)
 
-        Task { await viewModel.backUpNow() }
+        Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
         viewModel.lyrics = "typed during backup"
         viewModel.triggerAutoSave()
@@ -214,7 +214,7 @@ struct DraftRecoveryTests {
         let copy = try Data(contentsOf: harness.recoveryURL)
 
         // The fallback library used when the real one cannot be opened.
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
         let fallback = try ModelContainer(for: schema, configurations: [
             ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         ])
@@ -228,7 +228,7 @@ struct DraftRecoveryTests {
         #expect(degraded.currentProjectId == nil)
 
         // Typing during a backup in that session must not replace the copy either.
-        Task { await degraded.backUpNow() }
+        Task { await degraded.restoreBackupNow() }
         try await service.waitUntilStarted()
         degraded.lyrics = "typed in the fallback session"
         degraded.triggerAutoSave()
@@ -285,7 +285,7 @@ struct DraftRecoveryTests {
         let service = GatedBackupService()
         let viewModel = harness.makeViewModel(service: service)
 
-        Task { await viewModel.backUpNow() }
+        Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
         viewModel.newProject()
         viewModel.lyrics = "new hook"
@@ -377,7 +377,7 @@ struct DraftRecoveryTests {
         let service = GatedBackupService()
         let viewModel = redundant.makeViewModel(service: service)
         viewModel.loadProject(kept)
-        Task { await viewModel.backUpNow() }
+        Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
         #expect(try redundant.stagedSnapshots().count == 1)
         #expect(!redundant.recoveryCopyExists)
@@ -460,7 +460,7 @@ struct DraftRecoveryTests {
         let viewModel = harness.makeViewModel(service: service)
         viewModel.loadProject(project)
 
-        let operation = Task { await viewModel.backUpNow() }
+        let operation = Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
         viewModel.lyrics = "typed during backup"
         viewModel.triggerAutoSave()
@@ -495,7 +495,7 @@ struct DraftRecoveryTests {
         // and writes its recovery copy before it begins.
         viewModel.lyrics = "pending before backup"
 
-        let operation = Task { await viewModel.backUpNow() }
+        let operation = Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
         #expect(harness.recoveryCopyExists)
 
@@ -514,7 +514,8 @@ struct DraftRecoveryTests {
         #expect(try harness.projects().first?.lyrics == "pending before backup")
     }
 
-    @Test(arguments: ["backup", "restore", "background"])
+    /// Only restore holds the library; a backup only reads it and needs no safety copy.
+    @Test(arguments: ["restore"])
     func operationDoesNotStartWhenAPendingEditCannotGetItsRecoveryCopy(kind: String) async throws {
         let harness = try RecoveryHarness()
         let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
@@ -525,11 +526,7 @@ struct DraftRecoveryTests {
         viewModel.loadProject(project)
         viewModel.lyrics = "pending before backup"
 
-        switch kind {
-        case "backup": await viewModel.backUpNow()
-        case "restore": await viewModel.restoreBackupNow()
-        default: await viewModel.runCloudBackupOnBackgroundIfPossible()
-        }
+        await viewModel.restoreBackupNow()
 
         // Refused before the service was asked to do anything.
         #expect(!service.started)
@@ -555,7 +552,7 @@ struct DraftRecoveryTests {
         let service = GatedBackupService()
         let viewModel = harness.makeViewModel(service: service)
 
-        let operation = Task { await viewModel.backUpNow() }
+        let operation = Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
 
         #expect(viewModel.projectDeletionNotice == nil)
@@ -602,7 +599,7 @@ private struct RecoveryHarness {
         let service = GatedBackupService()
         let viewModel = makeViewModel(service: service)
         viewModel.loadProject(project)
-        Task { await viewModel.backUpNow() }
+        Task { await viewModel.restoreBackupNow() }
         try await service.waitUntilStarted()
         viewModel.lyrics = lyrics
         viewModel.triggerAutoSave()
@@ -610,7 +607,7 @@ private struct RecoveryHarness {
     }
 
     init() throws {
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("DraftRecoveryTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -713,7 +710,7 @@ private struct RecoveryHarness {
 @MainActor
 private final class GatedBackupService: CloudBackupServicing {
     var isConfigured = true
-    var hasStoredPassphrase = true
+    var isConnected = true
     var recordingRecoveryRoot: URL?
     var onStart: ((ModelContext) throws -> Void)?
     private(set) var started = false
@@ -734,8 +731,6 @@ private final class GatedBackupService: CloudBackupServicing {
         }
         try #require(started)
     }
-
-    func updatePassphrase(_ passphrase: String) throws {}
 
     func backupNow(modelContext: ModelContext) async throws {
         try await hold(modelContext)

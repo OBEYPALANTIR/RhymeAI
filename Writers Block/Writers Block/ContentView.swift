@@ -32,6 +32,13 @@ struct ContentView: View {
         .sheet(isPresented: $viewModel.showTemplatesSheet) {
             TemplatesView()
         }
+        // Settings presents the offer itself while it is open.
+        .sheet(item: Binding(
+            get: { viewModel.showSettingsSheet ? nil : viewModel.firstRunRestoreOffer },
+            set: { if $0 == nil, !viewModel.showSettingsSheet { viewModel.firstRunRestoreOffer = nil } }
+        )) { offer in
+            FirstRunRestoreSheet(offer: offer)
+        }
         .sheet(isPresented: $viewModel.showSettingsSheet) {
             SettingsView()
                 .frame(
@@ -46,5 +53,5 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environmentObject(EditorViewModel())
-        .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self], inMemory: true)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self], inMemory: true)
 }

@@ -67,7 +67,7 @@ struct SongProjectExport: Codable, Sendable {
 
 struct ExportDocument: FileDocument {
     static var readableContentTypes: [UTType] {
-        var types: [UTType] = [.plainText, .json, .pdf]
+        var types: [UTType] = [.plainText, .json, .pdf, .zip]
         if let lrc = UTType(filenameExtension: "lrc") { types.append(lrc) }
         return types
     }
