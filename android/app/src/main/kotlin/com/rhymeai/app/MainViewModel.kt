@@ -2,6 +2,7 @@ package com.rhymeai.app
 
 import android.app.Application
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
@@ -190,6 +191,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     private var suggestionInsertionRevision = 0L
     var isLoading by mutableStateOf(false)
+    /**
+     * Counts suggestion requests that ended by themselves with at least one line;
+     * Stop, a cancel from a settings or context change, errors and empty answers
+     * leave it alone. The Assistant bursts its spinner when it moves.
+     */
+    var suggestionRunsCompleted by mutableIntStateOf(0)
+        private set
     private var _rhymeType by mutableStateOf(RhymeType.PERFECT)
     var rhymeType: RhymeType
         get() = _rhymeType
@@ -1049,8 +1057,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     emittedSuggestion = true
                     suggestions = suggestions + line
                 }
-                if (revision == suggestionsRevision && isCurrentAIContext(requestContext) && !emittedSuggestion) {
-                    errorMessage = "AI did not return suggestions. Try again."
+                if (revision == suggestionsRevision && isCurrentAIContext(requestContext)) {
+                    if (emittedSuggestion) suggestionRunsCompleted++
+                    else errorMessage = "AI did not return suggestions. Try again."
                 }
             } catch (e: CancellationException) {
                 throw e
