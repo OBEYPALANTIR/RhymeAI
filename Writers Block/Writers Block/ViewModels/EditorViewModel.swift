@@ -210,6 +210,10 @@ final class EditorViewModel: ObservableObject {
     @Published var suggestions: [SuggestedLine] = []
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    /// The request whose stream ended on its own with at least one line.
+    /// Cleared when a request starts and on every cancel, so Stop, Settings
+    /// changes, navigation and errors never leave it set.
+    @Published private(set) var completedSuggestionsRequestID: UUID?
 
     // MARK: - Rhyme Settings
 
@@ -766,6 +770,7 @@ final class EditorViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         suggestions = []
+        completedSuggestionsRequestID = nil
 
         // Debug UI tests and simulator QA can answer from a scripted stream
         // (`--ui-test-scripted-suggestions`); everything below is unchanged.
@@ -817,8 +822,12 @@ final class EditorViewModel: ObservableObject {
                     let isHookRepeat = !firstChorusEndWordSet.isEmpty && firstChorusEndWordSet.contains(endWord)
                     self.suggestions.append(SuggestedLine(text: text, tier: tier, isHookRepeat: isHookRepeat))
                 }
-                if !emittedSuggestion, !Task.isCancelled, self.suggestionsRequestID == requestID {
-                    self.errorMessage = "AI did not return suggestions. Try again."
+                if !Task.isCancelled, self.suggestionsRequestID == requestID {
+                    if emittedSuggestion {
+                        self.completedSuggestionsRequestID = requestID
+                    } else {
+                        self.errorMessage = "AI did not return suggestions. Try again."
+                    }
                 }
             } catch is CancellationError {
                 // expected when cancelSuggestions() is invoked
@@ -878,6 +887,7 @@ final class EditorViewModel: ObservableObject {
         suggestionsTask?.cancel()
         suggestionsTask = nil
         suggestionsRequestID = nil
+        completedSuggestionsRequestID = nil
         isLoading = false
     }
 

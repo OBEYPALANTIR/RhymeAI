@@ -9,8 +9,6 @@ struct AssistantPanelView: View {
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
     @AppStorage("assistant.targetLineStressExpanded") private var stressDetailExpanded = false
-    /// Set by the Stop button so the stream it ends does not burst.
-    @State private var stoppedByUser = false
     /// When the spinner burst into ink; cleared once the burst is over.
     @State private var burstStart: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -171,7 +169,6 @@ struct AssistantPanelView: View {
     private var suggestBar: some View {
         Button {
             if viewModel.isLoading {
-                stoppedByUser = true
                 viewModel.cancelSuggestions()
             } else {
                 viewModel.getSuggestions()
@@ -545,16 +542,13 @@ struct AssistantPanelView: View {
             // The section opens on the state tier and, when a request ends
             // with no lines, fades away on the dismiss tier.
             .rhymeAnimation(viewModel.isLoading ? RhymeAITokens.Motion.state : RhymeAITokens.Motion.dismiss, value: showsSuggestions)
+            // Only a stream that ends on its own with lines bursts the spinner
+            // into ink; Stop, any other cancel, errors and empty answers do not.
+            .onChange(of: viewModel.completedSuggestionsRequestID) { _, completed in
+                if completed != nil, !reduceMotion { burstStart = .now }
+            }
             .onChange(of: viewModel.isLoading) { _, isLoading in
-                guard isLoading else {
-                    // Writing that ends with lines and no error bursts the
-                    // spinner into ink; Stop, errors and empty answers do not.
-                    if !stoppedByUser, !reduceMotion, !viewModel.suggestions.isEmpty, viewModel.errorMessage == nil {
-                        burstStart = .now
-                    }
-                    return
-                }
-                stoppedByUser = false
+                guard isLoading else { return }
                 // A caption inserted into the hierarchy is not read on its own,
                 // so tell VoiceOver that writing has started, as the Word
                 // Inspector does for its results.
