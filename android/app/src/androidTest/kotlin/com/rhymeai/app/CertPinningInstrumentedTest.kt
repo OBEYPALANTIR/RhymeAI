@@ -49,6 +49,24 @@ class CertPinningInstrumentedTest {
         assertTlsHandshakeSucceeds("oauth2.googleapis.com")
     }
 
+    /** example.com chains to SSL.com roots and shares the Drive pin set, which has no expiration. */
+    @Test
+    fun drivePinSetRejectsAnUnpinnedChain() {
+        val connection = URL("https://example.com/").openConnection() as HttpsURLConnection
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 10_000
+        try {
+            connection.connect()
+            fail("example.com handshook through the Drive pin set; it must be refused")
+        } catch (e: SSLException) {
+            println("CERT_PINNING_REJECTED domain=example.com error=${e.javaClass.simpleName}")
+        } catch (e: IOException) {
+            assumeTrue("No network connectivity to example.com; skipping pin rejection test ($e).", false)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun assertTlsHandshakeSucceeds(domain: String) {
         val connection = URL("https://$domain/").openConnection() as HttpsURLConnection
         connection.connectTimeout = 10_000
