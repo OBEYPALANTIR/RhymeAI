@@ -141,7 +141,7 @@ struct TrashBinView: View {
 
             Image(systemName: "square.grid.2x2")
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                 .accessibilityHidden(true)
         }
@@ -208,7 +208,7 @@ struct TrashBinView: View {
 
                     Image(systemName: "doc.text")
                         .font(.title3.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                 }
                 .frame(width: RhymeAITokens.Touch.comfortable, height: RhymeAITokens.Touch.comfortable)
 
@@ -220,7 +220,7 @@ struct TrashBinView: View {
 
                     Text("\(SyllableCounter.wordCount(project.lyrics)) words · \(trashRemainingText(deleteAfter: project.deleteAfter))")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                         .lineLimit(rowLineLimit)
                 }
                 .multilineTextAlignment(.leading)
@@ -245,7 +245,7 @@ struct TrashBinView: View {
         } description: {
             Text("Deleted songs stay here for 30 days.")
         }
-        .foregroundStyle(.secondary)
+        .foregroundStyle(appearance.palette.secondaryInk)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(RhymeAITokens.Spacing.xl)
     }
@@ -258,7 +258,7 @@ struct TrashBinView: View {
         } description: {
             Text("Deleted recordings stay here for 30 days.")
         }
-        .foregroundStyle(.secondary)
+        .foregroundStyle(appearance.palette.secondaryInk)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(RhymeAITokens.Spacing.xl)
     }
@@ -292,7 +292,7 @@ struct TrashBinView: View {
 
                     Image(systemName: "mic")
                         .font(.title3.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                 }
                 .frame(width: RhymeAITokens.Touch.comfortable, height: RhymeAITokens.Touch.comfortable)
 
@@ -304,7 +304,7 @@ struct TrashBinView: View {
 
                     Text("\(projectTitle) · \(trashRemainingText(deleteAfter: memo.deleteAfter))")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                         .lineLimit(rowLineLimit)
                 }
                 .multilineTextAlignment(.leading)
@@ -375,6 +375,9 @@ struct TrashBinView: View {
             } label: {
                 Label("Delete", systemImage: "trash")
                     .font(.subheadline.weight(.semibold))
+                    // The prominent style draws white on the action fill,
+                    // which is warm white on Graphite.
+                    .foregroundStyle(appearance.palette.onAction)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
             }

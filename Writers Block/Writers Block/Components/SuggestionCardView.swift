@@ -54,7 +54,7 @@ struct SuggestionCardView: View {
 
                     Text("\(prosody.syllableCount)")
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary.opacity(0.6))
+                        .foregroundStyle(appearance.palette.secondaryInk)
                         .padding(.horizontal, RhymeAITokens.Rhythm.tight)
                         .padding(.vertical, RhymeAITokens.Rhythm.tight)
                         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, fallbackOpacity: 0.08)
@@ -115,6 +115,7 @@ struct SuggestionCardView: View {
 }
 
 private struct SuggestionProsodyPreviewView: View {
+    @Environment(\.appAppearanceStyle) private var appearance
     let prosody: LineProsody
 
     var body: some View {
@@ -128,7 +129,7 @@ private struct SuggestionProsodyPreviewView: View {
                 }
             }
             .font(.caption.monospaced())
-            .foregroundStyle(.secondary.opacity(0.72))
+            .foregroundStyle(appearance.palette.secondaryInk)
             .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
         }

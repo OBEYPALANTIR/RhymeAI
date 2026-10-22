@@ -91,8 +91,16 @@ struct AssistantPanelView: View {
     private func inlineContent(rhymeContext: RhymeContext) -> some View {
         VStack(spacing: 0) {
             HStack {
-                Label("Assistant", systemImage: "pencil")
-                    .font(.headline)
+                // The icon gives way at accessibility sizes so the word
+                // "Assistant" keeps one line in the 380pt column.
+                Group {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        Text("Assistant")
+                    } else {
+                        Label("Assistant", systemImage: "pencil")
+                    }
+                }
+                .font(.headline)
                 Spacer()
 
                 if let onDismiss {
@@ -105,7 +113,8 @@ struct AssistantPanelView: View {
             .padding(.vertical, RhymeAITokens.Spacing.xs)
             .padding(.leading, RhymeAITokens.Rhythm.section)
             .padding(.trailing, RhymeAITokens.Rhythm.tight)
-            .liquidGlassSurface(cornerRadius: 0, fallbackOpacity: 0.02)
+            // Flat on the canvas like the editor top bar: a bordered surface
+            // here drew a box beside the column divider and under the status bar.
             .overlay(Divider(), alignment: .bottom)
 
             panelScrollView(rhymeContext: rhymeContext)
@@ -240,6 +249,7 @@ struct AssistantPanelView: View {
                 HStack(spacing: RhymeAITokens.Rhythm.tight) {
                     Label("Context & Theme", systemImage: "pencil")
                         .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
                     helpButton(.contextTheme)
                 }
 
@@ -259,18 +269,21 @@ struct AssistantPanelView: View {
 
             // MARK: - Target Line
             VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
-                HStack {
-                    Label("Target Line", systemImage: "text.alignleft")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    helpButton(.targetLine)
+                labelRowLayout {
+                    HStack {
+                        Label("Target Line", systemImage: "text.alignleft")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                        helpButton(.targetLine)
+                    }
 
-                    Spacer()
+                    if !stacksLabelRows { Spacer() }
 
                     if let targetLine = rhymeContext.targetLine {
                         Text("\(SyllableCounter.countText(targetLine)) syl")
                             .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(appearance.palette.secondaryInk)
                             .padding(.horizontal, RhymeAITokens.Rhythm.tight)
                             .padding(.vertical, RhymeAITokens.Rhythm.tight)
                             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, fallbackOpacity: 0.08)
@@ -300,7 +313,7 @@ struct AssistantPanelView: View {
                     } else {
                         Text("New rhyme sound: no earlier line to match")
                             .font(.caption)
-                            .foregroundStyle(.secondary.opacity(0.5))
+                            .foregroundStyle(appearance.palette.secondaryInk)
                             .italic()
                     }
                 }
@@ -322,34 +335,33 @@ struct AssistantPanelView: View {
                     HStack(spacing: RhymeAITokens.Rhythm.related) {
                         let title = Text("Rhyme Options")
                             .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(appearance.palette.secondaryInk)
                         let summary = Text("\(viewModel.rhymeScheme.label) \u{00b7} \(viewModel.rhymeType.shortName) \u{00b7} \(viewModel.rhymeComplexity.label)")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(appearance.palette.action)
-                        if !isInline {
-                            // The compact sheet keeps its original row.
-                            title
-                            Spacer()
-                            summary
-                        } else if dynamicTypeSize.isAccessibilitySize {
+                        if dynamicTypeSize.isAccessibilitySize {
                             // Too wide for one row: stack and let both wrap.
                             VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.tight) {
                                 title
                                 summary
                             }
                             Spacer(minLength: 0)
+                        } else if !isInline {
+                            // The compact sheet keeps its original row.
+                            title
+                            Spacer()
+                            summary
                         } else {
-                            // The summary keeps one line; the title truncates first.
-                            title.lineLimit(1)
+                            // One row; the summary keeps priority, and either
+                            // wraps between words rather than being cut off.
+                            title
                             Spacer(minLength: 0)
                             summary
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.85)
                                 .layoutPriority(1)
                         }
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(appearance.palette.secondaryInk)
                             .rotationEffect(.degrees(rhymeOptionsExpanded ? 180 : 0))
                     }
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
@@ -361,10 +373,10 @@ struct AssistantPanelView: View {
                 if rhymeOptionsExpanded {
                 // MARK: - Rhyme Scheme
                 VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
-                    HStack {
+                    labelRowLayout {
                         featureHelpLabel("Rhyme Scheme", help: .rhymeScheme)
 
-                        Spacer()
+                        if !stacksLabelRows { Spacer() }
 
                         Picker("Scheme", selection: $viewModel.rhymeScheme) {
                             ForEach(RhymeScheme.allCases, id: \.self) { scheme in
@@ -408,9 +420,9 @@ struct AssistantPanelView: View {
 
                 // MARK: - Complexity
                 VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
-                    HStack {
+                    labelRowLayout {
                         featureHelpLabel("Complexity", help: .complexity)
-                        Spacer()
+                        if !stacksLabelRows { Spacer() }
                         Text(viewModel.rhymeComplexity.label)
                             .font(.caption)
                             .foregroundStyle(appearance.palette.action)
@@ -428,7 +440,7 @@ struct AssistantPanelView: View {
 
                     Text(viewModel.rhymeComplexity.description)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                 }
 
                 }
@@ -458,7 +470,7 @@ struct AssistantPanelView: View {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                     Label(localStatusTitle, systemImage: "desktopcomputer")
                         .font(.subheadline.weight(.semibold))
-                    Text(readiness.detail).font(.caption).foregroundStyle(.secondary)
+                    Text(readiness.detail).font(.caption).foregroundStyle(appearance.palette.secondaryInk)
                     // Bordered like the panel's other secondary actions: as plain
                     // text in the ink-coloured tint it read as a caption.
                     Button("Local model setup") { showModelSetup = true }
@@ -520,12 +532,12 @@ struct AssistantPanelView: View {
                         HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Rhythm.related) {
                             Text("Suggestions")
                                 .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(appearance.palette.secondaryInk)
 
                             if viewModel.isLoading {
                                 Text("Writing…")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary.opacity(0.8))
+                                    .foregroundStyle(appearance.palette.secondaryInk)
                                     .accessibilityLabel(Self.writingAnnouncement)
                                     .accessibilityIdentifier("suggestionsWriting")
                                     .transition(.opacity)
@@ -534,7 +546,7 @@ struct AssistantPanelView: View {
 
                         Text("AI-generated · review before use")
                             .font(.caption.italic())
-                            .foregroundStyle(.secondary.opacity(0.8))
+                            .foregroundStyle(appearance.palette.secondaryInk)
                     }
 
                     ForEach(viewModel.suggestions) { suggestion in
@@ -628,8 +640,22 @@ struct AssistantPanelView: View {
             Text(text)
                 .font(font)
                 .foregroundStyle(color)
+                .fixedSize(horizontal: false, vertical: true)
             helpButton(help)
         }
+    }
+
+    /// At accessibility sizes a label and its control share no row: the
+    /// control moves under the label (and its help button), so the label
+    /// keeps the full width and wraps only between words.
+    private var stacksLabelRows: Bool {
+        dynamicTypeSize.isAccessibilitySize
+    }
+
+    private var labelRowLayout: AnyLayout {
+        stacksLabelRows
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: RhymeAITokens.Rhythm.tight))
+            : AnyLayout(HStackLayout())
     }
 
     private func toggleHelpRow(
@@ -654,7 +680,7 @@ struct AssistantPanelView: View {
             ZStack {
                 Image(systemName: "questionmark.circle")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearance.palette.secondaryInk)
             }
             .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum, alignment: .center)
         }
