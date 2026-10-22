@@ -26,7 +26,6 @@ protocol CloudBackupServicing: AnyObject {
     func remoteBackupSummary() async throws -> RemoteBackupSummary?
     func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data)
     func importArchive(_ data: Data, modelContext: ModelContext) throws
-    func reconcileRecordingLibrary(modelContext: ModelContext)
 }
 
 extension CloudBackupServicing {
@@ -43,7 +42,6 @@ extension CloudBackupServicing {
         throw BackupError.notConfigured
     }
     func importArchive(_ data: Data, modelContext: ModelContext) throws {}
-    func reconcileRecordingLibrary(modelContext: ModelContext) {}
 }
 
 /// Google Drive backup as Settings shows it; the same cases on Android.
@@ -76,7 +74,7 @@ enum CloudAISharingScope: String {
     case wholeSong
 }
 
-private final class OpenRecordingSnapshot {
+final class OpenRecordingSnapshot {
     private let recordingsRoot: URL
     private let snapshotFolder: URL
 
@@ -119,25 +117,65 @@ private final class OpenRecordingSnapshot {
 
     var folderName: String { snapshotFolder.lastPathComponent }
 
+    /// Files `copy(to:)` created, by destination song, with each file's identity
+    /// at creation. Rollback removes only those, and only if still the same file.
+    private var createdCopies: [String: (folder: URL?, files: [(url: URL, identity: [AnyHashable]?)])] = [:]
+
+    /// Copies the snapshot's recordings into the song's memo folder. A file
+    /// already there is never replaced or removed: if it holds other audio, the
+    /// snapshot's copy lands beside it under a numbered name.
     func copy(to projectId: String) throws {
+        let fileManager = FileManager.default
         let destination = try RecordingFiles.projectURL(projectId: projectId, memosRoot: recordingsRoot)
-        guard !FileManager.default.fileExists(atPath: destination.path) else {
-            throw CocoaError(.fileWriteFileExists)
-        }
-        try FileManager.default.createDirectory(
-            at: recordingsRoot, withIntermediateDirectories: true
-        )
+        let createdFolder = !fileManager.fileExists(atPath: destination.path)
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        var created: [(url: URL, identity: [AnyHashable]?)] = []
         do {
-            try FileManager.default.copyItem(at: snapshotFolder, to: destination)
+            let sources = try fileManager.contentsOfDirectory(at: snapshotFolder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+            for source in sources.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                var target = destination.appendingPathComponent(source.lastPathComponent)
+                if fileManager.fileExists(atPath: target.path) {
+                    if fileManager.contentsEqual(atPath: target.path, andPath: source.path) { continue }
+                    target = RecordingFiles.restoredURL(originalName: source.lastPathComponent, folder: destination)
+                }
+                // Refuses an existing destination, so a file that appeared meanwhile is kept.
+                try fileManager.copyItem(at: source, to: target)
+                created.append((target, Self.identity(of: target)))
+            }
         } catch {
-            try? FileManager.default.removeItem(at: destination)
+            Self.remove(created, folder: createdFolder ? destination : nil)
             throw error
         }
+        let earlier = createdCopies[projectId]
+        createdCopies[projectId] = (earlier?.folder ?? (createdFolder ? destination : nil), (earlier?.files ?? []) + created)
     }
 
+    /// Undoes this snapshot's copies for a song whose save failed.
     func removeCopy(for projectId: String) {
-        guard let destination = try? RecordingFiles.projectURL(projectId: projectId, memosRoot: recordingsRoot) else { return }
-        try? FileManager.default.removeItem(at: destination)
+        guard let copies = createdCopies.removeValue(forKey: projectId) else { return }
+        Self.remove(copies.files, folder: copies.folder)
+    }
+
+    /// File identity plus creation and change times, so a file put in its place
+    /// (even reusing the inode) does not match.
+    nonisolated private static func identity(of url: URL) -> [AnyHashable]? {
+        var url = url
+        url.removeAllCachedResourceValues()
+        guard let values = try? url.resourceValues(forKeys: [.fileResourceIdentifierKey, .creationDateKey, .contentModificationDateKey]),
+              let identifier = values.fileResourceIdentifier as? AnyHashable else { return nil }
+        return [identifier, values.creationDate, values.contentModificationDate]
+    }
+
+    nonisolated private static func remove(_ files: [(url: URL, identity: [AnyHashable]?)], folder: URL?) {
+        for file in files {
+            // Only the file this copy created: one put there since is left alone.
+            guard let identity = file.identity, identity == Self.identity(of: file.url) else { continue }
+            try? FileManager.default.removeItem(at: file.url)
+        }
+        // A folder this copy created goes too, but only once nothing else is in it.
+        if let folder, (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?.isEmpty == true {
+            try? FileManager.default.removeItem(at: folder)
+        }
     }
 
     func discard() {
@@ -376,12 +414,17 @@ final class EditorViewModel: ObservableObject {
     /// An older passphrase-encrypted backup is on Drive and waits for its passphrase.
     @Published private(set) var legacyBackupNeedsPassphrase: Bool = false
     @Published var firstRunRestoreOffer: FirstRunRestoreOffer?
+    /// Recordings over 16 MiB that stay on this device (not in iCloud or Drive).
+    @Published private(set) var oversizedRecordingCount = 0
+    private let recordingLibrary: RecordingLibrary?
     private var automaticBackupTask: Task<Void, Never>?
     private var automaticBackupFailures = 0
     private var automaticBackupRerunRequested = false
     private var firstRunCheckedThisLaunch = false
     /// Quiet period after the last saved change before an automatic backup.
     var automaticBackupDebounce: TimeInterval = BackupSchedule.debounce
+    /// Waits out a debounce or backoff delay; tests substitute a clock they advance.
+    var automaticBackupSleep: (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
     private var activeCloudEditorOperation: CloudEditorOperation?
     private var pendingRecordingRecovery: OpenRecordingSnapshot?
     /// Why the last `beginCloudEditorOperation` refused, when it has a reason
@@ -409,7 +452,7 @@ final class EditorViewModel: ObservableObject {
         didSet {
             modelContainer = modelContext?.container
             applyPersistedDeletions()
-            if let modelContext { backupService?.reconcileRecordingLibrary(modelContext: modelContext) }
+            reconcileRecordings()
             purgeExpiredTrashedProjects()
             recoverInterruptedDraftIfNeeded()
             seedTrashProjectForUITestsIfNeeded()
@@ -520,7 +563,7 @@ final class EditorViewModel: ObservableObject {
         if changed { scheduleAutomaticBackup() }
     }
 
-    init(aiService: AIService = AIService(), keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, companionStore: WritingCompanionStore? = nil, synonymService: (any SynonymProviding)? = nil, defaults: UserDefaults = .standard, draftRecoveryURL: URL? = nil, libraryIsCloudBacked: ((ModelContainer) -> Bool)? = nil, saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
+    init(aiService: AIService = AIService(), keychainStore: KeychainStore? = nil, backupService: CloudBackupServicing? = nil, recordingLibrary: RecordingLibrary? = nil, companionStore: WritingCompanionStore? = nil, synonymService: (any SynonymProviding)? = nil, defaults: UserDefaults = .standard, draftRecoveryURL: URL? = nil, libraryIsCloudBacked: ((ModelContainer) -> Bool)? = nil, saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.aiService = aiService
         self.synonymService = synonymService ?? aiService
         self.defaults = defaults
@@ -531,6 +574,7 @@ final class EditorViewModel: ObservableObject {
         self.companionStore = companionStore ?? WritingCompanionStore(inMemory: runningUITestInMemory || keychainStore != nil)
         self.keychainStore = resolvedStore
         self.backupService = backupService
+        self.recordingLibrary = recordingLibrary
         self.libraryIsCloudBacked = libraryIsCloudBacked ?? { container in
             container.configurations.contains { $0.cloudKitContainerIdentifier != nil }
         }
@@ -648,7 +692,11 @@ final class EditorViewModel: ObservableObject {
         if UITestFlags.isEnabled(UITestFlags.forceSaveFailed) {
             saveStatus = .failed
         }
-        voiceMemoService.onFilesChanged = { [weak self] in self?.scheduleAutomaticBackup() }
+        voiceMemoService.onFilesChanged = { [weak self] in
+            self?.reconcileRecordings()
+            self?.scheduleAutomaticBackup()
+        }
+        recordingLibrary?.filesInProgress = { [weak self] in Set([self?.voiceMemoService.activeRecordingURL].compactMap { $0 }) }
         refreshCloudBackupState()
     }
 
@@ -2072,6 +2120,18 @@ final class EditorViewModel: ObservableObject {
         return true
     }
 
+    // MARK: - Recordings library
+
+    /// Brings `Recording` rows (iCloud) and memo files in step. Runs at launch, when
+    /// iCloud delivers changes, and after any memo change; independent of Drive.
+    /// A failed scan changes nothing and is retried on the next trigger.
+    func reconcileRecordings() {
+        guard let recordingLibrary, let modelContext else { return }
+        if (try? recordingLibrary.reconcile(context: modelContext)) != nil {
+            oversizedRecordingCount = recordingLibrary.oversizedCount
+        }
+    }
+
     // MARK: - Cloud Backup
 
     func refreshCloudBackupState() {
@@ -2164,8 +2224,9 @@ final class EditorViewModel: ObservableObject {
         }
         automaticBackupTask?.cancel()
         let delay = max(automaticBackupDebounce, BackupSchedule.retryDelay(afterFailures: automaticBackupFailures))
+        let sleep = automaticBackupSleep
         automaticBackupTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
+            try? await sleep(delay)
             guard !Task.isCancelled, let self else { return }
             automaticBackupTask = nil
             await runCloudBackupOnBackgroundIfPossible()
@@ -2674,6 +2735,7 @@ final class EditorViewModel: ObservableObject {
             title: record.baselineTitle, lyrics: record.baselineLyrics, theme: record.baselineTheme
         )
         var recoveredCopyID: String?
+        var copiedSnapshot: OpenRecordingSnapshot?
         do {
             let projects = try context.fetch(FetchDescriptor<SongProject>())
             func content(_ project: SongProject) -> OpenDraft {
@@ -2718,9 +2780,10 @@ final class EditorViewModel: ObservableObject {
                 // The song was replaced, deleted, or changed after this copy was
                 // written, or may be about to be by sync. Keep both: never write
                 // old text over a newer row.
-                // No song owns this id (checked above), so recordings found under
-                // it were left by an attempt that was killed before its save.
-                recordingSnapshot?.removeCopy(for: separateID)
+                // No song owns this id (checked above). Recordings already under it
+                // were left by an attempt killed before its save; they are kept and
+                // only missing copies are added.
+                copiedSnapshot = recordingSnapshot
                 try recordingSnapshot?.copy(to: separateID)
                 recoveredCopyID = separateID
                 recovered = SongProject(
@@ -2737,10 +2800,7 @@ final class EditorViewModel: ObservableObject {
             saveStatus = .saved
         } catch {
             context.rollback()
-            if let recoveredCopyID, let root = backupService?.recordingRecoveryRoot,
-               let folder = try? RecordingFiles.projectURL(projectId: recoveredCopyID, memosRoot: root) {
-                try? fileManager.removeItem(at: folder)
-            }
+            if let recoveredCopyID { copiedSnapshot?.removeCopy(for: recoveredCopyID) }
             errorMessage = "Could not recover the song you were editing during the last backup. It will be retried the next time the app opens."
         }
     }

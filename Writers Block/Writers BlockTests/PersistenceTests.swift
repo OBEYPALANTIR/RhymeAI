@@ -209,12 +209,12 @@ struct PersistenceTests {
         backupService.revokeSucceeds = false
         let harness = try Self.makeHarness(backupService: backupService)
         let viewModel = harness.viewModel
-        viewModel.automaticBackupDebounce = 0.05
+        let clock = ManualBackupClock(viewModel)
         viewModel.scheduleAutomaticBackup()
         #expect(viewModel.backupStatus == .pending)
 
         await viewModel.disconnectGoogleDrive()
-        try await Task.sleep(for: .milliseconds(200))
+        await clock.advance()
 
         #expect(backupService.disconnectCalls == 1)
         #expect(backupService.backgroundCalls == 0)
@@ -229,7 +229,7 @@ struct PersistenceTests {
         let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
         let harness = try Self.makeHarness(backupService: backupService)
         let viewModel = harness.viewModel
-        viewModel.automaticBackupDebounce = 0.1
+        let clock = ManualBackupClock(viewModel)
         viewModel.showWelcome = false
 
         viewModel.title = "Debounced"
@@ -240,16 +240,18 @@ struct PersistenceTests {
         #expect(viewModel.backupStatus == .pending)
         #expect(backupService.backgroundCalls == 0)
 
-        try await Task.sleep(for: .milliseconds(500))
-        #expect(backupService.backgroundCalls == 1)
+        await clock.advance { backupService.backgroundCalls == 1 }
+        #expect(clock.requestedDelays.prefix(2) == [30, 30])
+        #expect(backupService.backgroundCalls == 1, "the second save restarted the countdown; one run")
         #expect(viewModel.backupStatus == .connected(lastBackupAt: nil))
 
         backupService.failure = "offline"
         viewModel.lyrics = "third"
         #expect(viewModel.flushCurrentDraft())
-        try await Task.sleep(for: .milliseconds(500))
+        await clock.advance { clock.requestedDelays.last == 60 }
         #expect(backupService.backgroundCalls == 2)
         // The retry waits out the backoff (a minute after one failure) and the reason stays shown.
+        #expect(clock.requestedDelays.last == 60)
         #expect(viewModel.backupStatus == .failed(reason: "offline", lastBackupAt: nil))
     }
 
@@ -301,16 +303,20 @@ struct PersistenceTests {
         let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
         let harness = try Self.makeHarness(backupService: backupService)
         let viewModel = harness.viewModel
-        viewModel.automaticBackupDebounce = 0.1
+        let clock = ManualBackupClock(viewModel)
         backupService.duringBackground = { viewModel.voiceMemoService.onFilesChanged?() }
 
         viewModel.voiceMemoService.onFilesChanged?()
         viewModel.voiceMemoService.onFilesChanged?()
         #expect(viewModel.backupStatus == .pending)
 
-        try await Task.sleep(for: .milliseconds(450))
-        // One run for the two changes, then one more for the change made during it.
+        await clock.advance { backupService.backgroundCalls == 1 }
+        #expect(backupService.backgroundCalls == 1, "one run for the two changes")
+        #expect(viewModel.backupStatus == .pending, "the change made during the run asked for another")
+
+        await clock.advance { backupService.backgroundCalls == 2 }
         #expect(backupService.backgroundCalls == 2)
+        #expect(clock.requestedDelays.count == 3)
     }
 
     @Test func automaticBackupBackoffDoublesToAnHour() {
@@ -416,6 +422,31 @@ struct PersistenceTests {
 
         var context: ModelContext {
             container.mainContext
+        }
+    }
+
+    /// Stands in for the debounce/backoff timer: delays wait until the test advances.
+    @MainActor
+    private final class ManualBackupClock {
+        private(set) var requestedDelays: [TimeInterval] = []
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        init(_ viewModel: EditorViewModel) {
+            viewModel.automaticBackupSleep = { [weak self] delay in
+                guard let self else { return }
+                requestedDelays.append(delay)
+                await withCheckedContinuation { self.waiting.append($0) }
+            }
+        }
+
+        /// Lets a just-scheduled delay start waiting, ends every pending delay, then
+        /// lets the woken work run until `done` holds. Bounded by yields, not time.
+        func advance(until done: () -> Bool = { false }) async {
+            for _ in 0..<10_000 where waiting.isEmpty { await Task.yield() }
+            let woken = waiting
+            waiting = []
+            woken.forEach { $0.resume() }
+            for _ in 0..<10_000 where !done() { await Task.yield() }
         }
     }
 
