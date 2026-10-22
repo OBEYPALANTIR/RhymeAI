@@ -54,7 +54,10 @@ object BackupArchive {
         clientId: String
     ): ExportSummary {
         val included = files.filter { it.entry.isTransferable }
-        val manifest = blob.copy(recordings = included.map { it.entry })
+        // A recording not yet in a backup carries its file time as its upload time.
+        val manifest = blob.copy(
+            recordings = included.map { it.entry.let { e -> if (e.uploadedAt > 0L) e else e.copy(uploadedAt = e.modifiedAt) } }
+        )
         ZipOutputStream(output).use { zip ->
             zip.putNextEntry(ZipEntry(MANIFEST_ENTRY))
             zip.write(BackupManifest.encode(manifest, savedAtMillis, clientId))
@@ -131,11 +134,17 @@ object BackupArchive {
         // Finish or roll back an interrupted restore before reading what is on disk.
         RecordingFileStore.recoverInterruptedRestores(filesDir)
         val base = repository.snapshotLocalSyncBase()
-        val merged = SyncMerger.merge(base.blob, contents.manifest.copy(recordings = emptyList()))
-        val local = snapshotLocalRecordingFiles(filesDir, base.pendingIds).mapTo(HashSet()) { it.entry.identityKey }
+        val localFiles = snapshotLocalRecordingFiles(filesDir, base.pendingIds)
+        // Gather this device and the archive, recordings included, then resolve once.
+        val merged = SyncMerger.resolve(
+            SyncMerger.gather(base.blob.copy(recordings = localFiles.map { it.entry }), contents.manifest)
+        )
+        val local = localFiles.mapTo(HashSet()) { it.entry.identityKey }
         val trashed = snapshotTrashedRecordingIdentities(filesDir)
-        val wanted = recordingsAllowedForUpload(contents.manifest.recordings, merged.deletions, emptyList())
-            .filter { it.identityKey !in local && it.identityKey !in trashed }
+        val imported = contents.manifest.recordings.associateBy { it.identityKey }
+        val wanted = merged.recordings
+            .filter { it.identityKey in imported && it.identityKey !in local && it.identityKey !in trashed }
+            .map { imported.getValue(it.identityKey) }
         var added = 0
         for (entry in wanted) {
             val bytes = contents.recordings[entry.identityKey] ?: continue

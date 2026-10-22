@@ -175,7 +175,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_CLIENT_ID = "client_id"
     }
 
-    private val repo = ProjectRepository(application)
+    private val repo = ProjectRepository(application).also { repository ->
+        repository.recordingNamesFor = { id -> com.rhymeai.app.data.sync.knownRecordingNames(application.filesDir, id) }
+    }
     private val backupPrefs = application.getSharedPreferences(BACKUP_PREFS, android.content.Context.MODE_PRIVATE)
     private val backupClientId: String by lazy {
         backupPrefs.getString(KEY_CLIENT_ID, null)
