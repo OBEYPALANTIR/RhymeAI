@@ -276,7 +276,15 @@ struct AssistantPanelView: View {
                 Group {
                     if let targetLine = rhymeContext.targetLine {
                         VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
-                            Text("\"\(targetLine)\"")
+                            Text(viewModel.isHighlightEnabled
+                                ? AttributedString("\"")
+                                    + RhymeMatchText.attributed(
+                                        targetLine,
+                                        highlight: Color(hex: appearance.analysisRhymeHexValues[4]),
+                                        font: .system(.body, design: .serif).italic()
+                                    )
+                                    + AttributedString("\"")
+                                : AttributedString("\"\(targetLine)\""))
                                 .font(.system(.body, design: .serif))
                                 .italic()
                                 .foregroundStyle(.primary.opacity(0.9))

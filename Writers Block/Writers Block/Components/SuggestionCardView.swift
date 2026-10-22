@@ -104,45 +104,13 @@ struct SuggestionCardView: View {
 
     @ViewBuilder
     private var highlightedText: some View {
-        if highlightRhyme, let attributed = highlightLastWord(in: suggestion) {
-            Text(attributed)
+        if highlightRhyme {
+            // The appearance's violet rhyme colour: the previous fixed pale
+            // indigo was about 1.8:1 on the light appearances.
+            Text(RhymeMatchText.attributed(suggestion, highlight: Color(hex: appearance.analysisRhymeHexValues[4])))
         } else {
             Text(suggestion)
         }
-    }
-
-    private func highlightLastWord(in text: String) -> AttributedString? {
-        let regex = LyricRegex.lastWord
-        guard let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              match.numberOfRanges == 4 else {
-            return nil
-        }
-
-        var result = AttributedString()
-
-        // Prefix
-        if let prefixRange = Range(match.range(at: 1), in: text) {
-            result += AttributedString(String(text[prefixRange]))
-        }
-
-        // Last word - highlighted
-        if let wordRange = Range(match.range(at: 2), in: text) {
-            var word = AttributedString(String(text[wordRange]))
-            // The appearance's violet rhyme colour: the previous fixed pale
-            // indigo was about 1.8:1 on the light appearances.
-            let highlight = Color(hex: appearance.analysisRhymeHexValues[4])
-            word.foregroundColor = highlight
-            word.underlineStyle = .single
-            word.underlineColor = UIColor(highlight.opacity(0.6))
-            result += word
-        }
-
-        // Suffix
-        if let suffixRange = Range(match.range(at: 3), in: text) {
-            result += AttributedString(String(text[suffixRange]))
-        }
-
-        return result
     }
 }
 
