@@ -87,6 +87,18 @@ private enum EditorViewConstants {
     }
 }
 
+/// The tablet assistant's two places: the writer's show/hide choice for the
+/// inline column, and the bottom panel used below the side-column width.
+struct TabletAssistantVisibility: Equatable {
+    var inlineColumn: Bool
+    var sheet: Bool
+
+    /// Reaching the side-column width closes the panel and keeps the choice.
+    func crossing(toSideColumns sideColumns: Bool) -> Self {
+        sideColumns ? Self(inlineColumn: inlineColumn, sheet: false) : self
+    }
+}
+
 struct EditorView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
@@ -124,7 +136,9 @@ struct EditorView: View {
 
     var body: some View {
         Group {
-            if usesSideColumns {
+            // Split by size class only: crossing the side-column width keeps
+            // the same editor subtree, so the lyric view keeps focus and scroll.
+            if horizontalSizeClass == .regular {
                 iPadLayout
             } else {
                 iPhoneLayout
@@ -132,13 +146,17 @@ struct EditorView: View {
         }
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { windowWidth = $0 }
         .onChange(of: usesSideColumns, initial: true) { _, sideColumns in
-            // The sheet only belongs to the single-column layout; on reaching
-            // the two-column width the inline column takes over.
-            guard sideColumns, viewModel.showAssistantSheet else { return }
+            guard sideColumns else { return }
+            // The sheet belongs to the single-column width. Drop a pending
+            // presentation and close an open sheet; the writer's choice to
+            // show or hide the inline column stands.
             assistantSheetLifecycleTask?.cancel()
             assistantSheetIsDismissing = false
-            viewModel.showAssistantSheet = false
-            inlineAssistantVisible = true
+            let next = TabletAssistantVisibility(
+                inlineColumn: inlineAssistantVisible,
+                sheet: viewModel.showAssistantSheet
+            ).crossing(toSideColumns: true)
+            if viewModel.showAssistantSheet != next.sheet { viewModel.showAssistantSheet = next.sheet }
         }
         .foregroundStyle(appearance.palette.primaryInk)
         // The drawer covers the editor; keep VoiceOver inside the drawer.
@@ -308,7 +326,7 @@ struct EditorView: View {
     // MARK: - iPad Layout (split view)
 
     private var iPadLayout: some View {
-        HStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
+        trackingAssistantSheet(HStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
             // Editor column
             ZStack(alignment: .bottom) {
                 VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
@@ -321,13 +339,15 @@ struct EditorView: View {
                         .padding(.horizontal, RhymeAITokens.Spacing.md)
                         .padding(.bottom, RhymeAITokens.Spacing.sm)
                 }
+                .allowsHitTesting(!assistantSheetIsActive)
+                .accessibilityHidden(assistantSheetIsActive)
 
                 iPadEditorActions
                     .zIndex(EditorViewConstants.EditorLayout.floatingButtonZIndex)
             }
             .frame(maxWidth: .infinity)
 
-            if inlineAssistantVisible && !isFocusMode {
+            if inlineAssistantIsOpen {
                 Divider()
 
                 AssistantPanelView(
@@ -340,13 +360,21 @@ struct EditorView: View {
                 .transition(.opacity)
             }
         }
-        .rhymeAnimation(RhymeAITokens.Motion.state, value: editorActionsVisible)
+        // Below the side-column width the assistant is the bottom panel,
+        // over the same editor column.
+        .overlay {
+            if !usesSideColumns {
+                assistantSheetOverlay
+            }
+        }
+        .rhymeAnimation(assistantSheetTransitionAnimation, value: viewModel.showAssistantSheet)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: editorActionsVisible))
     }
 
     // MARK: - iPhone Layout (FAB + sheet)
 
     private var iPhoneLayout: some View {
-        ZStack(alignment: .bottom) {
+        trackingAssistantSheet(ZStack(alignment: .bottom) {
             AppWritingBackground()
 
             VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
@@ -370,27 +398,33 @@ struct EditorView: View {
         }
         .rhymeAnimation(assistantSheetTransitionAnimation, value: viewModel.showAssistantSheet)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: editorActionsVisible)
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
-            if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
-                keyboardHeight = frame.height
-            }
-            keyboardIsVisible = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardIsVisible = false
-            keyboardHeight = EditorViewConstants.Keyboard.hiddenHeight
-        }
-        .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
-            if isPresented {
-                assistantSheetLifecycleTask?.cancel()
-                assistantSheetIsDismissing = false
-                assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
-            } else if !assistantSheetIsDismissing {
-                holdAssistantDismissalGate()
-            }
-        }
+        .ignoresSafeArea(.keyboard, edges: .bottom))
         .simultaneousGesture(assistantBackSwipeGesture, including: assistantSheetIsActive ? .all : .subviews)
+    }
+
+    /// Keyboard and lifecycle tracking for the assistant sheet, shared by the
+    /// compact layout and the regular layout below the side-column width.
+    private func trackingAssistantSheet(_ content: some View) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+                if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                    keyboardHeight = frame.height
+                }
+                keyboardIsVisible = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardIsVisible = false
+                keyboardHeight = EditorViewConstants.Keyboard.hiddenHeight
+            }
+            .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
+                if isPresented {
+                    assistantSheetLifecycleTask?.cancel()
+                    assistantSheetIsDismissing = false
+                    assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
+                } else if !assistantSheetIsDismissing {
+                    holdAssistantDismissalGate()
+                }
+            }
     }
 
     private var assistantModalOpen: Bool {
@@ -629,7 +663,8 @@ struct EditorView: View {
         if keyboardIsVisible {
             assistantSheetLifecycleTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: UInt64(RhymeAITokens.Motion.stateDuration * 1_000_000_000))
-                guard !Task.isCancelled else { return }
+                // The window may have widened to the side-column width meanwhile.
+                guard !Task.isCancelled, !usesSideColumns else { return }
                 showAssistantSheetWithAnimation()
             }
         } else {

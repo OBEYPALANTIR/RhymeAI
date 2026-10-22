@@ -28,4 +28,12 @@ struct SideColumnWidthTests {
         #expect(RhymeAITokens.Layout.fitsSideColumn(windowWidth: windowWidth))
         #expect(windowWidth - RhymeAITokens.Layout.sideColumnWidth(for: windowWidth) >= RhymeAITokens.Layout.assistantColumnWidth)
     }
+
+    @Test(arguments: [true, false])
+    func reachingTheSideColumnWidthClosesThePanelAndKeepsTheChoice(inlineColumn: Bool) {
+        // Hidden or shown before the window narrowed, the column stays that way.
+        let narrowWithPanel = TabletAssistantVisibility(inlineColumn: inlineColumn, sheet: true)
+        #expect(narrowWithPanel.crossing(toSideColumns: true) == TabletAssistantVisibility(inlineColumn: inlineColumn, sheet: false))
+        #expect(narrowWithPanel.crossing(toSideColumns: false) == narrowWithPanel)
+    }
 }
