@@ -1,12 +1,16 @@
 package com.rhymeai.app
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.IOException
 import java.net.URL
+import java.security.KeyStore
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLException
 
@@ -49,21 +53,42 @@ class CertPinningInstrumentedTest {
         assertTlsHandshakeSucceeds("oauth2.googleapis.com")
     }
 
-    /** example.com chains to SSL.com roots and shares the Drive pin set, which has no expiration. */
+    /**
+     * example.com chains to SSL.com roots and shares the Drive pin set, which has no
+     * expiration. The control handshake uses the plain system CA store (no pins) and
+     * must succeed; through the app's config the same chain must fail pin verification.
+     */
     @Test
     fun drivePinSetRejectsAnUnpinnedChain() {
-        val connection = URL("https://example.com/").openConnection() as HttpsURLConnection
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 10_000
+        val systemCas = KeyStore.getInstance("AndroidCAStore").apply { load(null) }
+        val trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(systemCas) }
+        val unpinned = SSLContext.getInstance("TLS").apply { init(null, trust.trustManagers, null) }
+        val control = URL("https://example.com/").openConnection() as HttpsURLConnection
+        control.sslSocketFactory = unpinned.socketFactory
+        control.connectTimeout = 10_000
+        control.readTimeout = 10_000
         try {
-            connection.connect()
-            fail("example.com handshook through the Drive pin set; it must be refused")
+            control.connect()
         } catch (e: SSLException) {
-            println("CERT_PINNING_REJECTED domain=example.com error=${e.javaClass.simpleName}")
+            fail("Control: example.com should validate against the system CAs without pins: $e")
         } catch (e: IOException) {
             assumeTrue("No network connectivity to example.com; skipping pin rejection test ($e).", false)
         } finally {
-            connection.disconnect()
+            control.disconnect()
+        }
+
+        val pinned = URL("https://example.com/").openConnection() as HttpsURLConnection
+        pinned.connectTimeout = 10_000
+        pinned.readTimeout = 10_000
+        try {
+            pinned.connect()
+            fail("example.com handshook through the Drive pin set; it must be refused")
+        } catch (e: SSLException) {
+            val messages = generateSequence<Throwable>(e) { it.cause }.mapNotNull { it.message }.toList()
+            assertTrue("Expected a pin verification failure, got $messages", messages.any { "Pin verification failed" in it })
+            println("CERT_PINNING_REJECTED domain=example.com reason=pin")
+        } finally {
+            pinned.disconnect()
         }
     }
 
