@@ -101,29 +101,40 @@ below is the contract it must meet, not verified behaviour.
   (and, in Trash, its `trashedAt`); a recording tombstone, or its song's, removes
   a recording only when newer than its `uploadedAt` (a local file not yet listed
   uses its modification time). A song or recording newer than its tombstone
-  survives and the tombstone is dropped. The same rule runs in the merger, the
+  survives and the tombstone is dropped. When a song tombstone removes a
+  recording, that recording gets its own tombstone at the same time, so reviving
+  the song later cannot bring the deleted audio back (on this device, in later
+  backups, or from an offline device holding the old file). The same rule runs in the merger, the
   local apply and the upload filter (`SyncMergerTest`, `BackupServiceTest`,
   `ProjectRepositoryTest`). Recordings are immutable, so Drive's entry wins per
-  identity; a listed recording whose raw file is missing, or whose
-  `appProperties` hash differs, takes the uploading device's copy.
+  identity; a raw file counts as present only when its `appProperties` hash and
+  size both match, otherwise the uploading device's copy is uploaded again.
 - Back up versus restore: Back up now and the automatic backup merge this device
   into Drive and never change local data. Restore merges both ways, uploads
   local-only items, then downloads missing recordings. Restore and import apply
   in one repository transaction against the current data, so an edit saved
   while they run is kept. A download is written only if nothing is at its
-  destination when it commits (create-if-absent hard link); a file that appeared
-  meanwhile is kept and the download dropped. A download whose SHA-256 or size
+  destination when it commits: the name check and the move into place happen
+  under one lock that recording, import, rename and restore-from-Trash also take,
+  so a file that appeared meanwhile is kept and the download dropped. Nothing in
+  place is ever replaced or removed; an interrupted restore leaves only complete
+  recordings, and its recovery (run only at the start of Restore and Import,
+  never during Back up) just deletes the staging folder. Android hard links are
+  not used because SELinux forbids them in app storage. A download whose SHA-256 or size
   does not match the manifest is discarded and counted. Recordings over 16 MiB
   are skipped with a visible count.
-- Lost updates between devices: every manifest write is downloaded again and
-  its hash compared with the one just written; a mismatch (another device wrote
-  in between) re-merges with the newer manifest and retries, up to three times,
-  then reports "Backup conflict, will retry" and backs off. Drive v3 exposes no
+- Lost updates between devices: just before writing, the manifest list is read
+  again; if another device wrote since the backup read it, the backup merges that
+  manifest first. Every write is then downloaded again and its hash compared with
+  the one just written; a mismatch re-merges and retries, up to three times,
+  then reports "Backup conflict, will retry" and backs off. Each retry merges the
+  fresh manifest into what the earlier attempt merged, so content seen once is
+  never dropped. Drive v3 exposes no
   file ETag, so no `If-Match` is sent. Duplicate manifests are merged, the newest
   is kept, and the others are deleted only after the merged one verifies.
 - Automatic backup: one 30 s debounce after any change to songs, trash,
   tombstones or recordings (saved, imported, renamed, deleted, trashed or
-  restored) while connected, plus the background trigger when leaving the app
+  restored, including recordings added by Import) while connected, plus the background trigger when leaving the app
   (at most every 15 minutes unless a backup is pending); runs never overlap and a
   change during a run queues one more; after failures it retries at 1, 2, 4, 8 …
   minutes capped at one hour and resets on success (`BackupSchedulerTest`).
@@ -143,11 +154,14 @@ below is the contract it must meet, not verified behaviour.
   manifests, RAI1 recordings; PBKDF2-HMAC-SHA256 210,000 iterations, AES-256-GCM,
   header as AAD), read only, and never applied to this device: with a stored
   passphrase each backup decrypts it, uploads its recordings raw (in memory) and
-  merges its songs into the Drive manifest. The old manifest, its `rec_*`
-  files and the passphrase are removed only when the written manifest verifies
-  and every old song not removed by a newer tombstone is in it with the same
-  content or a newer edit, and every old recording is a raw file whose
-  `appProperties` hash and size match. Anything too large, unreadable, missing
+  merges its songs into the Drive manifest. Deleted old recordings are uploaded
+  raw too (unlisted), so nothing in the old backup is destroyed. The old
+  manifest, its `rec_*` files and the passphrase are removed only when the
+  written manifest verifies, every old song not removed by a newer tombstone is
+  in it with the same content or a newer edit, and every old recording, deleted
+  or not, is a raw file whose `appProperties` hash and size match (live ones
+  also listed with that hash); cleanup deletes only encrypted files whose raw
+  copy was verified. Anything too large, unreadable, missing
   or held under the same name with different bytes keeps the old backup, the
   passphrase and the "Migrate older encrypted backup…" row, and is reported ("2
   older recordings could not be moved; the older backup was kept."). Without a
@@ -166,7 +180,9 @@ below is the contract it must meet, not verified behaviour.
 - Certificate pinning: Android pins `www.googleapis.com` and
   `oauth2.googleapis.com` fail-closed (no expiration) to GTS Root R4 with GTS
   R1-R3 and the GlobalSign cross-sign anchor as backups (verified 2026-10-22);
-  `CertPinningInstrumentedTest` also proves the set refuses a chain outside it.
+  `CertPinningInstrumentedTest` also shows the set refuses a chain outside it
+  with a pin-verification failure, while the same chain validates against the
+  system CAs without pins.
   Play Services fetches the Drive token outside the app.
 - iOS only (pending the companion PR): iCloud status shows a reason (no iCloud
   account with Open Settings, restricted, local-only fallback, temporarily

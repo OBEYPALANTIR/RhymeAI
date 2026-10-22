@@ -86,17 +86,21 @@ Back up now and the automatic backup merge this device into Drive and never
 change local data. The automatic backup runs 30 seconds after the last change
 to songs, trash, tombstones or recordings while Drive is connected, and when the
 app goes to the background (at most every 15 minutes unless a backup is
-pending); runs never overlap, and after a failure it retries after 1, 2, 4, 8,
-16 and 32 minutes, then hourly, and resets on success. Every manifest write is
-downloaded again and its hash compared; if another device wrote in between, the
-backup merges again (up to three times, then "Backup conflict, will retry"), and
+pending); recordings added by Import trigger it too; runs never overlap, and after a failure it retries after 1, 2, 4, 8,
+16 and 32 minutes, then hourly, and resets on success. Just before writing, the
+manifest is checked for writes by another device and merged if there were; every
+write is then downloaded again and its hash compared; on a mismatch the backup
+merges again, keeping everything earlier attempts saw (up to three times, then
+"Backup conflict, will retry"), and
 duplicate manifests are merged and the extras removed after verification.
 Restore merges both ways, uploads local-only items, then downloads missing
 recordings, applying everything in one transaction that keeps edits saved
-meanwhile. Per project id the newest `updatedAt` wins and per deletion identity
+meanwhile; a download moves into place only if its name is still free, under the
+same lock that recording, import, rename and restore-from-Trash take. Per project id the newest `updatedAt` wins and per deletion identity
 the newest `deletedAt` wins; a tombstone removes a song only when newer than its
 `updatedAt`, and a recording only when newer than its `uploadedAt`, otherwise the
-tombstone is dropped. Recordings are immutable: Drive's copy wins per identity, a
+tombstone is dropped; a recording removed by a song tombstone keeps a tombstone
+of its own, so reviving the song never brings the deleted audio back. Recordings are immutable: Drive's copy wins per identity, a
 download is written only where no file exists when it commits, and a download
 whose SHA-256 does not match the manifest is discarded and counted. Recordings
 over 16 MiB are skipped with a visible count.
@@ -104,9 +108,10 @@ over 16 MiB are skipped with a visible count.
 The older passphrase-encrypted backup (`rhymeai-projects.json` under RAI3/RAI2/RAI1,
 recordings under RAI1) is only read, and only into Drive: with a stored
 passphrase each backup decrypts it, uploads its recordings raw and merges its
-songs into the v4 manifest without touching this device. The old files and the
-passphrase are removed only when every old song and recording is verified in
-the new backup; anything that cannot move keeps them, keeps "Migrate older
+songs into the v4 manifest without touching this device; deleted old recordings
+are kept raw. The old files and the passphrase are removed only when every old
+song and every old recording, deleted ones included, is verified in the new
+backup; anything that cannot move keeps them, keeps "Migrate older
 encrypted backup…" available and is counted in Settings. Without a passphrase
 the old files are left alone and that row asks for it once.
 
@@ -124,15 +129,15 @@ The backup regressions run in `:app:testDebugUnitTest`:
 | --- | --- | --- |
 | V-1 | `BackupManifestTest.canonicalFormAndHashMatchTheSharedFixture`, `fixtureDecodesAndReEncodesByteForByte`, `canonicalEscapesOnlyTheContractCharactersAndSortsKeysByCodePoint` | Canonical JSON and `manifestSha256` match the shared fixture byte for byte. |
 | V-2 | `BackupManifestTest.hashMismatchIsRefused`, `newerVersionIsRefusedEvenWithAValidHash`; `BackupServiceTest.hashMismatchedManifestIsRefusedAndNeverOverwrittenOrMerged` | A damaged or newer manifest is neither merged nor overwritten. |
-| V-3 | `BackupServiceTest.backupMergesIntoDriveWritesRawRecordingsAndLeavesThisDeviceAlone`, `pendingLocalDeletionIsNeverUploaded` | Backup writes v4 and raw recordings with `appProperties`, uploads each once, skips pending deletions, and leaves local data alone. |
-| V-4 | `BackupServiceTest.restoreMergesBothWaysAndDownloadsOnlyVerifiedMissingRecordings`, `restoreNeverReplacesALocalRecording`; `RecordingSyncTest.restoreCommitKeepsADestinationThatAppearedAfterPlanning` | Restore merges both ways; hash-mismatched downloads are dropped; local files are never replaced, even ones that appear mid-restore. |
-| V-5 | `BackupServiceTest.migrationDecisionTable`, `storedPassphraseMigratesIntoDriveOnlyVerifiesThenDeletesTheOlderBackup`, `anUnmovableOlderRecordingKeepsTheOlderBackupAndThePassphrase`, `aDifferentRecordingUnderTheSameNameIsNotCountedAsMoved` | Migration merges into Drive only and removes the old backup only after every song and recording is verified. |
+| V-3 | `BackupServiceTest.backupMergesIntoDriveWritesRawRecordingsAndLeavesThisDeviceAlone`, `pendingLocalDeletionIsNeverUploaded`, `aRawFileWithoutMatchingMetadataIsUploadedAgain`, `backUpLeavesAnInterruptedRestoreAloneAndRestoreFinishesIt` | Backup writes v4 and raw recordings with `appProperties`, uploads each once, skips pending deletions, and leaves local data alone. |
+| V-4 | `BackupServiceTest.restoreMergesBothWaysAndDownloadsOnlyVerifiedMissingRecordings`, `restoreNeverReplacesALocalRecording`; `RecordingSyncTest.restoreCommitKeepsADestinationThatAppearedAfterPlanning`, `aFailedCommitKeepsEverythingAlreadyInPlace`, `recoveryRemovesOnlyTheStagingFolder` | Restore merges both ways; hash-mismatched downloads are dropped; local files are never replaced, even ones that appear mid-restore. |
+| V-5 | `BackupServiceTest.migrationDecisionTable`, `storedPassphraseMigratesIntoDriveOnlyVerifiesThenDeletesTheOlderBackup`, `anUnmovableOlderRecordingKeepsTheOlderBackupAndThePassphrase`, `aDifferentRecordingUnderTheSameNameIsNotCountedAsMoved`, `aDeletedOlderRecordingIsPreservedRawBeforeTheOlderBackupIsRemoved`, `aDeletedOlderRecordingThatCannotMoveKeepsTheOlderBackup` | Migration merges into Drive only and removes the old backup only after every song and recording is verified. |
 | V-6 | `BackupServiceTest.independentIosShapedVectorsMigrateFromEveryEnvelopeVersion` | iOS-shaped RAI1, RAI2 and RAI3 backups migrate with their tombstones. |
 | V-7 | `BackupSchedulerTest` (all), `BackupScheduleTest.backoffDoublesFromOneMinuteAndCapsAtOneHour` | Debounce, coalescing, backoff, leave-app interval and consent retry. |
 | V-8 | `BackupArchiveTest.exportThenImportYieldsTheSameManifest`, `importMergesIntoTheLibraryAndAddsOnlyMissingRecordings`, `archivesWithUnsafeOrForeignEntriesAreRejected` | Export → Import yields the same manifest and merges; unsafe archives are refused. |
-| V-9 | `BackupServiceTest.writerThatLandsBetweenOurWriteAndReadBackIsMergedNotLost`, `aWriterThatNeverStopsIsReportedAsAConflict`, `duplicateManifestsAreMergedAndTheOlderOnesRemovedAfterVerification` | Lost-update protection and duplicate-manifest reconciliation. |
+| V-9 | `BackupServiceTest.writerThatLandsBetweenOurWriteAndReadBackIsMergedNotLost`, `contentSeenInAnEarlierAttemptSurvivesAStaleWriterInBetween`, `aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite`, `aWriterThatNeverStopsIsReportedAsAConflict`, `duplicateManifestsAreMergedAndTheOlderOnesRemovedAfterVerification` | Lost-update protection and duplicate-manifest reconciliation. |
 | V-10 | `RealDriveClientTest` | Drive listing follows every page and keeps `appProperties`; revoke posts the token. |
-| T-1 | `SyncMergerTest.tombstonesConvergeByTimestampPrecedence`; `BackupServiceTest.tombstonesApplyByTimestampPrecedence`, `recordingTombstonesApplyByUploadTime` | Tombstones remove only older songs and recordings; newer ones survive and drop the tombstone. |
+| T-1 | `SyncMergerTest.tombstonesConvergeByTimestampPrecedence`; `BackupServiceTest.tombstonesApplyByTimestampPrecedence`, `recordingTombstonesApplyByUploadTime`, `revivingASongDoesNotBringBackItsDeletedRecordings` | Tombstones remove only older songs and recordings; newer ones survive and drop the tombstone. |
 | T-3 | `ProjectRepositoryTest.permanentDeleteWritesTombstoneBeforeSyncAndSurvivesRepositoryReopen` | A project tombstone is persisted, survives reopen and removes older copies. |
 | T-4 | `ProjectRepositoryTest.expiryPurgeWritesTombstonesForBothSongsBeforeRemoteMerge` | Expiry purge persists a tombstone for each purged song. |
 | T-5 | `ProjectRepositoryTest.deletionCommittedAfterBaseReadSurvivesSyncApplyAndLaterUpload` | A Delete Forever during the network window is not lost. |
@@ -141,14 +146,19 @@ The backup regressions run in `:app:testDebugUnitTest`:
 | C-2 | `SyncBlobCryptoTest.manifestHeaderBodyAndTagTamperingFailsClosed`, `unknownAndTruncatedManifestHeadersAreDistinctFromAuthenticationFailure` | Tampered or unknown legacy envelopes fail closed during migration. |
 
 The instrumented `BackupFlowInstrumentedTest` and `BackupSectionUiTest` cover the
-Settings rows, the first-run sheet, Disconnect, and the tombstone and recording
-backup triggers through the real view model with a fake Drive;
-`CertPinningInstrumentedTest.drivePinSetRejectsAnUnpinnedChain` checks the Drive
-pins fail closed. The earlier v2/v3 write-path regressions (`DriveSyncServiceTest`,
-`ReceivingDeviceUploadTest`, `DriveSyncUiStateTest`) were removed with the
-encrypted write path; their upload, tombstone, pending-deletion, consent-retry
-and background-interval cases are ported to the tests above,
-`LargeRecordingSyncTest` and `RecordingSyncTest`.
+Settings rows, the first-run sheet, Disconnect, and the tombstone, recording and
+recording-only-import backup triggers through the real view model with a fake
+Drive; `CertPinningInstrumentedTest.drivePinSetRejectsAnUnpinnedChain` checks the
+Drive pins fail closed with a pin-verification failure. The earlier v2/v3
+write-path suites (`DriveSyncServiceTest`, `ReceivingDeviceUploadTest`,
+`DriveSyncUiStateTest`) were removed with the encrypted write path. Ported with
+A3 timestamps: pending deletions never uploaded, a remote tombstone arriving
+during uploads is merged before the final write and stops a second upload
+(`aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite`),
+consent retry and the background interval (`BackupSchedulerTest`), oversize
+recordings (`LargeRecordingSyncTest`). Their encryption-write cases were dropped
+with that write path, and their tombstone-always-wins expectations were replaced
+by the timestamp rule.
 
 Release builds are minified. To produce signed release artifacts, create a gitignored
 `android/keystore.properties`:

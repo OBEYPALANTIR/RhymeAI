@@ -57,13 +57,15 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
   appears at launch when Drive is connected and the library is empty.
 - **Back up now** and the automatic backup (30 seconds after the last change to
   songs, trash, tombstones or recordings, and when leaving the app) merge this
-  device into Drive and never change local data. Each manifest write is read
-  back and its hash compared; if another device wrote in between, the backup
-  merges again (up to three times, then "Backup conflict, will retry").
+  device into Drive and never change local data. The manifest is re-checked
+  just before each write and read back after it; if another device wrote in
+  between, the backup merges again, keeping what earlier attempts saw (up to
+  three times, then "Backup conflict, will retry").
   Failures retry after 1, 2, 4, 8 … minutes, capped at an hour.
 - **Restore from backup** merges both ways, uploads local-only items, then
   downloads recordings this device lacks, keeping any edit saved meanwhile. A
-  download is written only where no file exists when it commits; one whose
+  download is written only where no file exists when it commits, and nothing
+  already in place is ever replaced or removed; one whose
   SHA-256 does not match the manifest is discarded and counted. Recordings over
   16 MiB are skipped with a visible count.
 - **Disconnect** revokes the grant at `https://oauth2.googleapis.com/revoke`
@@ -81,7 +83,8 @@ Tombstones apply by timestamp: Delete Forever and expiry purge write a project
 tombstone in the same DataStore transaction that removes the song, and a
 tombstone removes a song only when it is newer than the song's `updatedAt` (a
 recording: newer than its `uploadedAt`). A copy edited after the deletion
-survives and the tombstone is dropped. Android does not erase recording bytes
+survives and the tombstone is dropped, but the recordings that tombstone removed
+keep tombstones of their own. Android does not erase recording bytes
 already in Drive when a song is deleted.
 
 The Drive and revoke hosts are certificate-pinned fail-closed (GTS Root R4 with
@@ -97,7 +100,7 @@ device:
 
 | Old backup in Drive | Passphrase stored on the device | What happens |
 | --- | --- | --- |
-| yes | yes | On each backup: decrypt, upload the old recordings raw, merge the old songs into v4, read v4 back and check its hash. Only when every old song is there (same content or a newer edit) and every old recording is a raw file with matching hash and size are the old manifest, the old recordings and the passphrase removed. Status: "Your older encrypted backup was moved to the new format." Otherwise everything old is kept and Settings counts what could not move. |
+| yes | yes | On each backup: decrypt, upload every old recording raw (deleted ones too, unlisted), merge the old songs into v4, read v4 back and check its hash. Only when every old song is there (same content or a newer edit) and every old recording, deleted or not, is a raw file with matching hash and size are the old manifest, those verified old recordings and the passphrase removed. Status: "Your older encrypted backup was moved to the new format." Otherwise everything old is kept and Settings counts what could not move. |
 | yes | no | The old files are left untouched; v4 starts from local data. Settings shows "Migrate older encrypted backup…", which asks for the passphrase once (it is not stored); cancelling keeps the row. |
 | no | yes | The stored passphrase is removed. |
 | no | no | Nothing to do. |
