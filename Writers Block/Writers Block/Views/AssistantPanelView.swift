@@ -326,7 +326,12 @@ struct AssistantPanelView: View {
                         let summary = Text("\(viewModel.rhymeScheme.label) \u{00b7} \(viewModel.rhymeType.shortName) \u{00b7} \(viewModel.rhymeComplexity.label)")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(appearance.palette.action)
-                        if dynamicTypeSize.isAccessibilitySize {
+                        if !isInline {
+                            // The compact sheet keeps its original row.
+                            title
+                            Spacer()
+                            summary
+                        } else if dynamicTypeSize.isAccessibilitySize {
                             // Too wide for one row: stack and let both wrap.
                             VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.tight) {
                                 title
