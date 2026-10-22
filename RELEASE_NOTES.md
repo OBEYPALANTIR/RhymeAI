@@ -10,6 +10,14 @@ In the Song Notebook, opening a saved version moves it to the top with
 "Restore this version" right under it, so the button stays in view at large
 text sizes. The Settings Done button is easier to read.
 
+## Song titles stay on one line (Android)
+
+Pressing Enter in the song title now moves to the lyrics instead of adding a line break, and line breaks pasted into a title are dropped. A title saved with a line break earlier loses it when the song is opened and edited.
+
+## Memory warning only on models the phone cannot fit (Android)
+
+On phones with 10 GB of RAM or more, the AI setup no longer warns that Gemma E2B needs more memory; the warning now appears only on Gemma E4B when the phone has less than 10 GB.
+
 ## iPad works in narrow windows and reads better with VoiceOver (iOS)
 
 In Split View, Stage Manager and resized windows narrower than 760 points, the

@@ -51,6 +51,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
@@ -109,12 +111,22 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
@@ -141,6 +153,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -906,11 +919,19 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     BasicTextField(
                         value = viewModel.title,
                         onValueChange = { viewModel.onTitleChanged(it) },
+                        // Not singleLine so long titles wrap; Enter (soft Next or a hardware key) moves to the lyrics.
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                         textStyle = titleStyle,
                         cursorBrush = SolidColor(colorScheme.primary),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("songTitleEditor")
+                            .onPreviewKeyEvent {
+                                if (!isTitleSubmitKey(it.type, it.key, modified = it.isShiftPressed || it.isCtrlPressed || it.isAltPressed || it.isMetaPressed)) return@onPreviewKeyEvent false
+                                focusManager.moveFocus(FocusDirection.Down)
+                                true
+                            }
                             .onSizeChanged { titleHeightPx = it.height },
                         decorationBox = { innerTextField ->
                             Box {
@@ -1861,3 +1882,11 @@ private fun Modifier.animatedWidth(width: androidx.compose.runtime.State<android
         val placeable = measurable.measure(constraints.copy(minWidth = w, maxWidth = w))
         layout(w, placeable.height) { placeable.placeRelative(0, 0) }
     }
+
+/**
+ * True only for an unmodified Enter or numpad Enter key-down: the hardware equivalent of the
+ * keyboard's Next action. Key-up and any modifier (Shift, Ctrl, Alt, Meta) fall through so
+ * ordinary typing and shortcuts are untouched.
+ */
+internal fun isTitleSubmitKey(type: KeyEventType, key: Key, modified: Boolean): Boolean =
+    type == KeyEventType.KeyDown && !modified && (key == Key.Enter || key == Key.NumPadEnter)
