@@ -19,6 +19,11 @@ final class AccessibilityAuditUITests: XCTestCase {
     func testEditorWithInlineAssistantPassesAudit() throws {
         let app = launch(["--ui-test-seed-prosody-song"])
         XCTAssertTrue(app.buttons["hideInlineAssistantButton"].waitForExistence(timeout: 8))
+        // Expanded, so the Rhyme Scheme, Rhyme Density and Complexity rows are audited too.
+        let expand = app.buttons["Expand rhyme options"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        expand.tap()
+        XCTAssertTrue(app.buttons["Collapse rhyme options"].waitForExistence(timeout: 5))
         audit(app, "editor-inline-assistant")
     }
 
@@ -49,7 +54,7 @@ final class AccessibilityAuditUITests: XCTestCase {
     func testSettingsGeneralTabPassesAudit() throws {
         let app = launch(["--ui-test-seed-prosody-song"])
         openSettings(app)
-        audit(app, "settings-general")
+        audit(app, "settings-general", dimmedBackgroundText: 2)
     }
 
     @MainActor
@@ -57,7 +62,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         let app = launch(["--ui-test-seed-prosody-song"])
         openSettings(app)
         app.buttons["Editor"].tap()
-        audit(app, "settings-editor")
+        audit(app, "settings-editor", dimmedBackgroundText: 2)
     }
 
     @MainActor
@@ -90,7 +95,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Word inspector"].waitForExistence(timeout: 5))
         // The rhyme chips load off the main thread; audit the finished sheet.
         XCTAssertTrue(app.buttons["light"].waitForExistence(timeout: 20))
-        audit(app, "word-inspector")
+        audit(app, "word-inspector", dimmedBackgroundText: 6)
     }
 
     // MARK: - Helpers
@@ -130,7 +135,12 @@ final class AccessibilityAuditUITests: XCTestCase {
     }
 
     @MainActor
-    private func audit(_ app: XCUIApplication, _ surface: String) {
+    /// `dimmedBackgroundText` is how many unlabelled text detections the
+    /// dimmed screen behind a modal sheet produces on this surface, measured
+    /// from runs (the audit gives those issues no element or frame). Only that
+    /// many are filtered; one more, such as new unlabelled text inside the
+    /// sheet, fails the test.
+    private func audit(_ app: XCUIApplication, _ surface: String, dimmedBackgroundText: Int = 0) {
         // Let presentation animations settle so frames are final.
         Thread.sleep(forTimeInterval: 1)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
@@ -139,12 +149,17 @@ final class AccessibilityAuditUITests: XCTestCase {
         add(screenshot)
 
         var report: [String] = []
+        var backgroundTextLeft = dimmedBackgroundText
         do {
             try app.performAccessibilityAudit { issue in
                 let line = "\(Self.name(of: issue.auditType)) | \(issue.compactDescription) | \(issue.element == nil ? issue.detailedDescription + " | " : "")"
                     + "\(issue.element?.elementType.rawValue ?? 0) '\(issue.element?.label ?? "")' "
                     + "id='\(issue.element?.identifier ?? "")' \(issue.element.map { NSCoder.string(for: $0.frame) } ?? "")"
-                let reason = Self.knownNoiseReason(issue, in: app)
+                var reason = Self.knownNoiseReason(issue, in: app)
+                if reason == nil, issue.element == nil, issue.auditType == .elementDetection, backgroundTextLeft > 0 {
+                    backgroundTextLeft -= 1
+                    reason = "text of the dimmed screen behind the modal sheet (\(dimmedBackgroundText) expected)"
+                }
                 report.append((reason.map { "FILTERED (\($0)) " } ?? "ISSUE ") + line)
                 return reason != nil
             }
@@ -166,15 +181,7 @@ final class AccessibilityAuditUITests: XCTestCase {
     /// Each entry states why it is filtered.
     @MainActor
     private static func knownNoiseReason(_ issue: XCUIAccessibilityAuditIssue, in app: XCUIApplication) -> String? {
-        guard let element = issue.element else {
-            // Only seen on screens with a sheet up: text of the dimmed view
-            // behind it, which VoiceOver cannot reach while the sheet is modal.
-            let sheetIsUp = app.navigationBars["Settings"].exists || app.staticTexts["Word inspector"].exists
-            if issue.auditType == .elementDetection, sheetIsUp {
-                return "text behind a modal sheet"
-            }
-            return nil
-        }
+        guard let element = issue.element else { return nil }
         let label = element.label
         // XCUITest on this OS still lists SwiftUI elements marked
         // accessibilityHidden (the Trash header's hidden grid glyph shows up
