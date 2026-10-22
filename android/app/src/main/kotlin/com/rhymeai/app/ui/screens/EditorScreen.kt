@@ -120,6 +120,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -924,8 +925,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             .fillMaxWidth()
                             .testTag("songTitleEditor")
                             .onPreviewKeyEvent {
-                                if (it.key != Key.Enter && it.key != Key.NumPadEnter) return@onPreviewKeyEvent false
-                                if (it.type == KeyEventType.KeyDown) focusManager.moveFocus(FocusDirection.Down)
+                                if (!isTitleSubmitKey(it.type, it.key, it.isShiftPressed)) return@onPreviewKeyEvent false
+                                focusManager.moveFocus(FocusDirection.Down)
                                 true
                             }
                             .onSizeChanged { titleHeightPx = it.height },
@@ -1878,3 +1879,10 @@ private fun Modifier.animatedWidth(width: androidx.compose.runtime.State<android
         val placeable = measurable.measure(constraints.copy(minWidth = w, maxWidth = w))
         layout(w, placeable.height) { placeable.placeRelative(0, 0) }
     }
+
+/**
+ * True only for an unmodified Enter or numpad Enter key-down: the hardware equivalent of the
+ * keyboard's Next action. Key-up and Shift+Enter fall through so ordinary typing is untouched.
+ */
+internal fun isTitleSubmitKey(type: KeyEventType, key: Key, shiftPressed: Boolean): Boolean =
+    type == KeyEventType.KeyDown && !shiftPressed && (key == Key.Enter || key == Key.NumPadEnter)
