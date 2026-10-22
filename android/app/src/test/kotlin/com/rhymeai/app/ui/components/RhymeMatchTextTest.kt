@@ -35,6 +35,13 @@ class RhymeMatchTextTest {
     }
 
     @Test
+    fun `contractions and possessives are styled whole`() {
+        assertEquals(listOf("you're"), styledText(rhymeMatchAnnotated("I know you're", violet)))
+        assertEquals(listOf("you’re"), styledText(rhymeMatchAnnotated("I know you’re", violet)))
+        assertEquals(listOf("band's"), styledText(rhymeMatchAnnotated("\"Loud as the band's\"", violet)))
+    }
+
+    @Test
     fun `single word line is styled whole`() {
         assertEquals(listOf("Fire"), styledText(rhymeMatchAnnotated("Fire", violet)))
     }
