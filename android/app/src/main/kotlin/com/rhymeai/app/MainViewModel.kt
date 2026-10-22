@@ -151,6 +151,9 @@ internal fun shouldDeferBackgroundDriveSync(
 private fun plural(count: Int, noun: String): String =
     if (count == 1) "$count $noun" else "$count ${noun}s"
 
+/** A song title is one line: line breaks from Enter, paste or older saves are dropped; spaces stay. */
+internal fun sanitizedTitle(title: String): String = title.filterNot { it == '\n' || it == '\r' }
+
 data class SuggestionInsertion(val id: Long, val range: TextRange, val lyrics: String)
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -177,7 +180,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Editor state
-    var title by mutableStateOf("")
+    private var titleState by mutableStateOf("")
+    // Every path into the editor (typing, paste, song load, version restore, import) drops line breaks.
+    var title: String
+        get() = titleState
+        set(value) { titleState = sanitizedTitle(value) }
     var lyricsFieldValue by mutableStateOf(TextFieldValue(""))
     var theme by mutableStateOf("")
 

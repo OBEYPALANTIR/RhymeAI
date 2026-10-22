@@ -1,5 +1,9 @@
 # Release Notes
 
+## Song titles stay on one line (Android)
+
+Pressing Enter in the song title now moves to the lyrics instead of adding a line break, and line breaks pasted into a title are dropped. A title saved with a line break earlier loses it when the song is opened and edited.
+
 ## iPad works in narrow windows and reads better with VoiceOver (iOS)
 
 In Split View, Stage Manager and resized windows narrower than 760 points, the
