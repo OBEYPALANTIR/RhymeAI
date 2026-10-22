@@ -92,9 +92,9 @@ enum RecordingFiles {
     }
 
     /// All trashed recordings across every project, newest deletion first.
-    nonisolated static func trashedMemos() -> [TrashedVoiceMemo] {
+    nonisolated static func trashedMemos(in trashRoot: URL = memosTrashRoot()) -> [TrashedVoiceMemo] {
         guard let folders = try? FileManager.default.contentsOfDirectory(
-            at: memosTrashRoot(),
+            at: trashRoot,
             includingPropertiesForKeys: nil,
             options: .skipsHiddenFiles
         ) else { return [] }
@@ -232,22 +232,45 @@ enum RecordingFiles {
     }
 
     nonisolated static func modificationDate(_ url: URL) -> Date {
-        ((try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate) ?? Date()
+        var fresh = url
+        fresh.removeAllCachedResourceValues()
+        return ((try? fresh.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate) ?? Date()
     }
 
-    /// Writes `data` beside `target`, then moves it into place only if nothing is
-    /// there at that moment. False (and nothing changed) when a file already exists.
+    /// Where restored audio is written before it is verified and moved into
+    /// place; beside the memos root, so the move is a rename on the same volume.
+    nonisolated static func stagingRoot(for memosRoot: URL) -> URL {
+        memosRoot.deletingLastPathComponent().appendingPathComponent("recording-staging", isDirectory: true)
+    }
+
+    /// Recovery for an interrupted restore or import, run only as one starts:
+    /// anything still staged never reached the memo folders, so it is dropped.
+    nonisolated static func clearStaging(for memosRoot: URL) {
+        try? FileManager.default.removeItem(at: stagingRoot(for: memosRoot))
+    }
+
+    /// Stages `data`, verifies the staged bytes, then moves them to `target` only
+    /// if that name is still free. Never replaces or removes a file already in
+    /// place; false when one is there. Main-actor isolated, so it is serialised
+    /// with memo rename, trash and restore-from-Trash.
     @discardableResult
-    nonisolated static func commitIfAbsent(_ data: Data, to target: URL, modifiedAt: Date? = nil) throws -> Bool {
-        let folder = target.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let temp = folder.appendingPathComponent(".\(UUID().uuidString).partial")
-        try data.write(to: temp, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: temp) }
-        if let modifiedAt { try? FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: temp.path) }
+    static func commitIfAbsent(_ data: Data, sha256: String, to target: URL, memosRoot: URL, modifiedAt: Date? = nil) throws -> Bool {
+        let staging = stagingRoot(for: memosRoot)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let staged = staging.appendingPathComponent("\(UUID().uuidString).partial")
+        // Only the staged name is ever removed; after a move it no longer exists.
+        defer { try? FileManager.default.removeItem(at: staged) }
+        try data.write(to: staged, options: .atomic)
+        guard let written = try? Data(contentsOf: staged), written.count == data.count,
+              RecordingBackupManifest.sha256Hex(written) == sha256 else {
+            throw SyncValidationError.invalidRecording
+        }
+        if let modifiedAt { try? FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: staged.path) }
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard !FileManager.default.fileExists(atPath: target.path) else { return false }
         do {
-            // link(2) fails with EEXIST rather than replacing: create-if-absent in one step.
-            try FileManager.default.linkItem(at: temp, to: target)
+            // FileManager's move refuses an existing destination rather than replacing it.
+            try FileManager.default.moveItem(at: staged, to: target)
             return true
         } catch CocoaError.fileWriteFileExists {
             return false
