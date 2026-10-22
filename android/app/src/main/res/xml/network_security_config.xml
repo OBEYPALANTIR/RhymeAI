@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Pins the AI provider domains to their CA SPKIs (verified 2026-06-12: all
-     three chain to Google Trust Services, cross-signed by GlobalSign). The
+<!-- Pins the AI provider and Google Drive backup domains to their CA SPKIs.
+     All chain to Google Trust Services, cross-signed by GlobalSign (AI
+     providers verified 2026-06-12; the Drive and token-revoke hosts verified
+     2026-10-22 through GTS Root R4). Play Services fetches the Drive token
+     itself; only the app's own Drive and revoke requests are pinned here. The
      expiration makes pinning fail-open to default trust so an upstream CA
      migration can't permanently break the app; ISRG/DigiCert are backups in
      case OpenAI/Anthropic hop CAs before then. -->
@@ -9,6 +12,8 @@
         <domain includeSubdomains="false">generativelanguage.googleapis.com</domain>
         <domain includeSubdomains="false">api.openai.com</domain>
         <domain includeSubdomains="false">api.anthropic.com</domain>
+        <domain includeSubdomains="false">www.googleapis.com</domain>
+        <domain includeSubdomains="false">oauth2.googleapis.com</domain>
         <pin-set expiration="2027-06-12">
             <!-- GTS Root R1 -->
             <pin digest="SHA-256">hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</pin>

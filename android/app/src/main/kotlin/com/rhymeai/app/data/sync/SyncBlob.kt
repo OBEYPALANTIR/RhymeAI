@@ -19,13 +19,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * The complete, sync-able snapshot of a user's library. Serialized as a single
- * `rhymeai-projects.json` blob in Drive's hidden `appDataFolder`. One blob per
- * user; every device pushes and pulls the whole thing.
- *
- * Schema version is bumped only if the on-disk shape needs to evolve; readers
- * older than `version` should fall back to local-only operation rather than
- * try to interpret unknown fields.
+ * The complete backup snapshot of a user's library, held in memory. Drive and
+ * export files carry it as [BackupManifest] v4; this serializer only reads the
+ * legacy v1-v3 JSON found inside an older encrypted `rhymeai-projects.json`.
  */
 @Serializable(with = SyncBlobSerializer::class)
 data class SyncBlob(
@@ -39,6 +35,7 @@ data class SyncBlob(
 ) {
     companion object {
         const val CURRENT_VERSION = 3
+        /** Encrypted pre-v4 manifest; read only to migrate it. */
         const val DRIVE_FILE_NAME = "rhymeai-projects.json"
         const val DRIVE_MIME_TYPE = "application/json"
     }
@@ -161,9 +158,9 @@ data class RecordingManifestEntry(
         get() = "$projectId/$fileName"
 
     /**
-     * Whether this device can move the recording. Recordings are encrypted
-     * whole in memory, so a larger entry stays valid in the manifest (another
-     * device may hold it) but is never uploaded or downloaded here.
+     * Whether this device can move the recording. Recordings are held whole in
+     * memory, so a larger entry stays valid in the manifest (another device may
+     * hold it) but is never uploaded or downloaded here.
      */
     val isTransferable: Boolean
         get() = sizeBytes <= MAX_SYNC_RECORDING_BYTES
@@ -181,6 +178,7 @@ data class RecordingManifestEntry(
         const val DRIVE_PREFIX = "rec_"
         const val MIME_TYPE = "application/octet-stream"
 
+        /** RAI1-encrypted pre-v4 name; v4 uses [BackupManifest.recordingDriveName]. */
         fun driveNameFor(projectId: String, fileName: String): String {
             return "$DRIVE_PREFIX${projectId}_${fileName}.enc"
         }
@@ -276,15 +274,14 @@ object SyncMerger {
         local: List<RecordingManifestEntry>,
         remote: List<RecordingManifestEntry>
     ): List<RecordingManifestEntry> {
+        // Recordings are immutable once written (a rename is a new identity) and v4
+        // carries no recording timestamps, so the copy already backed up wins.
         val byIdentity = HashMap<String, RecordingManifestEntry>(local.size + remote.size)
         for (entry in local) {
             byIdentity[entry.identityKey] = entry
         }
         for (entry in remote) {
-            val existing = byIdentity[entry.identityKey]
-            if (existing == null || entry.modifiedAt > existing.modifiedAt) {
-                byIdentity[entry.identityKey] = entry
-            }
+            byIdentity[entry.identityKey] = entry
         }
         return byIdentity.values.toList()
     }

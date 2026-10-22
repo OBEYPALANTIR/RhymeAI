@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rhymeai.app.data.model.AppAppearance
@@ -25,9 +26,22 @@ import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.CorruptLibraryException
 import com.rhymeai.app.data.repository.MissingActiveProjectException
+import com.rhymeai.app.data.sync.BackupArchive
+import com.rhymeai.app.data.sync.BackupManifest
+import com.rhymeai.app.data.sync.BackupProbe
+import com.rhymeai.app.data.sync.BackupSchedule
+import com.rhymeai.app.data.sync.BackupStatus
+import com.rhymeai.app.data.sync.DamagedBackupException
+import com.rhymeai.app.data.sync.DriveAuthorizer
+import com.rhymeai.app.data.sync.DriveClient
 import com.rhymeai.app.data.sync.DriveSyncService
-import com.rhymeai.app.data.sync.DRIVE_SYNC_PASSPHRASE_REQUIREMENT_MESSAGE
+import com.rhymeai.app.data.sync.PlayServicesDriveAuthorizer
+import com.rhymeai.app.data.sync.ProbeResult
+import com.rhymeai.app.data.sync.RealDriveClient
 import com.rhymeai.app.data.sync.SyncResult
+import com.rhymeai.app.data.sync.UnsupportedBackupVersionException
+import com.rhymeai.app.data.sync.recordingsAllowedForUpload
+import com.rhymeai.app.data.sync.snapshotLocalRecordingFiles
 import com.rhymeai.app.data.repository.EncryptedPrefsKeyStore
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
@@ -48,6 +62,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
@@ -103,50 +120,30 @@ data class RhymeContext(
     val currentSectionRef: SectionRef? = null
 )
 
-internal enum class DriveSyncAction {
-    Sync,
-    Restore
+/** Lets instrumented tests run the real backup flow against a fake Drive. */
+internal object BackupTestHooks {
+    @Volatile var driveClient: DriveClient? = null
+    @Volatile var authorizer: DriveAuthorizer? = null
 }
 
-internal fun formatDriveSyncSuccessStatus(
-    action: DriveSyncAction,
-    projectCount: Int,
-    trashedCount: Int,
-    recordingCount: Int,
-    skippedLargeRecordings: Int = 0
-): String {
-    val verb = when (action) {
-        DriveSyncAction.Sync -> "Sync complete"
-        DriveSyncAction.Restore -> "Restore complete"
+internal enum class BackupAction { Connect, BackUp, Restore }
+
+internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction): String? = listOfNotNull(
+    "Your older encrypted backup was moved to the new format.".takeIf { result.migratedLegacyBackup },
+    if (action == BackupAction.Restore) {
+        "Restored ${plural(result.merged.projects.size, "song")} and ${plural(result.merged.recordings.size, "recording")}."
+    } else null,
+    when (result.skippedLargeRecordings) {
+        0 -> null
+        1 -> "1 recording is over 16 MB and was skipped."
+        else -> "${result.skippedLargeRecordings} recordings are over 16 MB and were skipped."
+    },
+    when (result.damagedRecordings) {
+        0 -> null
+        1 -> "1 recording did not match its backup checksum and was not saved."
+        else -> "${result.damagedRecordings} recordings did not match their backup checksum and were not saved."
     }
-    val skipped = when {
-        skippedLargeRecordings <= 0 -> ""
-        skippedLargeRecordings == 1 -> " 1 recording was skipped because it is too large to sync on this device."
-        else -> " $skippedLargeRecordings recordings were skipped because they are too large to sync on this device."
-    }
-    return "$verb — ${plural(projectCount, "project")}, $trashedCount trashed, ${plural(recordingCount, "recording")}.$skipped API keys stay on this device."
-}
-
-internal fun driveSyncProgressLabel(action: DriveSyncAction?): String =
-    when (action) {
-        DriveSyncAction.Restore -> "Restoring backup..."
-        else -> "Syncing backup..."
-    }
-
-internal fun nextDriveSyncActionAfterAuthorization(pendingAction: DriveSyncAction?): DriveSyncAction =
-    pendingAction ?: DriveSyncAction.Sync
-
-internal fun shouldAttemptBackgroundDriveSync(
-    hasPassphrase: Boolean,
-    authorizedForNonInteractiveSync: Boolean,
-    syncInProgress: Boolean
-): Boolean = hasPassphrase && authorizedForNonInteractiveSync && !syncInProgress
-
-internal fun shouldDeferBackgroundDriveSync(
-    nowMillis: Long,
-    lastAttemptMillis: Long,
-    minIntervalMillis: Long
-): Boolean = lastAttemptMillis > 0L && nowMillis - lastAttemptMillis < minIntervalMillis
+).joinToString(" ").ifEmpty { null }
 
 private fun plural(count: Int, noun: String): String =
     if (count == 1) "$count $noun" else "$count ${noun}s"
@@ -161,13 +158,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val AUTOSAVE_DEBOUNCE_MILLIS = 450L
         private const val SAVE_STATUS_VISIBLE_MILLIS = 700L
         private const val BACKGROUND_SYNC_MIN_INTERVAL_MILLIS = 15 * 60 * 1000L
+        private const val BACKUP_PREFS = "rhymeai_backup"
+        private const val KEY_CONNECTED = "drive_connected"
+        private const val KEY_LAST_BACKUP = "last_backup_at"
+        private const val KEY_CLIENT_ID = "client_id"
     }
 
     private val repo = ProjectRepository(application)
+    private val backupPrefs = application.getSharedPreferences(BACKUP_PREFS, android.content.Context.MODE_PRIVATE)
+    private val backupClientId: String by lazy {
+        backupPrefs.getString(KEY_CLIENT_ID, null)
+            ?: java.util.UUID.randomUUID().toString().also { backupPrefs.edit { putString(KEY_CLIENT_ID, it) } }
+    }
     private val driveSyncService = DriveSyncService(
-        context = application,
+        filesDir = application.filesDir,
         secureKeyStore = EncryptedPrefsKeyStore(application),
-        driveClientId = BuildConfig.DRIVE_OAUTH_CLIENT_ID
+        driveClient = BackupTestHooks.driveClient ?: RealDriveClient(),
+        authorizer = BackupTestHooks.authorizer
+            ?: PlayServicesDriveAuthorizer(application, BuildConfig.DRIVE_OAUTH_CLIENT_ID),
+        clientId = { backupClientId }
     )
     private val localModelService = LocalModelService().also {
         it.initialize(application)
@@ -641,154 +650,363 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- Drive sync state ---
+    // --- Backup (Google Drive) ---
 
-    /** True while a sync is in progress. */
-    var syncInProgress by mutableStateOf(false)
+    private var lastBackupAt: Long? = backupPrefs.getLong(KEY_LAST_BACKUP, 0L).takeIf { it > 0L }
+
+    var backupStatus by mutableStateOf<BackupStatus>(
+        if (isBackupConnected()) BackupStatus.Connected(lastBackupAt) else BackupStatus.NotConnected
+    )
         private set
 
-    private var syncCurrentAction by mutableStateOf<DriveSyncAction?>(null)
+    /** One-time result line under the Backup rows (restore summary, migration, export). */
+    var backupNotice by mutableStateOf<String?>(null)
+        private set
 
-    val syncProgressLabel: String
-        get() = driveSyncProgressLabel(syncCurrentAction)
+    /** Non-null while a user-started backup action runs ("Restoring…", "Exporting…"). */
+    var backupBusyLabel by mutableStateOf<String?>(null)
+        private set
 
-    /**
-     * Human-readable result of the last sync attempt.
-     * Null = never synced this session.
-     * Positive string = success.
-     * Negative string = error description.
-     */
-    var syncLastResult by mutableStateOf<String?>(null)
+    /** The older passphrase-encrypted backup is still in Drive. */
+    var legacyBackupPresent by mutableStateOf(false)
+        private set
+
+    var migrationInProgress by mutableStateOf(false)
+        private set
+    var migrationError by mutableStateOf<String?>(null)
+        private set
+
+    /** Drive holds songs: show "Restore your songs?" (never restored automatically). */
+    var restoreOffer by mutableStateOf<BackupProbe?>(null)
         private set
 
     /**
      * Set when Drive authorization requires the user to approve a consent screen.
-     * The UI should launch this intent via startIntentSenderForResult; after the
-     * user returns, clear it and call [triggerSync] again.
+     * MainActivity launches it and calls [retryAfterDriveAuthorization] on approval.
      */
     var syncPendingIntent by mutableStateOf<PendingIntent?>(null)
 
-    /** True if a sync passphrase has been stored in the secure key store. */
-    var syncPassphraseStored by mutableStateOf(false)
-        private set
+    private val backupMutex = kotlinx.coroutines.sync.Mutex()
+    private var autoBackupJob: Job? = null
+    private var backupRunning = false
+    private var backupDirty = false
+    private var backupFailures = 0
+    private var retryNotBeforeMillis = 0L
+    private var lastBackgroundBackupMillis = 0L
+    private var pendingAuthAction: BackupAction? = null
 
-    private var driveSyncAuthorizedForNonInteractive by mutableStateOf(false)
-    private var pendingAuthAction: DriveSyncAction? = null
-    private var lastBackgroundSyncAttemptMillis = 0L
+    private fun isBackupConnected(): Boolean = backupPrefs.getBoolean(KEY_CONNECTED, false)
 
-    fun saveSyncPassphrase(passphrase: String) {
-        if (!driveSyncService.setPassphrase(passphrase)) {
-            syncLastResult = DRIVE_SYNC_PASSPHRASE_REQUIREMENT_MESSAGE
-            syncPassphraseStored = driveSyncService.hasPassphrase()
-            driveSyncAuthorizedForNonInteractive = false
-            return
+    fun connectDrive() {
+        backupNotice = null
+        backupBusyLabel = "Connecting…"
+        viewModelScope.launch {
+            val result = backupMutex.withLock { driveSyncService.probe() }
+            backupBusyLabel = null
+            when (result) {
+                is ProbeResult.Ready -> {
+                    backupPrefs.edit { putBoolean(KEY_CONNECTED, true) }
+                    backupStatus = BackupStatus.Connected(lastBackupAt)
+                    legacyBackupPresent = result.probe.legacyBackupPresent
+                    if (result.probe.projectCount > 0) restoreOffer = result.probe
+                    startBackup(interactive = false)
+                }
+                is ProbeResult.Failed -> handleBackupResult(result.result, BackupAction.Connect, interactive = true)
+            }
         }
-        syncPassphraseStored = true
-        driveSyncAuthorizedForNonInteractive = false
-        syncLastResult = null
     }
 
-    fun triggerSync() {
-        runDriveSync(action = DriveSyncAction.Sync, interactive = true)
+    fun disconnectDrive() {
+        autoBackupJob?.cancel()
+        backupPrefs.edit { remove(KEY_CONNECTED); remove(KEY_LAST_BACKUP) }
+        lastBackupAt = null
+        backupStatus = BackupStatus.NotConnected
+        legacyBackupPresent = false
+        restoreOffer = null
+        backupFailures = 0
+        retryNotBeforeMillis = 0L
+        backupBusyLabel = "Disconnecting…"
+        viewModelScope.launch {
+            val revoked = backupMutex.withLock { driveSyncService.disconnect() }
+            backupBusyLabel = null
+            backupNotice = if (revoked) {
+                "Disconnected from Google Drive. Backups have stopped."
+            } else {
+                "Disconnected on this device, but Google could not be reached to revoke access. You can remove Writers Block from your Google Account's third-party access."
+            }
+        }
     }
 
-    fun triggerRestore() {
-        runDriveSync(action = DriveSyncAction.Restore, interactive = true)
+    fun backUpNow() {
+        backupNotice = null
+        startBackup(interactive = true)
+    }
+
+    fun restoreFromBackup() {
+        backupNotice = null
+        backupBusyLabel = "Restoring…"
+        backupStatus = BackupStatus.BackingUp
+        viewModelScope.launch {
+            val result = backupMutex.withLock { driveSyncService.restore(repo) }
+            backupBusyLabel = null
+            handleBackupResult(result, BackupAction.Restore, interactive = true)
+        }
+    }
+
+    fun acceptRestoreOffer() {
+        restoreOffer = null
+        restoreFromBackup()
+    }
+
+    fun declineRestoreOffer() {
+        restoreOffer = null
+    }
+
+    fun migrateLegacyBackup(passphrase: String) {
+        migrationInProgress = true
+        migrationError = null
+        viewModelScope.launch {
+            val result = backupMutex.withLock { driveSyncService.migrateLegacyBackup(repo, passphrase) }
+            migrationInProgress = false
+            when (result) {
+                SyncResult.WrongPassphrase -> migrationError = "That passphrase did not open the older backup."
+                is SyncResult.Success -> handleBackupResult(result, BackupAction.BackUp, interactive = true)
+                else -> {
+                    handleBackupResult(result, BackupAction.BackUp, interactive = true)
+                    migrationError = (backupStatus as? BackupStatus.Failed)?.reason ?: "The older backup could not be moved. Try again."
+                }
+            }
+        }
     }
 
     fun retryAfterDriveAuthorization() {
-        val action = nextDriveSyncActionAfterAuthorization(pendingAuthAction)
+        val action = pendingAuthAction ?: BackupAction.BackUp
         pendingAuthAction = null
         syncPendingIntent = null
-        runDriveSync(action = action, interactive = true)
+        when (action) {
+            BackupAction.Connect -> connectDrive()
+            BackupAction.BackUp -> startBackup(interactive = true)
+            BackupAction.Restore -> restoreFromBackup()
+        }
     }
 
-    fun triggerBackgroundDriveSync() {
-        val hasPassphrase = driveSyncService.hasPassphrase()
-        val now = System.currentTimeMillis()
-        syncPassphraseStored = hasPassphrase
-        if (!shouldAttemptBackgroundDriveSync(
-                hasPassphrase = hasPassphrase,
-                authorizedForNonInteractiveSync = driveSyncAuthorizedForNonInteractive,
-                syncInProgress = syncInProgress
-            ) ||
-            shouldDeferBackgroundDriveSync(
-                nowMillis = now,
-                lastAttemptMillis = lastBackgroundSyncAttemptMillis,
-                minIntervalMillis = BACKGROUND_SYNC_MIN_INTERVAL_MILLIS
-            )
-        ) {
+    /** Debounced automatic backup after a change; waits out any backoff. */
+    fun scheduleAutoBackup() {
+        if (!isBackupConnected()) return
+        if (backupRunning) {
+            backupDirty = true
             return
         }
-        lastBackgroundSyncAttemptMillis = now
-        runDriveSync(action = DriveSyncAction.Sync, interactive = false)
-    }
-
-    private fun runDriveSync(action: DriveSyncAction, interactive: Boolean) {
-        if (syncInProgress) return
-        syncInProgress = true
-        syncCurrentAction = action
-        syncLastResult = null
-        viewModelScope.launch {
-            val result = when (action) {
-                DriveSyncAction.Sync -> driveSyncService.sync(repo)
-                DriveSyncAction.Restore -> driveSyncService.restore(repo)
-            }
-            syncInProgress = false
-            syncCurrentAction = null
-            handleSyncResult(result, action, interactive)
+        if (backupStatus !is BackupStatus.Failed) backupStatus = BackupStatus.Pending
+        autoBackupJob?.cancel()
+        autoBackupJob = viewModelScope.launch {
+            delay(BackupSchedule.autoBackupDelayMillis(System.currentTimeMillis(), retryNotBeforeMillis))
+            autoBackupJob = null
+            startBackup(interactive = false)
         }
     }
 
-    private fun handleSyncResult(
-        result: SyncResult,
-        action: DriveSyncAction,
-        interactive: Boolean
-    ) {
-        when (result) {
+    /** Leaving the app flushes a pending backup; otherwise at most every 15 minutes. */
+    fun triggerBackgroundDriveSync() {
+        if (!isBackupConnected()) return
+        val now = System.currentTimeMillis()
+        if (now < retryNotBeforeMillis) return
+        if (backupStatus !is BackupStatus.Pending && now - lastBackgroundBackupMillis < BACKGROUND_SYNC_MIN_INTERVAL_MILLIS) return
+        lastBackgroundBackupMillis = now
+        startBackup(interactive = false)
+    }
+
+    private fun startBackup(interactive: Boolean) {
+        if (!isBackupConnected()) return
+        autoBackupJob?.cancel()
+        autoBackupJob = null
+        if (backupRunning) {
+            backupDirty = true
+            return
+        }
+        backupRunning = true
+        backupStatus = BackupStatus.BackingUp
+        viewModelScope.launch {
+            val result = try {
+                backupMutex.withLock { driveSyncService.backUp(repo) }
+            } finally {
+                backupRunning = false
+            }
+            handleBackupResult(result, BackupAction.BackUp, interactive)
+            if (backupDirty) {
+                backupDirty = false
+                scheduleAutoBackup()
+            }
+        }
+    }
+
+    private fun checkBackupAtLaunch() {
+        viewModelScope.launch {
+            val result = backupMutex.withLock { driveSyncService.probe() }
+            if (result !is ProbeResult.Ready) return@launch
+            legacyBackupPresent = result.probe.legacyBackupPresent
+            if (projects.isEmpty() && result.probe.projectCount > 0) restoreOffer = result.probe
+        }
+    }
+
+    private fun handleBackupResult(result: SyncResult, action: BackupAction, interactive: Boolean) {
+        if (action != BackupAction.Connect && !isBackupConnected()) {
+            backupStatus = BackupStatus.NotConnected
+            return
+        }
+        val retry = when (result) {
             is SyncResult.Success -> {
-                driveSyncAuthorizedForNonInteractive = true
+                backupFailures = 0
+                retryNotBeforeMillis = 0L
                 pendingAuthAction = null
-                syncLastResult = formatDriveSyncSuccessStatus(
-                    action = action,
-                    projectCount = result.merged.projects.size,
-                    trashedCount = result.merged.trashed.size,
-                    recordingCount = result.merged.recordings.size,
-                    skippedLargeRecordings = result.skippedLargeRecordings
-                )
+                val at = System.currentTimeMillis()
+                lastBackupAt = at
+                backupPrefs.edit { putLong(KEY_LAST_BACKUP, at) }
+                backupStatus = BackupStatus.Connected(at)
+                legacyBackupPresent = result.legacyBackupPresent
+                backupResultNotice(result, action)?.let { backupNotice = it }
+                false
             }
             is SyncResult.AuthorizationRequired -> {
-                driveSyncAuthorizedForNonInteractive = false
-                syncLastResult = if (interactive) {
+                if (interactive) {
                     pendingAuthAction = action
                     syncPendingIntent = result.pendingIntent
-                    "Authorization required — approve Google Drive access to back up and restore projects, trash, and recordings."
+                    backupStatus = if (isBackupConnected()) BackupStatus.Connected(lastBackupAt) else BackupStatus.NotConnected
                 } else {
-                    "Background sync skipped — open Settings and run Sync now to approve Google Drive access."
+                    backupStatus = BackupStatus.Failed("Google Drive needs your permission again.", lastBackupAt)
                 }
+                false
             }
-            is SyncResult.WrongPassphrase -> {
-                driveSyncAuthorizedForNonInteractive = false
-                syncLastResult = "Wrong passphrase — Drive backup was not changed."
+            SyncResult.NoBackup -> {
+                backupStatus = BackupStatus.Connected(lastBackupAt)
+                backupNotice = "No backup was found in your Google Drive."
+                false
             }
-            is SyncResult.CorruptRemote -> {
-                driveSyncAuthorizedForNonInteractive = false
-                syncLastResult = "Your Drive backup is unreadable and was not overwritten. Try Restore, or contact support."
+            SyncResult.WrongPassphrase -> {
+                backupStatus = BackupStatus.Connected(lastBackupAt)
+                false
             }
-            is SyncResult.NotConfigured -> {
-                driveSyncAuthorizedForNonInteractive = false
-                syncPassphraseStored = driveSyncService.hasPassphrase()
-                syncLastResult = if (!syncPassphraseStored) {
-                    "Set a sync passphrase in Settings to enable encrypted Drive backup for projects, trash, and recordings."
-                } else {
-                    "Drive backup is not configured — check Google Cloud Console setup."
-                }
+            SyncResult.NotConfigured -> {
+                backupStatus = BackupStatus.Failed("Google Drive is not available on this device.", lastBackupAt)
+                false
+            }
+            SyncResult.CorruptRemote -> {
+                backupStatus = BackupStatus.Failed(BackupManifest.DAMAGED_MESSAGE, lastBackupAt)
+                false
+            }
+            SyncResult.UnsupportedVersion -> {
+                backupStatus = BackupStatus.Failed(
+                    "This backup was made by a newer version of Writers Block. Update the app to use it.",
+                    lastBackupAt
+                )
+                false
             }
             is SyncResult.NetworkError -> {
-                syncLastResult = "Drive sync failed: ${result.message}"
+                backupStatus = BackupStatus.Failed("Backup failed: ${result.message}", lastBackupAt)
+                true
             }
             is SyncResult.UnknownError -> {
-                syncLastResult = "Drive sync failed: ${result.cause.message ?: "unexpected error"}"
+                backupStatus = BackupStatus.Failed(
+                    "Backup failed: ${result.cause.message ?: "unexpected error"}",
+                    lastBackupAt
+                )
+                true
+            }
+        }
+        if (action == BackupAction.Connect && !isBackupConnected() && result !is SyncResult.Success) {
+            if (result !is SyncResult.AuthorizationRequired) {
+                backupNotice = (backupStatus as? BackupStatus.Failed)?.reason
+            }
+            backupStatus = BackupStatus.NotConnected
+            return
+        }
+        if (retry) {
+            backupFailures++
+            val delayMillis = BackupSchedule.retryDelayMillis(backupFailures)
+            retryNotBeforeMillis = System.currentTimeMillis() + delayMillis
+            autoBackupJob?.cancel()
+            autoBackupJob = viewModelScope.launch {
+                delay(delayMillis)
+                autoBackupJob = null
+                startBackup(interactive = false)
+            }
+        }
+    }
+
+    fun exportFileName(): String = BackupArchive.fileName(System.currentTimeMillis())
+
+    fun exportBackup(uri: android.net.Uri) {
+        val app = getApplication<Application>()
+        backupNotice = null
+        backupBusyLabel = "Exporting…"
+        viewModelScope.launch {
+            backupNotice = try {
+                val summary = withContext(Dispatchers.IO) {
+                    val base = repo.snapshotLocalSyncBase()
+                    val files = snapshotLocalRecordingFiles(app.filesDir, base.pendingIds)
+                    val allowed = recordingsAllowedForUpload(files.map { it.entry }, base.blob.deletions, emptyList())
+                        .mapTo(HashSet()) { it.identityKey }
+                    app.contentResolver.openOutputStream(uri)?.use { output ->
+                        BackupArchive.write(
+                            output, base.blob, files.filter { it.entry.identityKey in allowed },
+                            System.currentTimeMillis(), backupClientId
+                        )
+                    } ?: throw java.io.IOException("The export file could not be opened")
+                }
+                buildString {
+                    append("Exported ${plural(summary.songs, "song")} and ${plural(summary.recordings, "recording")}.")
+                    if (summary.skippedLargeRecordings > 0) {
+                        append(" ${plural(summary.skippedLargeRecordings, "recording")} over 16 MB left out.")
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                "Export failed: ${error.message ?: "unexpected error"}"
+            } finally {
+                backupBusyLabel = null
+            }
+        }
+    }
+
+    fun importBackup(uri: android.net.Uri) {
+        val app = getApplication<Application>()
+        backupNotice = null
+        backupBusyLabel = "Importing…"
+        viewModelScope.launch {
+            backupNotice = try {
+                val summary = withContext(Dispatchers.IO) {
+                    val temp = java.io.File.createTempFile("import-", ".backup", app.cacheDir)
+                    try {
+                        app.contentResolver.openInputStream(uri)?.use { input ->
+                            temp.outputStream().use { input.copyTo(it) }
+                        } ?: throw java.io.IOException("The file could not be opened")
+                        val contents = BackupArchive.read(temp)
+                        backupMutex.withLock { BackupArchive.import(contents, repo, app.filesDir) }
+                    } finally {
+                        temp.delete()
+                    }
+                }
+                buildString {
+                    append("Imported ${plural(summary.songs, "song")} and added ${plural(summary.recordingsAdded, "recording")}.")
+                    if (summary.damagedRecordings > 0) {
+                        val verb = if (summary.damagedRecordings == 1) "was" else "were"
+                        append(" ${plural(summary.damagedRecordings, "recording")} failed the checksum and $verb skipped.")
+                    }
+                    if (summary.skippedLargeRecordings > 0) {
+                        append(" ${plural(summary.skippedLargeRecordings, "recording")} over 16 MB skipped.")
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: DamagedBackupException) {
+                BackupManifest.DAMAGED_MESSAGE
+            } catch (error: UnsupportedBackupVersionException) {
+                error.message
+            } catch (error: Exception) {
+                "Import failed: ${error.message ?: "unexpected error"}"
+            } finally {
+                backupBusyLabel = null
             }
         }
     }
@@ -892,9 +1110,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else rhymeScheme.pattern
 
     init {
-        // Reflect stored passphrase presence without reading the value itself.
-        syncPassphraseStored = driveSyncService.hasPassphrase()
-
         viewModelScope.launch {
             _appAppearance = runCatching { repo.appearanceFlow.first() }
                 .getOrDefault(AppAppearance.INK)
@@ -989,6 +1204,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             launch {
                 voiceMemoService.trashChanges.collect { scheduleTrashPurge() }
             }
+            // Any change to songs, trash or tombstones queues a debounced Drive backup.
+            launch {
+                try {
+                    combine(repo.projectsFlow, repo.trashedProjectsFlow) { active, trash -> active to trash }
+                        .distinctUntilChanged()
+                        .drop(1)
+                        .collect { scheduleAutoBackup() }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: CorruptLibraryException) {
+                    // Reported by the collectors above; nothing to back up from unreadable data.
+                }
+            }
+            if (isBackupConnected()) checkBackupAtLaunch()
         }
     }
 

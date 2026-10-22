@@ -38,6 +38,9 @@ import com.rhymeai.app.ui.components.LocalImeBottom
 import com.rhymeai.app.ui.components.LocalNavBottom
 import com.rhymeai.app.ui.components.LocalStatusBarTop
 import com.rhymeai.app.ui.components.ProjectsDrawer
+import com.rhymeai.app.ui.components.BackupSectionActions
+import com.rhymeai.app.ui.components.BackupSectionState
+import com.rhymeai.app.ui.components.RestoreOfferSheet
 import com.rhymeai.app.ui.components.SettingsDialog
 import com.rhymeai.app.ui.components.TemplatesDialog
 import com.rhymeai.app.ui.navigation.RhymeNavGraph
@@ -187,6 +190,14 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
+                    viewModel.restoreOffer?.let { offer ->
+                        RestoreOfferSheet(
+                            offer = offer,
+                            onRestore = viewModel::acceptRestoreOffer,
+                            onNotNow = viewModel::declineRestoreOffer
+                        )
+                    }
+
                     viewModel.persistenceError?.let { message ->
                         androidx.compose.material3.AlertDialog(
                             onDismissRequest = { viewModel.persistenceError = null },
@@ -298,13 +309,26 @@ class MainActivity : ComponentActivity() {
                             verifiedGemmaFileNames = viewModel.verifiedGemmaFileNames,
                             onStartGemmaDownload = { viewModel.startGemmaDownload(it) },
                             onUseDownloadedGemma = { viewModel.useDownloadedGemma(it) },
-                            syncPassphraseStored = viewModel.syncPassphraseStored,
-                            syncInProgress = viewModel.syncInProgress,
-                            syncLastResult = viewModel.syncLastResult,
-                            syncProgressLabel = viewModel.syncProgressLabel,
-                            onSaveSyncPassphrase = { viewModel.saveSyncPassphrase(it) },
-                            onSyncNow = { viewModel.triggerSync() },
-                            onRestoreNow = { viewModel.triggerRestore() },
+                            backup = BackupSectionState(
+                                status = viewModel.backupStatus,
+                                notice = viewModel.backupNotice,
+                                busyLabel = viewModel.backupBusyLabel,
+                                legacyBackupPresent = viewModel.legacyBackupPresent,
+                                migrationInProgress = viewModel.migrationInProgress,
+                                migrationError = viewModel.migrationError
+                            ),
+                            backupActions = remember(viewModel) {
+                                BackupSectionActions(
+                                    onConnect = viewModel::connectDrive,
+                                    onDisconnect = viewModel::disconnectDrive,
+                                    onBackUpNow = viewModel::backUpNow,
+                                    onRestore = viewModel::restoreFromBackup,
+                                    onMigrate = viewModel::migrateLegacyBackup,
+                                    exportFileName = viewModel::exportFileName,
+                                    onExport = viewModel::exportBackup,
+                                    onImport = viewModel::importBackup
+                                )
+                            },
                             // Editor toggles — each change is persisted via viewModel.persistEditorToggles().
                             useWholeSongContext = viewModel.useWholeSongContext,
                             onWholeSongContextChange = viewModel::saveUseWholeSongContext,

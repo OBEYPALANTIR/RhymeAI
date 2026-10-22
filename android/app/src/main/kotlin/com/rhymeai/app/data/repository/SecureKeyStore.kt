@@ -12,6 +12,7 @@ import androidx.security.crypto.MasterKey
 interface SecureKeyStore {
     fun getKey(provider: String): String
     fun setKey(provider: String, key: String)
+    fun removeKey(provider: String) = setKey(provider, "")
     fun allKeys(): Map<String, String>
     fun clear()
 
@@ -41,6 +42,10 @@ class EncryptedPrefsKeyStore(context: Context) : SecureKeyStore {
         check(prefs.edit().putString(provider, key).commit()) {
             "Secure credential storage failed"
         }
+    }
+
+    override fun removeKey(provider: String) {
+        check(prefs.edit().remove(provider).commit()) { "Secure credential storage failed" }
     }
 
     override fun allKeys(): Map<String, String> =

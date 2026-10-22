@@ -1,10 +1,7 @@
 package com.rhymeai.app.data.sync
 
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 
 /**
  * A recording over the per-device transfer limit is a valid manifest entry
@@ -12,8 +9,6 @@ import kotlin.test.assertIs
  * must not disappear from the shared manifest.
  */
 class LargeRecordingSyncTest {
-    private val passphrase = "synthetic sync passphrase".toCharArray()
-    private val json = Json { ignoreUnknownKeys = true }
     private val limit = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES
 
     private fun recording(
@@ -21,7 +16,7 @@ class LargeRecordingSyncTest {
         fileName: String,
         sizeBytes: Long = 12L,
         modifiedAt: Long = 100L,
-        sha256: String = "digest-$projectId-$fileName"
+        sha256: String = BackupManifest.sha256Hex("$projectId/$fileName".toByteArray())
     ) = RecordingManifestEntry(
         projectId = projectId,
         fileName = fileName,
@@ -30,17 +25,21 @@ class LargeRecordingSyncTest {
         sha256 = sha256
     )
 
-    private fun seal(blob: SyncBlob): ByteArray =
-        SyncBlobCrypto.sealManifest(json.encodeToString(blob).toByteArray(Charsets.UTF_8), passphrase)
+    private class Merged(val merged: SyncBlob)
 
-    private fun decide(local: SyncBlob, remote: SyncBlob): SyncDecision.MergeAndUpload =
-        assertIs<SyncDecision.MergeAndUpload>(
-            decideSyncAction(SyncDecisionInput(local, seal(remote), passphrase, "device"))
-        )
+    /** The backup's merge: this device only advertises recordings it can upload. */
+    private fun decide(local: SyncBlob, remote: SyncBlob) =
+        Merged(SyncMerger.merge(local.copy(recordings = local.recordings.filter { it.isTransferable }), remote))
 
-    private fun uploadedManifest(decision: SyncDecision.MergeAndUpload): SyncBlob = json.decodeFromString(
-        SyncBlobCrypto.openManifest(decision.sealedBytes, passphrase).plaintext.toString(Charsets.UTF_8)
-    )
+    /** Recording identity, size and hash as they travel in a v4 manifest. */
+    private fun wire(entries: Collection<RecordingManifestEntry>) =
+        entries.map { Triple(it.identityKey, it.sizeBytes, it.sha256) }.toSet()
+
+    private fun uploadedManifest(decision: Merged): Set<Triple<String, Long, String>> =
+        wire(BackupManifest.decode(BackupManifest.encode(decision.merged, 0L, "device")).recordings)
+
+    private fun v4Names(vararg pairs: Pair<RecordingManifestEntry, String>) =
+        pairs.associate { (entry, id) -> BackupManifest.recordingDriveName(entry.projectId, entry.fileName) to id }
 
     @Test
     fun remoteManifestWithOversizeEntryMergesRetainsItAndPlansNoDownload() {
@@ -54,11 +53,11 @@ class LargeRecordingSyncTest {
         )
 
         assertEquals(setOf(large, small, localOnly), decision.merged.recordings.toSet())
-        assertEquals(setOf(large, small, localOnly), uploadedManifest(decision).recordings.toSet())
+        assertEquals(wire(setOf(large, small, localOnly)), uploadedManifest(decision))
         val restores = RecordingSyncPlanner.planRestores(
             local = listOf(localOnly),
             remoteManifest = decision.merged.recordings,
-            remoteFilesByName = mapOf(large.driveName to "drive-large", small.driveName to "drive-small")
+            remoteFilesByName = v4Names(large to "drive-large", small to "drive-small")
         )
         assertEquals(listOf(small), restores.map { it.entry })
         assertEquals(1, skippedLargeRecordingCount(listOf(localOnly), decision.merged))
@@ -76,8 +75,8 @@ class LargeRecordingSyncTest {
 
     @Test
     fun oversizeLocalEntryIsAdvertisedOnlyThroughAnExistingRemoteEntry() {
-        val localLarge = recording("p1", "session.wav", sizeBytes = limit + 1L, modifiedAt = 500L, sha256 = "local")
-        val remoteLarge = localLarge.copy(modifiedAt = 100L, sha256 = "remote")
+        val localLarge = recording("p1", "session.wav", sizeBytes = limit + 1L, modifiedAt = 500L, sha256 = BackupManifest.sha256Hex("local".toByteArray()))
+        val remoteLarge = localLarge.copy(modifiedAt = 100L, sha256 = BackupManifest.sha256Hex("remote".toByteArray()))
         val local = SyncBlob(recordings = listOf(localLarge))
 
         val unlisted = decide(local, remote = SyncBlob())
@@ -87,21 +86,21 @@ class LargeRecordingSyncTest {
 
         val listed = decide(local, remote = SyncBlob(recordings = listOf(remoteLarge)))
         assertEquals(listOf(remoteLarge), listed.merged.recordings)
-        assertEquals(listOf(remoteLarge), uploadedManifest(listed).recordings)
+        assertEquals(wire(listOf(remoteLarge)), uploadedManifest(listed))
         assertEquals(emptyList(), listed.merged.deletions)
     }
 
     @Test
     fun newerRemoteRecordingDoesNotReplaceLocalFileThatWasTooLargeToUpload() {
-        val localLarge = recording("p1", "session.wav", sizeBytes = limit + 1L, modifiedAt = 1L, sha256 = "local")
-        val remoteNewer = recording("p1", "session.wav", modifiedAt = 2L, sha256 = "remote")
+        val localLarge = recording("p1", "session.wav", sizeBytes = limit + 1L, modifiedAt = 1L, sha256 = BackupManifest.sha256Hex("local".toByteArray()))
+        val remoteNewer = recording("p1", "session.wav", modifiedAt = 2L, sha256 = BackupManifest.sha256Hex("remote".toByteArray()))
 
         assertEquals(
             emptyList<RecordingRestorePlan>(),
             RecordingSyncPlanner.planRestores(
                 local = listOf(localLarge),
                 remoteManifest = listOf(remoteNewer),
-                remoteFilesByName = mapOf(remoteNewer.driveName to "remote-file")
+                remoteFilesByName = v4Names(remoteNewer to "remote-file")
             )
         )
     }
@@ -118,7 +117,7 @@ class LargeRecordingSyncTest {
             listOf(localAtLimit, localSmall),
             RecordingSyncPlanner.planUploads(
                 local = listOf(localLarge, localAtLimit, localSmall),
-                remoteManifest = emptyList(),
+                manifest = listOf(localLarge, localAtLimit, localSmall),
                 remoteDriveNames = emptySet()
             )
         )
@@ -127,7 +126,7 @@ class LargeRecordingSyncTest {
             RecordingSyncPlanner.planRestores(
                 local = emptyList(),
                 remoteManifest = listOf(remoteLarge, remoteAtLimit),
-                remoteFilesByName = mapOf(remoteLarge.driveName to "large", remoteAtLimit.driveName to "limit")
+                remoteFilesByName = v4Names(remoteLarge to "large", remoteAtLimit to "limit")
             ).map { it.entry }
         )
     }
@@ -155,8 +154,8 @@ class LargeRecordingSyncTest {
         val same = recording("p1", "same.wav", sizeBytes = limit + 1L)
         val localOnly = recording("p1", "local.wav", sizeBytes = limit + 1L)
         val remoteOnly = recording("p1", "remote.wav", sizeBytes = limit + 1L)
-        val localDiverged = recording("p1", "both.wav", sizeBytes = limit + 1L, sha256 = "local")
-        val remoteDiverged = localDiverged.copy(sizeBytes = 12L, sha256 = "remote")
+        val localDiverged = recording("p1", "both.wav", sizeBytes = limit + 1L, sha256 = BackupManifest.sha256Hex("local".toByteArray()))
+        val remoteDiverged = localDiverged.copy(sizeBytes = 12L, sha256 = BackupManifest.sha256Hex("remote".toByteArray()))
         val smallMissingLocally = recording("p1", "take.m4a")
 
         assertEquals(

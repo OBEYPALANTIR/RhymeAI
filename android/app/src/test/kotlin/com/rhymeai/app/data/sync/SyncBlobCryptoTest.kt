@@ -21,13 +21,13 @@ class SyncBlobCryptoTest {
 
     @Test
     fun sealedEnvelopeRoundTripsWithSamePassphrase() {
-        val envelope = SyncBlobCrypto.seal(payload, passphrase)
+        val envelope = LegacyEnvelopes.seal(payload, passphrase)
         assertArrayEquals(payload, SyncBlobCrypto.open(envelope, passphrase))
     }
 
     @Test
     fun reportedEnvelopeSizeMatchesSealedBytes() {
-        val envelope = SyncBlobCrypto.seal(payload, passphrase)
+        val envelope = LegacyEnvelopes.seal(payload, passphrase)
 
         assertEquals(envelope.size.toLong(), SyncBlobCrypto.envelopeSizeForPlaintext(payload.size.toLong()))
     }
@@ -61,7 +61,7 @@ class SyncBlobCryptoTest {
         val salt = ByteArray(16) { it.toByte() }
         val iv = ByteArray(12) { (0x10 + it).toByte() }
 
-        val envelope = SyncBlobCrypto.seal(goldenPlaintext, passphrase, salt, iv)
+        val envelope = LegacyEnvelopes.seal(goldenPlaintext, passphrase, salt, iv)
 
         assertArrayEquals(Base64.getDecoder().decode(goldenEnvelopeBase64), envelope)
     }
@@ -70,7 +70,7 @@ class SyncBlobCryptoTest {
     @Test
     fun nonAsciiPassphraseFailsBeforeDerivation() {
         assertThrows(IllegalArgumentException::class.java) {
-            SyncBlobCrypto.seal(payload, "café".toCharArray())
+            LegacyEnvelopes.seal(payload, "café".toCharArray())
         }
         assertThrows(SyncBlobSealException::class.java) {
             SyncBlobCrypto.open(Base64.getDecoder().decode(goldenEnvelopeBase64), "café".toCharArray())
@@ -78,7 +78,7 @@ class SyncBlobCryptoTest {
     }
     @Test
     fun wrongPassphraseFailsClosed() {
-        val envelope = SyncBlobCrypto.seal(payload, passphrase)
+        val envelope = LegacyEnvelopes.seal(payload, passphrase)
         assertThrows(SyncBlobSealException::class.java) {
             SyncBlobCrypto.open(envelope, "not the passphrase".toCharArray())
         }
@@ -86,7 +86,7 @@ class SyncBlobCryptoTest {
 
     @Test
     fun tamperedCiphertextFailsAuthentication() {
-        val envelope = SyncBlobCrypto.seal(payload, passphrase)
+        val envelope = LegacyEnvelopes.seal(payload, passphrase)
         envelope[envelope.size - 1] = (envelope.last().toInt() xor 0x01).toByte()
         assertThrows(SyncBlobSealException::class.java) {
             SyncBlobCrypto.open(envelope, passphrase)
@@ -95,7 +95,7 @@ class SyncBlobCryptoTest {
 
     @Test
     fun tamperedHeaderSaltFailsAuthentication() {
-        val envelope = SyncBlobCrypto.seal(payload, passphrase)
+        val envelope = LegacyEnvelopes.seal(payload, passphrase)
         envelope[6] = (envelope[6].toInt() xor 0x01).toByte() // inside the salt
         assertThrows(SyncBlobSealException::class.java) {
             SyncBlobCrypto.open(envelope, passphrase)
@@ -104,7 +104,7 @@ class SyncBlobCryptoTest {
 
     @Test
     fun unrecognizedMagicIsRejectedBeforeDecryption() {
-        val envelope = SyncBlobCrypto.seal(payload, passphrase)
+        val envelope = LegacyEnvelopes.seal(payload, passphrase)
         envelope[0] = 'X'.code.toByte()
         assertThrows(SyncBlobSealException::class.java) {
             SyncBlobCrypto.open(envelope, passphrase)
@@ -120,8 +120,8 @@ class SyncBlobCryptoTest {
 
     @Test
     fun eachSealUsesFreshSaltAndIv() {
-        val first = SyncBlobCrypto.seal(payload, passphrase)
-        val second = SyncBlobCrypto.seal(payload, passphrase)
+        val first = LegacyEnvelopes.seal(payload, passphrase)
+        val second = LegacyEnvelopes.seal(payload, passphrase)
         assertFalse(first.contentEquals(second))
         // salt+IV live in bytes 4..31; identical prefixes would mean reuse
         assertFalse(first.copyOfRange(4, 32).contentEquals(second.copyOfRange(4, 32)))
@@ -129,7 +129,7 @@ class SyncBlobCryptoTest {
 
     @Test
     fun ciphertextDoesNotLeakPlaintext() {
-        val envelope = SyncBlobCrypto.seal(payload, passphrase)
+        val envelope = LegacyEnvelopes.seal(payload, passphrase)
         assertFalse(String(envelope, Charsets.ISO_8859_1).contains("Midnight Notes"))
     }
 
@@ -143,14 +143,14 @@ class SyncBlobCryptoTest {
     fun manifestUsesRai3WhileRecordingEncryptionRemainsRai1() {
         val v3 = referenceVectors.single { it.getValue("magic").jsonPrimitive.content == "RAI3" }
         val bytes = v3.getValue("plaintext").jsonPrimitive.content.toByteArray(Charsets.UTF_8)
-        val manifest = SyncBlobCrypto.sealManifest(bytes, passphrase)
+        val manifest = LegacyEnvelopes.sealManifest(bytes, passphrase)
         assertEquals("RAI3", String(manifest, 0, 4, Charsets.US_ASCII))
         assertEquals(3, SyncBlobCrypto.openManifest(manifest, passphrase).version)
         assertArrayEquals(bytes, SyncBlobCrypto.openManifest(manifest, passphrase).plaintext)
         assertThrows(SyncBlobSealException::class.java) {
             SyncBlobCrypto.openManifest(manifest, "wrong passphrase".toCharArray())
         }
-        val recording = SyncBlobCrypto.seal(bytes, passphrase)
+        val recording = LegacyEnvelopes.seal(bytes, passphrase)
         assertEquals("RAI1", String(recording, 0, 4, Charsets.US_ASCII))
         assertArrayEquals(bytes, SyncBlobCrypto.open(recording, passphrase))
     }
@@ -166,10 +166,10 @@ class SyncBlobCryptoTest {
             assertEquals(vector.getValue("envelope_sha256").jsonPrimitive.content, sha)
             val magic = vector.getValue("magic").jsonPrimitive.content
             assertEquals(magic, String(expected, 0, 4, Charsets.US_ASCII))
-            // RAI2 is read-only now: Android writes recordings as RAI1 and manifests as RAI3.
+            // The test writer reproduces the RAI1 and RAI3 vectors; RAI2 was never written by Android.
             when (magic) {
-                "RAI1" -> assertArrayEquals(expected, SyncBlobCrypto.seal(plaintext, passphrase, salt, iv))
-                "RAI3" -> assertArrayEquals(expected, SyncBlobCrypto.sealManifest(plaintext, passphrase, salt, iv))
+                "RAI1" -> assertArrayEquals(expected, LegacyEnvelopes.seal(plaintext, passphrase, salt, iv))
+                "RAI3" -> assertArrayEquals(expected, LegacyEnvelopes.sealManifest(plaintext, passphrase, salt, iv))
             }
             val opened = SyncBlobCrypto.openManifest(expected, passphrase)
             assertEquals(mapOf("RAI1" to 1, "RAI2" to 2, "RAI3" to 3).getValue(magic), opened.version)

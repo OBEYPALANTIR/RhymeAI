@@ -12,7 +12,7 @@ import javax.net.ssl.SSLException
 
 /**
  * Smoke-checks that the certificate pins in res/xml/network_security_config.xml
- * still match what the AI provider endpoints actually serve. A pin mismatch
+ * still match what the AI provider and Google Drive backup endpoints actually serve. A pin mismatch
  * surfaces as an SSLHandshakeException during the handshake; any HTTP status
  * (even an auth-error body) means TLS made it through the pin set.
  *
@@ -37,6 +37,16 @@ class CertPinningInstrumentedTest {
     @Test
     fun anthropicEndpointHandshakesThroughPins() {
         assertTlsHandshakeSucceeds("api.anthropic.com")
+    }
+
+    @Test
+    fun driveEndpointHandshakesThroughPins() {
+        assertTlsHandshakeSucceeds("www.googleapis.com")
+    }
+
+    @Test
+    fun googleRevokeEndpointHandshakesThroughPins() {
+        assertTlsHandshakeSucceeds("oauth2.googleapis.com")
     }
 
     private fun assertTlsHandshakeSucceeds(domain: String) {

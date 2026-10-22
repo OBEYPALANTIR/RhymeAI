@@ -1,8 +1,6 @@
 package com.rhymeai.app.data.sync
 
-import kotlinx.coroutines.runBlocking
 import java.io.File
-import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.security.MessageDigest
 import kotlin.test.Test
@@ -14,7 +12,7 @@ import kotlin.test.assertTrue
 
 /**
  * Libraries larger than one restore transaction: the plan is split into
- * bounded chunks, uploads have no aggregate cap, and a failed chunk leaves
+ * bounded chunks and a failed chunk leaves
  * earlier chunks committed so the next sync resumes.
  */
 class RecordingRestoreChunkingTest {
@@ -97,50 +95,6 @@ class RecordingRestoreChunkingTest {
     }
 
     @Test
-    fun uploadSetOverSixtyFourMebibytesIsUploadedOneFileAtATime() = runBlocking {
-        val root = Files.createTempDirectory("rhymeai-large-upload").toFile()
-        try {
-            repeat(5) { index ->
-                val file = RecordingFileStore.targetFile(root, "project-$index", "clip.m4a")
-                file.parentFile!!.mkdirs()
-                RandomAccessFile(file, "rw").use { it.setLength(fileLimit) }
-            }
-            val localFiles = snapshotLocalRecordingFiles(root, emptySet())
-            val uploads = localFiles.map { it.entry }
-            assertTrue(uploads.sumOf { it.sizeBytes } > chunkLimit)
-            val drive = CountingDriveClient()
-
-            val uploaded = uploadRecordingFilesToDrive(
-                driveClient = drive,
-                accessToken = "synthetic",
-                passphrase = "test correct horse battery".toCharArray(),
-                uploads = uploads,
-                localFiles = localFiles,
-                remoteFilesByName = emptyMap()
-            )
-
-            assertEquals(uploads.map { it.driveName }, drive.uploadedNames)
-            assertEquals(uploads.map { it.driveName }.toSet(), uploaded.keys)
-
-            val oversize = uploads.first().copy(sizeBytes = fileLimit + 1L)
-            val rejectingDrive = CountingDriveClient()
-            assertFailsWith<DriveNetworkException> {
-                uploadRecordingFilesToDrive(
-                    driveClient = rejectingDrive,
-                    accessToken = "synthetic",
-                    passphrase = "test correct horse battery".toCharArray(),
-                    uploads = uploads.drop(1) + oversize,
-                    localFiles = localFiles,
-                    remoteFilesByName = emptyMap()
-                )
-            }
-            assertEquals(emptyList(), rejectingDrive.uploadedNames)
-        } finally {
-            root.deleteRecursively()
-        }
-    }
-
-    @Test
     fun failedChunkKeepsEarlierChunksAndNextPlanResumesWithOnlyTheRemainder() {
         val root = Files.createTempDirectory("rhymeai-chunked-restore").toFile()
         try {
@@ -154,7 +108,7 @@ class RecordingRestoreChunkingTest {
                     sha256 = sha256Hex(bytes)
                 )
             }
-            val remoteFilesByName = remote.associate { it.driveName to "id-${it.projectId}" }
+            val remoteFilesByName = remote.associate { BackupManifest.recordingDriveName(it.projectId, it.fileName) to "id-${it.projectId}" }
             val bytesByFileId = remote.indices.associate { "id-${remote[it].projectId}" to contents[it] }
 
             val plan = RecordingSyncPlanner.planRestores(emptyList(), remote, remoteFilesByName)
@@ -215,23 +169,4 @@ class RecordingRestoreChunkingTest {
     private fun sha256Hex(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
-    /** Records upload order without retaining the encrypted bytes. */
-    private class CountingDriveClient : DriveClient {
-        val uploadedNames = mutableListOf<String>()
-
-        override suspend fun findFileByName(accessToken: String, name: String): DriveFileMetadata? = null
-        override suspend fun listFilesByNamePrefix(accessToken: String, namePrefix: String): List<DriveFileMetadata> =
-            emptyList()
-        override suspend fun downloadFile(accessToken: String, fileId: String, maxBytes: Long): ByteArray =
-            error("No download expected")
-        override suspend fun uploadNewFile(
-            accessToken: String, name: String, mimeType: String, content: ByteArray
-        ): String {
-            uploadedNames += name
-            return name
-        }
-        override suspend fun updateFile(
-            accessToken: String, fileId: String, mimeType: String, content: ByteArray
-        ) = error("No update expected")
-    }
 }
