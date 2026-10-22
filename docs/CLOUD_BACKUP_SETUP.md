@@ -44,8 +44,8 @@ Create one OAuth client per signing certificate:
 ## Backup contract (v4)
 
 Drive holds `rhymeai-manifest.json` (plain UTF-8 JSON, `version` 4) and one raw
-file per recording named `rec_<projectId>_<fileName>`, uploaded with Drive
-`appProperties` `projectId`, `fileName`, `sha256` and `bytes`. The manifest's
+file per recording named `rec_<recordingId>` (each recording has a stable UUID), uploaded with Drive
+`appProperties` `id`, `projectId`, `fileName`, `sha256` and `bytes`. The manifest's
 `manifestSha256` covers its canonical form; a manifest whose hash does not match
 is refused ("Backup file is damaged; it was not merged.") and never overwritten,
 and so is one with a `version` above 4. The full field list, canonical rules and
@@ -57,7 +57,8 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
   appears at launch when Drive is connected and the library is empty.
 - **Back up now** and the automatic backup (30 seconds after the last change to
   songs, trash, tombstones or recordings, and when leaving the app) merge this
-  device into Drive and never change local data. The manifest is re-checked
+  device into Drive and change no songs or recordings here (stamping a recording
+  seen for the first time with its file time is their only local write). The manifest is re-checked
   just before each write and read back after it; if another device wrote in
   between, the backup merges again, keeping what earlier attempts saw (up to
   three times, then "Backup conflict, will retry").
