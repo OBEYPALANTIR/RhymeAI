@@ -75,8 +75,8 @@ struct AssistantPanelView: View {
                     closeButton(label: "Close Assistant", identifier: "closeAssistantButton", action: onDismiss)
                 }
             }
-            .padding(.leading, RhymeAITokens.Spacing.md)
-            .padding(.trailing, RhymeAITokens.Spacing.xs)
+            .padding(.leading, RhymeAITokens.Rhythm.section)
+            .padding(.trailing, RhymeAITokens.Rhythm.tight)
             .frame(minHeight: RhymeAITokens.Touch.minimum)
             .overlay(Divider(), alignment: .bottom)
 
@@ -98,8 +98,8 @@ struct AssistantPanelView: View {
                     closeButton(label: "Hide Assistant", identifier: "hideInlineAssistantButton", action: onDismiss)
                 }
             }
-            .padding(.leading, RhymeAITokens.Spacing.md)
-            .padding(.trailing, RhymeAITokens.Spacing.xs)
+            .padding(.leading, RhymeAITokens.Rhythm.section)
+            .padding(.trailing, RhymeAITokens.Rhythm.tight)
             .frame(minHeight: RhymeAITokens.Touch.comfortable)
             .liquidGlassSurface(cornerRadius: 0, fallbackOpacity: 0.02)
             .overlay(Divider(), alignment: .bottom)
@@ -132,7 +132,7 @@ struct AssistantPanelView: View {
             VStack(spacing: 0) {
                 ScrollView {
                     panelControls(rhymeContext: rhymeContext)
-                        .padding(RhymeAITokens.Spacing.md)
+                        .padding(RhymeAITokens.Rhythm.section)
                         .liquidGlassGroup(spacing: RhymeAITokens.Spacing.md)
                 }
                 .accessibilityIdentifier("assistantScrollView")
@@ -214,26 +214,26 @@ struct AssistantPanelView: View {
             .font(.body.weight(.semibold))
             .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, RhymeAITokens.Spacing.sm)
-            .frame(minHeight: RhymeAITokens.Touch.minimum)
+            .padding(.vertical, RhymeAITokens.Rhythm.tight)
+            .frame(minHeight: RhymeAITokens.Rhythm.primary)
             .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.md)
             .opacity(isDisabled ? 0.45 : 1)
         }
         .disabled(suggestionDisabled)
         .buttonStyle(.rhymePress)
-        .padding(.horizontal, RhymeAITokens.Spacing.md)
-        .padding(.top, RhymeAITokens.Spacing.sm)
-        .padding(.bottom, RhymeAITokens.Spacing.sm + bottomInset)
+        .padding(.horizontal, RhymeAITokens.Rhythm.section)
+        .padding(.top, RhymeAITokens.Rhythm.tight)
+        .padding(.bottom, RhymeAITokens.Rhythm.tight + bottomInset)
         .background(appearance.palette.canvas)
         .overlay(Divider(), alignment: .top)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: bottomInset)
     }
 
     private func panelControls(rhymeContext: RhymeContext) -> some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.section) {
             // MARK: - Context & Theme
-            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                HStack(spacing: RhymeAITokens.Spacing.xs) {
+            VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
+                HStack(spacing: RhymeAITokens.Rhythm.tight) {
                     Label("Context & Theme", systemImage: "pencil")
                         .font(.headline)
                     helpButton(.contextTheme)
@@ -242,7 +242,7 @@ struct AssistantPanelView: View {
                 TextField("What is this song about?", text: $viewModel.theme, axis: .vertical)
                     .lineLimit(3...6)
                     .textFieldStyle(.plain)
-                    .padding(RhymeAITokens.Spacing.sm)
+                    .padding(RhymeAITokens.Rhythm.related)
                     .liquidGlassSurface(
                         cornerRadius: RhymeAITokens.Radius.md,
                         tint: .white.opacity(0.04),
@@ -254,7 +254,7 @@ struct AssistantPanelView: View {
             Divider()
 
             // MARK: - Target Line
-            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+            VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                 HStack {
                     Label("Target Line", systemImage: "text.alignleft")
                         .font(.subheadline.weight(.medium))
@@ -267,15 +267,15 @@ struct AssistantPanelView: View {
                         Text("\(SyllableCounter.countText(targetLine)) syl")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                            .padding(.vertical, RhymeAITokens.Spacing.xxs)
+                            .padding(.horizontal, RhymeAITokens.Rhythm.tight)
+                            .padding(.vertical, RhymeAITokens.Rhythm.tight)
                             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, fallbackOpacity: 0.08)
                     }
                 }
 
                 Group {
                     if let targetLine = rhymeContext.targetLine {
-                        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                        VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                             Text("\"\(targetLine)\"")
                                 .font(.system(.body, design: .serif))
                                 .italic()
@@ -293,7 +293,7 @@ struct AssistantPanelView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(RhymeAITokens.Spacing.sm)
+                .padding(RhymeAITokens.Rhythm.standard)
                 .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.sm, tint: .white.opacity(0.03), fallbackOpacity: 0.05)
             }
 
@@ -301,13 +301,13 @@ struct AssistantPanelView: View {
             // Scheme, density, and complexity live behind one disclosure so the
             // panel leads with the writing flow; the header summary keeps the
             // current tuning visible while collapsed.
-            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+            VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.standard) {
                 Button {
                     withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                         rhymeOptionsExpanded.toggle()
                     }
                 } label: {
-                    HStack(spacing: RhymeAITokens.Spacing.sm) {
+                    HStack(spacing: RhymeAITokens.Rhythm.related) {
                         Text("Rhyme Options")
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.secondary)
@@ -328,7 +328,7 @@ struct AssistantPanelView: View {
 
                 if rhymeOptionsExpanded {
                 // MARK: - Rhyme Scheme
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                     HStack {
                         featureHelpLabel("Rhyme Scheme", help: .rhymeScheme)
 
@@ -347,7 +347,7 @@ struct AssistantPanelView: View {
                         TextField("e.g. AABBCC", text: $viewModel.customRhymeScheme)
                             .textFieldStyle(.plain)
                             .textInputAutocapitalization(.characters)
-                            .padding(RhymeAITokens.Spacing.sm)
+                            .padding(RhymeAITokens.Rhythm.related)
                             .frame(minHeight: RhymeAITokens.Touch.minimum)
                             .liquidGlassSurface(
                                 cornerRadius: RhymeAITokens.Radius.md,
@@ -363,7 +363,7 @@ struct AssistantPanelView: View {
                 }
 
                 // MARK: - Rhyme Density
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                     featureHelpLabel("Rhyme Density", help: .rhymeDensity)
 
                     Picker("Type", selection: $viewModel.rhymeType) {
@@ -375,7 +375,7 @@ struct AssistantPanelView: View {
                 }
 
                 // MARK: - Complexity
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                     HStack {
                         featureHelpLabel("Complexity", help: .complexity)
                         Spacer()
@@ -423,7 +423,7 @@ struct AssistantPanelView: View {
             }
 
             if viewModel.selectedProvider == .local {
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                     Label(localStatusTitle, systemImage: "desktopcomputer")
                         .font(.subheadline.weight(.semibold))
                     Text(readiness.detail).font(.caption).foregroundStyle(.secondary)
@@ -438,11 +438,11 @@ struct AssistantPanelView: View {
             }
 
             // MARK: - Results
-            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+            VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.standard) {
             // MARK: - Error
             if let error = viewModel.errorMessage {
                 let recoveryAction = AIErrorRecoveryAction(errorMessage: error)
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(appearance.palette.error)
@@ -463,7 +463,7 @@ struct AssistantPanelView: View {
                     .tint(recoveryAction == .openSettings ? appearance.palette.action : appearance.palette.error)
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
                 }
-                .padding(RhymeAITokens.Spacing.sm)
+                .padding(RhymeAITokens.Rhythm.standard)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .liquidGlassSurface(
                     cornerRadius: RhymeAITokens.Radius.sm,
@@ -483,25 +483,27 @@ struct AssistantPanelView: View {
                 isLoading: viewModel.isLoading
             )
             if showsSuggestions {
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                    HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Spacing.xs) {
-                        Text("Suggestions")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.standard) {
+                    VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
+                        HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Rhythm.related) {
+                            Text("Suggestions")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
 
-                        if viewModel.isLoading {
-                            Text("Writing…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary.opacity(0.8))
-                                .accessibilityLabel(Self.writingAnnouncement)
-                                .accessibilityIdentifier("suggestionsWriting")
-                                .transition(.opacity)
+                            if viewModel.isLoading {
+                                Text("Writing…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary.opacity(0.8))
+                                    .accessibilityLabel(Self.writingAnnouncement)
+                                    .accessibilityIdentifier("suggestionsWriting")
+                                    .transition(.opacity)
+                            }
                         }
-                    }
 
-                    Text("AI-generated · review before use")
-                        .font(.caption.italic())
-                        .foregroundStyle(.secondary.opacity(0.8))
+                        Text("AI-generated · review before use")
+                            .font(.caption.italic())
+                            .foregroundStyle(.secondary.opacity(0.8))
+                    }
 
                     ForEach(viewModel.suggestions) { suggestion in
                         SuggestionCardView(
@@ -566,7 +568,7 @@ struct AssistantPanelView: View {
                 stressDetailExpanded.toggle()
             }
         } label: {
-            HStack(spacing: RhymeAITokens.Spacing.xxs) {
+            HStack(spacing: RhymeAITokens.Rhythm.tight) {
                 Text(stressDetailExpanded ? "Hide stress pattern" : "Show stress pattern")
                 Image(systemName: "chevron.down")
                     .rotationEffect(.degrees(stressDetailExpanded ? 180 : 0))
@@ -590,7 +592,7 @@ struct AssistantPanelView: View {
         font: Font = .subheadline.weight(.medium),
         color: Color = .secondary
     ) -> some View {
-        HStack(spacing: RhymeAITokens.Spacing.xs) {
+        HStack(spacing: RhymeAITokens.Rhythm.tight) {
             Text(text)
                 .font(font)
                 .foregroundStyle(color)

@@ -26,9 +26,9 @@ struct SuggestionCardView: View {
 
     var body: some View {
         let prosody = ProsodyAnalyzer.analyzeLine(suggestion)
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
-            HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
+            HStack(alignment: .top, spacing: RhymeAITokens.Rhythm.related) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                     highlightedText
                         .font(.system(.body, design: .serif))
                         .foregroundStyle(.primary.opacity(0.9))
@@ -41,13 +41,13 @@ struct SuggestionCardView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: RhymeAITokens.Spacing.xs) {
+                HStack(spacing: RhymeAITokens.Rhythm.tight) {
                     if let badge = tierBadgeLabel {
                         Text(badge)
                             .font(.system(.caption, design: .rounded).weight(.medium))
                             .foregroundStyle(tierBadgeColor)
-                            .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                            .padding(.vertical, 2)
+                            .padding(.horizontal, RhymeAITokens.Rhythm.tight)
+                            .padding(.vertical, RhymeAITokens.Rhythm.tight)
                             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, tint: tierBadgeColor.opacity(0.08), fallbackOpacity: 0.08)
                             .accessibilityHidden(true)
                     }
@@ -55,20 +55,20 @@ struct SuggestionCardView: View {
                     Text("\(prosody.syllableCount)")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary.opacity(0.6))
-                        .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                        .padding(.vertical, RhymeAITokens.Spacing.xs)
+                        .padding(.horizontal, RhymeAITokens.Rhythm.tight)
+                        .padding(.vertical, RhymeAITokens.Rhythm.tight)
                         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xs, fallbackOpacity: 0.08)
 
                 }
             }
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: RhymeAITokens.Spacing.md) { suggestionActions }
+                HStack(spacing: RhymeAITokens.Rhythm.standard) { suggestionActions }
                     .fixedSize(horizontal: true, vertical: false)
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) { suggestionActions }
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.tight) { suggestionActions }
             }
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Rhythm.standard)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, fallbackOpacity: 0.06)
     }
 

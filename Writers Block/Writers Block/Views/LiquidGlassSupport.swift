@@ -16,6 +16,21 @@ enum RhymeAITokens {
         static let xxl: CGFloat = 52
     }
 
+    /// Golden-ratio spacing ladder (8·13·21·34·55, each step ≈ ×φ), one meaning
+    /// per step. Android mirror: `DesignTokens.Rhythm`.
+    enum Rhythm {
+        /// Icon to label, badge padding.
+        static let tight: CGFloat = 8
+        /// Heading to caption, label to its control, text to badge, field inset, the two scribble lines.
+        static let related: CGFloat = 13
+        /// Card padding, gap between cards and sub-groups, section heading to first card.
+        static let standard: CGFloat = 21
+        /// Between panel sections, and the panel's edge padding.
+        static let section: CGFloat = 34
+        /// The primary action's height.
+        static let primary: CGFloat = 55
+    }
+
     enum Touch {
         static let minimum: CGFloat = 44
         static let comfortable: CGFloat = 56
