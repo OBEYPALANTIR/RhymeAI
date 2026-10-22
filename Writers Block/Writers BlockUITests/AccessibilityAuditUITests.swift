@@ -157,26 +157,92 @@ final class AccessibilityAuditUITests: XCTestCase {
 
         var report: [String] = []
         var backgroundTextLeft = dimmedBackgroundText
+        // Elements cut by the edge of their own scroll view (such as a button
+        // half under the assistant's pinned bar): the audit samples the view
+        // covering them, so they are scrolled fully into view and audited again.
+        var clipped: [(element: XCUIElement, scrollView: XCUIElement)] = []
         do {
             try app.performAccessibilityAudit { issue in
-                let line = "\(Self.name(of: issue.auditType)) | \(issue.compactDescription) | \(issue.element == nil ? issue.detailedDescription + " | " : "")"
-                    + "\(issue.element?.elementType.rawValue ?? 0) '\(issue.element?.label ?? "")' "
-                    + "id='\(issue.element?.identifier ?? "")' \(issue.element.map { NSCoder.string(for: $0.frame) } ?? "")"
                 var reason = Self.knownNoiseReason(issue, in: app)
                 if reason == nil, issue.element == nil, issue.auditType == .elementDetection, backgroundTextLeft > 0 {
                     backgroundTextLeft -= 1
                     reason = "text of the dimmed screen behind the modal sheet (\(dimmedBackgroundText) expected)"
                 }
-                report.append((reason.map { "FILTERED (\($0)) " } ?? "ISSUE ") + line)
+                if reason == nil, issue.auditType == .contrast, let element = issue.element,
+                   let scrollView = Self.clippingScrollView(of: element, in: app) {
+                    clipped.append((element, scrollView))
+                    reason = "cut by the edge of its scroll view; audited again once scrolled fully into view"
+                }
+                report.append((reason.map { "FILTERED (\($0)) " } ?? "ISSUE ") + Self.describe(issue))
                 return reason != nil
             }
         } catch {
             XCTFail("Accessibility audit of \(surface) failed to run: \(error)")
         }
+        if !clipped.isEmpty {
+            report += reauditContrast(of: clipped, in: app)
+        }
         let attachment = XCTAttachment(string: report.isEmpty ? "(no issues)" : report.joined(separator: "\n"))
         attachment.name = "audit-\(surface)-issues"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    /// Scrolls each clipped element fully into its scroll view and runs the
+    /// contrast audit again. Issues on those elements now fail like any other;
+    /// every other element was already audited in the first pass.
+    @MainActor
+    private func reauditContrast(
+        of clipped: [(element: XCUIElement, scrollView: XCUIElement)],
+        in app: XCUIApplication
+    ) -> [String] {
+        var report: [String] = []
+        var labels: Set<String> = []
+        for (element, scrollView) in clipped {
+            labels.insert(element.label)
+            for _ in 0..<4 where !scrollView.frame.contains(element.frame) {
+                let frame = element.frame, visible = scrollView.frame
+                let dy = frame.maxY > visible.maxY ? -(frame.maxY - visible.maxY + 24) : visible.minY - frame.minY + 24
+                let start = scrollView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: dy)), withVelocity: .slow, thenHoldForDuration: 0.3)
+            }
+            XCTAssertTrue(scrollView.frame.contains(element.frame), "Could not scroll '\(element.label)' fully into view")
+        }
+        report.append("-- contrast audit again after scrolling \(labels.sorted()) into view")
+        do {
+            try app.performAccessibilityAudit(for: .contrast) { issue in
+                guard let element = issue.element, labels.contains(element.label) else {
+                    report.append("SKIPPED (audited in the first pass) " + Self.describe(issue))
+                    return true
+                }
+                let reason = Self.knownNoiseReason(issue, in: app)
+                report.append((reason.map { "FILTERED (\($0)) " } ?? "ISSUE ") + Self.describe(issue))
+                return reason != nil
+            }
+        } catch {
+            XCTFail("Contrast audit after scrolling failed to run: \(error)")
+        }
+        return report
+    }
+
+    /// The scroll view that contains `element` and cuts it at an edge: the
+    /// element is one of its descendants and only partly inside its frame.
+    @MainActor
+    private static func clippingScrollView(of element: XCUIElement, in app: XCUIApplication) -> XCUIElement? {
+        let label = element.label, frame = element.frame
+        guard !label.isEmpty else { return nil }
+        return app.scrollViews.allElementsBoundByIndex.first { scrollView in
+            guard scrollView.frame.intersects(frame), !scrollView.frame.contains(frame) else { return false }
+            let match = scrollView.descendants(matching: element.elementType)
+                .matching(NSPredicate(format: "label == %@", label)).firstMatch
+            return match.exists && match.frame == frame
+        }
+    }
+
+    private static func describe(_ issue: XCUIAccessibilityAuditIssue) -> String {
+        "\(name(of: issue.auditType)) | \(issue.compactDescription) | \(issue.element == nil ? issue.detailedDescription + " | " : "")"
+            + "\(issue.element?.elementType.rawValue ?? 0) '\(issue.element?.label ?? "")' "
+            + "id='\(issue.element?.identifier ?? "")' \(issue.element.map { NSCoder.string(for: $0.frame) } ?? "")"
     }
 
     /// Rows that swap a one-line layout for a stacked one with ViewThatFits as
@@ -212,10 +278,6 @@ final class AccessibilityAuditUITests: XCTestCase {
             return "segment of the represented system segmented control; frame does not match the drawn segment"
         case .contrast where !element.isHittable:
             return "covered by another view or scrolled out of sight; the audit samples the wrong pixels"
-        case .contrast where app.scrollViews.allElementsBoundByIndex.contains(where: {
-            $0.frame.intersects(element.frame) && !$0.frame.contains(element.frame)
-        }):
-            return "partly scrolled under the edge of its scroll view (such as the assistant's pinned bar); the audit samples the covering view"
         case .textClipped where element.elementType == .textField:
             return "single-line text field; its text scrolls, nothing is cut off"
         case .dynamicType where app.navigationBars.buttons[label].exists:
