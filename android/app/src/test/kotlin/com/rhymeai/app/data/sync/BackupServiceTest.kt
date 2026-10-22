@@ -238,6 +238,140 @@ class BackupServiceTest {
     }
 
     @Test
+    fun contentSeenInAnEarlierAttemptSurvivesAStaleWriterInBetween() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("L")))
+        putRemote(SyncBlob(projects = listOf(song("R"))))
+        // A stale device overwrites the manifest with only T right after our write.
+        drive.afterManifestWrite = { putRemote(SyncBlob(projects = listOf(song("T")))) }
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertEquals(setOf("R", "L", "T"), remote().projects.map { it.id }.toSet())
+    }
+
+    @Test
+    fun aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("doomed", updatedAt = 1_000L), song("kept")))
+        writeMemo("doomed", "take.m4a", "audio".toByteArray(), modifiedAt = 1_000L)
+        putRemote(SyncBlob(projects = listOf(song("kept"))))
+        // Another device deletes the song forever while our recording uploads (a minute later).
+        drive.onRecordingUpload = {
+            putRemote(SyncBlob(projects = listOf(song("kept")), deletions = listOf(SyncDeletion("doomed", deletedAt = clock + 60_000L))))
+        }
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertEquals(listOf("kept"), remote().projects.map { it.id })
+        assertTrue(remote().recordings.isEmpty())
+        assertTrue(remote().deletions.any { it.projectId == "doomed" && it.fileName == null })
+        // The retry does not upload the recording a second time.
+        assertEquals(1, drive.count("rec_doomed_take.m4a"))
+        assertEquals(1, drive.uploads) // the one recording upload; the manifest was updated in place
+        // This device still has its song: Back up never changes local data.
+        assertEquals(setOf("doomed", "kept"), repository.projectsFlow.first().map { it.id }.toSet())
+    }
+
+    @Test
+    fun revivingASongDoesNotBringBackItsDeletedRecordings() = runBlocking<Unit> {
+        val audio = "old take".toByteArray()
+        val listed = entry("x", "take.m4a", audio, uploadedAt = 1_000L)
+        // Another device deleted song x forever at 5000; Drive still listed its old take.
+        putRemote(SyncBlob(recordings = listOf(listed), deletions = listOf(SyncDeletion("x", deletedAt = 5_000L))))
+        putRaw(listed, audio)
+        // This device edited x afterwards and still holds the old audio.
+        repository.saveProjects(listOf(song("x", updatedAt = 9_000L)))
+        writeMemo("x", "take.m4a", audio, modifiedAt = 1_000L)
+
+        repeat(2) {
+            assertIs<SyncResult.Success>(service.backUp(repository))
+            assertEquals(listOf("x"), remote().projects.map { it.id }, "backup ${it + 1}")
+            assertTrue(remote().recordings.isEmpty(), "backup ${it + 1}")
+            assertEquals(listOf(SyncDeletion("x", "take.m4a", 5_000L)), remote().deletions, "backup ${it + 1}")
+        }
+
+        // An offline device that kept the old song and audio backs up later.
+        val offlineRoot = kotlin.io.path.createTempDirectory("rhymeai-offline").toFile()
+        try {
+            val offlineFiles = File(offlineRoot, "files").also { it.mkdirs() }
+            val offlineRepo = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = scope) { File(offlineRoot, "prefs.preferences_pb") }, MemoryKeyStore()
+            )
+            offlineRepo.saveProjects(listOf(song("x", updatedAt = 100L)))
+            RecordingFileStore.targetFile(offlineFiles, "x", "take.m4a").apply { parentFile!!.mkdirs(); writeBytes(audio); setLastModified(1_000L) }
+            val offline = DriveSyncService(offlineFiles, MemoryKeyStore(), drive, auth, clientId = { "offline" }, now = { clock })
+
+            assertIs<SyncResult.Success>(offline.backUp(offlineRepo))
+
+            assertTrue(remote().recordings.isEmpty())
+            assertEquals(9_000L, remote().projects.single().updatedAt)
+        } finally {
+            offlineRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aRawFileWithoutMatchingMetadataIsUploadedAgain() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val memo = writeMemo("p", "take.m4a", "healthy".toByteArray())
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(memo.copy(uploadedAt = 2_000L))))
+        drive.put("rec_p_take.m4a", "damaged".toByteArray()) // no appProperties
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertContentEquals("healthy".toByteArray(), drive.bytes("rec_p_take.m4a"))
+        assertEquals(memo.sha256, drive.file("rec_p_take.m4a")!!.appProperties["sha256"])
+        assertEquals(1, drive.count("rec_p_take.m4a"))
+    }
+
+    @Test
+    fun aDeletedOlderRecordingIsPreservedRawBeforeTheOlderBackupIsRemoved() = runBlocking<Unit> {
+        keys.setKey(DriveSyncService.LEGACY_PASSPHRASE_KEY, passphrase)
+        val audio = "deleted take".toByteArray()
+        val old = entry("legacy", "deleted.m4a", audio, uploadedAt = 0L)
+        putLegacy(
+            SyncBlob(projects = listOf(song("legacy")), recordings = listOf(old), deletions = listOf(SyncDeletion("legacy", "deleted.m4a", 9_000L))),
+            mapOf(old to audio)
+        )
+
+        val result = assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertTrue(result.migratedLegacyBackup)
+        // Not listed (it was deleted), but its bytes are kept raw rather than destroyed.
+        assertTrue(remote().recordings.isEmpty())
+        assertContentEquals(audio, drive.bytes("rec_legacy_deleted.m4a"))
+        assertNull(drive.bytes(old.driveName))
+    }
+
+    @Test
+    fun aDeletedOlderRecordingThatCannotMoveKeepsTheOlderBackup() = runBlocking<Unit> {
+        keys.setKey(DriveSyncService.LEGACY_PASSPHRASE_KEY, passphrase)
+        val old = entry("legacy", "deleted.m4a", "never uploaded".toByteArray(), uploadedAt = 0L)
+        putLegacy(SyncBlob(projects = listOf(song("legacy")), recordings = listOf(old), deletions = listOf(SyncDeletion("legacy", "deleted.m4a", 9_000L))))
+
+        val result = assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertFalse(result.migratedLegacyBackup)
+        assertEquals(1, result.unmovedLegacyRecordings)
+        assertNotNull(drive.bytes(SyncBlob.DRIVE_FILE_NAME))
+    }
+
+    @Test
+    fun backUpLeavesAnInterruptedRestoreAloneAndRestoreFinishesIt() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val stage = java.nio.file.Files.createTempDirectory(filesDir.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
+        val bytes = "half restored".toByteArray()
+        RecordingFileStore.stageRestore(stage, 0, entry("p", "staged.m4a", bytes), bytes)
+        val mine = writeMemo("p", "mine.m4a", "mine".toByteArray())
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertTrue(stage.exists())
+
+        assertIs<SyncResult.Success>(service.restore(repository))
+        assertFalse(stage.exists())
+        assertContentEquals("mine".toByteArray(), RecordingFileStore.targetFile(filesDir, mine.projectId, mine.fileName).readBytes())
+    }
+
+    @Test
     fun aWriterThatNeverStopsIsReportedAsAConflict() = runBlocking<Unit> {
         putRemote(SyncBlob(projects = listOf(song("seed"))))
         var round = 0
@@ -456,6 +590,7 @@ class BackupServiceTest {
         var failRevoke = false
         var afterManifestWrite: (() -> Unit)? = null
         var keepInterfering: (() -> Unit)? = null
+        var onRecordingUpload: (() -> Unit)? = null
         val revoked = mutableListOf<String>()
 
         fun put(name: String, bytes: ByteArray, appProperties: Map<String, String> = emptyMap()) {
@@ -509,6 +644,7 @@ class BackupServiceTest {
             uploads++
             val id = add(name, content, appProperties)
             if (name == BackupManifest.FILE_NAME) manifestWritten()
+            if (name.startsWith(BackupManifest.RECORDING_PREFIX)) onRecordingUpload?.let { onRecordingUpload = null; it() }
             return id
         }
         override suspend fun updateFile(

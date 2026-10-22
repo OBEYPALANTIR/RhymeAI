@@ -158,11 +158,8 @@ class RecordingRestoreChunkingTest {
                 RecordingFileStore.stageRestore(stageDirectory, index, restore.entry, download(restore.remoteFileId))
             }
             RecordingFileStore.commitStagedRestores(filesDir, staged)
-        } catch (e: Exception) {
-            if (!RecordingFileStore.hasPreparedRestore(stageDirectory)) {
-                stageDirectory.deleteRecursively()
-            }
-            throw e
+        } finally {
+            stageDirectory.deleteRecursively()
         }
     }
 

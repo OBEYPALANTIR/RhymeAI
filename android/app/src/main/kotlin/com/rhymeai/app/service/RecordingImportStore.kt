@@ -46,10 +46,12 @@ internal object RecordingImportStore {
             require(candidate.length() > 0) { "Empty audio file" }
             validate(candidate)
             checkCancellation()
-            val destination = RecordingFiles.resolveCollision(directory, basename, extension)
             // No REPLACE_EXISTING: a concurrent import must never overwrite another take.
-            Files.move(candidate.toPath(), destination.toPath())
-            return destination
+            return synchronized(RecordingFiles.mutationLock) {
+                RecordingFiles.resolveCollision(directory, basename, extension).also {
+                    Files.move(candidate.toPath(), it.toPath())
+                }
+            }
         } finally {
             staged?.delete()
         }

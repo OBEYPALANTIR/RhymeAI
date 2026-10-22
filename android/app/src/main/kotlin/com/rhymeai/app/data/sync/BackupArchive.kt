@@ -128,6 +128,8 @@ object BackupArchive {
 
     /** Merges imported songs, trash and tombstones; adds recordings this device lacks and never replaces one. */
     internal suspend fun import(contents: Contents, repository: ProjectRepository, filesDir: File): ImportSummary {
+        // Finish or roll back an interrupted restore before reading what is on disk.
+        RecordingFileStore.recoverInterruptedRestores(filesDir)
         val base = repository.snapshotLocalSyncBase()
         val merged = SyncMerger.merge(base.blob, contents.manifest.copy(recordings = emptyList()))
         val local = snapshotLocalRecordingFiles(filesDir, base.pendingIds).mapTo(HashSet()) { it.entry.identityKey }
