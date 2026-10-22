@@ -102,9 +102,20 @@ below is the contract it must meet, not verified behaviour.
   a recording only when newer than its `uploadedAt` (a local file not yet listed
   uses its modification time). A song or recording newer than its tombstone
   survives and the tombstone is dropped. When a song tombstone removes a
-  recording, that recording gets its own tombstone at the same time, so reviving
-  the song later cannot bring the deleted audio back (on this device, in later
-  backups, or from an offline device holding the old file). The same rule runs in the merger, the
+  recording, that recording gets its own tombstone at the same time, and
+  deleting a song (Delete Forever or Trash expiry) writes tombstones for every
+  recording this device knows for it in the same write, so reviving the song
+  later cannot bring the deleted audio back (on this device, in later backups,
+  or from an offline device holding the old file). Exception: a recording that
+  was never in any backup and was never on the deleting device (for example one
+  recorded on an offline device and not yet uploaded) has no identity anyone
+  could tombstone; if the song is revived before that device backs up, the
+  recording is treated as new. Every merge (backup write, retry, pre-write
+  refresh, restore, import, migration) first gathers all its inputs' songs,
+  trash, recording entries and tombstones (local, everything earlier attempts
+  saw, the fresh manifest, a conflicting read-back, the archive) and only then
+  applies the timestamp rule once; no path filters recordings or drops
+  tombstones before every input is in. The same rule runs in the merger, the
   local apply and the upload filter (`SyncMergerTest`, `BackupServiceTest`,
   `ProjectRepositoryTest`). Recordings are immutable, so Drive's entry wins per
   identity; a raw file counts as present only when its `appProperties` hash and
