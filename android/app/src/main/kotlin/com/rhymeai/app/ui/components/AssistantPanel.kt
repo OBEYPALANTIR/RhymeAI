@@ -686,31 +686,27 @@ fun AssistantPanel(
         }
         }
 
-        // The ink burst: when writing ends with at least one line and no
-        // error, and not because Stop was tapped, the spinner bursts once.
+        // The ink burst: the spinner bursts once when a request ends by itself
+        // with at least one line. Stop, cancels and errors never move the count.
         val burstElapsed = remember { Animatable(InkBurstMotion.DURATION_MILLIS.toFloat()) }
         // The spinner's centre in the button's own space, so a sheet drag mid-burst carries the dots with it.
         val burstOrigin = remember { mutableStateOf(Offset.Unspecified) }
         val buttonCoordinates = remember { mutableStateOf<LayoutCoordinates?>(null) }
-        var stopTapped by remember { mutableStateOf(false) }
-        var wasLoading by remember { mutableStateOf(viewModel.isLoading) }
+        // Runs that finished before the panel opened do not burst.
+        var runsSeen by remember { mutableIntStateOf(viewModel.suggestionRunsCompleted) }
         LaunchedEffect(viewModel.isLoading) {
-            val finished = wasLoading && !viewModel.isLoading
-            wasLoading = viewModel.isLoading
-            if (viewModel.isLoading) {
-                stopTapped = false
-                // A new request clears a burst still in flight.
-                burstElapsed.snapTo(InkBurstMotion.DURATION_MILLIS.toFloat())
-            }
-            if (finished && !stopTapped && animationsEnabled &&
-                viewModel.suggestions.isNotEmpty() && viewModel.errorMessage == null
-            ) {
-                burstElapsed.snapTo(0f)
-                burstElapsed.animateTo(
-                    InkBurstMotion.DURATION_MILLIS.toFloat(),
-                    tween(InkBurstMotion.DURATION_MILLIS, easing = LinearEasing)
-                )
-            }
+            // A new request clears a burst still in flight.
+            if (viewModel.isLoading) burstElapsed.snapTo(InkBurstMotion.DURATION_MILLIS.toFloat())
+        }
+        LaunchedEffect(viewModel.suggestionRunsCompleted) {
+            if (viewModel.suggestionRunsCompleted == runsSeen) return@LaunchedEffect
+            runsSeen = viewModel.suggestionRunsCompleted
+            if (!animationsEnabled) return@LaunchedEffect
+            burstElapsed.snapTo(0f)
+            burstElapsed.animateTo(
+                InkBurstMotion.DURATION_MILLIS.toFloat(),
+                tween(InkBurstMotion.DURATION_MILLIS, easing = LinearEasing)
+            )
         }
         val burstInk = colorScheme.onSurface
 
@@ -721,10 +717,7 @@ fun AssistantPanel(
             onClick = {
                 when {
                     setupModel -> onModelSetup()
-                    viewModel.isLoading -> {
-                        stopTapped = true
-                        viewModel.cancelSuggestions()
-                    }
+                    viewModel.isLoading -> viewModel.cancelSuggestions()
                     else -> viewModel.getSuggestions()
                 }
             },
