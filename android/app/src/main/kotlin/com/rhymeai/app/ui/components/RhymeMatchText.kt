@@ -8,7 +8,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 
-private val lastWordPattern = Regex("(.*?)(\\b\\w+\\b)([^\\w]*)\$")
+// Internal straight or curly apostrophes keep contractions and possessives whole ("you're", "band's").
+private val lastWordPattern = Regex("(.*?)(\\b\\w+(?:['’]\\w+)*\\b)([^\\w]*)\$")
 
 /**
  * Marks the line's last word as the rhyme being matched: [color], semibold, underlined.
