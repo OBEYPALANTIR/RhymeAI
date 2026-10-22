@@ -1,5 +1,5 @@
-import CryptoKit
 import XCTest
+@testable import Writers_Block
 
 /// Live smoke test for the ATS declarative certificate pins (NSPinnedDomains)
 /// declared in Writers-Block-Info.plist.
@@ -43,25 +43,41 @@ final class CertPinningSmokeTests: XCTestCase {
         try await verifyPinnedDomain("oauth2.googleapis.com")
     }
 
-    /// The pin check itself must fail closed: a session that pins identities the
-    /// Drive host does not present is refused at the TLS layer, with no fallback
-    /// to system trust. (ATS's own pins cannot be swapped inside a test, so this
-    /// uses an isolated session with its own pinning delegate.)
-    func testDriveHostIsRejectedWhenNoPinnedIdentityMatches() async throws {
-        let delegate = MismatchedPinsDelegate(pins: [String(repeating: "A", count: 43) + "="])
-        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-        var request = URLRequest(url: try XCTUnwrap(URL(string: "https://www.googleapis.com/")))
-        request.timeoutInterval = 30
+    /// The app's own pin check, bound to the production pin set in Info.plist:
+    /// it accepts the Drive host's chain and refuses a chain from another CA.
+    /// Removing the production pins makes the first half fail.
+    func testProductionPinsAcceptTheDriveChainAndRefuseAnotherCA() async throws {
+        let pins = PinnedTrust.pins(for: "www.googleapis.com")
+        XCTAssertGreaterThanOrEqual(pins.count, 2)
+        let drive = try await serverTrust(for: "www.googleapis.com")
+        XCTAssertTrue(PinnedTrust.evaluate(drive, pins: pins), "the production pins no longer match the Drive host")
+        let other = try await serverTrust(for: "github.com")
+        XCTAssertFalse(PinnedTrust.evaluate(other, pins: pins), "a chain with no pinned CA was accepted")
+        XCTAssertFalse(PinnedTrust.evaluate(drive, pins: []), "no pins must mean no trust")
+    }
 
-        do {
-            _ = try await session.data(for: request)
-            XCTFail("A chain with no pinned identity was accepted")
-        } catch let error as URLError where error.code == .cancelled {
-            XCTAssertEqual(delegate.rejection, "no certificate in the chain matches a pinned identity")
-        } catch let error as URLError where [.notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .timedOut].contains(error.code) {
-            throw XCTSkip("Offline; skipping the pin rejection check: \(error)")
+    /// The session the Drive client and sign-in use reaches the pinned hosts.
+    func testPinnedSessionReachesTheDriveHosts() async throws {
+        for host in ["www.googleapis.com", "oauth2.googleapis.com"] {
+            do {
+                let (_, response) = try await PinnedTrust.session.data(from: try XCTUnwrap(URL(string: "https://\(host)/")))
+                XCTAssertNotNil(response as? HTTPURLResponse)
+            } catch let error as URLError where [.notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .timedOut].contains(error.code) {
+                throw XCTSkip("Offline: \(error)")
+            }
         }
+    }
+
+    private func serverTrust(for host: String) async throws -> SecTrust {
+        let capture = TrustCapture()
+        let session = URLSession(configuration: .ephemeral, delegate: capture, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        do {
+            _ = try await session.data(from: try XCTUnwrap(URL(string: "https://\(host)/")))
+        } catch let error as URLError where [.notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .timedOut].contains(error.code) {
+            throw XCTSkip("Offline: \(error)")
+        } catch {}
+        return try XCTUnwrap(capture.trust, "no server trust for \(host)")
     }
 
     private func verifyPinnedDomain(_ domain: String) async throws {
@@ -99,28 +115,13 @@ final class CertPinningSmokeTests: XCTestCase {
     }
 }
 
-/// Pins by SHA-256 of each certificate in the chain; never defers to system trust.
-private final class MismatchedPinsDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
-    private let pins: Set<String>
-    private(set) var rejection: String?
-
-    init(pins: Set<String>) { self.pins = pins }
+/// Records the server trust and refuses the connection; the test evaluates it.
+private final class TrustCapture: NSObject, URLSessionDelegate, @unchecked Sendable {
+    private(set) var trust: SecTrust?
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = challenge.protectionSpace.serverTrust,
-              let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate] else {
-            rejection = "no server trust to evaluate"
-            completionHandler(.cancelAuthenticationChallenge, nil)
-            return
-        }
-        let presented = chain.map { Data(SHA256.hash(data: SecCertificateCopyData($0) as Data)).base64EncodedString() }
-        if presented.contains(where: pins.contains) {
-            completionHandler(.useCredential, URLCredential(trust: trust))
-        } else {
-            rejection = "no certificate in the chain matches a pinned identity"
-            completionHandler(.cancelAuthenticationChallenge, nil)
-        }
+        trust = challenge.protectionSpace.serverTrust
+        completionHandler(.cancelAuthenticationChallenge, nil)
     }
 }

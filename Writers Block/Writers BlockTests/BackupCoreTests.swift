@@ -154,15 +154,16 @@ struct BackupCoreTests {
         let manifest = try SyncBlob.decodeManifest(manifestData)
         #expect(manifest.projects.map(\.id) == ["project-1"])
         #expect(manifest.platform == "ios")
-        #expect(manifest.recordings.map { [$0.key, String($0.bytes), $0.sha256] } == [["project-1/take 1.m4a", "6", RecordingBackupManifest.sha256Hex(memoData)]])
+        let id = try harness.rowId("take 1.m4a")
+        #expect(manifest.recordings.map { [$0.id, $0.projectId, $0.fileName, String($0.bytes), $0.sha256] } == [[id, "project-1", "take 1.m4a", "6", RecordingBackupManifest.sha256Hex(memoData)]])
         #expect(abs(try #require(manifest.recordings.first).uploadedAt.timeIntervalSinceNow) < 60)
         let text = try #require(String(data: manifestData, encoding: .utf8))
         #expect(!text.contains("apiKey"))
         #expect(text.contains(#""manifestSha256":"\#(manifest.manifestSha256)""#))
 
-        #expect(harness.drive.content(named: "rec_project-1_take 1.m4a") == memoData)
-        #expect(harness.drive.appProperties(named: "rec_project-1_take 1.m4a") == [
-            "projectId": "project-1", "fileName": "take 1.m4a", "sha256": RecordingBackupManifest.sha256Hex(memoData), "bytes": "6",
+        #expect(harness.drive.content(named: "rec_\(id)") == memoData)
+        #expect(harness.drive.appProperties(named: "rec_\(id)") == [
+            "id": id, "projectId": "project-1", "fileName": "take 1.m4a", "sha256": RecordingBackupManifest.sha256Hex(memoData), "bytes": "6",
         ])
         #expect(try harness.context.fetch(FetchDescriptor<Recording>()).map(\.key) == ["project-1/take 1.m4a"])
         #expect(harness.service.lastBackupAt != nil)
@@ -176,11 +177,12 @@ struct BackupCoreTests {
         try harness.writeMemo(Data([1, 2]), projectId: "project-1", fileName: "take.m4a")
 
         try await harness.service.backupNow(modelContext: harness.context)
-        let recordingUploads = harness.drive.uploads(named: "rec_project-1_take.m4a")
+        let name = "rec_\(try harness.rowId("take.m4a"))"
+        let recordingUploads = harness.drive.uploads(named: name)
         try await harness.service.backupNow(modelContext: harness.context)
 
         #expect(recordingUploads == 1)
-        #expect(harness.drive.uploads(named: "rec_project-1_take.m4a") == 1)
+        #expect(harness.drive.uploads(named: name) == 1)
     }
 
     @MainActor
@@ -290,7 +292,7 @@ struct BackupCoreTests {
         let restoredURL = harness.memosRoot.appendingPathComponent("project-2/demo.m4a")
         #expect(try Data(contentsOf: restoredURL) == remoteMemo)
         #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.id) == ["project-2"])
-        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).map { [$0.key, $0.sha256] } == [[entry.key, entry.sha256]])
+        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).map { [$0.id, $0.key, $0.sha256, $0.origin] } == [[entry.id, "project-2/demo.m4a", entry.sha256, "restored"]])
         #expect(harness.service.lastReport?.damagedRecordings == [])
     }
 
@@ -311,15 +313,20 @@ struct BackupCoreTests {
         harness.drive.seed(name: mine.driveName, content: remoteMine)
         harness.drive.seed(name: broken.driveName, content: corrupt)
 
-        try await harness.service.restoreNow(modelContext: harness.context)
+        await #expect(throws: BackupError.damagedRemoteRecordings(["broken.m4a"])) {
+            try await harness.service.restoreNow(modelContext: harness.context)
+        }
 
+        // The Drive recording is another recording that shares the name: both are kept.
         #expect(try Data(contentsOf: harness.memosRoot.appendingPathComponent("project-3/mine.m4a")) == local)
+        #expect(try Data(contentsOf: harness.memosRoot.appendingPathComponent("project-3/mine 2.m4a")) == remoteMine)
         #expect(!FileManager.default.fileExists(atPath: harness.memosRoot.appendingPathComponent("project-3/broken.m4a").path))
         #expect(harness.service.lastReport?.damagedRecordings == ["broken.m4a"])
+        #expect(harness.service.lastBackupAt == nil)
     }
 
     @MainActor
-    @Test func sameNameRecordingConflictKeepsDrivesCopyAndTheLocalFile() async throws {
+    @Test func twoRecordingsSharingANameAreBothKept() async throws {
         let harness = try makeHarness()
         harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
         try harness.context.save()
@@ -328,15 +335,16 @@ struct BackupCoreTests {
         try harness.writeMemo(local, projectId: "song", fileName: "take.m4a")
         let entry = SyncRecording(projectId: "song", fileName: "take.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(drive))
         harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(recordings: [entry]).encodedManifest())
-        harness.drive.seed(name: entry.driveName, content: drive, appProperties: ["sha256": entry.sha256, "bytes": "2"])
+        harness.drive.seedRecording(entry, content: drive)
 
         try await harness.service.backupNow(modelContext: harness.context)
         try await harness.service.restoreNow(modelContext: harness.context)
 
         let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
-        #expect(manifest.recordings == [entry])
+        #expect(Set(manifest.recordings.map(\.id)) == Set([entry.id, try harness.rowId("take.m4a")]))
         #expect(harness.drive.content(named: entry.driveName) == drive)
         #expect(try Data(contentsOf: harness.memosRoot.appendingPathComponent("song/take.m4a")) == local)
+        #expect(try Data(contentsOf: harness.memosRoot.appendingPathComponent("song/take 2.m4a")) == drive)
     }
 
     @MainActor
@@ -362,8 +370,9 @@ struct BackupCoreTests {
 
         let pushed = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
         #expect(pushed.projects.map(\.id) == ["local-project"])
-        #expect(pushed.recordings.map(\.driveName) == ["rec_local-project_restore-push.m4a"])
-        #expect(harness.drive.content(named: "rec_local-project_restore-push.m4a") == memoData)
+        let id = try harness.rowId("restore-push.m4a")
+        #expect(pushed.recordings.map(\.driveName) == ["rec_\(id)"])
+        #expect(harness.drive.content(named: "rec_\(id)") == memoData)
     }
 
     @MainActor
@@ -380,17 +389,20 @@ struct BackupCoreTests {
         harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 4_000_000_000_000))
         try harness.context.save()
         harness.drive.seed(name: SyncBlob.driveFileName, content: try staleRemote.encodedManifest())
-        harness.drive.seed(name: entry.driveName, content: remoteMemo, appProperties: ["projectId": "gone", "fileName": "take.m4a"])
+        harness.drive.seedRecording(entry, content: remoteMemo)
 
         try await harness.service.restoreNow(modelContext: harness.context)
 
         let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
         #expect(manifest.projects.isEmpty)
         #expect(manifest.recordings.isEmpty)
-        #expect(manifest.deletions == [SyncDeletion(projectId: "gone", deletedAt: 4_000_000_000_000)])
+        // The song's recording gets its own tombstone by id.
+        let tombstones = [SyncDeletion(projectId: "gone", deletedAt: 4_000_000_000_000),
+                          SyncDeletion(projectId: "gone", recordingId: entry.id, fileName: "take.m4a", deletedAt: 4_000_000_000_000)]
+        #expect(manifest.deletions == tombstones)
         #expect(harness.drive.content(named: entry.driveName) == nil)
         #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
-        #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).count == 1)
+        #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).count == 2)
     }
 
     @MainActor
@@ -422,7 +434,7 @@ struct BackupCoreTests {
         harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 4_000_000_000_000))
         try harness.context.save()
         harness.drive.seed(name: SyncBlob.driveFileName, content: try remote.encodedManifest())
-        harness.drive.seed(name: entry.driveName, content: Data([1, 2, 3]))
+        harness.drive.seedRecording(entry, content: Data([1, 2, 3]))
         harness.drive.failNextDelete(named: entry.driveName)
 
         await #expect(throws: BackupError.self) {
@@ -434,7 +446,8 @@ struct BackupCoreTests {
 
         #expect(harness.drive.content(named: entry.driveName) == nil)
         let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
-        #expect(manifest.deletions == [SyncDeletion(projectId: "gone", deletedAt: 4_000_000_000_000)])
+        #expect(manifest.deletions == [SyncDeletion(projectId: "gone", deletedAt: 4_000_000_000_000),
+                                       SyncDeletion(projectId: "gone", recordingId: entry.id, fileName: "take.m4a", deletedAt: 4_000_000_000_000)])
         #expect(manifest.recordings.isEmpty)
     }
 
@@ -482,24 +495,26 @@ struct BackupCoreTests {
         let harness = try makeHarness()
         harness.context.insert(SongProject(id: "song", title: "Song"))
         try harness.context.save()
-        try harness.writeFile(Data([1, 2]), projectId: "song", fileName: "take.m4a")
-        let url = harness.memosRoot.appendingPathComponent("song/take.m4a")
-        harness.service.library.filesInProgress = { [url] }
+        // The recorder writes outside the memo folder until it finishes (A22).
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("in-progress-\(UUID().uuidString)/take.m4a")
+        try FileManager.default.createDirectory(at: staged.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([1, 2]).write(to: staged)
         try harness.service.library.reconcile(context: harness.context)
 
         try await harness.service.backupNow(modelContext: harness.context)
         #expect(try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName))).recordings.isEmpty)
 
         let finished = Data([1, 2, 3, 4, 5])
-        try finished.write(to: url)
-        harness.service.library.filesInProgress = { [] }
-        try harness.service.library.reconcile(context: harness.context)
+        try finished.write(to: staged)
+        harness.service.library.context = harness.context
+        _ = try harness.service.library.publishFinished(staged, projectId: "song", preferredName: "take.m4a", origin: .recorded)
         try await harness.service.backupNow(modelContext: harness.context)
 
-        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).map(\.audio) == [finished])
-        #expect(harness.drive.content(named: "rec_song_take.m4a") == finished)
+        let row = try #require(harness.context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(row.audio == finished && row.origin == "recorded")
+        #expect(harness.drive.content(named: "rec_\(row.id)") == finished)
         let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
-        #expect(manifest.recordings.map(\.sha256) == [RecordingBackupManifest.sha256Hex(finished)])
+        #expect(manifest.recordings.map(\.id) == [row.id])
     }
 
     @MainActor
@@ -586,28 +601,154 @@ struct BackupCoreTests {
     }
 
     @MainActor
-    @Test func aTrashOnlyTakeIsRemovedByANewerSongTombstoneAndCannotComeBack() async throws {
+    @Test func aTrashOnlyTakeGetsItsOwnTombstoneSoARevivalCannotBringItBack() async throws {
         let harness = try makeHarness()
         harness.context.insert(SongProject(id: "S", title: "S", updatedAt: Date(timeIntervalSince1970: 500)))
         try harness.context.save()
-        let trashFolder = harness.service.library.trashRoot.appendingPathComponent("S", isDirectory: true)
-        try FileManager.default.createDirectory(at: trashFolder, withIntermediateDirectories: true)
-        let trashed = trashFolder.appendingPathComponent("1000000\(RecordingFiles.trashNameSeparator)take.m4a")
-        try Data([1, 1]).write(to: trashed)
+        // A take from 1000 s, then moved to the recordings Trash.
+        let library = harness.service.library
+        library.context = harness.context
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("take-\(UUID().uuidString).m4a")
+        try Data([1, 1]).write(to: staged)
+        let live = try library.publishFinished(staged, projectId: "S", preferredName: "take.m4a", origin: .recorded)
+        let row = try #require(harness.context.fetch(FetchDescriptor<Recording>()).first)
+        row.uploadedAt = Date(timeIntervalSince1970: 1_000)
+        try harness.context.save()
+        let trashed = library.trashRoot.appendingPathComponent("S/1500000\(RecordingFiles.trashNameSeparator)take.m4a")
+        try library.trashRecording(at: live, to: trashed, trashedAt: Date(timeIntervalSince1970: 1_500))
+        let takeId = row.id
         harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(deletions: [SyncDeletion(projectId: "S", deletedAt: 5_000_000)]).encodedManifest())
 
         try await harness.service.restoreNow(modelContext: harness.context)
         #expect(!FileManager.default.fileExists(atPath: trashed.path))
         #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        let protection = SyncDeletion(projectId: "S", recordingId: takeId, fileName: "take.m4a", deletedAt: 5_000_000)
+        #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.deletion).contains(protection))
 
-        // The song comes back with a newer edit; a later backup has nothing old to bring back.
+        // The song comes back newer; a device that was offline still holds the take.
         harness.context.insert(SongProject(id: "S", title: "S", lyrics: "revived", updatedAt: Date(timeIntervalSince1970: 9_000)))
         try harness.context.save()
+        let offline = SyncRecording(id: takeId, projectId: "S", fileName: "take.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(Data([1, 1])), uploadedAt: Date(timeIntervalSince1970: 1_000))
+        harness.drive.concurrentWrites = [try SyncBlob(projects: [SyncSongProject(id: "S", title: "S", lyrics: "old", theme: "", updatedAt: Date(timeIntervalSince1970: 500))], recordings: [offline]).encodedManifest()]
+        harness.drive.seedRecording(offline, content: Data([1, 1]))
         try await harness.service.backupNow(modelContext: harness.context)
+
         let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
         #expect(manifest.projects.map(\.lyrics) == ["revived"])
         #expect(manifest.recordings.isEmpty)
-        #expect(manifest.deletions == [SyncDeletion(projectId: "S", deletedAt: 5_000_000)])
+        #expect(manifest.deletions == [protection])
+    }
+
+    @MainActor
+    @Test func aTombstoneWrittenWhileAudioUploadsJoinsBeforeTheManifestIsCommitted() async throws {
+        let harness = try makeHarness()
+        harness.context.insert(SongProject(id: "S", title: "S", updatedAt: Date(timeIntervalSince1970: 100)))
+        try harness.context.save()
+        try harness.writeMemo(Data([1, 2]), projectId: "S", fileName: "take.m4a")
+        harness.drive.duringRecordingUpload = {
+            harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(deletions: [SyncDeletion(projectId: "S", deletedAt: Date().epochMilliseconds + 60_000)]).encodedManifest())
+        }
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(manifest.projects.isEmpty)
+        #expect(manifest.recordings.isEmpty)
+        #expect(manifest.deletions.contains { $0.isSongTombstone && $0.projectId == "S" })
+        #expect(manifest.deletions.contains { $0.recordingId == (try? harness.rowId("take.m4a")) })
+    }
+
+    @MainActor
+    @Test func missingDriveAudioFailsRestoreEvenWhenALocalFileHasItsName() async throws {
+        let harness = try makeHarness()
+        try harness.writeMemo(Data([7]), projectId: "song", fileName: "take.m4a")
+        let entry = SyncRecording(projectId: "song", fileName: "take.m4a", bytes: 1, sha256: RecordingBackupManifest.sha256Hex(Data([8])))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1))],
+            recordings: [entry]
+        ).encodedManifest())
+
+        await #expect(throws: BackupError.missingRemoteRecordings(["take.m4a"])) {
+            try await harness.service.restoreNow(modelContext: harness.context)
+        }
+        #expect(harness.service.lastBackupAt == nil)
+        #expect(harness.service.backgroundBackupFailureDescription != nil)
+    }
+
+    @MainActor
+    @Test func fractionalSecondsDecideAgainstATombstone() async throws {
+        let take = SyncRecording(projectId: "song", fileName: "take.m4a", bytes: 1, sha256: RecordingBackupManifest.sha256Hex(Data([1])),
+                                 uploadedAt: Date(millisecondsSince1970: 1_000_400))
+        let roundTripped = try SyncBlob.decodeManifest(try SyncBlob(recordings: [take]).encodedManifest()).recordings
+        #expect(roundTripped.map(\.uploadedAt.epochMilliseconds) == [1_000_400])
+        let after = try SyncMerger.merge(local: SyncBlob(recordings: roundTripped), remote: SyncBlob(deletions: [SyncDeletion(projectId: "song", recordingId: take.id, fileName: "take.m4a", deletedAt: 1_000_401)]))
+        let before = try SyncMerger.merge(local: SyncBlob(recordings: roundTripped), remote: SyncBlob(deletions: [SyncDeletion(projectId: "song", recordingId: take.id, fileName: "take.m4a", deletedAt: 1_000_399)]))
+        #expect(after.recordings.isEmpty)
+        #expect(before.recordings.map(\.id) == [take.id])
+    }
+
+    @MainActor
+    @Test func aDeletionMadeHereDuringARestoreWinsWhenItIsNewer() async throws {
+        let harness = try makeHarness()
+        let audio = Data([5])
+        let entry = SyncRecording(projectId: "song", fileName: "take.m4a", bytes: 1, sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 1_000))
+        let later = SyncRecording(projectId: "song", fileName: "later.m4a", bytes: 1, sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 1_000))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 2_000))],
+            recordings: [entry, later]
+        ).encodedManifest())
+        harness.drive.seedRecording(entry, content: audio)
+        harness.drive.seedRecording(later, content: audio)
+        // While the first download is in flight, the writer deletes both here: one
+        // tombstone newer than the backup's copy, one older.
+        harness.drive.afterManifestWrite = {
+            harness.context.insert(SyncDeletionRecord(projectId: "song", recordingId: entry.id, fileName: "take.m4a", deletedAt: 1_500_000))
+            harness.context.insert(SyncDeletionRecord(projectId: "song", recordingId: later.id, fileName: "later.m4a", deletedAt: 500_000))
+            try harness.context.save()
+        }
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        #expect(!FileManager.default.fileExists(atPath: harness.memosRoot.appendingPathComponent("song/take.m4a").path))
+        #expect(FileManager.default.fileExists(atPath: harness.memosRoot.appendingPathComponent("song/later.m4a").path))
+    }
+
+    @MainActor
+    @Test func everyOldRecordingGoesUpRawEvenWhenATombstoneKeepsItOutOfTheManifest() async throws {
+        let harness = try makeHarness()
+        harness.secrets.setString(passphrase, for: "drive-sync-passphrase")
+        let oldAudio = Data([3, 3])
+        try harness.seedLegacyBackup(audio: oldAudio)
+        harness.context.insert(SyncDeletionRecord(projectId: "old-song", deletedAt: 4_000_000_000_000))
+        try harness.context.save()
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(manifest.recordings.isEmpty && manifest.projects.isEmpty)
+        let raw = try #require(manifest.deletions.first { $0.recordingId != nil }?.recordingId)
+        #expect(harness.drive.content(named: "rec_\(raw)") == oldAudio)
+        #expect(harness.service.lastReport?.migratedLegacyBackup == true)
+        #expect(harness.drive.content(named: "rhymeai-projects.json") == nil)
+    }
+
+    @MainActor
+    @Test func theDeviceHoldingTheBytesSetsTheNameInARenameConflict() async throws {
+        let harness = try makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        try harness.writeMemo(Data([4, 4]), projectId: "song", fileName: "renamed here.m4a")
+        let id = try harness.rowId("renamed here.m4a")
+        let elsewhere = SyncRecording(id: id, projectId: "song", fileName: "renamed elsewhere.m4a", bytes: 2,
+                                      sha256: RecordingBackupManifest.sha256Hex(Data([4, 4])), uploadedAt: Date(timeIntervalSince1970: 1_000))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(recordings: [elsewhere]).encodedManifest())
+        harness.drive.seedRecording(elsewhere, content: Data([4, 4]))
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(manifest.recordings.map(\.fileName) == ["renamed here.m4a"])
+        #expect(manifest.recordings.map(\.uploadedAt) == [Date(timeIntervalSince1970: 1_000)], "the backed-up copy keeps its time")
     }
 
     // MARK: Lost updates between devices
@@ -646,7 +787,8 @@ struct BackupCoreTests {
         let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
         #expect(manifest.projects.map(\.lyrics) == ["edited"])
         #expect(manifest.recordings.isEmpty)
-        #expect(manifest.deletions == [SyncDeletion(projectId: "S", deletedAt: 5_000_000)])
+        // The outlived song tombstone goes; the take keeps its own tombstone by id.
+        #expect(manifest.deletions == [SyncDeletion(projectId: "S", recordingId: take.id, fileName: "take.m4a", deletedAt: 5_000_000)])
     }
 
     @MainActor
@@ -691,7 +833,7 @@ struct BackupCoreTests {
     @MainActor
     @Test func writesThatNeverReadBackGiveUpAfterThreeAttempts() async throws {
         let harness = try makeHarness()
-        harness.drive.concurrentWrites = try (1...3).map { index in
+        harness.drive.concurrentWrites = try (1...12).map { index in
             try SyncBlob(projects: [SyncSongProject(id: "other-\(index)", title: "", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: Double(index)))]).encodedManifest()
         }
 
@@ -768,9 +910,10 @@ struct BackupCoreTests {
 
         try await harness.service.restoreNow(modelContext: harness.context)
 
+        // The file that took the name is kept; the download lands under the next free name.
         #expect(try Data(contentsOf: harness.memosRoot.appendingPathComponent("song/take.m4a")) == local)
+        #expect(try Data(contentsOf: harness.memosRoot.appendingPathComponent("song/take 2.m4a")) == remote)
         #expect((try? FileManager.default.contentsOfDirectory(atPath: staging.path)) ?? [] == [])
-        #expect(try FileManager.default.contentsOfDirectory(atPath: harness.memosRoot.appendingPathComponent("song").path) == ["take.m4a"])
     }
 
     @Test func pinnedTrustCoversTheDriveHostsWithNoWayAround() throws {
@@ -832,8 +975,8 @@ struct BackupCoreTests {
         #expect(!harness.service.hasLegacyBackupToMigrate)
         let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
         #expect(Set(manifest.projects.map(\.id)) == Set(["local", "old-song"]))
-        #expect(manifest.recordings.map(\.key) == ["old-song/take.m4a"])
-        #expect(harness.drive.content(named: "rec_old-song_take.m4a") == oldAudio)
+        #expect(manifest.recordings.map(\.fileName) == ["take.m4a"])
+        #expect(harness.drive.content(named: try #require(manifest.recordings.first).driveName) == oldAudio)
         // The migration is a backup: the old songs reach this device on Restore.
         #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.id) == ["local"])
         #expect(!FileManager.default.fileExists(atPath: harness.memosRoot.appendingPathComponent("old-song/take.m4a").path))
@@ -1722,6 +1865,10 @@ private struct BackupHarness {
         try service.library.reconcile(context: context)
     }
 
+    func rowId(_ fileName: String) throws -> String {
+        try #require(try context.fetch(FetchDescriptor<Recording>()).first { $0.fileName == fileName && $0.trashedAt == nil }?.id)
+    }
+
     func writeFile(_ data: Data, projectId: String, fileName: String) throws {
         let url = try RecordingFiles.localURL(projectId: projectId, fileName: fileName, memosRoot: memosRoot)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1873,6 +2020,8 @@ private final class FakeDriveClient: DriveAppDataClient {
     private var uploadsByName: [String: Int] = [:]
     private var manifestWritten = false
     var beforeManifestWrite: (@MainActor () throws -> Void)?
+    /// Runs once, when the first recording is uploaded: another device writing meanwhile.
+    var duringRecordingUpload: (@MainActor () throws -> Void)?
     /// Runs at the first download after the manifest upload: an await after the merge is applied.
     var afterManifestWrite: (@MainActor () async throws -> Void)?
 
@@ -1893,6 +2042,13 @@ private final class FakeDriveClient: DriveAppDataClient {
     func seed(name: String, content: Data, appProperties: [String: String]? = nil) {
         let file = DriveAppDataFile(id: UUID().uuidString, name: name, modifiedTime: "seed-\(UUID().uuidString)", version: UUID().uuidString, appProperties: appProperties)
         filesByName[name] = StoredFile(file: file, content: content)
+    }
+
+    /// Raw recording audio as a v4 writer leaves it, with its properties.
+    func seedRecording(_ entry: SyncRecording, content: Data) {
+        seed(name: entry.driveName, content: content, appProperties: [
+            "id": entry.id, "projectId": entry.projectId, "fileName": entry.fileName, "sha256": entry.sha256, "bytes": String(entry.bytes),
+        ])
     }
 
     func content(named name: String) -> Data? {
@@ -1944,6 +2100,10 @@ private final class FakeDriveClient: DriveAppDataClient {
 
     func uploadNewFile(named name: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile {
         try await runManifestWriteHookIfNeeded(name: name)
+        if name.hasPrefix("rec_"), let hook = duringRecordingUpload {
+            duringRecordingUpload = nil
+            try await MainActor.run { try hook() }
+        }
         let file = DriveAppDataFile(id: UUID().uuidString, name: name, modifiedTime: "upload-\(UUID().uuidString)", version: UUID().uuidString, appProperties: appProperties)
         filesByName[name] = StoredFile(file: file, content: content)
         uploadsByName[name, default: 0] += 1
