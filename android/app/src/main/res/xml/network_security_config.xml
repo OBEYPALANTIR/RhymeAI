@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Pins the AI provider and Google Drive backup domains to their CA SPKIs.
-     All chain to Google Trust Services, cross-signed by GlobalSign (AI
-     providers verified 2026-06-12; the Drive and token-revoke hosts verified
-     2026-10-22 through GTS Root R4). Play Services fetches the Drive token
-     itself; only the app's own Drive and revoke requests are pinned here. The
+<!-- Pins the AI provider domains to their CA SPKIs (verified 2026-06-12: all
+     three chain to Google Trust Services, cross-signed by GlobalSign). The
      expiration makes pinning fail-open to default trust so an upstream CA
      migration can't permanently break the app; ISRG/DigiCert are backups in
      case OpenAI/Anthropic hop CAs before then. -->
@@ -12,8 +9,6 @@
         <domain includeSubdomains="false">generativelanguage.googleapis.com</domain>
         <domain includeSubdomains="false">api.openai.com</domain>
         <domain includeSubdomains="false">api.anthropic.com</domain>
-        <domain includeSubdomains="false">www.googleapis.com</domain>
-        <domain includeSubdomains="false">oauth2.googleapis.com</domain>
         <pin-set expiration="2027-06-12">
             <!-- GTS Root R1 -->
             <pin digest="SHA-256">hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</pin>
@@ -29,6 +24,31 @@
             <pin digest="SHA-256">C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=</pin>
             <!-- DigiCert Global Root CA (backup) -->
             <pin digest="SHA-256">r/mIkG3eEpVdm+u/ko/cwxzOMo1bk4TyHIlByibiA5E=</pin>
+        </pin-set>
+    </domain-config>
+    <!-- Google Drive backup and token revoke, pinned fail-closed: no expiration, so
+         a chain outside these roots is refused rather than falling back to system
+         trust. Both hosts chain to GTS Root R4 (verified 2026-10-22); R1-R3 and the
+         GlobalSign cross-sign anchor are the backups. Play Services fetches the
+         Drive token itself; only the app's own Drive and revoke requests pass here.
+         example.com (SSL.com roots) is never contacted by the app: it shares this
+         pin set only so CertPinningInstrumentedTest can show the set rejects an
+         unpinned chain. Rotate these pins before Google moves off GTS. -->
+    <domain-config>
+        <domain includeSubdomains="false">www.googleapis.com</domain>
+        <domain includeSubdomains="false">oauth2.googleapis.com</domain>
+        <domain includeSubdomains="false">example.com</domain>
+        <pin-set>
+            <!-- GTS Root R4 (primary) -->
+            <pin digest="SHA-256">mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=</pin>
+            <!-- GTS Root R1 -->
+            <pin digest="SHA-256">hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</pin>
+            <!-- GTS Root R2 -->
+            <pin digest="SHA-256">Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=</pin>
+            <!-- GTS Root R3 -->
+            <pin digest="SHA-256">QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=</pin>
+            <!-- GlobalSign Root CA (GTS cross-sign anchor on older trust stores) -->
+            <pin digest="SHA-256">K87oWBWM9UZfyddvDfoxL+8lpNyoUB2ptGtn0fv6G2Q=</pin>
         </pin-set>
     </domain-config>
 </network-security-config>
