@@ -14,7 +14,8 @@ import java.util.zip.ZipOutputStream
  * "Export all songs…" / "Import from file…": one zip that any storage provider can
  * hold. Layout: `manifest.json` (v4), `songs/<title or id>.txt`, `songs/<id>.json`,
  * `recordings/<projectId>/<fileName>`. Import reads only paths the verified
- * manifest names, so zip entry names never become file paths.
+ * manifest names, so zip entry names never become file paths, and rejects any
+ * archive holding an entry outside that layout.
  */
 object BackupArchive {
     const val MANIFEST_ENTRY = "manifest.json"
@@ -31,6 +32,16 @@ object BackupArchive {
         val damagedRecordings: Int,
         val skippedLargeRecordings: Int
     )
+
+    /**
+     * Every entry must be `manifest.json` or sit under `songs/` or `recordings/`, with no
+     * `..` segment, absolute path, drive letter or backslash; anything else rejects the archive.
+     */
+    internal fun isAllowedEntryName(name: String): Boolean {
+        if (name.isEmpty() || name.startsWith("/") || '\\' in name || Regex("^[A-Za-z]:").containsMatchIn(name)) return false
+        if (name.split('/').any { it == ".." || it == "." }) return false
+        return name == MANIFEST_ENTRY || name.startsWith("songs/") || name.startsWith("recordings/")
+    }
 
     fun fileName(nowMillis: Long, zone: ZoneId = ZoneId.systemDefault()): String =
         "WritersBlock-backup-${Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()}.zip"
@@ -82,6 +93,7 @@ object BackupArchive {
         }
         return try {
             ZipFile(file).use { zip ->
+                zip.entries().asSequence().forEach { if (!isAllowedEntryName(it.name)) throw DamagedBackupException() }
                 val manifestEntry = zip.getEntry(MANIFEST_ENTRY) ?: throw DamagedBackupException()
                 val manifest = BackupManifest.decode(
                     zip.getInputStream(manifestEntry).use { it.readBytesBounded(DriveSyncService.MAX_SYNC_BLOB_BYTES) }
@@ -125,8 +137,7 @@ object BackupArchive {
         var added = 0
         for (entry in wanted) {
             val bytes = contents.recordings[entry.identityKey] ?: continue
-            RecordingFileStore.writeAtomically(filesDir, entry, bytes)
-            added++
+            if (RecordingFileStore.writeIfAbsent(filesDir, entry, bytes)) added++
         }
         repository.applySyncResult(merged, base)
         return ImportSummary(

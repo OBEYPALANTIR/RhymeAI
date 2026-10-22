@@ -134,6 +134,26 @@ class BackupArchiveTest {
     }
 
     @Test
+    fun archivesWithUnsafeOrForeignEntriesAreRejected() {
+        val manifest = BackupManifest.encode(library, 0L, "device")
+        for (bad in listOf("../escape.m4a", "recordings/a/../../escape.m4a", "/abs/path.txt", "C:/windows.txt", "songs\\win.txt", "notes/extra.txt")) {
+            val zip = File(root, "bad.zip")
+            ZipOutputStream(zip.outputStream()).use { out ->
+                out.putNextEntry(ZipEntry(BackupArchive.MANIFEST_ENTRY))
+                out.write(manifest)
+                out.closeEntry()
+                out.putNextEntry(ZipEntry(bad))
+                out.write(byteArrayOf(1))
+                out.closeEntry()
+            }
+            assertFailsWith<DamagedBackupException>(bad) { BackupArchive.read(zip) }
+        }
+        for (good in listOf("manifest.json", "songs/", "songs/My Song.txt", "recordings/a/take.m4a")) {
+            assertTrue(BackupArchive.isAllowedEntryName(good), good)
+        }
+    }
+
+    @Test
     fun exportFileNameUsesTheLocalDate() {
         assertEquals("WritersBlock-backup-2026-10-22.zip", BackupArchive.fileName(1_792_702_991_000L, ZoneOffset.UTC))
     }
