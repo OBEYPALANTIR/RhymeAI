@@ -2,6 +2,7 @@ package com.rhymeai.app.ui.components
 
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.ui.unit.IntSize
+import com.rhymeai.app.data.sync.backupStatusLine
 import android.app.ActivityManager
 import android.content.Context
 import android.net.Uri
@@ -151,14 +152,9 @@ internal fun SettingsDialog(
     verifiedGemmaFileNames: Set<String> = emptySet(),
     onStartGemmaDownload: (GemmaDownload) -> Unit = {},
     onUseDownloadedGemma: suspend (GemmaDownload) -> Boolean = { false },
-    // Drive sync
-    syncPassphraseStored: Boolean = false,
-    syncInProgress: Boolean = false,
-    syncLastResult: String? = null,
-    syncProgressLabel: String = "Syncing backup...",
-    onSaveSyncPassphrase: (String) -> Unit = {},
-    onSyncNow: () -> Unit = {},
-    onRestoreNow: (() -> Unit)? = null,
+    // Backup
+    backup: BackupSectionState = BackupSectionState(),
+    backupActions: BackupSectionActions = BackupSectionActions(),
     // Editor toggles — moved from AssistantPanel to Settings so the panel stays clean.
     useWholeSongContext: Boolean = false,
     onWholeSongContextChange: (Boolean) -> Unit = {},
@@ -217,12 +213,9 @@ internal fun SettingsDialog(
     var aboutExpanded by remember { mutableStateOf(false) }
     var modelExpanded by remember { mutableStateOf(false) }
 
-    // Sync passphrase field — write-only like API key fields; empty = do not change stored value.
-    // Progressive disclosure: Drive sync collapses to a single header row
+    // Progressive disclosure: Backup collapses to a single header row
     // until the user opens it — General stays scannable.
     var syncSectionExpanded by remember { mutableStateOf(false) }
-    var syncPassphraseField by remember { mutableStateOf("") }
-    var showSyncPassphrase by remember { mutableStateOf(false) }
 
     // File picker for local models
     var copyingFile by remember { mutableStateOf(false) }
@@ -1032,7 +1025,7 @@ internal fun SettingsDialog(
                 }
 
                 // ---------------------------------------------------------------
-                // Drive Sync section
+                // Backup section
                 // ---------------------------------------------------------------
                 Spacer(Modifier.height(DesignTokens.Spacing.xxl))
                 androidx.compose.material3.HorizontalDivider(
@@ -1040,6 +1033,16 @@ internal fun SettingsDialog(
                     thickness = 0.5.dp
                 )
                 Spacer(Modifier.height(DesignTokens.Spacing.lg))
+
+                var backupNow by remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+                LaunchedEffect(Unit) {
+                    // Keeps "Last backed up 2 min ago" current while Settings is open.
+                    while (true) {
+                        kotlinx.coroutines.delay(30_000)
+                        backupNow = System.currentTimeMillis()
+                    }
+                }
+                val backupLine = backupStatusLine(backup.status, backupNow)
 
                 Row(
                     modifier = Modifier
@@ -1050,20 +1053,16 @@ internal fun SettingsDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Cloud Sync (Google Drive)",
+                            "Backup",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium,
-                            color = colorScheme.onSurfaceVariant
+                            color = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.semantics { heading() }
                         )
-                        Text(
-                            when {
-                                syncInProgress -> syncProgressLabel
-                                syncPassphraseStored -> "On — encrypted with your passphrase"
-                                else -> "Not set up"
-                            },
-                            fontSize = 12.sp,
-                            color = subtleColor
-                        )
+                        // Expanded, the status line leads the rows instead.
+                        if (!syncSectionExpanded) {
+                            Text(backupLine, fontSize = 12.sp, color = subtleColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                     val chevronRotation by animateFloatAsState(
                         targetValue = if (syncSectionExpanded) 180f else 0f,
@@ -1076,7 +1075,7 @@ internal fun SettingsDialog(
                     )
                     Icon(
                         Icons.Default.KeyboardArrowDown,
-                        contentDescription = if (syncSectionExpanded) "Collapse cloud sync" else "Expand cloud sync",
+                        contentDescription = if (syncSectionExpanded) "Collapse Backup" else "Expand Backup",
                         tint = colorScheme.onSurfaceVariant,
                         modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
                     )
@@ -1087,114 +1086,14 @@ internal fun SettingsDialog(
                     enter = expandVertically(animationSpec = DesignTokens.Motion.standardSpring(IntSize.VisibilityThreshold), expandFrom = Alignment.Top),
                     exit = shrinkVertically(animationSpec = tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing), shrinkTowards = Alignment.Top)
                 ) {
-                Column {
-                Spacer(Modifier.height(DesignTokens.Spacing.sm))
-                Text(
-                    "Backs up projects, trash, and recordings to Google Drive. A later sync may restore previously synced recordings of a deleted song to this device. API keys stay on this device. Backup is encrypted with your passphrase.",
-                    fontSize = 12.sp,
-                    color = subtleColor,
-                    lineHeight = 16.sp
-                )
-                Spacer(Modifier.height(8.dp))
-
-                OutlinedTextField(
-                    value = syncPassphraseField,
-                    onValueChange = { syncPassphraseField = it },
-                    placeholder = {
-                        Text(
-                            if (syncPassphraseStored) "Passphrase saved — type to replace" else "Set sync passphrase...",
-                            fontSize = 14.sp
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(Icons.Default.Key, null, tint = placeholderColor, modifier = Modifier.size(18.dp))
-                    },
-                    trailingIcon = {
-                        IconButton(onClick = { showSyncPassphrase = !showSyncPassphrase }) {
-                            Icon(
-                                if (showSyncPassphrase) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = if (showSyncPassphrase) "Hide" else "Show",
-                                tint = placeholderColor,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    },
-                    visualTransformation = if (showSyncPassphrase) VisualTransformation.None else PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = textFieldColors,
-                    shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp)
-                )
-
-                Spacer(Modifier.height(8.dp))
-
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            if (syncPassphraseField.isNotBlank()) {
-                                onSaveSyncPassphrase(syncPassphraseField.trim())
-                                syncPassphraseField = ""
-                            }
-                            onSyncNow()
-                        },
-                        enabled = !syncInProgress && (syncPassphraseStored || syncPassphraseField.isNotBlank()),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(DesignTokens.Radius.lg)
-                    ) {
-                        if (syncInProgress) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                color = colorScheme.primary,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(syncProgressLabel, fontSize = DesignTokens.Typography.caption)
-                        } else {
-                            Text("Back up / sync now", fontSize = DesignTokens.Typography.caption)
-                        }
-                    }
-
-                    onRestoreNow?.let { restore ->
-                        OutlinedButton(
-                            onClick = {
-                                if (syncPassphraseField.isNotBlank()) {
-                                    onSaveSyncPassphrase(syncPassphraseField.trim())
-                                    syncPassphraseField = ""
-                                }
-                                restore()
-                            },
-                            enabled = !syncInProgress && (syncPassphraseStored || syncPassphraseField.isNotBlank()),
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(DesignTokens.Radius.lg)
-                        ) {
-                            Text("Restore from Drive", fontSize = DesignTokens.Typography.caption)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Your songs and recordings are included in Android's automatic backup. Only the optional Google Drive backup is encrypted with your passphrase. API keys are stored encrypted on this device and sent directly to the selected provider to authenticate requests.",
-                    fontSize = 12.sp,
-                    color = subtleColor,
-                    lineHeight = 16.sp
-                )
-
-                syncLastResult?.let { result ->
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        result,
-                        fontSize = 12.sp,
-                        color = if (result.startsWith("Sync complete") || result.startsWith("Restore complete")) colorScheme.tertiary
-                        else subtleColor,
-                        lineHeight = 15.sp
+                    BackupSection(
+                        state = backup,
+                        actions = backupActions,
+                        statusLine = backupLine,
+                        subtleColor = subtleColor,
+                        textFieldColors = textFieldColors
                     )
                 }
-                } // end sync collapsible column
-                } // end sync AnimatedVisibility
 
                 Spacer(Modifier.height(DesignTokens.Spacing.xl))
                 Row(

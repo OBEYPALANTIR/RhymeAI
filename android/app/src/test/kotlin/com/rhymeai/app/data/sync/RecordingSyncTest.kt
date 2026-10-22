@@ -113,61 +113,57 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun syncMergerUnionsRecordingsAndKeepsNewestPerIdentity() {
+    fun syncMergerUnionsRecordingsAndKeepsTheBackedUpCopyPerIdentity() {
         val localOnly = recording("p1", "local.m4a", modifiedAt = 100L, sha256 = "local")
-        val staleLocal = recording("p1", "shared.m4a", modifiedAt = 100L, sha256 = "old")
-        val freshRemote = recording("p1", "shared.m4a", modifiedAt = 300L, sha256 = "new")
+        val localCopy = recording("p1", "shared.m4a", modifiedAt = 900L, sha256 = "here")
+        val backedUp = recording("p1", "shared.m4a", modifiedAt = 0L, sha256 = "drive")
         val remoteOnly = recording("p2", "remote.m4a", modifiedAt = 200L, sha256 = "remote")
 
         val merged = SyncMerger.merge(
-            local = SyncBlob(recordings = listOf(localOnly, staleLocal)),
-            remote = SyncBlob(recordings = listOf(freshRemote, remoteOnly))
+            local = SyncBlob(recordings = listOf(localOnly, localCopy)),
+            remote = SyncBlob(recordings = listOf(backedUp, remoteOnly))
         )
 
         assertEquals(setOf("p1/local.m4a", "p1/shared.m4a", "p2/remote.m4a"), merged.recordings.map { it.identityKey }.toSet())
-        assertEquals("new", merged.recordings.first { it.projectId == "p1" && it.fileName == "shared.m4a" }.sha256)
+        // Recordings are immutable and v4 has no recording timestamps: Drive's copy wins.
+        assertEquals("drive", merged.recordings.first { it.projectId == "p1" && it.fileName == "shared.m4a" }.sha256)
     }
 
     @Test
-    fun uploadPlanIncludesOnlyLocalRecordingsMissingOrOlderInRemoteManifest() {
-        val alreadyRemote = recording("p1", "same.m4a", modifiedAt = 100L, sha256 = "same")
-        val newerLocal = recording("p1", "newer.m4a", modifiedAt = 300L, sha256 = "local-new")
-        val olderRemote = newerLocal.copy(modifiedAt = 200L, sha256 = "remote-old")
-        val localOlder = recording("p3", "remote-newer.m4a", modifiedAt = 100L, sha256 = "local-old")
-        val remoteNewer = localOlder.copy(modifiedAt = 400L, sha256 = "remote-new")
-        val localOnly = recording("p2", "local-only.m4a", modifiedAt = 100L, sha256 = "only")
+    fun uploadPlanSendsOnlyListedLocalBytesMissingFromDrive() {
+        val onDrive = recording("p1", "same.m4a", sha256 = "same")
+        val missingOnDrive = recording("p1", "missing.m4a", sha256 = "missing")
+        val diverged = recording("p3", "diverged.m4a", sha256 = "local")
+        val tombstoned = recording("p2", "deleted.m4a", sha256 = "gone")
 
         val plan = RecordingSyncPlanner.planUploads(
-            local = listOf(alreadyRemote, newerLocal, localOlder, localOnly),
-            remoteManifest = listOf(alreadyRemote, olderRemote, remoteNewer),
-            remoteDriveNames = setOf(alreadyRemote.driveName, olderRemote.driveName)
+            local = listOf(onDrive, missingOnDrive, diverged, tombstoned),
+            manifest = listOf(onDrive, missingOnDrive, diverged.copy(sha256 = "remote")),
+            remoteDriveNames = setOf(BackupManifest.recordingDriveName("p1", "same.m4a"))
         )
 
-        assertEquals(listOf(newerLocal.driveName, localOnly.driveName), plan.map { it.driveName })
+        assertEquals(listOf(missingOnDrive), plan)
     }
 
     @Test
-    fun restorePlanIsNonDestructiveAndOnlyDownloadsMissingOrNewerRemoteRecordings() {
-        val localOnly = recording("p1", "local-only.m4a", modifiedAt = 500L, sha256 = "keep")
-        val localNewer = recording("p1", "local-newer.m4a", modifiedAt = 500L, sha256 = "new-local")
-        val remoteOlder = localNewer.copy(modifiedAt = 100L, sha256 = "old-remote")
-        val localStale = recording("p1", "stale.m4a", modifiedAt = 100L, sha256 = "old-local")
-        val remoteNewer = localStale.copy(modifiedAt = 300L, sha256 = "new-remote")
-        val remoteOnly = recording("p2", "remote-only.m4a", modifiedAt = 200L, sha256 = "remote")
+    fun restorePlanOnlyFillsRecordingsMissingHere() {
+        val localOnly = recording("p1", "local-only.m4a", sha256 = "keep")
+        val localDiverged = recording("p1", "diverged.m4a", sha256 = "local")
+        val remoteDiverged = localDiverged.copy(sha256 = "remote")
+        val remoteOnly = recording("p2", "remote-only.m4a", sha256 = "remote")
+        val remoteWithoutFile = recording("p2", "never-uploaded.m4a", sha256 = "lost")
 
         val plan = RecordingSyncPlanner.planRestores(
-            local = listOf(localOnly, localNewer, localStale),
-            remoteManifest = listOf(remoteOlder, remoteNewer, remoteOnly),
+            local = listOf(localOnly, localDiverged),
+            remoteManifest = listOf(remoteDiverged, remoteOnly, remoteWithoutFile),
             remoteFilesByName = mapOf(
-                remoteOlder.driveName to "drive-old",
-                remoteNewer.driveName to "drive-new",
-                remoteOnly.driveName to "drive-only"
+                BackupManifest.recordingDriveName("p1", "diverged.m4a") to "drive-diverged",
+                BackupManifest.recordingDriveName("p2", "remote-only.m4a") to "drive-only"
             )
         )
 
-        assertEquals(listOf("drive-new", "drive-only"), plan.map { it.remoteFileId })
-        assertFalse(plan.any { it.entry.identityKey == localOnly.identityKey }, "remote absence must never delete or overwrite local-only recordings")
-        assertFalse(plan.any { it.entry.identityKey == localNewer.identityKey }, "older remote must not overwrite newer local recording")
+        assertEquals(listOf("drive-only"), plan.map { it.remoteFileId })
+        assertFalse(plan.any { it.entry.identityKey == localDiverged.identityKey }, "a local recording is never replaced")
     }
 
     @Test
@@ -178,7 +174,8 @@ class RecordingSyncTest {
         val plan = RecordingSyncPlanner.planRestores(
             local = emptyList(),
             remoteManifest = listOf(trashedHere, remoteOnly),
-            remoteFilesByName = mapOf(trashedHere.driveName to "drive-trashed", remoteOnly.driveName to "drive-only"),
+            remoteFilesByName = listOf(trashedHere to "drive-trashed", remoteOnly to "drive-only")
+                .associate { (entry, id) -> BackupManifest.recordingDriveName(entry.projectId, entry.fileName) to id },
             locallyTrashed = setOf(trashedHere.identityKey)
         )
 
@@ -374,7 +371,7 @@ class RecordingSyncTest {
     private fun recording(
         projectId: String,
         fileName: String,
-        modifiedAt: Long,
+        modifiedAt: Long = 100L,
         sha256: String,
         sizeBytes: Long = 12L
     ): RecordingManifestEntry = RecordingManifestEntry(

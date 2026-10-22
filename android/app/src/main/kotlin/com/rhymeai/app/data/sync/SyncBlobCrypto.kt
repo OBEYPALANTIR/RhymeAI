@@ -1,6 +1,5 @@
 package com.rhymeai.app.data.sync
 
-import java.security.SecureRandom
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
@@ -9,11 +8,10 @@ import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Passphrase-derived AES-GCM envelopes shared with iOS.
- *
- * Recording payloads retain RAI1. Project manifests are written as v3 under
- * RAI3; v2 under RAI2 and v1 under RAI1 remain readable. The actual header bytes
- * (magic, salt and IV) are authenticated as AAD.
+ * Read-only access to the passphrase-derived AES-GCM envelopes of the pre-v4
+ * Drive backup, used once to migrate it. Recordings are RAI1; manifests are v3
+ * under RAI3, v2 under RAI2 and v1 under RAI1. The header bytes (magic, salt and
+ * IV) are authenticated as AAD. Nothing writes these envelopes any more.
  */
 object SyncBlobCrypto {
     private val RECORDING_MAGIC = "RAI1".toByteArray(Charsets.US_ASCII)
@@ -24,57 +22,11 @@ object SyncBlobCrypto {
     private const val TAG_BITS = 128
     private const val KEY_BITS = 256
     internal const val ENVELOPE_OVERHEAD_BYTES = 4 + SALT_BYTES + IV_BYTES + (TAG_BITS / 8)
-
-    // OWASP 2023 floor for PBKDF2-HmacSHA256. Derivation runs once per
-    // sync push/pull, so the ~0.5s cost on a phone is acceptable.
     private const val PBKDF2_ITERATIONS = 210_000
-
-    private val random = SecureRandom()
 
     internal fun envelopeSizeForPlaintext(plaintextBytes: Long): Long {
         require(plaintextBytes >= 0) { "Plaintext size must be non-negative" }
         return Math.addExact(plaintextBytes, ENVELOPE_OVERHEAD_BYTES.toLong())
-    }
-
-    /** Recording payloads must remain byte-compatible with the existing RAI1 format. */
-    fun seal(plaintext: ByteArray, passphrase: CharArray): ByteArray =
-        sealWithMagic(plaintext, passphrase, randomSalt(), randomIv(), RECORDING_MAGIC)
-
-    internal fun seal(
-        plaintext: ByteArray,
-        passphrase: CharArray,
-        salt: ByteArray,
-        iv: ByteArray
-    ): ByteArray = sealWithMagic(plaintext, passphrase, salt, iv, RECORDING_MAGIC)
-
-    fun sealManifest(plaintext: ByteArray, passphrase: CharArray): ByteArray =
-        sealWithMagic(plaintext, passphrase, randomSalt(), randomIv(), MANIFEST_MAGIC)
-
-    internal fun sealManifest(
-        plaintext: ByteArray,
-        passphrase: CharArray,
-        salt: ByteArray,
-        iv: ByteArray
-    ): ByteArray = sealWithMagic(plaintext, passphrase, salt, iv, MANIFEST_MAGIC)
-
-    private fun randomSalt() = ByteArray(SALT_BYTES).also(random::nextBytes)
-    private fun randomIv() = ByteArray(IV_BYTES).also(random::nextBytes)
-
-    private fun sealWithMagic(
-        plaintext: ByteArray,
-        passphrase: CharArray,
-        salt: ByteArray,
-        iv: ByteArray,
-        magic: ByteArray
-    ): ByteArray {
-        requirePortablePassphrase(passphrase)
-        require(salt.size == SALT_BYTES) { "Salt must be $SALT_BYTES bytes" }
-        require(iv.size == IV_BYTES) { "IV must be $IV_BYTES bytes" }
-        val header = magic + salt + iv
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, deriveKey(passphrase, salt), GCMParameterSpec(TAG_BITS, iv))
-        cipher.updateAAD(header)
-        return header + cipher.doFinal(plaintext)
     }
 
     data class OpenedManifest(val plaintext: ByteArray, val version: Int)
@@ -132,12 +84,6 @@ object SyncBlobCrypto {
         val key = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec)
         spec.clearPassword()
         return SecretKeySpec(key.encoded, "AES")
-    }
-
-    private fun requirePortablePassphrase(passphrase: CharArray) {
-        require(isPortablePassphrase(passphrase)) {
-            "Drive sync passphrase must use printable ASCII so Android and iOS derive the same key"
-        }
     }
 
     private fun isPortablePassphrase(passphrase: CharArray): Boolean =
