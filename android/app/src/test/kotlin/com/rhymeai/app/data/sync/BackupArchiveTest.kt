@@ -3,6 +3,7 @@ package com.rhymeai.app.data.sync
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
+import com.rhymeai.app.data.recording.RecordingFiles
 import com.rhymeai.app.data.repository.ProjectRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class BackupArchiveTest {
@@ -150,6 +152,39 @@ class BackupArchiveTest {
         }
         for (good in listOf("manifest.json", "songs/", "songs/My Song.txt", "recordings/a/take.m4a")) {
             assertTrue(BackupArchive.isAllowedEntryName(good), good)
+        }
+    }
+
+    @Test
+    fun importRevivesANewerSongButKeepsItsDeletedAudioDeleted() = runBlocking<Unit> {
+        val audio = "old take".toByteArray()
+        val sourceDir = File(root, "archive-source")
+        val take = memo(sourceDir, "x", "take.m4a", audio).let { it.copy(entry = it.entry.copy(modifiedAt = 1_000L, uploadedAt = 1_000L)) }
+        val zipFile = File(root, "revive.zip")
+        zipFile.outputStream().use {
+            BackupArchive.write(it, SyncBlob(projects = listOf(SongProject(id = "x", title = "Revived", updatedAt = 9_000L))), listOf(take), 0L, "other")
+        }
+
+        // With the recording tombstone written at deletion, and without it (song tombstone only).
+        for (knowsTheRecording in listOf(true, false)) {
+            val filesDir = File(root, "device-$knowsTheRecording").also { it.mkdirs() }
+            val repo = repository("device-$knowsTheRecording")
+            if (knowsTheRecording) repo.recordingNamesFor = { id -> knownRecordingNames(filesDir, id) }
+            repo.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "x", updatedAt = 100L), deletedAt = 200L)))
+            memo(filesDir, "x", "take.m4a", audio)
+            repo.permanentlyDeleteTrashedProject("x", now = 5_000L)
+            RecordingFiles.memoDirectory(filesDir, "x").deleteRecursively()
+
+            val summary = BackupArchive.import(BackupArchive.read(zipFile), repo, filesDir)
+
+            assertEquals(listOf("x"), repo.projectsFlow.first().map { it.id }, "knows=$knowsTheRecording")
+            assertEquals(0, summary.recordingsAdded, "knows=$knowsTheRecording")
+            assertFalse(RecordingFileStore.targetFile(filesDir, "x", "take.m4a").exists(), "knows=$knowsTheRecording")
+            assertEquals(
+                listOf(SyncDeletion("x", "take.m4a", 5_000L)),
+                repo.snapshotLocalSyncBase().blob.deletions,
+                "knows=$knowsTheRecording"
+            )
         }
     }
 

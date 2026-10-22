@@ -309,7 +309,19 @@ class ProjectRepository internal constructor(
         committed
     }
 
-    suspend fun permanentlyDeleteTrashedProject(id: String): List<TrashedSongProject>? = projectSaveMutex.withLock {
+    /** Recording names known on this device for a song; their tombstones are written with the song's. */
+    @Volatile var recordingNamesFor: (String) -> List<String> = { emptyList() }
+
+    private fun songTombstones(ids: Collection<String>, deletedAt: Long): List<SyncDeletion> =
+        ids.flatMap { id ->
+            listOf(SyncDeletion(projectId = id, deletedAt = deletedAt)) +
+                recordingNamesFor(id).map { SyncDeletion(id, it, deletedAt) }
+        }
+
+    suspend fun permanentlyDeleteTrashedProject(
+        id: String,
+        now: Long = System.currentTimeMillis()
+    ): List<TrashedSongProject>? = projectSaveMutex.withLock {
         var committed: List<TrashedSongProject>? = null
         dataStore.edit { prefs ->
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
@@ -322,7 +334,7 @@ class ProjectRepository internal constructor(
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + id
             prefs[SYNC_DELETIONS_KEY] = json.encodeToString(
-                SyncMerger.mergeDeletions(deletions + SyncDeletion(projectId = id, deletedAt = System.currentTimeMillis()))
+                SyncMerger.mergeDeletions(deletions + songTombstones(listOf(id), now))
             )
             committed = nextTrash
         }
@@ -343,7 +355,7 @@ class ProjectRepository internal constructor(
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + expired
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(
-                    SyncMerger.mergeDeletions(deletions + expired.map { SyncDeletion(projectId = it, deletedAt = now) })
+                    SyncMerger.mergeDeletions(deletions + songTombstones(expired, now))
                 )
             }
             committed = TrashPurge(retained, expired)
@@ -410,7 +422,7 @@ class ProjectRepository internal constructor(
                     current.trashed.forEach { add(it.project.id) }
                 }
                 val removed = base.baseIds - currentIds
-                val resolved = SyncMerger.merge(current, merged.copy(recordings = emptyList()))
+                val resolved = SyncMerger.merge(current, merged)
                 val nextProjects = resolved.projects.filterNot { it.id in removed }
                 val nextTrash = resolved.trashed.filterNot { it.project.id in removed }
                 val writtenIds = buildSet {

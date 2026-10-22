@@ -1005,6 +1005,39 @@ class ProjectRepositoryTest {
     }
 
     @Test
+    fun songDeletionTombstonesItsKnownRecordingsInTheSameWrite() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-song-recording-tombstones").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val repository = ProjectRepository(
+                PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") }, testKeyStore()
+            )
+            repository.recordingNamesFor = { id -> listOf("$id-take.m4a") }
+            repository.saveProjects(listOf(SongProject(id = "forever", updatedAt = 1L), SongProject(id = "expired", updatedAt = 1L)))
+            repository.moveProjectToTrash("forever", 10L)
+            repository.moveProjectToTrash("expired", 10L)
+
+            repository.permanentlyDeleteTrashedProject("forever", now = 5_000L)
+            repository.purgeExpiredTrashedProjects(10L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS)
+
+            val deletions = repository.snapshotLocalSyncBase().blob.deletions
+            val purgedAt = 10L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+            assertEquals(
+                setOf(
+                    SyncDeletion("expired", deletedAt = purgedAt),
+                    SyncDeletion("expired", "expired-take.m4a", purgedAt),
+                    SyncDeletion("forever", deletedAt = 5_000L),
+                    SyncDeletion("forever", "forever-take.m4a", 5_000L)
+                ),
+                deletions.toSet()
+            )
+        } finally {
+            scope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun applyKeepsAnEditSavedBetweenSnapshotAndCommit() = runBlocking {
         val directory = kotlin.io.path.createTempDirectory("rhymeai-apply-race").toFile()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
