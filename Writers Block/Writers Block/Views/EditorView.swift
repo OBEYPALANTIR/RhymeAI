@@ -153,15 +153,35 @@ struct EditorView: View {
             viewModel.clearInsertionFeedback()
         }
         .onChange(of: viewModel.voiceMemoService.isRecording) { _, isRecording in
-            // Collapsing, the wordmark fades out on the feedback tier, ahead of the
-            // width spring, so the clip bites into an already-faded wordmark.
-            withAnimation(reduceMotion ? nil : (isRecording ? RhymeAITokens.Motion.feedback : RhymeAITokens.Motion.recording)) {
-                unblockWordmarkOpacity = isRecording ? EditorViewConstants.UnBlockChrome.hiddenWordmarkOpacity : EditorViewConstants.UnBlockChrome.visibleWordmarkOpacity
-            }
-            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.recording) {
-                unblockButtonWidth = isRecording ? RhymeAITokens.Touch.comfortable : EditorViewConstants.UnBlockChrome.expandedButtonWidth
-                unblockWordmarkWidth = isRecording ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : EditorViewConstants.UnBlockChrome.expandedWordmarkWidth
+            let chrome = EditorViewConstants.UnBlockChrome.self
+            let wordmarkOpacity = isRecording ? chrome.hiddenWordmarkOpacity : chrome.visibleWordmarkOpacity
+            let resize = {
+                unblockButtonWidth = isRecording ? RhymeAITokens.Touch.comfortable : chrome.expandedButtonWidth
+                unblockWordmarkWidth = isRecording ? chrome.collapsedWordmarkWidth : chrome.expandedWordmarkWidth
                 unblockCollapsed = isRecording
+            }
+            guard !reduceMotion else {
+                unblockWordmarkOpacity = wordmarkOpacity
+                resize()
+                return
+            }
+            // The width clip must never cut a visible wordmark, so the two run in
+            // turn: collapsing fades the wordmark out before the width springs in,
+            // expanding springs the width open before the wordmark fades back.
+            if isRecording {
+                withAnimation(RhymeAITokens.Motion.feedback) {
+                    unblockWordmarkOpacity = wordmarkOpacity
+                } completion: {
+                    guard viewModel.voiceMemoService.isRecording else { return }
+                    withAnimation(RhymeAITokens.Motion.recording, resize)
+                }
+            } else {
+                withAnimation(RhymeAITokens.Motion.recording, resize) {
+                    guard !viewModel.voiceMemoService.isRecording else { return }
+                    withAnimation(RhymeAITokens.Motion.feedback) {
+                        unblockWordmarkOpacity = wordmarkOpacity
+                    }
+                }
             }
         }
         .alert(item: $viewModel.cloudAISharingRequest) { request in
