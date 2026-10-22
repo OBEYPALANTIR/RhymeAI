@@ -17,6 +17,21 @@ struct InkBurstMotionTests {
     }
 
     @Test
+    func halfwayOffsetsPinTheSpeedJitterAndDrop() {
+        // Golden values from the spec formula at p = 0.5, in units of the reach.
+        let dots = InkBurstMotion.dots(elapsed: 0.24)
+        let expected: [CGPoint] = [
+            CGPoint(x: 0.63, y: 0.045),
+            CGPoint(x: 0.710207, y: 0.556107),
+            CGPoint(x: 0.469176, y: 0.633328),
+        ]
+        for (dot, want) in zip(dots.prefix(3), expected) {
+            #expect(abs(dot.offset.x - want.x) < 1e-4)
+            #expect(abs(dot.offset.y - want.y) < 1e-4)
+        }
+    }
+
+    @Test
     func nothingIsLeftOnceTheBurstIsOver() {
         #expect(InkBurstMotion.dots(elapsed: 0.48).isEmpty)
         #expect(InkBurstMotion.dots(elapsed: 2).isEmpty)

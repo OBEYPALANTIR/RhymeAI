@@ -120,6 +120,15 @@ struct SuggestionInkLineMotionTests {
     }
 
     @Test
+    func theWaveKeepsItsDesignedShapeAndStroke() {
+        #expect(SuggestionInkLineMotion.strokeWidth == 1.6)
+        #expect(SuggestionInkLineMotion.waveShape.map(\.x) == [0, 0.18, 0.42, 0.68, 1])
+        #expect(SuggestionInkLineMotion.waveShape.map(\.y) == [0.55, 0.25, 0.78, 0.28, 0.58])
+        let ys = SuggestionInkLineMotion.wavePoints(width: 34).map(\.y)
+        for (y, want) in zip(ys, [5.5, 2.5, 7.8, 2.8, 5.8] as [CGFloat]) { #expect(abs(y - want) < 1e-6) }
+    }
+
+    @Test
     func theLastPeriodIsCutAtTheEdge() {
         // 40pt: one full period, then cut between 1.0 (34pt) and 1.18 (40.12pt).
         let points = SuggestionInkLineMotion.wavePoints(width: 40)
