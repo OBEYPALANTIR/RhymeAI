@@ -34,8 +34,8 @@ class UnsupportedBackupVersionException(val version: Int) :
  * `shared/fixtures/sync-manifest-v4.json`. `manifestSha256` covers the canonical
  * form of the object without that key: keys sorted by code point, no whitespace,
  * only `\"`, `\\`, `\n`, `\r`, `\t` and lowercase `\u00xx` escapes, integers only.
- * Song, trash and tombstone timestamps are epoch milliseconds, as in v3; `savedAt`
- * and each recording's `uploadedAt` are ISO-8601 UTC with whole seconds.
+ * Every precedence time (`updatedAt`, `trashedAt`, `uploadedAt`, `deletedAt`) is an
+ * integer of epoch milliseconds; `savedAt` is ISO-8601 UTC with milliseconds.
  */
 object BackupManifest {
     const val VERSION = 4
@@ -51,14 +51,13 @@ object BackupManifest {
     private val integerPattern = Regex("-?(0|[1-9][0-9]*)")
 
     /** Drive name of a raw recording; never collides with the RAI1 `.enc` names. */
-    fun recordingDriveName(projectId: String, fileName: String): String =
-        "$RECORDING_PREFIX${projectId}_$fileName"
+    fun recordingDriveName(recordingId: String): String = "$RECORDING_PREFIX$recordingId"
 
     fun encode(blob: SyncBlob, savedAtMillis: Long, clientId: String): ByteArray {
         blob.validate()
         val body = buildJsonObject {
             put("version", VERSION)
-            put("savedAt", isoSeconds(savedAtMillis))
+            put("savedAt", isoMillis(savedAtMillis))
             put("savedByClientId", clientId)
             put("platform", PLATFORM)
             putJsonArray("projects") { blob.projects.forEach { add(projectJson(it)) } }
@@ -70,11 +69,12 @@ object BackupManifest {
             putJsonArray("recordings") {
                 blob.recordings.forEach { entry ->
                     addJsonObject {
+                        put("id", entry.id)
                         put("projectId", entry.projectId)
                         put("fileName", entry.fileName)
                         put("bytes", entry.sizeBytes)
                         put("sha256", entry.sha256)
-                        put("uploadedAt", isoSeconds(entry.uploadedAt))
+                        put("uploadedAt", entry.uploadedAt)
                     }
                 }
             }
@@ -83,6 +83,7 @@ object BackupManifest {
                     addJsonObject {
                         put("projectId", deletion.projectId)
                         put("fileName", deletion.fileName?.let(::JsonPrimitive) ?: JsonNull)
+                        deletion.recordingId?.let { put("recordingId", it) }
                         put("deletedAt", deletion.deletedAt)
                     }
                 }
@@ -129,7 +130,8 @@ object BackupManifest {
                         sizeBytes = fields.long("bytes"),
                         modifiedAt = 0L,
                         sha256 = sha,
-                        uploadedAt = Instant.parse(fields.string("uploadedAt")).toEpochMilli()
+                        uploadedAt = fields.long("uploadedAt"),
+                        id = fields.string("id")
                     )
                 },
                 deletions = root.array("deletions").map { element ->
@@ -140,7 +142,9 @@ object BackupManifest {
                         fileName = if (fileName is JsonNull) null else fileName.jsonPrimitive.also {
                             require(it.isString) { "Invalid fileName" }
                         }.content,
-                        deletedAt = fields.long("deletedAt")
+                        deletedAt = fields.long("deletedAt"),
+                        recordingId = fields["recordingId"]?.takeUnless { it is JsonNull }?.jsonPrimitive
+                            ?.also { require(it.isString) { "Invalid recordingId" } }?.content
                     )
                 },
                 savedAt = Instant.parse(root.string("savedAt")).toEpochMilli(),
@@ -164,7 +168,11 @@ object BackupManifest {
     fun sha256Hex(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
-    fun isoSeconds(millis: Long): String = Instant.ofEpochSecond(Math.floorDiv(millis, 1000L)).toString()
+    private val isoMillisFormat = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+        .withZone(java.time.ZoneOffset.UTC)
+
+    /** `savedAt`: ISO-8601 UTC, always with milliseconds. */
+    fun isoMillis(millis: Long): String = isoMillisFormat.format(Instant.ofEpochMilli(millis))
 
     private fun projectJson(project: SongProject): JsonObject = buildJsonObject {
         put("id", project.id)

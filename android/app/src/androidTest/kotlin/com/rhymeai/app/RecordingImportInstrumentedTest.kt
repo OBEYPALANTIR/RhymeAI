@@ -51,6 +51,80 @@ class RecordingImportInstrumentedTest {
         }
     }
 
+    /** In-memory records; [failWrites] injects a metadata write failure. */
+    private class Catalog : com.rhymeai.app.data.recording.RecordingCatalog {
+        var records = listOf<com.rhymeai.app.data.sync.RecordingRecord>()
+        var failWrites = false
+        override suspend fun recordingRecords() = records
+        override suspend fun updateRecordingRecords(
+            transform: (List<com.rhymeai.app.data.sync.RecordingRecord>) -> List<com.rhymeai.app.data.sync.RecordingRecord>
+        ) {
+            if (failWrites) throw java.io.IOException("injected metadata write failure")
+            records = transform(records)
+        }
+    }
+
+    @Test fun reimportingIdenticalAudioAfterDeletionIsANewRecordingAndOldTombstoneStays() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
+        val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned })
+        val catalog = Catalog()
+        val tombstones = mutableListOf<Pair<String, Long>>()
+        service.catalog = catalog
+        service.recordingDeletionRecorder = { _, _, recordingId, deletedAt -> tombstones += recordingId to deletedAt }
+        try {
+            val source = File(owned, "take.wav").apply { writeBytes(wav()) }
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", source)
+            val first = service.importRecording("song", uri)
+            val firstRecord = catalog.records.single()
+            // Renaming keeps the id; then the take is deleted forever.
+            val renamed = requireNotNull(service.renameMemo(first, "Keeper"))
+            assertEquals(firstRecord.id, catalog.records.single().id)
+            assertTrue(service.permanentlyDeleteTrashedMemo(requireNotNull(service.trashMemo(renamed))))
+            assertEquals(listOf(firstRecord.id), tombstones.map { it.first })
+            assertTrue(catalog.records.isEmpty())
+
+            Thread.sleep(5)
+            service.importRecording("song", uri)
+
+            val second = catalog.records.single()
+            assertNotEquals(firstRecord.id, second.id)
+            assertTrue(second.uploadedAt > firstRecord.uploadedAt)
+            assertEquals(firstRecord.sha256, second.sha256)
+            assertEquals(listOf(firstRecord.id), tombstones.map { it.first })
+        } finally {
+            service.release()
+            owned.deleteRecursively()
+        }
+    }
+
+    @Test fun metadataWriteFailuresFailImportRenameAndTrashRestoreWithoutMovingFiles() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
+        val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned })
+        val catalog = Catalog()
+        service.catalog = catalog
+        try {
+            val source = File(owned, "take.wav").apply { writeBytes(wav()) }
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", source)
+            val memo = service.importRecording("song", uri)
+            val trashed = requireNotNull(service.trashMemo(service.importRecording("song", uri)))
+            catalog.failWrites = true
+
+            assertTrue(runCatching { service.importRecording("song", uri) }.isFailure)
+            assertTrue(runCatching { service.renameMemo(memo, "Renamed") }.isFailure)
+            assertTrue(runCatching { service.restoreTrashedMemo(trashed) }.isFailure)
+
+            assertEquals(listOf(memo.file.name), service.memosForProject("song").map { it.file.name })
+            assertTrue(memo.file.exists())
+            assertTrue(trashed.file.exists())
+            assertTrue(RecordingFiles.stagingRoot(owned).walk().none { it.isFile })
+        } finally {
+            service.release()
+            owned.deleteRecursively()
+        }
+    }
+
     @Test fun rejectsRenamedTextAndLeavesNoImportedRecording() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }

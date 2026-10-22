@@ -71,7 +71,7 @@ internal class FailClosedStoredJson<T>(
 class ProjectRepository internal constructor(
     private val dataStore: DataStore<Preferences>,
     private val secureKeyStore: SecureKeyStore
-) {
+) : com.rhymeai.app.data.recording.RecordingCatalog {
     constructor(
         context: Context,
         secureKeyStore: SecureKeyStore = EncryptedPrefsKeyStore(context)
@@ -315,60 +315,28 @@ class ProjectRepository internal constructor(
         committed
     }
 
-    suspend fun recordingRecords(): Map<String, RecordingRecord> =
-        recordsStore.decode(dataStore.data.first()[RECORDING_RECORDS_KEY] ?: "[]").associateBy { it.identityKey }
+    override suspend fun recordingRecords(): List<RecordingRecord> =
+        recordsStore.decode(dataStore.data.first()[RECORDING_RECORDS_KEY] ?: "[]")
 
-    /**
-     * Gives each recording seen on disk without a matching record (same hash) a record
-     * stamped once with its file time, and returns every record. Pre-existing memos
-     * get their time here and keep it from then on.
-     */
-    suspend fun stampRecordings(seen: List<RecordingManifestEntry>): Map<String, RecordingRecord> =
+    override suspend fun updateRecordingRecords(transform: (List<RecordingRecord>) -> List<RecordingRecord>) {
         projectSaveMutex.withLock {
-            lateinit var all: Map<String, RecordingRecord>
             dataStore.edit { prefs ->
-                val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").associateByTo(LinkedHashMap()) { it.identityKey }
-                var changed = false
-                for (entry in seen) {
-                    if (records[entry.identityKey]?.sha256 == entry.sha256) continue
-                    records[entry.identityKey] = RecordingRecord(
-                        entry.projectId, entry.fileName, entry.modifiedAt, entry.sha256, entry.sizeBytes, RecordingRecord.RECORDED
-                    )
-                    changed = true
-                }
-                if (changed) prefs[RECORDING_RECORDS_KEY] = json.encodeToString(records.values.toList())
-                all = records
+                val current = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
+                val next = transform(current)
+                if (next != current) prefs[RECORDING_RECORDS_KEY] = json.encodeToString(next)
             }
-            all
-        }
-
-    suspend fun putRecordingRecord(record: RecordingRecord) = projectSaveMutex.withLock {
-        dataStore.edit { prefs ->
-            val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").filterNot { it.identityKey == record.identityKey }
-            prefs[RECORDING_RECORDS_KEY] = json.encodeToString(records + record)
         }
     }
 
-    /** A rename or a restore under a new name keeps the recording's record and its time. */
-    suspend fun renameRecordingRecord(projectId: String, from: String, to: String) = projectSaveMutex.withLock {
-        if (from == to) return@withLock
-        dataStore.edit { prefs ->
-            val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
-            val moving = records.firstOrNull { it.projectId == projectId && it.fileName == from } ?: return@edit
-            prefs[RECORDING_RECORDS_KEY] = json.encodeToString(
-                records.filterNot { it.projectId == projectId && (it.fileName == from || it.fileName == to) } + moving.copy(fileName = to)
-            )
-        }
-    }
-
-    /** Recording names known on this device for a song; their tombstones are written with the song's. */
-    @Volatile var recordingNamesFor: (String) -> List<String> = { emptyList() }
-
-    private fun songTombstones(ids: Collection<String>, deletedAt: Long): List<SyncDeletion> =
-        ids.flatMap { id ->
+    /** Tombstones for a deleted song and every recording this device holds for it, in one write. */
+    private fun songTombstones(prefs: Preferences, ids: Collection<String>, deletedAt: Long): List<SyncDeletion> {
+        val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
+        return ids.flatMap { id ->
             listOf(SyncDeletion(projectId = id, deletedAt = deletedAt)) +
-                recordingNamesFor(id).map { SyncDeletion(id, it, deletedAt) }
+                records.filter { it.projectId == id && it.path != null }
+                    .map { SyncDeletion(id, it.fileName, deletedAt, recordingId = it.id) }
         }
+    }
 
     suspend fun permanentlyDeleteTrashedProject(
         id: String,
@@ -386,7 +354,7 @@ class ProjectRepository internal constructor(
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + id
             prefs[SYNC_DELETIONS_KEY] = json.encodeToString(
-                SyncMerger.mergeDeletions(deletions + songTombstones(listOf(id), now))
+                SyncMerger.mergeDeletions(deletions + songTombstones(prefs, listOf(id), now))
             )
             committed = nextTrash
         }
@@ -407,7 +375,7 @@ class ProjectRepository internal constructor(
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + expired
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(
-                    SyncMerger.mergeDeletions(deletions + songTombstones(expired, now))
+                    SyncMerger.mergeDeletions(deletions + songTombstones(prefs, expired, now))
                 )
             }
             committed = TrashPurge(retained, expired)
@@ -419,14 +387,15 @@ class ProjectRepository internal constructor(
      * Tombstone one recording so no device restores it through Drive sync. Callers
      * write this before deleting the file; a failed write keeps the file in Trash.
      */
-    suspend fun recordRecordingDeletion(projectId: String, fileName: String, deletedAt: Long) = projectSaveMutex.withLock {
-        dataStore.edit { prefs ->
-            val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
-            prefs[SYNC_DELETIONS_KEY] = json.encodeToString(
-                SyncMerger.mergeDeletions(deletions + SyncDeletion(projectId, fileName, deletedAt))
-            )
+    suspend fun recordRecordingDeletion(projectId: String, fileName: String, recordingId: String, deletedAt: Long) =
+        projectSaveMutex.withLock {
+            dataStore.edit { prefs ->
+                val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
+                prefs[SYNC_DELETIONS_KEY] = json.encodeToString(
+                    SyncMerger.mergeDeletions(deletions + SyncDeletion(projectId, fileName, deletedAt, recordingId = recordingId))
+                )
+            }
         }
-    }
 
     /** A deletion becomes retryable in the same commit that removes its song and notebook. */
     suspend fun pendingRecordingDeletionIds(): Set<String> =
@@ -469,17 +438,14 @@ class ProjectRepository internal constructor(
                 val current = SyncBlob(
                     projects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]"),
                     trashed = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]"),
-                    recordings = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").map { it.toEntry() },
+                    recordings = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").filter { it.path != null }.map { it.toEntry() },
                     deletions = SyncMerger.mergeDeletions(deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]"))
                 )
-                val currentIds = buildSet {
-                    current.projects.forEach { add(it.id) }
-                    current.trashed.forEach { add(it.project.id) }
-                }
-                val removed = base.baseIds - currentIds
+                // A25: a song deleted here after the snapshot stays deleted only if its
+                // tombstone is newer than the incoming version; timestamps decide, not membership.
                 val resolved = SyncMerger.merge(current, merged)
-                val nextProjects = resolved.projects.filterNot { it.id in removed }
-                val nextTrash = resolved.trashed.filterNot { it.project.id in removed }
+                val nextProjects = resolved.projects
+                val nextTrash = resolved.trashed
                 val writtenIds = buildSet {
                     nextProjects.forEach { add(it.id) }
                     nextTrash.forEach { add(it.project.id) }
@@ -489,7 +455,7 @@ class ProjectRepository internal constructor(
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - writtenIds
-                committed = merged.copy(projects = nextProjects, trashed = nextTrash, deletions = resolved.deletions)
+                committed = resolved
             }
             committed
         }

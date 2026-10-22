@@ -56,11 +56,25 @@ data class SyncDeletion(
     @OptIn(ExperimentalSerializationApi::class)
     @EncodeDefault
     val fileName: String? = null,
-    val deletedAt: Long
+    val deletedAt: Long,
+    /**
+     * The deleted recording's stable id (A21). Null on a song tombstone, and on a
+     * name-only recording tombstone carried over from a pre-v4 backup, which still
+     * applies by project and file name.
+     */
+    val recordingId: String? = null
 ) {
+    /** Tombstones of one identity collapse to the newest. */
+    val identity: String
+        get() = recordingId?.let { "id:$it" } ?: "name:$projectId/${fileName.orEmpty()}"
+
     fun validate() {
         SyncIdentity.validateProjectId(projectId)
         fileName?.let(SyncIdentity::validateFileName)
+        recordingId?.let {
+            SyncIdentity.validateRecordingId(it)
+            require(fileName != null) { "A recording tombstone needs its file name" }
+        }
     }
 }
 
@@ -122,6 +136,12 @@ object SyncBlobSerializer : KSerializer<SyncBlob> {
 }
 
 internal object SyncIdentity {
+    private val recordingIdPattern = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+    fun validateRecordingId(value: String) {
+        require(recordingIdPattern.matches(value)) { "Invalid recording id" }
+    }
+
     private const val MAX_PROJECT_ID_BYTES = 128
     private const val MAX_RECORDING_FILE_NAME_BYTES = 240
     private val illegalRecordingCharacters = setOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
@@ -153,14 +173,24 @@ data class RecordingManifestEntry(
     val sizeBytes: Long,
     val modifiedAt: Long,
     val sha256: String,
-    /** When this copy reached Drive (v4 `uploadedAt`); 0 for a local file not yet listed. */
-    val uploadedAt: Long = 0L
+    /** The recording's precedence time (v4 `uploadedAt`, epoch milliseconds); 0 when unknown. */
+    val uploadedAt: Long = 0L,
+    /**
+     * Stable recording id (A21). A pre-v4 entry has none on the wire and gets one
+     * derived from its project, name and hash, so every device derives the same id.
+     */
+    val id: String = legacyRecordingId(projectId, fileName, sha256)
 ) {
+    /** Merge, tombstones and presence all key on the id. */
     val identityKey: String
+        get() = id
+
+    /** The pre-v4 identity, for name-only tombstones and archive paths. */
+    val nameKey: String
         get() = "$projectId/$fileName"
 
-    fun toRecord(origin: String) =
-        RecordingRecord(projectId, fileName, precedenceTime, sha256, sizeBytes, origin)
+    fun toRecord(origin: String, path: String?) =
+        RecordingRecord(id, projectId, fileName, precedenceTime, sha256, sizeBytes, origin, path)
 
     /** The time a tombstone must beat to remove this recording. */
     val precedenceTime: Long
@@ -177,8 +207,10 @@ data class RecordingManifestEntry(
     fun validate() {
         SyncIdentity.validateProjectId(projectId)
         SyncIdentity.validateFileName(fileName)
+        SyncIdentity.validateRecordingId(id)
         require(driveName == driveNameFor(projectId, fileName)) { "Invalid recording Drive name" }
         require(sizeBytes >= 0L) { "Invalid recording size" }
+        require(uploadedAt >= 0L) { "Invalid recording time" }
     }
 
     companion object {
@@ -186,6 +218,17 @@ data class RecordingManifestEntry(
         const val MAX_SYNC_RECORDING_BYTES = 16L * 1024L * 1024L
         const val DRIVE_PREFIX = "rec_"
         const val MIME_TYPE = "application/octet-stream"
+
+        /**
+         * Name-based UUID (version 3, MD5) of "rhymeai-legacy-recording:<projectId>/<fileName>/<sha256>",
+         * so a pre-v4 recording gets the same id on every device and every run.
+         */
+        fun legacyRecordingId(projectId: String, fileName: String, sha256: String): String =
+            java.util.UUID.nameUUIDFromBytes(
+                "rhymeai-legacy-recording:$projectId/$fileName/$sha256".toByteArray(Charsets.UTF_8)
+            ).toString()
+
+        fun newRecordingId(): String = java.util.UUID.randomUUID().toString()
 
         /** RAI1-encrypted pre-v4 name; v4 uses [BackupManifest.recordingDriveName]. */
         fun driveNameFor(projectId: String, fileName: String): String {
@@ -195,26 +238,30 @@ data class RecordingManifestEntry(
 }
 
 /**
- * What this device knows about one recording, kept in DataStore beside the songs:
- * the precedence time tombstones are compared with ([uploadedAt]), its hash and
- * size, and how it arrived. Written when a recording is recorded (finish time),
- * restored or imported (the backup entry's own time, never the file time) or first
- * seen without a record (its file time, once). File times are never read again.
+ * What this device knows about one recording (A20/A21), kept in DataStore beside
+ * the songs and keyed by the recording's stable [id]: its display [fileName], the
+ * precedence time tombstones are compared with ([uploadedAt]), its hash and size,
+ * how it arrived, and where its bytes are now ([path], relative to the app's files
+ * folder, live or in Trash). While a file is being moved, [pendingFrom] names the
+ * source so an interrupted move can be finished or undone at the next launch (A24).
  */
 @Serializable
 data class RecordingRecord(
+    val id: String,
     val projectId: String,
     val fileName: String,
     val uploadedAt: Long,
     val sha256: String,
     val bytes: Long,
-    val origin: String
+    val origin: String,
+    val path: String? = null,
+    val pendingFrom: String? = null,
+    val pendingFromName: String? = null,
+    val pendingOp: String? = null
 ) {
-    val identityKey: String
-        get() = "$projectId/$fileName"
-
     fun toEntry() = RecordingManifestEntry(
-        projectId = projectId, fileName = fileName, sizeBytes = bytes, modifiedAt = 0L, sha256 = sha256, uploadedAt = uploadedAt
+        projectId = projectId, fileName = fileName, sizeBytes = bytes, modifiedAt = 0L,
+        sha256 = sha256, uploadedAt = uploadedAt, id = id
     )
 
     companion object {
@@ -222,6 +269,12 @@ data class RecordingRecord(
         const val RESTORED = "restored"
         const val IMPORTED = "imported"
         const val MIGRATED = "migrated"
+
+        /** The bytes were being placed from a staging file; undo removes the record. */
+        const val OP_PUBLISH = "publish"
+
+        /** The bytes were being moved (rename, Trash, restore from Trash); undo moves the record back. */
+        const val OP_MOVE = "move"
     }
 }
 
@@ -289,15 +342,17 @@ object SyncMerger {
     /** Newest tombstone per identity. */
     fun mergeDeletions(deletions: List<SyncDeletion>): List<SyncDeletion> {
         deletions.forEach(SyncDeletion::validate)
-        val byIdentity = HashMap<Pair<String, String?>, SyncDeletion>(deletions.size)
+        val byIdentity = HashMap<String, SyncDeletion>(deletions.size)
         for (deletion in deletions) {
-            val identity = deletion.projectId to deletion.fileName
+            val identity = deletion.identity
             val existing = byIdentity[identity]
             if (existing == null || deletion.deletedAt > existing.deletedAt) {
                 byIdentity[identity] = deletion
             }
         }
-        return byIdentity.values.sortedWith(compareBy<SyncDeletion> { it.projectId }.thenBy { it.fileName ?: "" })
+        return byIdentity.values.sortedWith(
+            compareBy<SyncDeletion> { it.projectId }.thenBy { it.fileName ?: "" }.thenBy { it.recordingId ?: "" }
+        )
     }
 
     fun applyTombstones(
@@ -306,43 +361,51 @@ object SyncMerger {
         recordings: List<RecordingManifestEntry>,
         deletions: List<SyncDeletion>
     ): Resolved {
-        val projectTombstones = deletions.filter { it.fileName == null }.associateBy { it.projectId }
-        val fileTombstones = deletions.filter { it.fileName != null }.associateBy { it.projectId to it.fileName }
+        val tombstones = Tombstones(deletions)
         val keptProjects = projects.filterNot { project ->
-            projectTombstones[project.id]?.let { it.deletedAt > project.updatedAt } == true
+            tombstones.songs[project.id]?.let { it.deletedAt > project.updatedAt } == true
         }
         val keptTrash = trashed.filterNot { entry ->
-            projectTombstones[entry.project.id]?.let { it.deletedAt > maxOf(entry.project.updatedAt, entry.deletedAt) } == true
+            tombstones.songs[entry.project.id]?.let { it.deletedAt > maxOf(entry.project.updatedAt, entry.deletedAt) } == true
         }
-        val keptRecordings = recordings.filterNot { removesRecording(it, projectTombstones, fileTombstones) }
+        val keptRecordings = recordings.filterNot(tombstones::removes)
         // Each recording a song tombstone removes gets its own tombstone, so reviving
         // the song later (which drops the song tombstone) cannot bring the audio back.
         val covered = recordings.mapNotNull { entry ->
-            val songTombstone = projectTombstones[entry.projectId] ?: return@mapNotNull null
+            val songTombstone = tombstones.songs[entry.projectId] ?: return@mapNotNull null
             if (songTombstone.deletedAt <= entry.precedenceTime) return@mapNotNull null
-            SyncDeletion(entry.projectId, entry.fileName, songTombstone.deletedAt)
+            SyncDeletion(entry.projectId, entry.fileName, songTombstone.deletedAt, recordingId = entry.id)
         }
         val allDeletions = if (covered.isEmpty()) deletions else mergeDeletions(deletions + covered)
         val survivingSongs = buildSet {
             keptProjects.forEach { add(it.id) }
             keptTrash.forEach { add(it.project.id) }
         }
-        val survivingRecordings = keptRecordings.mapTo(HashSet()) { it.projectId to it.fileName }
+        val survivingIds = keptRecordings.mapTo(HashSet()) { it.id }
+        val survivingNames = keptRecordings.mapTo(HashSet()) { it.nameKey }
         val keptDeletions = allDeletions.filterNot { deletion ->
-            if (deletion.fileName == null) deletion.projectId in survivingSongs
-            else (deletion.projectId to deletion.fileName) in survivingRecordings
+            when {
+                deletion.fileName == null -> deletion.projectId in survivingSongs
+                deletion.recordingId != null -> deletion.recordingId in survivingIds
+                else -> "${deletion.projectId}/${deletion.fileName}" in survivingNames
+            }
         }
         return Resolved(keptProjects, keptTrash, keptRecordings, keptDeletions)
     }
 
-    internal fun removesRecording(
-        entry: RecordingManifestEntry,
-        projectTombstones: Map<String, SyncDeletion>,
-        fileTombstones: Map<Pair<String, String?>, SyncDeletion>
-    ): Boolean {
-        val time = entry.precedenceTime
-        return projectTombstones[entry.projectId]?.let { it.deletedAt > time } == true ||
-            fileTombstones[entry.projectId to entry.fileName]?.let { it.deletedAt > time } == true
+    /** Song, recording-id and pre-v4 name-only tombstones, applied by timestamp. */
+    class Tombstones(deletions: List<SyncDeletion>) {
+        val songs: Map<String, SyncDeletion> = deletions.filter { it.fileName == null }.associateBy { it.projectId }
+        private val byId = deletions.filter { it.recordingId != null }.associateBy { it.recordingId!! }
+        private val byName = deletions.filter { it.fileName != null && it.recordingId == null }
+            .associateBy { "${it.projectId}/${it.fileName}" }
+
+        fun removes(entry: RecordingManifestEntry): Boolean {
+            val time = entry.precedenceTime
+            return songs[entry.projectId]?.let { it.deletedAt > time } == true ||
+                byId[entry.id]?.let { it.deletedAt > time } == true ||
+                byName[entry.nameKey]?.let { it.deletedAt > time } == true
+        }
     }
 
     private fun mergeProjects(
