@@ -106,8 +106,10 @@ final class VoiceMemoService {
     /// Called after a recording file is added, renamed, trashed, restored or
     /// deleted, so the automatic backup can pick the change up.
     @ObservationIgnored var onFilesChanged: (() -> Void)?
-    /// The file the recorder is writing, if any; it is not finished until stopped.
-    var activeRecordingURL: URL? { audioRecorder?.url }
+    /// Records each memo change in the library before the file moves; without
+    /// one (tests of the service alone) changes are file moves only.
+    @ObservationIgnored weak var publisher: (any RecordingPublishing)?
+    @ObservationIgnored private var recordingProjectId: String?
 
     init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared) {
         self.sessionTransitions = sessionTransitions
@@ -121,7 +123,7 @@ final class VoiceMemoService {
 
     /// Copy provider-owned bytes into staging, decode them, then atomically publish.
     /// No microphone or audio session is needed to import a recording.
-    nonisolated static func importMemo(from source: URL, projectId: String) async throws -> URL {
+    nonisolated static func importMemo(from source: URL, projectId: String, publisher: (any RecordingPublishing)? = nil) async throws -> URL {
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
             let scoped = source.startAccessingSecurityScopedResource()
@@ -166,8 +168,13 @@ final class VoiceMemoService {
             guard frames > 0 else { throw ImportError.emptyAudio }
             try Task.checkCancellation()
             let target = try RecordingFiles.importURL(basename: source.deletingPathExtension().lastPathComponent, extension: ext, projectId: projectId)
-            try FileManager.default.moveItem(at: copied, to: target)
-            return target
+            return try await MainActor.run {
+                if let publisher {
+                    return try publisher.publishFinished(copied, projectId: projectId, preferredName: target.lastPathComponent, origin: .imported)
+                }
+                try FileManager.default.moveItem(at: copied, to: target)
+                return target
+            }
         }
         return try await withTaskCancellationHandler {
             try await task.value
@@ -197,7 +204,12 @@ final class VoiceMemoService {
                 deletedAtMs += 1
                 target = folder.appendingPathComponent("\(deletedAtMs)\(RecordingFiles.trashNameSeparator)\(url.lastPathComponent)")
             }
-            try FileManager.default.moveItem(at: url, to: target)
+            let trashedAt = Date(timeIntervalSince1970: Double(deletedAtMs) / 1000)
+            if let publisher {
+                try publisher.trashRecording(at: url, to: target, trashedAt: trashedAt)
+            } else {
+                try FileManager.default.moveItem(at: url, to: target)
+            }
             onFilesChanged?()
             return TrashedVoiceMemo(
                 url: target,
@@ -218,7 +230,11 @@ final class VoiceMemoService {
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let target = RecordingFiles.restoredURL(originalName: trashed.originalName, folder: folder)
-            try FileManager.default.moveItem(at: trashed.url, to: target)
+            if let publisher {
+                try publisher.untrashRecording(trashed, to: target)
+            } else {
+                try FileManager.default.moveItem(at: trashed.url, to: target)
+            }
             RecordingFiles.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
             onFilesChanged?()
         } catch {
@@ -305,9 +321,8 @@ final class VoiceMemoService {
         stopPlayback()
         let recordingRevision = audioIntentRevision
 
-        let folder = RecordingFiles.memoFolder(for: projectId)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let url = RecordingFiles.newMemoURL(for: projectId)
+        let url = RecordingFiles.recorderStagingURL(for: projectId)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         do {
             recordingActivationRevision = recordingRevision
@@ -354,6 +369,7 @@ final class VoiceMemoService {
         }
 
         audioRecorder = recorder
+        recordingProjectId = projectId
         recordingStartTime = Date()
         isRecording = true
 
@@ -386,11 +402,18 @@ final class VoiceMemoService {
         }
     }
 
-    func stopRecording() {
+    /// Stops the recorder; a recording that finished is published into the memo
+    /// folder (with its library row first). One that failed stays in staging.
+    func stopRecording(publish: Bool = true) {
         audioIntentRevision &+= 1
         let shouldDeactivateSession = audioRecorder != nil || recordingActivationRevision != nil
+        let finished = audioRecorder.map { ($0.url, recordingProjectId) }
         audioRecorder?.stop()
         audioRecorder = nil
+        recordingProjectId = nil
+        if publish, let (staged, projectId) = finished, let projectId {
+            publishRecording(staged, projectId: projectId)
+        }
         elapsedTimer?.invalidate()
         elapsedTimer = nil
         meteringTimer?.invalidate()
@@ -516,16 +539,36 @@ final class VoiceMemoService {
         // If active playback is on this file, stop it before rename.
         if activePlayURL == url { stopPlayback() }
 
-        try FileManager.default.moveItem(at: url, to: targetURL)
+        if let publisher {
+            try publisher.renameRecording(at: url, to: targetURL)
+        } else {
+            try FileManager.default.moveItem(at: url, to: targetURL)
+        }
         onFilesChanged?()
         return targetURL
     }
 
+    private func publishRecording(_ staged: URL, projectId: String) {
+        guard let size = (try? staged.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 0 else { return }
+        do {
+            if let publisher {
+                _ = try publisher.publishFinished(staged, projectId: projectId, preferredName: staged.lastPathComponent, origin: .recorded)
+            } else {
+                let folder = RecordingFiles.memoFolder(for: projectId)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try FileManager.default.moveItem(at: staged, to: RecordingFiles.restoredURL(originalName: staged.lastPathComponent, folder: folder))
+            }
+        } catch {
+            // The audio stays in staging rather than being lost.
+            lastError = "Couldn't save the recording: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Callbacks from delegate forwarder
 
-    fileprivate func recordingDidFinish(_ recorder: AVAudioRecorder) {
+    fileprivate func recordingDidFinish(_ recorder: AVAudioRecorder, successfully: Bool) {
         guard audioRecorder === recorder else { return }
-        stopRecording()
+        stopRecording(publish: successfully)
     }
 
     fileprivate func playbackDidFinish(_ player: AVAudioPlayer) {
@@ -555,7 +598,7 @@ private final class VoiceMemoDelegate: NSObject, AVAudioRecorderDelegate, AVAudi
 
     func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
         Task { @MainActor [weak self] in
-            self?.service?.recordingDidFinish(recorder)
+            self?.service?.recordingDidFinish(recorder, successfully: flag)
         }
     }
 

@@ -149,7 +149,7 @@ struct SongRecordingsView: View {
             case .success(let url):
                 importTask = Task {
                     do {
-                        _ = try await VoiceMemoService.importMemo(from: url, projectId: projectId)
+                        _ = try await VoiceMemoService.importMemo(from: url, projectId: projectId, publisher: viewModel.voiceMemoService.publisher)
                         reloadRecordings()
                         viewModel.voiceMemoService.onFilesChanged?()
                     } catch is CancellationError {
