@@ -100,7 +100,13 @@ same lock that recording, import, rename and restore-from-Trash take. Per projec
 the newest `deletedAt` wins; a tombstone removes a song only when newer than its
 `updatedAt`, and a recording only when newer than its `uploadedAt`, otherwise the
 tombstone is dropped; a recording removed by a song tombstone keeps a tombstone
-of its own, so reviving the song never brings the deleted audio back. Recordings are immutable: Drive's copy wins per identity, a
+of its own, and deleting a song writes tombstones for every recording this device
+knows for it, so reviving the song does not bring the deleted audio back. The one
+exception is a recording that was never backed up and never on the deleting
+device (say, recorded on an offline phone); if the song is revived before that
+phone backs up, the recording is treated as new. Every merge gathers all its
+inputs (local, earlier attempts, fresh and conflicting manifests, an archive)
+before resolving tombstones once. Recordings are immutable: Drive's copy wins per identity, a
 download is written only where no file exists when it commits, and a download
 whose SHA-256 does not match the manifest is discarded and counted. Recordings
 over 16 MiB are skipped with a visible count.
@@ -135,9 +141,9 @@ The backup regressions run in `:app:testDebugUnitTest`:
 | V-6 | `BackupServiceTest.independentIosShapedVectorsMigrateFromEveryEnvelopeVersion` | iOS-shaped RAI1, RAI2 and RAI3 backups migrate with their tombstones. |
 | V-7 | `BackupSchedulerTest` (all), `BackupScheduleTest.backoffDoublesFromOneMinuteAndCapsAtOneHour` | Debounce, coalescing, backoff, leave-app interval and consent retry. |
 | V-8 | `BackupArchiveTest.exportThenImportYieldsTheSameManifest`, `importMergesIntoTheLibraryAndAddsOnlyMissingRecordings`, `archivesWithUnsafeOrForeignEntriesAreRejected` | Export → Import yields the same manifest and merges; unsafe archives are refused. |
-| V-9 | `BackupServiceTest.writerThatLandsBetweenOurWriteAndReadBackIsMergedNotLost`, `contentSeenInAnEarlierAttemptSurvivesAStaleWriterInBetween`, `aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite`, `aWriterThatNeverStopsIsReportedAsAConflict`, `duplicateManifestsAreMergedAndTheOlderOnesRemovedAfterVerification` | Lost-update protection and duplicate-manifest reconciliation. |
+| V-9 | `BackupServiceTest.writerThatLandsBetweenOurWriteAndReadBackIsMergedNotLost`, `contentSeenInAnEarlierAttemptSurvivesAStaleWriterInBetween`, `aConflictingReadBackIsKeptEvenWhenAnotherWriterReplacesItBeforeTheRetry`, `aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite`, `aStaleSongTombstoneSeenOnRetryStillDeletesTheOldTakeButNotTheNewerSong`, `aWriterThatNeverStopsIsReportedAsAConflict`, `duplicateManifestsAreMergedAndTheOlderOnesRemovedAfterVerification` | Lost-update protection and duplicate-manifest reconciliation. |
 | V-10 | `RealDriveClientTest` | Drive listing follows every page and keeps `appProperties`; revoke posts the token. |
-| T-1 | `SyncMergerTest.tombstonesConvergeByTimestampPrecedence`; `BackupServiceTest.tombstonesApplyByTimestampPrecedence`, `recordingTombstonesApplyByUploadTime`, `revivingASongDoesNotBringBackItsDeletedRecordings` | Tombstones remove only older songs and recordings; newer ones survive and drop the tombstone. |
+| T-1 | `SyncMergerTest.tombstonesConvergeByTimestampPrecedence`; `BackupServiceTest.tombstonesApplyByTimestampPrecedence`, `recordingTombstonesApplyByUploadTime`, `revivingASongDoesNotBringBackItsDeletedRecordings`; `BackupArchiveTest.importRevivesANewerSongButKeepsItsDeletedAudioDeleted`; `ProjectRepositoryTest.songDeletionTombstonesItsKnownRecordingsInTheSameWrite` | Tombstones remove only older songs and recordings; newer ones survive and drop the tombstone. |
 | T-3 | `ProjectRepositoryTest.permanentDeleteWritesTombstoneBeforeSyncAndSurvivesRepositoryReopen` | A project tombstone is persisted, survives reopen and removes older copies. |
 | T-4 | `ProjectRepositoryTest.expiryPurgeWritesTombstonesForBothSongsBeforeRemoteMerge` | Expiry purge persists a tombstone for each purged song. |
 | T-5 | `ProjectRepositoryTest.deletionCommittedAfterBaseReadSurvivesSyncApplyAndLaterUpload` | A Delete Forever during the network window is not lost. |
