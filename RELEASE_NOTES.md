@@ -1,5 +1,17 @@
 # Release Notes
 
+## Placeholders scribble while suggestions are written, and the spinner bursts when they are done (iOS and Android)
+
+While the model writes, the one placeholder card waiting for the next line now
+scribbles two wavy pencil lines in, holds them a moment, wipes them and starts
+again, so a slow model still looks busy. Each line fades into the
+placeholder's place without moving, and a placeholder left empty when writing
+stops fades away as before. When writing finishes with at least one line, the
+Stop spinner bursts into a small spray of ink as the button turns back into
+Suggest Next Line; tapping Stop, an error or an empty answer does not burst.
+With Reduce Motion on (iOS) or animations removed (Android) the scribble holds
+still, there is no burst, and lines simply appear.
+
 ## Suggestions hold their places while they are written (iOS and Android)
 
 Tapping Suggest Next Line now opens the Suggestions list straight away with
