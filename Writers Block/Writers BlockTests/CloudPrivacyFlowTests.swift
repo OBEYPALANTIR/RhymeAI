@@ -402,59 +402,71 @@ struct CloudPrivacyFlowTests {
         #expect(emptyViewModel.errorMessage == "AI did not return suggestions. Try again.")
     }
 
-    /// The ink burst keys off this signal: only a stream that ends on its own
-    /// with lines sets it; Stop, a Settings change and errors leave it empty.
-    @Test func onlyNaturalCompletionSignalsFinishedSuggestions() async throws {
-        let (defaults, suiteName) = Self.makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let keychain = InMemoryKeychainStore()
-        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
-        let viewModel = EditorViewModel(
-            aiService: AIService(session: Self.makeSession()),
-            keychainStore: keychain,
-            defaults: defaults
-        )
-        viewModel.saveProvider(.gemini)
-        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
-        viewModel.lyrics = "A first unfinished line"
-        viewModel.cursorPosition = viewModel.lyrics.utf16.count
-        let rhymingLines = "Under the pine\nHolding the sign\nPouring the wine\nAll of it mine"
+    /// The ink burst keys off this signal. Each case streams one line, holds
+    /// the response open, then ends it one way; only a stream that ends on its
+    /// own with its lines still listed sets the signal.
+    @Test func onlyNaturalCompletionWithListedLinesSignalsFinishedSuggestions() async throws {
+        enum Interruption { case none, consume, stop, setting, streamError }
+        for interruption in [Interruption.none, .consume, .stop, .setting, .streamError] {
+            let (defaults, suiteName) = Self.makeDefaults()
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            let keychain = InMemoryKeychainStore()
+            keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+            StagedStreamURLProtocol.reset(firstLine: "Under the pine")
+            defer { StagedStreamURLProtocol.release(.finish) }
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [StagedStreamURLProtocol.self]
+            let viewModel = EditorViewModel(
+                aiService: AIService(session: URLSession(configuration: configuration)),
+                keychainStore: keychain,
+                defaults: defaults
+            )
+            viewModel.saveProvider(.gemini)
+            viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+            viewModel.lyrics = "A first unfinished line"
+            viewModel.cursorPosition = viewModel.lyrics.utf16.count
 
-        // Natural completion with lines: signalled with this request's ID.
-        PrivacyURLProtocol.reset(suggestionText: rhymingLines)
-        viewModel.getSuggestions()
-        let naturalID = try #require(viewModel.suggestionsRequestIDForTest())
-        #expect(viewModel.completedSuggestionsRequestID == nil)
-        #expect(await Self.waitUntil { !viewModel.isLoading })
-        #expect(!viewModel.suggestions.isEmpty)
-        #expect(viewModel.completedSuggestionsRequestID == naturalID)
+            viewModel.getSuggestions()
+            let requestID = try #require(viewModel.suggestionsRequestIDForTest())
+            #expect(await Self.waitUntil { viewModel.suggestions.count == 1 }, "\(interruption): the first line streams in")
+            #expect(viewModel.isLoading)
+            #expect(viewModel.completedSuggestionsRequestID == nil)
 
-        // Stop mid-stream: the next start clears the signal and Stop never sets it.
-        PrivacyURLProtocol.reset(suggestionText: rhymingLines, holdResponse: true)
-        viewModel.getSuggestions()
-        #expect(viewModel.completedSuggestionsRequestID == nil)
-        #expect(await Self.waitUntil { PrivacyURLProtocol.capturedBodies().count == 1 })
-        viewModel.cancelSuggestions()
-        PrivacyURLProtocol.releaseHeldResponse()
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(!viewModel.isLoading)
-        #expect(viewModel.completedSuggestionsRequestID == nil)
+            switch interruption {
+            case .none, .streamError:
+                break
+            case .consume:
+                // Using a line clears the list without cancelling the request.
+                viewModel.insertSuggestion(viewModel.suggestions[0].text)
+                #expect(viewModel.suggestions.isEmpty)
+            case .stop:
+                viewModel.cancelSuggestions()
+            case .setting:
+                #expect(!viewModel.useWholeSongContext)
+                viewModel.saveUseWholeSongContext(true)
+                #expect(viewModel.useWholeSongContext)
+            }
 
-        // A Settings change mid-stream cancels through cancelEditorAIWork.
-        PrivacyURLProtocol.reset(suggestionText: rhymingLines, holdResponse: true)
-        viewModel.getSuggestions()
-        #expect(await Self.waitUntil { PrivacyURLProtocol.capturedBodies().count == 1 })
-        viewModel.saveUseWholeSongContext(false)
-        PrivacyURLProtocol.releaseHeldResponse()
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(!viewModel.isLoading)
-        #expect(viewModel.completedSuggestionsRequestID == nil)
+            StagedStreamURLProtocol.release(interruption == .streamError ? .fail : .finish)
+            #expect(await Self.waitUntil { !viewModel.isLoading }, "\(interruption): loading ends")
+            try await Task.sleep(for: .milliseconds(200))
 
-        // An empty answer is an error, not a completion.
-        PrivacyURLProtocol.reset(suggestionText: "")
-        viewModel.getSuggestions()
-        #expect(await Self.waitUntil { !viewModel.isLoading && viewModel.errorMessage != nil })
-        #expect(viewModel.completedSuggestionsRequestID == nil)
+            switch interruption {
+            case .none:
+                #expect(viewModel.completedSuggestionsRequestID == requestID)
+                #expect(viewModel.suggestions.count == 1)
+            case .consume:
+                #expect(viewModel.completedSuggestionsRequestID == nil)
+                #expect(viewModel.errorMessage == nil, "consumed lines are not an empty answer")
+            case .stop, .setting:
+                #expect(viewModel.completedSuggestionsRequestID == nil, "\(interruption)")
+                #expect(viewModel.suggestions.count == 1, "\(interruption): the line already shown stays")
+            case .streamError:
+                #expect(viewModel.completedSuggestionsRequestID == nil)
+                #expect(viewModel.errorMessage != nil)
+                #expect(viewModel.suggestions.count == 1)
+            }
+        }
     }
 
     private static func makeSession() -> URLSession {
@@ -619,4 +631,65 @@ private final class PrivacyURLProtocol: URLProtocol, @unchecked Sendable {
         return result
     }
 
+}
+
+/// Streams one Gemini SSE line, then holds the response open until the test
+/// releases it to finish normally or fail mid-stream.
+private final class StagedStreamURLProtocol: URLProtocol, @unchecked Sendable {
+    enum Ending { case finish, fail }
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var gate = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) private static var ending = Ending.finish
+    nonisolated(unsafe) private static var line = ""
+
+    nonisolated static func reset(firstLine: String) {
+        lock.withLock {
+            gate = DispatchSemaphore(value: 0)
+            ending = .finish
+            line = firstLine
+        }
+    }
+
+    nonisolated static func release(_ end: Ending) {
+        let gate = lock.withLock { () -> DispatchSemaphore in
+            ending = end
+            return Self.gate
+        }
+        gate.signal()
+    }
+
+    nonisolated override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.scheme == "https"
+    }
+
+    nonisolated override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    nonisolated override func startLoading() {
+        let (gate, line) = Self.lock.withLock { (Self.gate, Self.line) }
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "text/event-stream"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let payload = ["candidates": [["content": ["parts": [["text": line + "\n"]]]]]]
+        let json = String(decoding: try! JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        client?.urlProtocol(self, didLoad: Data("data: \(json)\n\n".utf8))
+        DispatchQueue.global().async { [self] in
+            gate.wait()
+            gate.signal()
+            switch Self.lock.withLock({ Self.ending }) {
+            case .finish:
+                client?.urlProtocol(self, didLoad: Data("data: [DONE]\n\n".utf8))
+                client?.urlProtocolDidFinishLoading(self)
+            case .fail:
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            }
+        }
+    }
+
+    nonisolated override func stopLoading() {}
 }

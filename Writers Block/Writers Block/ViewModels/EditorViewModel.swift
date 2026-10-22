@@ -210,9 +210,9 @@ final class EditorViewModel: ObservableObject {
     @Published var suggestions: [SuggestedLine] = []
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
-    /// The request whose stream ended on its own with at least one line.
+    /// The request whose stream ended on its own with its lines still listed.
     /// Cleared when a request starts and on every cancel, so Stop, Settings
-    /// changes, navigation and errors never leave it set.
+    /// changes, navigation, errors and lines used before the end never leave it set.
     @Published private(set) var completedSuggestionsRequestID: UUID?
 
     // MARK: - Rhyme Settings
@@ -823,10 +823,13 @@ final class EditorViewModel: ObservableObject {
                     self.suggestions.append(SuggestedLine(text: text, tier: tier, isHookRepeat: isHookRepeat))
                 }
                 if !Task.isCancelled, self.suggestionsRequestID == requestID {
-                    if emittedSuggestion {
-                        self.completedSuggestionsRequestID = requestID
-                    } else {
+                    if !emittedSuggestion {
                         self.errorMessage = "AI did not return suggestions. Try again."
+                    } else if !self.suggestions.isEmpty {
+                        // Lines can be used or cleared while the stream finishes
+                        // (an inserted line clears the list); only results still
+                        // on screen count as a completion.
+                        self.completedSuggestionsRequestID = requestID
                     }
                 }
             } catch is CancellationError {
