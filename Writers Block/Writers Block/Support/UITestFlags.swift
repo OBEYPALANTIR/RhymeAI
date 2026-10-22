@@ -106,7 +106,7 @@ enum UITestFlags {
                     SyncSongProject(id: "drive-song-1", title: "Drive Song One", lyrics: "Found it in the cloud", theme: "", updatedAt: Date(timeIntervalSince1970: 1_761_000_000)),
                     SyncSongProject(id: "drive-song-2", title: "Drive Song Two", lyrics: "Back where it belongs", theme: "", updatedAt: Date(timeIntervalSince1970: 1_761_000_100)),
                 ],
-                recordings: takes.map { SyncRecording(projectId: $0.0, fileName: $0.1, bytes: Int64($0.2.count), sha256: RecordingBackupManifest.sha256Hex($0.2), uploadedAt: Date(timeIntervalSince1970: 1_761_000_150)) },
+                recordings: takes.map { SyncRecording(id: "take-\($0.0)", projectId: $0.0, fileName: $0.1, bytes: Int64($0.2.count), sha256: RecordingBackupManifest.sha256Hex($0.2), uploadedAt: Date(timeIntervalSince1970: 1_761_000_150)) },
                 savedAt: Date(timeIntervalSince1970: 1_761_000_200),
                 savedByClientId: "ui-test-seed",
                 platform: "android"
@@ -115,8 +115,8 @@ enum UITestFlags {
                 drive.seed(name: SyncBlob.driveFileName, content: manifest)
             }
             for (projectId, fileName, audio) in takes {
-                drive.seed(name: RecordingBackupManifest.driveName(projectId: projectId, fileName: fileName), content: audio,
-                           appProperties: ["projectId": projectId, "fileName": fileName, "sha256": RecordingBackupManifest.sha256Hex(audio), "bytes": String(audio.count)])
+                drive.seed(name: RecordingBackupManifest.driveName(recordingId: "take-\(projectId)"), content: audio,
+                           appProperties: ["id": "take-\(projectId)", "projectId": projectId, "fileName": fileName, "sha256": RecordingBackupManifest.sha256Hex(audio), "bytes": String(audio.count)])
             }
         }
         return BackupService(
