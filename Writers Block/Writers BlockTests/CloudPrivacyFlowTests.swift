@@ -402,6 +402,61 @@ struct CloudPrivacyFlowTests {
         #expect(emptyViewModel.errorMessage == "AI did not return suggestions. Try again.")
     }
 
+    /// The ink burst keys off this signal: only a stream that ends on its own
+    /// with lines sets it; Stop, a Settings change and errors leave it empty.
+    @Test func onlyNaturalCompletionSignalsFinishedSuggestions() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.lyrics = "A first unfinished line"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+        let rhymingLines = "Under the pine\nHolding the sign\nPouring the wine\nAll of it mine"
+
+        // Natural completion with lines: signalled with this request's ID.
+        PrivacyURLProtocol.reset(suggestionText: rhymingLines)
+        viewModel.getSuggestions()
+        let naturalID = try #require(viewModel.suggestionsRequestIDForTest())
+        #expect(viewModel.completedSuggestionsRequestID == nil)
+        #expect(await Self.waitUntil { !viewModel.isLoading })
+        #expect(!viewModel.suggestions.isEmpty)
+        #expect(viewModel.completedSuggestionsRequestID == naturalID)
+
+        // Stop mid-stream: the next start clears the signal and Stop never sets it.
+        PrivacyURLProtocol.reset(suggestionText: rhymingLines, holdResponse: true)
+        viewModel.getSuggestions()
+        #expect(viewModel.completedSuggestionsRequestID == nil)
+        #expect(await Self.waitUntil { PrivacyURLProtocol.capturedBodies().count == 1 })
+        viewModel.cancelSuggestions()
+        PrivacyURLProtocol.releaseHeldResponse()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!viewModel.isLoading)
+        #expect(viewModel.completedSuggestionsRequestID == nil)
+
+        // A Settings change mid-stream cancels through cancelEditorAIWork.
+        PrivacyURLProtocol.reset(suggestionText: rhymingLines, holdResponse: true)
+        viewModel.getSuggestions()
+        #expect(await Self.waitUntil { PrivacyURLProtocol.capturedBodies().count == 1 })
+        viewModel.saveUseWholeSongContext(false)
+        PrivacyURLProtocol.releaseHeldResponse()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!viewModel.isLoading)
+        #expect(viewModel.completedSuggestionsRequestID == nil)
+
+        // An empty answer is an error, not a completion.
+        PrivacyURLProtocol.reset(suggestionText: "")
+        viewModel.getSuggestions()
+        #expect(await Self.waitUntil { !viewModel.isLoading && viewModel.errorMessage != nil })
+        #expect(viewModel.completedSuggestionsRequestID == nil)
+    }
+
     private static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [PrivacyURLProtocol.self]
