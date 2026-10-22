@@ -1,5 +1,19 @@
 # Release Notes
 
+## iPad works in narrow windows and reads better with VoiceOver (iOS)
+
+In Split View, Stage Manager and resized windows narrower than 760 points, the
+editor keeps the full window and the Assistant opens as the panel that rises
+from the bottom, instead of squeezing the lyrics beside a fixed column; widen
+the window and the column comes back. At the largest text sizes the
+Assistant's labels sit above their controls, so words such as "Target" and
+"Rhyme" are no longer split. Secondary text is darker so it is easier to read,
+the Trash screen's Delete button is readable on Graphite, the songs drawer has
+a visible edge on Graphite, and the Assistant header is flat like the editor's
+toolbar. With VoiceOver, the editor is hidden while the songs drawer is open,
+the dimmed area closes the drawer, and showing or hiding the Assistant is
+announced.
+
 ## iPad layout sits on the golden ratio (iOS)
 
 On iPad the Assistant column and the songs drawer now take the smaller golden
