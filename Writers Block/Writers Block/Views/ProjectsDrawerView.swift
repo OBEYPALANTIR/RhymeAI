@@ -330,12 +330,13 @@ struct ProjectsDrawerView: View {
                 .padding(.top, RhymeAITokens.Spacing.lg)
 
             // Tab picker — spans Songs and Recordings
-            Picker("Tab", selection: $activeTab) {
-                ForEach(DrawerTab.allCases, id: \.self) { tab in
-                    Text(tab.rawValue).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
+            RhymeSegmentedControl(
+                options: DrawerTab.allCases,
+                selection: $activeTab,
+                accessibilityIdentifier: "drawerTabPicker",
+                label: "Tab",
+                title: \.rawValue
+            )
             .padding(.top, RhymeAITokens.Spacing.sm)
 
             if activeTab == .songs {

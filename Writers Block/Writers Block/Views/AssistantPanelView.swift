@@ -410,12 +410,13 @@ struct AssistantPanelView: View {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                     featureHelpLabel("Rhyme Density", help: .rhymeDensity)
 
-                    Picker("Type", selection: $viewModel.rhymeType) {
-                        ForEach(RhymeType.allCases, id: \.self) { type in
-                            Text(type.shortName).tag(type)
-                        }
-                    }
-                    .pickerStyle(.segmented)
+                    RhymeSegmentedControl(
+                        options: RhymeType.allCases,
+                        selection: $viewModel.rhymeType,
+                        accessibilityIdentifier: "rhymeDensityPicker",
+                        label: "Rhyme Density",
+                        title: \.shortName
+                    )
                 }
 
                 // MARK: - Complexity
