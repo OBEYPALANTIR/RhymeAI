@@ -92,6 +92,24 @@ class SuggestionPlaceholderMotionTest {
     // Wave path
 
     @Test
+    fun `scribble is a 34 period wave, 10 tall, stroked 1_6`() {
+        assertEquals(34f, SuggestionPlaceholderMotion.WAVE_PERIOD_DP)
+        assertEquals(10f, SuggestionPlaceholderMotion.WAVE_HEIGHT_DP)
+        assertEquals(1.6f, SuggestionPlaceholderMotion.STROKE_WIDTH_DP)
+    }
+
+    @Test
+    fun `one period follows the design's five wave points`() {
+        val points = SuggestionPlaceholderMotion.wavePoints(width = 34f, period = 34f, height = 10f)
+        val expected = listOf(0f to 5.5f, 6.12f to 2.5f, 14.28f to 7.8f, 23.12f to 2.8f, 34f to 5.8f)
+        assertEquals(expected.size, points.size)
+        expected.zip(points).forEach { (e, p) ->
+            assertEquals(e.first, p.x, 1e-4f)
+            assertEquals(e.second, p.y, 1e-4f)
+        }
+    }
+
+    @Test
     fun `wave keeps its 34 period and is cut at the width`() {
         val points = SuggestionPlaceholderMotion.wavePoints(width = 80f, period = 34f, height = 10f)
         assertEquals(0f, points.first().x)

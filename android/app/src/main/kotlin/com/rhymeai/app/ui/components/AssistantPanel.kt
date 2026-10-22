@@ -75,7 +75,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Modifier
@@ -689,8 +689,9 @@ fun AssistantPanel(
         // The ink burst: when writing ends with at least one line and no
         // error, and not because Stop was tapped, the spinner bursts once.
         val burstElapsed = remember { Animatable(InkBurstMotion.DURATION_MILLIS.toFloat()) }
+        // The spinner's centre in the button's own space, so a sheet drag mid-burst carries the dots with it.
         val burstOrigin = remember { mutableStateOf(Offset.Unspecified) }
-        val buttonOrigin = remember { mutableStateOf(Offset.Zero) }
+        val buttonCoordinates = remember { mutableStateOf<LayoutCoordinates?>(null) }
         var stopTapped by remember { mutableStateOf(false) }
         var wasLoading by remember { mutableStateOf(viewModel.isLoading) }
         LaunchedEffect(viewModel.isLoading) {
@@ -732,13 +733,12 @@ fun AssistantPanel(
                 .fillMaxWidth()
                 .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.sm)
                 .height(DesignTokens.Touch.minTarget)
-                .onGloballyPositioned { buttonOrigin.value = it.positionInRoot() }
+                .onGloballyPositioned { buttonCoordinates.value = it }
                 // Above the button and unclipped, so the dots fly past it onto the panel.
                 .drawWithContent {
                     drawContent()
-                    val origin = burstOrigin.value
-                    if (!origin.isSpecified) return@drawWithContent
-                    val centre = origin - buttonOrigin.value
+                    val centre = burstOrigin.value
+                    if (!centre.isSpecified) return@drawWithContent
                     val reach = InkBurstMotion.REACH_DP.dp.toPx()
                     InkBurstMotion.dots(burstElapsed.value).forEach { dot ->
                         drawCircle(
@@ -785,8 +785,13 @@ fun AssistantPanel(
                             CircularProgressIndicator(
                                 modifier = Modifier
                                     .size(DesignTokens.Indicator.spinnerMd)
-                                    .onGloballyPositioned {
-                                        burstOrigin.value = it.positionInRoot() + Offset(it.size.width / 2f, it.size.height / 2f)
+                                    .onGloballyPositioned { spinner ->
+                                        buttonCoordinates.value?.takeIf { it.isAttached }?.let { button ->
+                                            burstOrigin.value = button.localPositionOf(
+                                                spinner,
+                                                Offset(spinner.size.width / 2f, spinner.size.height / 2f)
+                                            )
+                                        }
                                     },
                                 color = colorScheme.onPrimary,
                                 strokeWidth = 2.dp
