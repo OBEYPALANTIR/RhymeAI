@@ -9,24 +9,26 @@ import kotlin.test.assertTrue
 class TitleSubmitKeyTest {
     @Test
     fun enterAndNumPadEnterKeyDownSubmit() {
-        assertTrue(isTitleSubmitKey(KeyEventType.KeyDown, Key.Enter, shiftPressed = false))
-        assertTrue(isTitleSubmitKey(KeyEventType.KeyDown, Key.NumPadEnter, shiftPressed = false))
+        assertTrue(isTitleSubmitKey(KeyEventType.KeyDown, Key.Enter, modified = false))
+        assertTrue(isTitleSubmitKey(KeyEventType.KeyDown, Key.NumPadEnter, modified = false))
     }
 
     @Test
     fun keyUpDoesNotSubmit() {
-        assertFalse(isTitleSubmitKey(KeyEventType.KeyUp, Key.Enter, shiftPressed = false))
-        assertFalse(isTitleSubmitKey(KeyEventType.KeyUp, Key.NumPadEnter, shiftPressed = false))
+        assertFalse(isTitleSubmitKey(KeyEventType.KeyUp, Key.Enter, modified = false))
+        assertFalse(isTitleSubmitKey(KeyEventType.KeyUp, Key.NumPadEnter, modified = false))
     }
 
     @Test
-    fun shiftEnterDoesNotSubmit() {
-        assertFalse(isTitleSubmitKey(KeyEventType.KeyDown, Key.Enter, shiftPressed = true))
+    fun modifiedEnterDoesNotSubmit() {
+        // The caller folds Shift, Ctrl, Alt and Meta into `modified`.
+        assertFalse(isTitleSubmitKey(KeyEventType.KeyDown, Key.Enter, modified = true))
+        assertFalse(isTitleSubmitKey(KeyEventType.KeyDown, Key.NumPadEnter, modified = true))
     }
 
     @Test
     fun ordinaryKeysDoNotSubmit() {
-        assertFalse(isTitleSubmitKey(KeyEventType.KeyDown, Key.A, shiftPressed = false))
-        assertFalse(isTitleSubmitKey(KeyEventType.KeyDown, Key.Spacebar, shiftPressed = true))
+        assertFalse(isTitleSubmitKey(KeyEventType.KeyDown, Key.A, modified = false))
+        assertFalse(isTitleSubmitKey(KeyEventType.KeyDown, Key.Spacebar, modified = true))
     }
 }

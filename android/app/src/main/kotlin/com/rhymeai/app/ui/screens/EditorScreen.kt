@@ -120,6 +120,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -925,7 +928,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             .fillMaxWidth()
                             .testTag("songTitleEditor")
                             .onPreviewKeyEvent {
-                                if (!isTitleSubmitKey(it.type, it.key, it.isShiftPressed)) return@onPreviewKeyEvent false
+                                if (!isTitleSubmitKey(it.type, it.key, modified = it.isShiftPressed || it.isCtrlPressed || it.isAltPressed || it.isMetaPressed)) return@onPreviewKeyEvent false
                                 focusManager.moveFocus(FocusDirection.Down)
                                 true
                             }
@@ -1882,7 +1885,8 @@ private fun Modifier.animatedWidth(width: androidx.compose.runtime.State<android
 
 /**
  * True only for an unmodified Enter or numpad Enter key-down: the hardware equivalent of the
- * keyboard's Next action. Key-up and Shift+Enter fall through so ordinary typing is untouched.
+ * keyboard's Next action. Key-up and any modifier (Shift, Ctrl, Alt, Meta) fall through so
+ * ordinary typing and shortcuts are untouched.
  */
-internal fun isTitleSubmitKey(type: KeyEventType, key: Key, shiftPressed: Boolean): Boolean =
-    type == KeyEventType.KeyDown && !shiftPressed && (key == Key.Enter || key == Key.NumPadEnter)
+internal fun isTitleSubmitKey(type: KeyEventType, key: Key, modified: Boolean): Boolean =
+    type == KeyEventType.KeyDown && !modified && (key == Key.Enter || key == Key.NumPadEnter)
