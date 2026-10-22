@@ -251,6 +251,10 @@ final class UXAuditWalkthroughUITests: XCTestCase {
         }
         scroll.swipeUp()
         shot(app, "assistant-idle-scrolled")
+        // The rest of the expanded options: the stanza preview and model readiness.
+        scroll.swipeUp()
+        shot(app, "assistant-idle-scrolled-end")
+        scroll.swipeDown()
         scroll.swipeDown()
         if tap(app.buttons["Context & Theme help"], "help button") {
             shot(app, "assistant-help-sheet")

@@ -68,13 +68,13 @@ struct TrashBinView: View {
                 topBar
 
                 VStack(spacing: 0) {
-                    Picker("Trash Tab", selection: $activeTab) {
-                        ForEach(TrashTab.allCases, id: \.self) { tab in
-                            Text(tab.rawValue).tag(tab)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("trashTabPicker")
+                    RhymeSegmentedControl(
+                        options: TrashTab.allCases,
+                        selection: $activeTab,
+                        accessibilityIdentifier: "trashTabPicker",
+                        label: "Trash Tab",
+                        title: \.rawValue
+                    )
                     .padding(.horizontal, RhymeAITokens.Spacing.md)
                     .padding(.top, RhymeAITokens.Spacing.sm)
 

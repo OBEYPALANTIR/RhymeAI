@@ -74,14 +74,14 @@ struct SettingsView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(appearance.preferredColorScheme, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        if hasUnsavedKeys {
-                            confirmingUnsavedKeys = true
-                        } else {
-                            dismiss()
-                        }
-                    }
+                // iPadOS draws toolbar buttons on a shared glass capsule, which
+                // failed the contrast audit on hardware. Without it, Done is the
+                // action colour on the canvas toolbar, the pair used across the app.
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .cancellationAction) { doneButton }
+                        .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .cancellationAction) { doneButton }
                 }
             }
             .confirmationDialog(
@@ -103,6 +103,18 @@ struct SettingsView: View {
             .sheet(item: $activeHelp) { help in
                 FeatureHelpSheet(help: help)
             }
+        }
+    }
+
+    private var doneButton: some View {
+        Button {
+            if hasUnsavedKeys {
+                confirmingUnsavedKeys = true
+            } else {
+                dismiss()
+            }
+        } label: {
+            Text("Done").foregroundStyle(appearance.palette.action)
         }
     }
 
