@@ -189,12 +189,12 @@ struct SettingsLocalModelSection: View {
                      : "The selected GGUF model runs directly on this device with llama.cpp. Apple Intelligence remains available as an alternative."
                 )
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
                 .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("Gemma downloads and the GGUF engine are unavailable in this build. Apple Intelligence remains the on-device local option.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearance.palette.secondaryInk)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("gemmaUnavailableMessage")
             }
@@ -252,6 +252,7 @@ struct SettingsLocalModelSection: View {
                 .font(.title2)
                 .foregroundStyle(appearance.palette.action)
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                 Text("Apple Foundation Models")
@@ -259,7 +260,7 @@ struct SettingsLocalModelSection: View {
 
                 Text("Runs suggestions on-device when Apple Intelligence is available. No API key is needed.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearance.palette.secondaryInk)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -332,7 +333,7 @@ struct SettingsLocalModelSection: View {
 
                         Text("\(option.subtitle) · \(option.size)")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(appearance.palette.secondaryInk)
                     }
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -410,7 +411,7 @@ struct SettingsEditorSection: View {
                 } label: {
                     Image(systemName: "questionmark.circle")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                         .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                 }
                 .buttonStyle(.rhymePress)
@@ -452,7 +453,7 @@ struct SettingsCloudBackupSection: View {
 
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                         .rotationEffect(.degrees(isExpanded ? 180 : 0))
                 }
                 .contentShape(Rectangle())
@@ -485,7 +486,7 @@ struct SettingsCloudBackupSection: View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             Text("Backs up projects, trash, and voice recordings to your Google Drive app data. API keys stay on this device and are never included.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
 
             SecureField(
                 viewModel.cloudBackupHasStoredPassphrase ? "Stored passphrase ready" : "Backup passphrase",
@@ -514,7 +515,7 @@ struct SettingsCloudBackupSection: View {
 
             Text("Background backup runs only after you set up Google Drive and save a passphrase here. Your songs and recordings also remain covered by iCloud backup and sync.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
         }
     }
 
@@ -530,7 +531,7 @@ struct SettingsCloudBackupSection: View {
     private var cloudSyncStatusRow: some View {
         Label(cloudSyncStatusText, systemImage: cloudSyncStatusIcon)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(appearance.palette.secondaryInk)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("iCloudSyncStatus")
     }

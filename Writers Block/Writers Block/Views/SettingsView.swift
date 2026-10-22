@@ -182,7 +182,7 @@ struct SettingsView: View {
                 } label: {
                     Image(systemName: showKey ? "eye.slash" : "eye")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                         .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                 }
                 .buttonStyle(.rhymePress)
@@ -194,11 +194,11 @@ struct SettingsView: View {
 
             Text(viewModel.selectedProvider.keyHint)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
 
             Text(viewModel.cloudAISharingDisclosure)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
                 .fixedSize(horizontal: false, vertical: true)
 
             Toggle(
@@ -248,7 +248,7 @@ struct SettingsView: View {
             if viewModel.selectedProvider != .local {
                 Text(viewModel.selectedModel.id)
                     .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearance.palette.secondaryInk)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
             }

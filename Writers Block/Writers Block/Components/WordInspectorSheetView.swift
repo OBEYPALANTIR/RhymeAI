@@ -33,7 +33,7 @@ struct WordInspectorSheetView: View {
                                 .controlSize(.small)
                             Text(RhymeResultPresentation.findingMessage)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(appearance.palette.secondaryInk)
                         }
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("wordInspectorFindingRhymes")
@@ -92,7 +92,7 @@ struct WordInspectorSheetView: View {
                     .foregroundStyle(appearance.palette.action)
                 Text("Word inspector")
                     .font(.callout.weight(.medium))
-                    .foregroundStyle(Color.primary.opacity(0.7))
+                    .foregroundStyle(appearance.palette.secondaryInk)
             }
             Spacer()
             Button {
@@ -100,7 +100,7 @@ struct WordInspectorSheetView: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(Color.primary.opacity(0.7))
+                    .foregroundStyle(appearance.palette.secondaryInk)
                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                     .contentShape(Rectangle())
             }
@@ -118,12 +118,12 @@ struct WordInspectorSheetView: View {
                 if let ipa = prosody?.ipa, !ipa.isEmpty {
                     Text("/\(ipa)/")
                         .font(.system(.footnote, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                 }
                 if let count = prosody?.syllableCount, count > 0 {
                     Text("\(count) \(count == 1 ? "syllable" : "syllables")")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                 }
                 if let stress = prosody?.stressPattern, !stress.isEmpty {
                     StressDots(pattern: stress)
@@ -181,13 +181,14 @@ struct WordInspectorSheetView: View {
             } else if synonyms.isEmpty, !synonymsLoading {
                 Text("No synonyms yet.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearance.palette.secondaryInk)
             }
         }
     }
 }
 
 private struct ResultsSection: View {
+    @Environment(\.appAppearanceStyle) private var appearance
     let title: String
     let empty: String
     let items: [String]
@@ -200,7 +201,7 @@ private struct ResultsSection: View {
             if items.isEmpty {
                 Text(empty)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearance.palette.secondaryInk)
             } else {
                 FlowChips(items: items, onTap: onTap)
             }

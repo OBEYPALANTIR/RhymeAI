@@ -7,7 +7,7 @@ struct AppearanceSettingsSection: View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             Label("Appearance", systemImage: "circle.lefthalf.filled")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.wrappedValue.palette.secondaryInk)
                 .textCase(.uppercase)
 
             RhymeSegmentedControl(

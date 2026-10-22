@@ -191,12 +191,20 @@ struct ProjectsDrawerView: View {
                 let drawerWidth = overlayPanelWidth(for: proxy.size.width)
 
                 ZStack(alignment: .leading) {
-                    Color.black.opacity(drawerVisible ? 0.42 : 0)
+                    // The palette scrim: ink on Ink and Paper, a deeper black on
+                    // Graphite, where black at 42% barely set the panel apart.
+                    appearance.palette.scrim.opacity(drawerVisible ? 1 : 0)
                         .ignoresSafeArea()
                         // The panel is still off-screen until the open
                         // animation starts on the next run-loop tick; a tap
                         // in that gap must not dismiss a drawer nobody saw.
                         .onTapGesture { if drawerVisible { closeDrawer() } }
+                        // VoiceOver reaches the scrim as a close control, as
+                        // UIKit does for a popover's dimming view.
+                        .accessibilityElement()
+                        .accessibilityLabel("Dismiss songs drawer")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction { closeDrawer() }
 
                     drawerContent(topInset: proxy.safeAreaInsets.top, bottomInset: proxy.safeAreaInsets.bottom)
                         .frame(width: drawerWidth)
@@ -211,6 +219,13 @@ struct ProjectsDrawerView: View {
                         .background {
                             AppWritingBackground()
                                 .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
+                                // A black shadow vanishes on Graphite's canvas; the
+                                // hairline keeps the panel edge in every appearance.
+                                .overlay(alignment: .trailing) {
+                                    Rectangle()
+                                        .fill(appearance.palette.outline)
+                                        .frame(width: RhymeAITokens.Spacing.hairline)
+                                }
                         }
                         // Push-style reveal: while the trash screen slides in from
                         // the right, the drawer slides toward the left like a
@@ -305,7 +320,7 @@ struct ProjectsDrawerView: View {
                 Button(action: closeDrawer) {
                     Image(systemName: "xmark")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                         .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                         .contentShape(Rectangle())
                 }
@@ -366,7 +381,7 @@ struct ProjectsDrawerView: View {
 
             Text("Recent Songs")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
                 .padding(.top, RhymeAITokens.Spacing.md)
                 .padding(.bottom, RhymeAITokens.Spacing.xs)
 
@@ -592,12 +607,12 @@ struct ProjectsDrawerView: View {
                     .lineLimit(1)
                 Text("\(folder.items.count) \(folder.items.count == 1 ? "recording" : "recordings")")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearance.palette.secondaryInk)
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
                 .rotationEffect(.degrees(isRecordingFolderExpanded(folder) ? 90 : 0))
                 .accessibilityHidden(true)
         }
@@ -653,7 +668,7 @@ struct ProjectsDrawerView: View {
             } label: {
                 Image(systemName: "pencil")
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearance.palette.secondaryInk)
                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
             }
             .buttonStyle(.rhymePress)
@@ -759,7 +774,7 @@ struct ProjectsDrawerView: View {
     private var searchField: some View {
         HStack(spacing: RhymeAITokens.Spacing.xs) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
 
             TextField(
                 "",
@@ -775,7 +790,7 @@ struct ProjectsDrawerView: View {
                     searchText = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                         .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                         .contentShape(Rectangle())
                 }
@@ -801,7 +816,8 @@ struct ProjectsDrawerView: View {
                         Text(project.title.isEmpty ? "Untitled Song" : project.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                            // Three lines at accessibility sizes, as in Trash.
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
 
                         // Side by side while both facts fit on one line;
                         // stacked once larger text would squeeze the date
@@ -810,6 +826,7 @@ struct ProjectsDrawerView: View {
                             HStack(spacing: RhymeAITokens.Spacing.xs) {
                                 Text(project.updatedAt, style: .date)
                                 Text("·")
+                                    .accessibilityHidden(true)
                                 Text("\(SyllableCounter.wordCount(project.lyrics)) words")
                             }
                             .lineLimit(1)
@@ -820,7 +837,7 @@ struct ProjectsDrawerView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         }
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearance.palette.secondaryInk)
                     }
                     .multilineTextAlignment(.leading)
 
@@ -877,7 +894,7 @@ struct ProjectsDrawerView: View {
                 .foregroundStyle(.secondary.opacity(0.7))
             Text(title)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, RhymeAITokens.Touch.minimum)
