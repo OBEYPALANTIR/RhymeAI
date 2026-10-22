@@ -590,6 +590,7 @@ struct ProjectsDrawerView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityValue(isRecordingFolderExpanded(folder) ? "Expanded" : "Collapsed")
+        .accessibilityAddTraits(.isButton)
         .onTapGesture {
             withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                 if expandedFolders.contains(folder.id) {

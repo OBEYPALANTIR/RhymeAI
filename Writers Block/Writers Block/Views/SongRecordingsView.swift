@@ -332,6 +332,7 @@ struct SongRecordingsView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityValue(isRecordingFolderExpanded(folder) ? "Expanded" : "Collapsed")
+        .accessibilityAddTraits(.isButton)
         .onTapGesture {
             withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.settle) {
                 if expandedFolders.contains(folder.id) {
