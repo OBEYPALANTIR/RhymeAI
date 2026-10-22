@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -310,12 +311,15 @@ fun SuggestionPlaceholderCard(
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
             ) {
                 // The serif line, held by one invisible line of the card's
-                // style, with the two scribble lines over it.
+                // style, with the two scribble lines centred over it. The
+                // scribble never sizes the box: where it is taller than the
+                // line it runs into the card's padding, so a one-line card
+                // lands without moving the list.
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopStart) {
                     HeldLine(fontFamily = FontFamily.Serif, fontSize = 14.sp, lineHeight = 20.sp)
                     Column(
-                        modifier = Modifier.padding(top = 4.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.matchParentSize().wrapContentHeight(unbounded = true),
+                        verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)
                     ) {
                         ScribbleLine(scribbleInk, SuggestionPlaceholderMotion.textBarFraction(slot)) { progress().first }
                         ScribbleLine(scribbleInk, SuggestionPlaceholderMotion.secondBarFraction(slot)) { progress().second }
