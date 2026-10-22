@@ -302,13 +302,13 @@ fun SuggestionPlaceholderCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(DesignTokens.Spacing.lg),
+                .padding(DesignTokens.Rhythm.standard),
             verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)
         ) {
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight)
             ) {
                 // The serif line, held by one invisible line of the card's
                 // style, with the two scribble lines centred over it. The
@@ -338,7 +338,7 @@ fun SuggestionPlaceholderCard(
                 Modifier
                     .clip(RoundedCornerShape(DesignTokens.Radius.xs))
                     .background(ink.copy(alpha = SuggestionPlaceholderMotion.GHOST_ALPHA))
-                    .padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
+                    .padding(horizontal = DesignTokens.Rhythm.tight, vertical = DesignTokens.Spacing.xs)
             ) {
                 HeldLine(fontFamily = FontFamily.Monospace, fontSize = 12.sp, text = "00")
             }
@@ -346,8 +346,8 @@ fun SuggestionPlaceholderCard(
         FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.xs),
-            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                .padding(start = DesignTokens.Rhythm.related, end = DesignTokens.Rhythm.related, bottom = DesignTokens.Rhythm.tight),
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight)
         ) {
             // The card's own buttons, disabled and invisible, so they measure
             // and wrap exactly as the real ones do; only their ghosts are drawn.

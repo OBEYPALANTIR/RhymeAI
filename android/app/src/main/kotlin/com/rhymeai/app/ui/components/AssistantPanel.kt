@@ -156,7 +156,7 @@ fun AssistantPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(DesignTokens.Spacing.lg)
+                .padding(horizontal = DesignTokens.Rhythm.section, vertical = DesignTokens.Rhythm.standard)
         ) {
             Row(
                 modifier = Modifier
@@ -166,7 +166,7 @@ fun AssistantPanel(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.Default.Edit, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(DesignTokens.Rhythm.tight))
                 FeatureHelpLabel(
                     text = "Context & Theme",
                     help = FeatureHelp.CONTEXT_THEME,
@@ -202,7 +202,7 @@ fun AssistantPanel(
                     placeholder = { Text("What is this song about?", fontSize = DesignTokens.Typography.caption) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp)
+                        .padding(top = DesignTokens.Rhythm.related)
                         .heightIn(min = 84.dp),
                     colors = textFieldColors,
                     shape = RoundedCornerShape(DesignTokens.Radius.lg),
@@ -218,11 +218,12 @@ fun AssistantPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(DesignTokens.Spacing.lg),
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.lg)
+                // The trailing space is the breathing room above the primary button.
+                .padding(start = DesignTokens.Rhythm.section, top = DesignTokens.Rhythm.standard, end = DesignTokens.Rhythm.section, bottom = DesignTokens.Rhythm.primary),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.section)
         ) {
             // Target Line
-            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -230,7 +231,7 @@ fun AssistantPanel(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight)
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Notes, null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
                         FeatureHelpLabel(
@@ -244,7 +245,7 @@ fun AssistantPanel(
                         Box(
                             modifier = Modifier
                                 .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.xs))
-                                .padding(horizontal = DesignTokens.Spacing.sm, vertical = DesignTokens.Spacing.xs)
+                                .padding(horizontal = DesignTokens.Rhythm.tight, vertical = DesignTokens.Spacing.xs)
                         ) {
                             Text(
                                 "${SyllableCounter.countText(rhymeContext.targetLine)} syllables",
@@ -261,10 +262,10 @@ fun AssistantPanel(
                         .fillMaxWidth()
                         .background(colorScheme.surfaceContainer, RoundedCornerShape(DesignTokens.Radius.sm))
                         .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.sm))
-                        .padding(DesignTokens.Spacing.md)
+                        .padding(DesignTokens.Rhythm.related)
                 ) {
                     if (rhymeContext.targetLine != null) {
-                        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight)) {
                             Text(
                                 "\"${rhymeContext.targetLine}\"",
                                 fontFamily = FontFamily.Serif,
@@ -290,7 +291,7 @@ fun AssistantPanel(
             // Rhyme options — scheme, density, and complexity live behind one
             // disclosure so the panel leads with the writing flow; the header
             // summary keeps the current tuning visible while collapsed.
-            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -341,9 +342,9 @@ fun AssistantPanel(
                         ExitTransition.None
                     }
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.lg)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.standard)) {
                     // Rhyme Scheme
-                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -407,7 +408,7 @@ fun AssistantPanel(
                     }
 
                     // Rhyme Type
-                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)) {
                         FeatureHelpLabel(
                             text = "Rhyme Density",
                             help = FeatureHelp.RHYME_DENSITY,
@@ -527,7 +528,7 @@ fun AssistantPanel(
                 Column {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight)
                     ) {
                         Text(stringResource(R.string.assistant_suggestions_header), fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
                         if (isWriting) {
@@ -550,7 +551,7 @@ fun AssistantPanel(
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic,
-                        modifier = Modifier.padding(top = DesignTokens.Spacing.sm)
+                        modifier = Modifier.padding(top = DesignTokens.Rhythm.related)
                     )
                     // Slots there when the section is composed (the request
                     // opening it, or the sheet reopened or rotated) appear
@@ -568,7 +569,7 @@ fun AssistantPanel(
                                 line = viewModel.suggestions.getOrNull(slot),
                                 pending = isWriting && slot == viewModel.suggestions.size,
                                 appearsWithSection = slot < slotsAtStart,
-                                modifier = Modifier.padding(top = DesignTokens.Spacing.sm),
+                                modifier = Modifier.padding(top = DesignTokens.Rhythm.standard),
                                 ghost = {
                                     SuggestionPlaceholderCard(
                                         slot = slot,
@@ -614,7 +615,7 @@ fun AssistantPanel(
                     )
 
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.tight),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // Tap-tempo button
@@ -681,8 +682,6 @@ fun AssistantPanel(
                     )
                 }
             }
-
-            Spacer(Modifier.height(DesignTokens.Spacing.lg))
         }
         }
 
@@ -724,7 +723,7 @@ fun AssistantPanel(
             enabled = setupModel || viewModel.isLoading || viewModel.lyrics.isNotEmpty(),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.sm)
+                .padding(horizontal = DesignTokens.Rhythm.section, vertical = DesignTokens.Rhythm.tight)
                 .height(DesignTokens.Touch.minTarget)
                 .onGloballyPositioned { buttonCoordinates.value = it }
                 // Above the button and unclipped, so the dots fly past it onto the panel.
@@ -789,11 +788,11 @@ fun AssistantPanel(
                                 color = colorScheme.onPrimary,
                                 strokeWidth = 2.dp
                             )
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(DesignTokens.Rhythm.tight))
                         }
                         PrimaryAction.SUGGEST -> {
                             Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(DesignTokens.Rhythm.tight))
                         }
                         PrimaryAction.SET_UP_MODEL -> Unit
                     }
