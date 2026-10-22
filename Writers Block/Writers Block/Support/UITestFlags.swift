@@ -20,6 +20,13 @@ enum UITestFlags {
     /// arrival states can be held and replayed with no key, request or model.
     /// It only takes effect alongside `inMemoryStore`.
     static let scriptedSuggestions = "--ui-test-scripted-suggestions"
+    /// Google Drive backup talks to an in-memory Drive and a fake sign-in, with
+    /// backup state in a suite of its own that each launch starts empty.
+    static let fakeDrive = "--ui-test-fake-drive"
+    /// With `fakeDrive`: start signed in.
+    static let fakeDriveConnected = "--ui-test-fake-drive-connected"
+    /// With `fakeDrive`: the Drive holds a v4 backup of two songs and two recordings.
+    static let fakeDriveSeeded = "--ui-test-fake-drive-seeded"
 
     #if DEBUG
     static func isEnabled(_ flag: String, in arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
@@ -88,6 +95,39 @@ enum UITestFlags {
         }
     }
 
+    static func makeFakeDriveBackupService() -> BackupService {
+        let suite = "RhymeAI.UITest.Backup"
+        UserDefaults().removePersistentDomain(forName: suite)
+        let drive = InMemoryDriveAppDataClient()
+        if isEnabled(fakeDriveSeeded) {
+            let takes = [("drive-song-1", "first take.m4a", Data([1, 2, 3, 4])), ("drive-song-2", "second take.m4a", Data([5, 6, 7]))]
+            let seeded = SyncBlob(
+                projects: [
+                    SyncSongProject(id: "drive-song-1", title: "Drive Song One", lyrics: "Found it in the cloud", theme: "", updatedAt: Date(timeIntervalSince1970: 1_761_000_000)),
+                    SyncSongProject(id: "drive-song-2", title: "Drive Song Two", lyrics: "Back where it belongs", theme: "", updatedAt: Date(timeIntervalSince1970: 1_761_000_100)),
+                ],
+                recordings: takes.map { SyncRecording(projectId: $0.0, fileName: $0.1, bytes: Int64($0.2.count), sha256: RecordingBackupManifest.sha256Hex($0.2), uploadedAt: Date(timeIntervalSince1970: 1_761_000_150)) },
+                savedAt: Date(timeIntervalSince1970: 1_761_000_200),
+                savedByClientId: "ui-test-seed",
+                platform: "android"
+            )
+            if let manifest = try? seeded.encodedManifest() {
+                drive.seed(name: SyncBlob.driveFileName, content: manifest)
+            }
+            for (projectId, fileName, audio) in takes {
+                drive.seed(name: RecordingBackupManifest.driveName(projectId: projectId, fileName: fileName), content: audio,
+                           appProperties: ["projectId": projectId, "fileName": fileName, "sha256": RecordingBackupManifest.sha256Hex(audio), "bytes": String(audio.count)])
+            }
+        }
+        return BackupService(
+            driveClient: drive,
+            oauthProvider: FakeOAuthProvider(connected: isEnabled(fakeDriveConnected)),
+            secretStore: InMemoryBackupSecretStore(),
+            defaults: UserDefaults(suiteName: suite) ?? .standard,
+            memosRoot: RecordingFiles.memosRoot()
+        )
+    }
+
     static func seedCustomGGUFModelIfRequested() {
         guard isEnabled(seedCustomGGUFModel),
               let directory = try? GGUFModelStorage.modelsDirectory(create: true) else { return }
@@ -122,3 +162,68 @@ enum UITestFlags {
     static func seedCustomGGUFModelIfRequested() {}
     #endif
 }
+
+#if DEBUG
+/// The UI tests' Google Drive: appDataFolder files in memory.
+final class InMemoryDriveAppDataClient: DriveAppDataClient {
+    private var files: [String: (file: DriveAppDataFile, content: Data)] = [:]
+
+    func seed(name: String, content: Data, appProperties: [String: String]? = nil) {
+        files[name] = (DriveAppDataFile(id: UUID().uuidString, name: name, version: UUID().uuidString, appProperties: appProperties), content)
+    }
+
+    func findFile(named name: String, accessToken: String) async throws -> DriveAppDataFile? { files[name]?.file }
+
+    func listFiles(prefix: String, accessToken: String) async throws -> [DriveAppDataFile] {
+        files.values.map(\.file).filter { $0.name.hasPrefix(prefix) }
+    }
+
+    func downloadFile(id: String, accessToken: String) async throws -> Data {
+        guard let stored = files.values.first(where: { $0.file.id == id }) else { throw BackupError.noRemoteBackup }
+        return stored.content
+    }
+
+    func uploadNewFile(named name: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile {
+        seed(name: name, content: content, appProperties: appProperties)
+        return files[name]!.file
+    }
+
+    func updateFile(id: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile {
+        guard let name = files.first(where: { $0.value.file.id == id })?.key else { throw BackupError.invalidResponse }
+        let file = DriveAppDataFile(id: id, name: name, version: UUID().uuidString, appProperties: appProperties ?? files[name]?.file.appProperties)
+        files[name] = (file, content)
+        return file
+    }
+
+    func deleteFile(id: String, accessToken: String) async throws {
+        files = files.filter { $0.value.file.id != id }
+    }
+}
+
+/// Signs in without a browser: an interactive request connects.
+final class FakeOAuthProvider: OAuthAccessTokenProvider {
+    private var connected: Bool
+    init(connected: Bool) { self.connected = connected }
+
+    var isConfigured: Bool { true }
+    var hasRefreshToken: Bool { connected }
+
+    func accessToken(interactive: Bool) async throws -> String {
+        if !connected, interactive { connected = true }
+        guard connected else { throw BackupError.authorizationRequired }
+        return "ui-test-token"
+    }
+
+    func revokeAndForget() async -> Bool {
+        connected = false
+        return true
+    }
+}
+
+final class InMemoryBackupSecretStore: BackupSecretStore {
+    private var values: [String: String] = [:]
+    func string(for key: String) -> String? { values[key] }
+    func setString(_ value: String, for key: String) { values[key] = value }
+    func deleteString(for key: String) { values.removeValue(forKey: key) }
+}
+#endif

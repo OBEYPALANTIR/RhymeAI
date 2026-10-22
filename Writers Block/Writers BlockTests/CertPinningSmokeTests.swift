@@ -18,6 +18,8 @@ final class CertPinningSmokeTests: XCTestCase {
         "generativelanguage.googleapis.com",
         "api.openai.com",
         "api.anthropic.com",
+        "www.googleapis.com",
+        "oauth2.googleapis.com",
     ]
 
     func testGeminiDomainPassesPinnedTrustEvaluation() async throws {
@@ -30,6 +32,14 @@ final class CertPinningSmokeTests: XCTestCase {
 
     func testAnthropicDomainPassesPinnedTrustEvaluation() async throws {
         try await verifyPinnedDomain("api.anthropic.com")
+    }
+
+    func testDriveBackupDomainPassesPinnedTrustEvaluation() async throws {
+        try await verifyPinnedDomain("www.googleapis.com")
+    }
+
+    func testOAuthTokenDomainPassesPinnedTrustEvaluation() async throws {
+        try await verifyPinnedDomain("oauth2.googleapis.com")
     }
 
     private func verifyPinnedDomain(_ domain: String) async throws {

@@ -85,7 +85,7 @@ struct PersistenceTests {
     @Test func pendingAutoSaveCompletesAfterItsContainerOwnerIsReleased() async throws {
         let viewModel = EditorViewModel()
         do {
-            let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+            let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
             let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
             let container = try ModelContainer(for: schema, configurations: [configuration])
             viewModel.modelContext = container.mainContext
@@ -180,18 +180,19 @@ struct PersistenceTests {
 
 
     @MainActor
-    @Test func cloudBackupManualActionsPersistPassphraseAndUseConfiguredService() async throws {
-        let backupService = FakeCloudBackupService(isConfigured: true, hasStoredPassphrase: false)
+    @Test func connectingGoogleDriveEnablesManualActions() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: false)
         let harness = try Self.makeHarness(backupService: backupService)
         let viewModel = harness.viewModel
 
         #expect(viewModel.canRunCloudBackup == false)
-        #expect(viewModel.cloudBackupStatusText == "Enter a backup passphrase to enable Google Drive backup.")
+        #expect(viewModel.backupStatus == .notConnected)
 
-        viewModel.updateCloudBackupPassphrase("shared secret")
+        await viewModel.connectGoogleDrive()
 
-        #expect(backupService.updatedPassphrases == ["shared secret"])
+        #expect(backupService.connectCalls == 1)
         #expect(viewModel.canRunCloudBackup == true)
+        #expect(viewModel.firstRunRestoreOffer == nil)
 
         await viewModel.backUpNow()
         await viewModel.restoreBackupNow()
@@ -199,12 +200,127 @@ struct PersistenceTests {
         #expect(backupService.backupCalls == 1)
         #expect(backupService.restoreCalls == 1)
         #expect(viewModel.cloudBackupStatusText == "Restore complete. Projects, trash, and missing recordings were restored.")
+        #expect(viewModel.backupStatus == .connected(lastBackupAt: nil))
     }
 
+    @MainActor
+    @Test func disconnectStopsBackupsAndSaysWhenRevokeFailed() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
+        backupService.revokeSucceeds = false
+        let harness = try Self.makeHarness(backupService: backupService)
+        let viewModel = harness.viewModel
+        viewModel.automaticBackupDebounce = 0.05
+        viewModel.scheduleAutomaticBackup()
+        #expect(viewModel.backupStatus == .pending)
+
+        await viewModel.disconnectGoogleDrive()
+        try await Task.sleep(for: .milliseconds(200))
+
+        #expect(backupService.disconnectCalls == 1)
+        #expect(backupService.backgroundCalls == 0)
+        #expect(viewModel.backupStatus == .notConnected)
+        #expect(viewModel.canRunCloudBackup == false)
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText == "Disconnected on this device, but Google still lists the app; remove it at myaccount.google.com/permissions")
+    }
+
+    @MainActor
+    @Test func savedChangeStartsOneDebouncedBackupAndFailureShowsTheReason() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
+        let harness = try Self.makeHarness(backupService: backupService)
+        let viewModel = harness.viewModel
+        viewModel.automaticBackupDebounce = 0.1
+        viewModel.showWelcome = false
+
+        viewModel.title = "Debounced"
+        viewModel.lyrics = "first"
+        #expect(viewModel.flushCurrentDraft())
+        viewModel.lyrics = "second"
+        #expect(viewModel.flushCurrentDraft())
+        #expect(viewModel.backupStatus == .pending)
+        #expect(backupService.backgroundCalls == 0)
+
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(backupService.backgroundCalls == 1)
+        #expect(viewModel.backupStatus == .connected(lastBackupAt: nil))
+
+        backupService.failure = "offline"
+        viewModel.lyrics = "third"
+        #expect(viewModel.flushCurrentDraft())
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(backupService.backgroundCalls == 2)
+        // The retry waits out the backoff (a minute after one failure) and the reason stays shown.
+        #expect(viewModel.backupStatus == .failed(reason: "offline", lastBackupAt: nil))
+    }
+
+    @MainActor
+    @Test func firstRunOfferAppearsAfterConnectingAndRestoresOnlyWhenAccepted() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: false)
+        backupService.summary = RemoteBackupSummary(songs: 2, recordings: 1)
+        let harness = try Self.makeHarness(backupService: backupService)
+        let viewModel = harness.viewModel
+
+        await viewModel.connectGoogleDrive()
+
+        #expect(viewModel.firstRunRestoreOffer?.songs == 2)
+        #expect(viewModel.firstRunRestoreOffer?.recordings == 1)
+        #expect(backupService.restoreCalls == 0)
+        await viewModel.runCloudBackupOnBackgroundIfPossible()
+        #expect(backupService.backgroundCalls == 0, "no backup merges the remote while the offer is open")
+
+        await viewModel.acceptFirstRunRestore()
+        #expect(viewModel.firstRunRestoreOffer == nil)
+        #expect(backupService.restoreCalls == 1)
+
+        await viewModel.checkFirstRunRestoreOffer(afterConnecting: true)
+        viewModel.declineFirstRunRestore()
+        #expect(viewModel.firstRunRestoreOffer == nil)
+        #expect(backupService.restoreCalls == 1)
+    }
+
+    @MainActor
+    @Test func firstRunOfferAtLaunchNeedsAnEmptyLibrary() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
+        backupService.summary = RemoteBackupSummary(songs: 1, recordings: 0)
+        let empty = try Self.makeHarness(backupService: backupService)
+        await empty.viewModel.checkFirstRunRestoreOffer(afterConnecting: false)
+        #expect(empty.viewModel.firstRunRestoreOffer?.songs == 1)
+
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        container.mainContext.insert(SongProject(title: "Local"))
+        try container.mainContext.save()
+        let viewModel = EditorViewModel(backupService: backupService)
+        viewModel.modelContext = container.mainContext
+        await viewModel.checkFirstRunRestoreOffer(afterConnecting: false)
+        #expect(viewModel.firstRunRestoreOffer == nil)
+    }
+
+    @MainActor
+    @Test func recordingChangesAndChangesDuringARunShareTheOneDebounce() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
+        let harness = try Self.makeHarness(backupService: backupService)
+        let viewModel = harness.viewModel
+        viewModel.automaticBackupDebounce = 0.1
+        backupService.duringBackground = { viewModel.voiceMemoService.onFilesChanged?() }
+
+        viewModel.voiceMemoService.onFilesChanged?()
+        viewModel.voiceMemoService.onFilesChanged?()
+        #expect(viewModel.backupStatus == .pending)
+
+        try await Task.sleep(for: .milliseconds(450))
+        // One run for the two changes, then one more for the change made during it.
+        #expect(backupService.backgroundCalls == 2)
+    }
+
+    @Test func automaticBackupBackoffDoublesToAnHour() {
+        #expect(BackupSchedule.debounce == 30)
+        #expect((0...8).map { BackupSchedule.retryDelay(afterFailures: $0) / 60 } == [0, 1, 2, 4, 8, 16, 32, 60, 60])
+    }
 
     @MainActor
     @Test func restoreDoesNotStartWhenOpenDraftCannotBeSaved() async throws {
-        let backupService = FakeCloudBackupService(isConfigured: true, hasStoredPassphrase: true)
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
         let harness = try Self.makeHarness(
             backupService: backupService,
             saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) }
@@ -229,7 +345,7 @@ struct PersistenceTests {
 
     @MainActor
     @Test func manualBackupDoesNotStartWhenOpenDraftCannotBeSaved() async throws {
-        let backupService = FakeCloudBackupService(isConfigured: true, hasStoredPassphrase: true)
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
         let harness = try Self.makeHarness(
             backupService: backupService,
             saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) }
@@ -252,22 +368,23 @@ struct PersistenceTests {
     }
 
     @MainActor
-    @Test func cloudBackupBackgroundSyncOnlyRunsAfterSetupExists() async throws {
-        let unconfigured = FakeCloudBackupService(isConfigured: false, hasStoredPassphrase: true)
+    @Test func cloudBackupBackgroundSyncOnlyRunsWhenConnected() async throws {
+        let unconfigured = FakeCloudBackupService(isConfigured: false, isConnected: true)
         var harness = try Self.makeHarness(backupService: unconfigured)
         await harness.viewModel.runCloudBackupOnBackgroundIfPossible()
         #expect(unconfigured.backgroundCalls == 0)
 
-        let missingPassphrase = FakeCloudBackupService(isConfigured: true, hasStoredPassphrase: false)
-        harness = try Self.makeHarness(backupService: missingPassphrase)
+        let disconnected = FakeCloudBackupService(isConfigured: true, isConnected: false)
+        harness = try Self.makeHarness(backupService: disconnected)
         await harness.viewModel.runCloudBackupOnBackgroundIfPossible()
-        #expect(missingPassphrase.backgroundCalls == 0)
+        #expect(disconnected.backgroundCalls == 0)
 
-        let ready = FakeCloudBackupService(isConfigured: true, hasStoredPassphrase: true)
+        let ready = FakeCloudBackupService(isConfigured: true, isConnected: true)
         harness = try Self.makeHarness(backupService: ready)
         await harness.viewModel.runCloudBackupOnBackgroundIfPossible()
         #expect(ready.backgroundCalls == 1)
-        #expect(harness.viewModel.cloudBackupStatusText == "Ready to back up projects, trash, and recordings.")
+        #expect(harness.viewModel.cloudBackupStatusText == "")
+        #expect(harness.viewModel.backupStatus == .connected(lastBackupAt: nil))
     }
 
     @MainActor
@@ -275,7 +392,7 @@ struct PersistenceTests {
         backupService: CloudBackupServicing? = nil,
         saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) throws -> Harness {
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let viewModel = EditorViewModel(backupService: backupService, saveModelContext: saveModelContext)
@@ -305,21 +422,35 @@ struct PersistenceTests {
     @MainActor
     private final class FakeCloudBackupService: CloudBackupServicing {
         var isConfigured: Bool
-        var hasStoredPassphrase: Bool
-        private(set) var updatedPassphrases: [String] = []
+        var isConnected: Bool
+        var revokeSucceeds = true
+        var summary: RemoteBackupSummary?
+        var failure: String?
+        private(set) var connectCalls = 0
+        private(set) var disconnectCalls = 0
         private(set) var backupCalls = 0
         private(set) var restoreCalls = 0
         private(set) var backgroundCalls = 0
 
-        init(isConfigured: Bool, hasStoredPassphrase: Bool) {
+        init(isConfigured: Bool, isConnected: Bool) {
             self.isConfigured = isConfigured
-            self.hasStoredPassphrase = hasStoredPassphrase
+            self.isConnected = isConnected
         }
 
-        func updatePassphrase(_ passphrase: String) {
-            updatedPassphrases.append(passphrase)
-            hasStoredPassphrase = !passphrase.isEmpty
+        var backgroundBackupFailureDescription: String? { failure }
+
+        func connect() async throws {
+            connectCalls += 1
+            isConnected = true
         }
+
+        func disconnect() async -> Bool {
+            disconnectCalls += 1
+            isConnected = false
+            return revokeSucceeds
+        }
+
+        func remoteBackupSummary() async throws -> RemoteBackupSummary? { summary }
 
         func backupNow(modelContext: ModelContext) async throws {
             backupCalls += 1
@@ -329,8 +460,11 @@ struct PersistenceTests {
             restoreCalls += 1
         }
 
+        var duringBackground: (() -> Void)?
+
         func backupInBackgroundIfPossible(modelContext: ModelContext) async {
             backgroundCalls += 1
+            if backgroundCalls == 1 { duringBackground?() }
         }
     }
 }

@@ -103,6 +103,9 @@ struct SettingsView: View {
             .sheet(item: $activeHelp) { help in
                 FeatureHelpSheet(help: help)
             }
+            .sheet(item: $viewModel.firstRunRestoreOffer) { offer in
+                FirstRunRestoreSheet(offer: offer)
+            }
         }
     }
 
@@ -325,6 +328,6 @@ struct SettingsView: View {
 #Preview {
     SettingsView()
         .environmentObject(EditorViewModel())
-        .environmentObject(AppPersistenceState(persistenceDegraded: false, cloudSyncStatus: .available, usesCloudBackedStore: true))
+        .environmentObject(AppPersistenceState(persistenceDegraded: false, cloudSyncStatus: .on, usesCloudBackedStore: true))
         .environmentObject(GGUFDownloadManager())
 }
