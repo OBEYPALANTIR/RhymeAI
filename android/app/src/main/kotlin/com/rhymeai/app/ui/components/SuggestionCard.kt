@@ -21,18 +21,15 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.ui.theme.DesignTokens
-
-private val lastWordPattern = Regex("(.*?)(\\b\\w+\\b)([^\\w]*)\$")
+import com.rhymeai.app.ui.theme.LocalAppAppearance
+import com.rhymeai.app.ui.theme.rhymeMatchColor
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -71,36 +68,9 @@ fun SuggestionCard(
         ) {
         // Suggestion text with optional rhyme highlight
         val annotated = if (highlightRhyme) {
-            val match = lastWordPattern.find(suggestion)
-            if (match != null) {
-                buildAnnotatedString {
-                    withStyle(SpanStyle(color = colorScheme.onSurface)) {
-                        append(match.groupValues[1])
-                    }
-                    withStyle(SpanStyle(
-                        color = colorScheme.primary,
-                        fontWeight = FontWeight.Medium,
-                        textDecoration = TextDecoration.Underline
-                    )) {
-                        append(match.groupValues[2])
-                    }
-                    withStyle(SpanStyle(color = colorScheme.onSurface)) {
-                        append(match.groupValues[3])
-                    }
-                }
-            } else {
-                buildAnnotatedString {
-                    withStyle(SpanStyle(color = colorScheme.onSurface)) {
-                        append(suggestion)
-                    }
-                }
-            }
+            rhymeMatchAnnotated(suggestion, rhymeMatchColor(LocalAppAppearance.current.isDark))
         } else {
-            buildAnnotatedString {
-                withStyle(SpanStyle(color = colorScheme.onSurface)) {
-                    append(suggestion)
-                }
-            }
+            AnnotatedString(suggestion)
         }
 
         Column(

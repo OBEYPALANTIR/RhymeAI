@@ -111,6 +111,9 @@ val RhymePalette: List<Color> = RhymePaletteDark
 fun rhymePalette(isDark: Boolean): List<Color> =
     if (isDark) RhymePaletteDark else RhymePaletteLight
 
+/** Violet rhyme family: marks the end word being matched in the assistant panel. */
+fun rhymeMatchColor(isDark: Boolean): Color = rhymePalette(isDark)[4]
+
 fun statusSuccessColor(isDark: Boolean): Color = if (isDark) SuccessDark else SuccessLight
 
 fun statusWarningColor(isDark: Boolean): Color = if (isDark) WarningDark else WarningLight
