@@ -133,7 +133,11 @@ struct FloatingMicButton: View {
         .frame(width: interpolatedWidth, height: pillHeight)
         // React to service state changes with a spring animation.
         .onChange(of: service.isRecording) { _, isRecording in
-            withAnimation(reduceMotion ? nil : RhymeAITokens.Motion.recording) {
+            // Starting, the pill waits out UnBlock's wordmark fade (EditorView),
+            // so UnBlock narrows as the pill widens and the pair never outgrows
+            // the row; stopping, both springs already run together.
+            let spring = RhymeAITokens.Motion.recording
+            withAnimation(reduceMotion ? nil : (isRecording ? spring.delay(RhymeAITokens.Motion.feedbackDuration) : spring)) {
                 progress = isRecording ? 1 : 0
             }
         }
