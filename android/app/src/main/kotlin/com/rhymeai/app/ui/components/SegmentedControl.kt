@@ -15,9 +15,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -34,6 +36,9 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
@@ -144,12 +149,14 @@ fun SlidingSegmentedControl(
         }
         // Labels draw twice: onSurfaceVariant outside the pill's live bounds and an onPrimary
         // copy inside them, so the colour hand-off follows the pill edge mid-glyph. The clip
-        // reads the offset at draw time, so a spring frame only redraws.
+        // reads the offset at draw time, so a spring frame only redraws. Both are draw-only
+        // layers; the segments themselves sit unclipped on top, so focus and press show on
+        // the selected segment too.
         for (onPill in listOf(false, true)) {
             Row(
                 Modifier
                     .fillMaxSize()
-                    .then(if (onPill) Modifier.clearAndSetSemantics {} else Modifier.selectableGroup())
+                    .clearAndSetSemantics {}
                     .drawWithContent {
                         val offsetPx = pillOffset.value.roundToPx().toFloat()
                         val widthPx = segmentWidth.roundToPx().toFloat()
@@ -164,24 +171,8 @@ fun SlidingSegmentedControl(
                         }
                     }
             ) {
-                labels.forEachIndexed { index, label ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .then(
-                                if (onPill) {
-                                    Modifier
-                                } else {
-                                    Modifier.clip(shape).selectable(
-                                        selected = index == selectedIndex,
-                                        role = Role.RadioButton,
-                                        onClick = { onSelect(index) }
-                                    )
-                                }
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
+                labels.forEach { label ->
+                    Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
                         Text(
                             text = label,
                             fontSize = fontSize,
@@ -189,6 +180,22 @@ fun SlidingSegmentedControl(
                             maxLines = 1
                         )
                     }
+                }
+            }
+        }
+        Row(Modifier.fillMaxSize().selectableGroup()) {
+            labels.forEachIndexed { index, label ->
+                val selected = index == selectedIndex
+                // The ripple takes the content colour, so the selected segment's focus and press read on the ink pill.
+                CompositionLocalProvider(LocalContentColor provides if (selected) colorScheme.onPrimary else colorScheme.onSurface) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(shape)
+                            .selectable(selected = selected, role = Role.RadioButton, onClick = { onSelect(index) })
+                            .semantics { text = AnnotatedString(label) }
+                    )
                 }
             }
         }
