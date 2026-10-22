@@ -4,24 +4,40 @@ import SwiftUI
 /// suggestions stream in. One ghost card is open at a time: it opens in the
 /// first slot when a request starts, each streamed line takes its slot in
 /// place while the next ghost opens below, and the ghost still waiting when
-/// the stream stops collapses. When a ghost opens, its text bar is written
-/// once, left to right on the settle tier, and the ink settles to the resting
-/// bar, which then holds still until the line arrives.
+/// the stream stops collapses. While a ghost waits, two scribbled lines write
+/// themselves tip first, hold, are wiped and write again, on the ghost's own
+/// clock from when it appeared.
 ///
 /// Android mirror: `SuggestionPlaceholderMotion` in
 /// `ui/components/SuggestionPlaceholderCard.kt`.
 enum SuggestionInkLineMotion {
-    static let drawDuration: TimeInterval = RhymeAITokens.Motion.settleDuration
-    static let draw: Animation = .easeInOut(duration: drawDuration)
-
-    /// The bar's ink while it waits, and under Reduce Motion, where it is never drawn.
-    static let restingInkOpacity: Double = 0.08
-    /// The ink at the pen as the stroke starts; it settles to the resting ink as it draws.
-    static let strokeInkOpacity: Double = 0.34
     static let ghostOpacity: Double = 0.08
     static let ghostSoftOpacity: Double = 0.06
 
     static let textBarFractions: [CGFloat] = [0.72, 0.56, 0.64]
+    /// The second scribble's width as a share of the first's.
+    static let secondLineShare: CGFloat = 0.6
+
+    // MARK: Scribble loop
+
+    static let writeDuration: TimeInterval = 1.3
+    static let holdDuration: TimeInterval = 0.35
+    static let loopPeriod: TimeInterval = writeDuration + holdDuration
+    /// The share of the write the first line takes; the second takes the rest.
+    static let firstLineShare: Double = 0.63
+    /// Reduce Motion holds one frame: the first line drawn, the second 60% along.
+    static let stillProgress: (first: CGFloat, second: CGFloat) = (1, 0.6)
+
+    // MARK: Scribble wave
+
+    static let wavePeriod: CGFloat = 34
+    static let waveHeight: CGFloat = 10
+    static let strokeWidth: CGFloat = 1.6
+    /// One period of the wave, as fractions of the period and of the wave's height.
+    static let waveShape: [CGPoint] = [
+        CGPoint(x: 0, y: 0.55), CGPoint(x: 0.18, y: 0.25), CGPoint(x: 0.42, y: 0.78),
+        CGPoint(x: 0.68, y: 0.28), CGPoint(x: 1, y: 0.58),
+    ]
 
     /// Ghost cards waiting for a line: one, in the next slot, while the stream
     /// runs, and none once it stops.
@@ -37,6 +53,51 @@ enum SuggestionInkLineMotion {
     static func textBarFraction(slot: Int) -> CGFloat {
         textBarFractions[max(0, slot) % textBarFractions.count]
     }
+
+    /// How far each scribble is drawn `elapsed` seconds after the ghost
+    /// appeared: the first line over the first 63% of the write, the second
+    /// over the rest, both held drawn through the hold, then wiped.
+    static func lineProgress(elapsed: TimeInterval) -> (first: CGFloat, second: CGFloat) {
+        let wrapped = elapsed - (elapsed / loopPeriod).rounded(.down) * loopPeriod
+        let phase = wrapped / writeDuration
+        return (
+            CGFloat(min(max(phase / firstLineShare, 0), 1)),
+            CGFloat(min(max((phase - firstLineShare) / (1 - firstLineShare), 0), 1))
+        )
+    }
+
+    /// The wave tiled along `width` at its fixed period, the last period cut at the edge.
+    static func wavePoints(width: CGFloat, height: CGFloat = waveHeight) -> [CGPoint] {
+        guard width > 0 else { return [] }
+        var points = [CGPoint(x: 0, y: waveShape[0].y * height)]
+        var period: CGFloat = 0
+        while points[points.count - 1].x < width {
+            for point in waveShape.dropFirst() {
+                let next = CGPoint(x: (period + point.x) * wavePeriod, y: point.y * height)
+                let last = points[points.count - 1]
+                if next.x >= width {
+                    let share = next.x > last.x ? (width - last.x) / (next.x - last.x) : 0
+                    points.append(CGPoint(x: width, y: last.y + (next.y - last.y) * share))
+                    break
+                }
+                points.append(next)
+            }
+            period += 1
+        }
+        return points
+    }
+}
+
+/// One scribbled line, `widthShare` of the space it is given, drawn tip first to `progress`.
+private struct ScribbleStroke: Shape {
+    var widthShare: CGFloat
+    var progress: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addLines(SuggestionInkLineMotion.wavePoints(width: rect.width * widthShare, height: rect.height))
+        return path.offsetBy(dx: rect.minX, dy: rect.minY).trimmedPath(from: 0, to: progress)
+    }
 }
 
 /// A ghost of `SuggestionCardView` that holds a slot until its line arrives.
@@ -50,22 +111,21 @@ enum SuggestionInkLineMotion {
 struct SuggestionPlaceholderCardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
-    @ScaledMetric(relativeTo: .body) private var barHeight: CGFloat = 10
     @ScaledMetric(relativeTo: .caption) private var softBarHeight: CGFloat = 8
     @ScaledMetric(relativeTo: .subheadline) private var actionBarHeight: CGFloat = 20
 
     let slot: Int
     /// Mirrors `SuggestionCardView.showProsody`: reserves the stress-and-IPA rows.
     var showProsody: Bool = false
-    /// Flips on appear, so each ghost writes its line once as it opens.
-    @State private var drawn = false
+    /// The ghost's own scribble clock starts when it appears.
+    @State private var appeared = Date()
 
     var body: some View {
         let ink = appearance.palette.primaryInk
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                    lineSlot(ink: ink)
+                    lineSlot(ink: appearance.palette.placeholder)
 
                     if showProsody {
                         // SuggestionProsodyPreviewView: two caption monospace lines.
@@ -102,25 +162,36 @@ struct SuggestionPlaceholderCardView: View {
     }
 
     /// The serif line, held by one hidden line of the card's font so the slot
-    /// is as tall as the line that will land in it; the ink bar is drawn over it.
+    /// is at least as tall as the line that will land in it, with two
+    /// scribbled lines writing themselves over it. Under Reduce Motion the
+    /// timeline pauses on one still frame.
     private func lineSlot(ink: Color) -> some View {
-        Text(verbatim: "Placeholder")
-            .font(.system(.body, design: .serif))
-            .lineLimit(1)
-            .hidden()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .leading) {
-                Capsule()
-                    .fill(ink)
-                    .opacity(drawn ? SuggestionInkLineMotion.restingInkOpacity : SuggestionInkLineMotion.strokeInkOpacity)
-                    .scaleEffect(x: drawn ? 1 : 0.001, anchor: .leading)
-                    .frame(height: barHeight)
-                    .scaleEffect(x: SuggestionInkLineMotion.textBarFraction(slot: slot), anchor: .leading)
+        let first = SuggestionInkLineMotion.textBarFraction(slot: slot)
+        return ZStack(alignment: .topLeading) {
+            Text(verbatim: "Placeholder")
+                .font(.system(.body, design: .serif))
+                .lineLimit(1)
+                .hidden()
+
+            TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { context in
+                let progress = reduceMotion
+                    ? SuggestionInkLineMotion.stillProgress
+                    : SuggestionInkLineMotion.lineProgress(elapsed: context.date.timeIntervalSince(appeared))
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    scribble(widthShare: first, progress: progress.first, ink: ink)
+                    scribble(widthShare: first * SuggestionInkLineMotion.secondLineShare, progress: progress.second, ink: ink)
+                }
+                .padding(.top, RhymeAITokens.Spacing.xxs)
             }
-            .onAppear {
-                // Under Reduce Motion the bar is simply there, still, at the resting ink.
-                withRhymeAnimation(SuggestionInkLineMotion.draw, reduceMotion: reduceMotion) { drawn = true }
-            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func scribble(widthShare: CGFloat, progress: CGFloat, ink: Color) -> some View {
+        ScribbleStroke(widthShare: widthShare, progress: progress)
+            .stroke(ink, style: StrokeStyle(lineWidth: SuggestionInkLineMotion.strokeWidth, lineCap: .round, lineJoin: .round))
+            .frame(maxWidth: .infinity)
+            .frame(height: SuggestionInkLineMotion.waveHeight)
     }
 
     /// One caption line of the prosody preview, held by hidden text in the

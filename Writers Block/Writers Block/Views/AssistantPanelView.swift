@@ -9,6 +9,10 @@ struct AssistantPanelView: View {
     @State private var activeHelp: FeatureHelp?
     @State private var rhymeOptionsExpanded = false
     @AppStorage("assistant.targetLineStressExpanded") private var stressDetailExpanded = false
+    /// Set by the Stop button so the stream it ends does not burst.
+    @State private var stoppedByUser = false
+    /// When the spinner burst into ink; cleared once the burst is over.
+    @State private var burstStart: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
     var isInline: Bool = false
@@ -167,6 +171,7 @@ struct AssistantPanelView: View {
     private var suggestBar: some View {
         Button {
             if viewModel.isLoading {
+                stoppedByUser = true
                 viewModel.cancelSuggestions()
             } else {
                 viewModel.getSuggestions()
@@ -189,6 +194,23 @@ struct AssistantPanelView: View {
                         Text("Suggest Next Line")
                     }
                     .transition(.opacity)
+                }
+
+                if let burstStart {
+                    // A hidden copy of the Stop label puts the burst at the
+                    // spinner's centre; the dots may fly past the button.
+                    HStack {
+                        ProgressView()
+                            .hidden()
+                            .overlay { InkBurstView(start: burstStart, ink: appearance.palette.primaryInk) }
+                        Text("Stop").hidden()
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                    .task(id: burstStart) {
+                        try? await Task.sleep(for: .seconds(InkBurstMotion.duration))
+                        self.burstStart = nil
+                    }
                 }
             }
             .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.isLoading)
@@ -498,11 +520,8 @@ struct AssistantPanelView: View {
                             onKeep: { viewModel.keepAlternate(suggestion.text) },
                             isKept: viewModel.companion.alternates.contains(where: { $0.text == suggestion.text.trimmingCharacters(in: .whitespacesAndNewlines) })
                         )
-                        // A landing line rises 24pt into its slot, the undo toast's travel.
-                        .transition(.asymmetric(
-                            insertion: reduceMotion ? .opacity : .offset(y: RhymeAITokens.Spacing.lg).combined(with: .opacity),
-                            removal: .opacity
-                        ))
+                        // A landing line cross-fades in place, on the state tier below.
+                        .transition(.opacity)
                     }
 
                     // Identified by slot, so the filled slot's ghost fades out
@@ -527,7 +546,15 @@ struct AssistantPanelView: View {
             // with no lines, fades away on the dismiss tier.
             .rhymeAnimation(viewModel.isLoading ? RhymeAITokens.Motion.state : RhymeAITokens.Motion.dismiss, value: showsSuggestions)
             .onChange(of: viewModel.isLoading) { _, isLoading in
-                guard isLoading else { return }
+                guard isLoading else {
+                    // Writing that ends with lines and no error bursts the
+                    // spinner into ink; Stop, errors and empty answers do not.
+                    if !stoppedByUser, !reduceMotion, !viewModel.suggestions.isEmpty, viewModel.errorMessage == nil {
+                        burstStart = .now
+                    }
+                    return
+                }
+                stoppedByUser = false
                 // A caption inserted into the hierarchy is not read on its own,
                 // so tell VoiceOver that writing has started, as the Word
                 // Inspector does for its results.
@@ -606,6 +633,67 @@ struct AssistantPanelView: View {
         .buttonStyle(.rhymePress)
         .contentShape(Rectangle())
         .accessibilityLabel("\(help.title) help")
+    }
+}
+
+/// The ink burst when writing ends: fourteen dots fly from the Stop spinner's
+/// centre on an ease-out cubic, dropping as they go and never passing the
+/// reach, keeping their size until the last 30% fades and shrinks them to
+/// 40%, around a blot that collapses on the same curve. Offsets are in units
+/// of `reach`.
+enum InkBurstMotion {
+    struct Dot: Equatable {
+        var offset: CGPoint
+        var radius: CGFloat
+        var alpha: Double
+    }
+
+    static let duration: TimeInterval = 0.48
+    static let dotCount = 14
+    static let reach: CGFloat = 44
+    static let dotRadius: CGFloat = 2.2
+    static let blotRadius: CGFloat = 6
+    static let drop: CGFloat = 0.18
+
+    /// The fourteen dots, then the blot while it has any size; nothing once the burst is over.
+    static func dots(elapsed: TimeInterval) -> [Dot] {
+        let p = elapsed / duration
+        guard p >= 0, p < 1 else { return [] }
+        let eased = 1 - pow(1 - p, 3)
+        let alpha = p < 0.7 ? 1 : 1 - (p - 0.7) / 0.3
+        var dots = (0..<dotCount).map { i -> Dot in
+            let angle = Double(i) * 2 * .pi / Double(dotCount) + Double((i * 7) % 14) / 14 * 0.35
+            let distance = eased * (0.72 + 0.28 * Double((i * 5) % 3) / 2)
+            var x = cos(angle) * distance
+            var y = sin(angle) * distance + Double(drop) * p * p
+            let length = (x * x + y * y).squareRoot()
+            if length > 1 { x /= length; y /= length }
+            return Dot(offset: CGPoint(x: x, y: y), radius: dotRadius * CGFloat(0.4 + 0.6 * alpha), alpha: alpha)
+        }
+        let blot = blotRadius * CGFloat(1 - eased)
+        if blot > 0 { dots.append(Dot(offset: .zero, radius: blot, alpha: 1 - p)) }
+        return dots
+    }
+}
+
+/// Draws `InkBurstMotion` around its own centre, in a square wide enough for the reach.
+private struct InkBurstView: View {
+    let start: Date
+    let ink: Color
+
+    var body: some View {
+        let side = 2 * (InkBurstMotion.reach + InkBurstMotion.blotRadius)
+        TimelineView(.animation) { context in
+            Canvas { canvas, size in
+                let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+                for dot in InkBurstMotion.dots(elapsed: context.date.timeIntervalSince(start)) {
+                    let at = CGPoint(x: centre.x + dot.offset.x * InkBurstMotion.reach, y: centre.y + dot.offset.y * InkBurstMotion.reach)
+                    let circle = CGRect(x: at.x - dot.radius, y: at.y - dot.radius, width: 2 * dot.radius, height: 2 * dot.radius)
+                    canvas.fill(Path(ellipseIn: circle), with: .color(ink.opacity(dot.alpha)))
+                }
+            }
+        }
+        .frame(width: side, height: side)
     }
 }
 
