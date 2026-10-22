@@ -66,58 +66,74 @@ Run from `/Users/tylermanring/Documents/RhymeAI/android`:
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
+Google Drive backup uses manifest v4: a plain UTF-8 JSON file
+`rhymeai-manifest.json` in Drive's `appDataFolder` plus one raw
+`rec_<projectId>_<fileName>` file per recording, with `projectId`, `fileName`,
+`sha256` and `bytes` in Drive `appProperties`. There is no passphrase.
+`manifestSha256` covers the canonical form of the manifest (keys sorted by code
+point, no whitespace, only `\"`, `\\`, `\n`, `\r`, `\t` and lowercase `\u00xx`
+escapes, integers only); a reader refuses a manifest whose hash does not match
+("Backup file is damaged; it was not merged.") or whose `version` is above 4,
+and never overwrites it. `shared/fixtures/sync-manifest-v4.json`, written by
+`python3 scripts/generate-sync-manifest-v4-fixture.py` (stdlib only; `--check`
+fails when the file is stale), pins the canonical string and hash. iOS tests
+read a copy at `Writers Block/Writers BlockTests/sync-manifest-v4.json`;
+`BackupManifestTest` fails if that copy drifts and skips while it is absent.
+
+Back up now and the automatic backup merge this device into Drive and never
+change local data. The automatic backup runs 30 seconds after the last change
+to songs, trash or tombstones while Drive is connected, and when the app goes
+to the background (at most every 15 minutes unless a backup is pending); after
+a failure it retries after 1, 2, 4, 8, 16 and 32 minutes, then hourly, and
+resets on success. Restore merges both ways, uploads local-only items, then
+downloads missing recordings. Per project id the newest `updatedAt` wins, per
+deletion identity the newest `deletedAt` wins, and a tombstone removes the song
+and its recordings regardless of a later edit. Recordings are immutable: Drive's
+copy wins per identity, a local file is never replaced, only missing files
+download, and a download whose SHA-256 does not match the manifest is discarded
+and counted. Recordings over 16 MiB are skipped with a visible count.
+
+The older passphrase-encrypted backup (`rhymeai-projects.json` under RAI3/RAI2/RAI1,
+recordings under RAI1) is only read, to migrate it. With a stored passphrase the
+first backup decrypts it, merges it into this device, writes v4, downloads the
+new manifest again to check its hash and contents, then deletes the old manifest
+and the old recordings that reached v4 (any that did not stay in Drive) and
+clears the passphrase. Without one the old files are left alone and Settings
+offers "Migrate older encrypted backup…", which asks for the passphrase once.
+
 When permanent song deletion cannot remove every recording, Android keeps a
 pending cleanup record and reports that deletion is incomplete. It retries on
 the next app launch or Trash purge. Recordings for pending deletions are omitted
-from new local Drive uploads; Android Auto Backup retains the pending record with
-any remaining files so cleanup resumes after restore.
-
-Android writes SyncBlob v3 under RAI3, as iOS does, and emits the required
-song, trash, and recording body keys even when their values equal defaults.
-Both platforms still read v2/RAI2 and v1/RAI1.
-Native two-platform exchange has not been verified. On Android sync,
-tombstoned songs are hidden and their recordings are no longer uploaded or
-advertised by the receiving device, even if an older copy is edited later.
-An upload that precedes a newly arriving remote tombstone is not undone;
-the refreshed decision prevents re-upload and final advertisement. Local audio
-files and notebook data are retained pending a separate cleanup decision.
-Android does not erase previously uploaded recording bytes from Drive; iOS
+from Drive uploads; Android Auto Backup retains the pending record with any
+remaining files so cleanup resumes after restore. Android does not erase
+previously uploaded recording bytes from Drive when a song is deleted; iOS
 peers do erase remote bytes, so the two platforms currently differ there.
+Native two-platform exchange of v4 has not been verified.
 
-The v2 deletion regressions run in `:app:testDebugUnitTest`. Their test source
-uses `SyncDeletion` and `SyncBlob.deletions`, so it does not compile unchanged
-against the pre-v2 base `3a0e8971`; the table identifies the behavioral
-assertion that base could not satisfy rather than claiming a base test run.
-The manifest format has since moved to v3 under RAI3: tests that pinned the
-written format were renamed and now assert RAI3, while the right-hand columns
-still describe the pre-v2 base they were written against.
+The backup regressions run in `:app:testDebugUnitTest`:
 
-| Case | Regression test | Base behavior contradicted |
+| Case | Regression test | Behavior pinned |
 | --- | --- | --- |
-| T-1 | `SyncMergerTest.permanentDeletionsConvergeAgainstNewerProjectTrashAndRecordingContent` | A newer stale project/trash/recording survives instead of the tombstone winning. |
-| T-2 | `DriveSyncServiceTest.supportedV1AndV3RemoteShapesMergeIntoV3WithoutRestoringDeletedSong` and `unsupportedVersionShapesNeverBecomeRemoteOrReplaceLocalData` | A valid v2 blob is rejected; v1 with a deletion key is not rejected as a shape error. |
-| T-3 | `ProjectRepositoryTest.permanentDeleteWritesTombstoneBeforeSyncAndSurvivesRepositoryReopen` | Reopen has no persisted project tombstone; a stale remote copy returns on merge. |
-| T-4 | `ProjectRepositoryTest.expiryPurgeWritesTombstonesForBothSongsBeforeRemoteMerge` | Neither purged ID has a persisted tombstone; stale copies return on merge. |
-| T-5 | `ProjectRepositoryTest.deletionCommittedAfterBaseReadSurvivesSyncApplyAndLaterUpload` | The later sync snapshot has no deletion marker for the post-base Delete Forever. |
-| T-6 | `ProjectRepositoryTest.remoteProjectTombstoneRemovesPostSnapshotLocalSongAndRestorePlan` | A remote tombstone cannot suppress the local song and recording restore plan. |
-| T-7 | `DriveSyncServiceTest.uploadOnlyWritesV3AndExplicitEmptyDeletionArrayEvenFromLegacyLocalBlob` | UploadOnly writes v1 without an explicit empty `deletions` array. |
+| V-1 | `BackupManifestTest.canonicalFormAndHashMatchTheSharedFixture`, `fixtureDecodesAndReEncodesByteForByte`, `canonicalEscapesOnlyTheContractCharactersAndSortsKeysByCodePoint` | Canonical JSON and `manifestSha256` match the shared fixture byte for byte. |
+| V-2 | `BackupManifestTest.hashMismatchIsRefused`, `newerVersionIsRefusedEvenWithAValidHash`; `BackupServiceTest.hashMismatchedManifestIsRefusedAndNeverOverwrittenOrMerged` | A damaged or newer manifest is neither merged nor overwritten. |
+| V-3 | `BackupServiceTest.backupMergesIntoDriveWritesRawRecordingsAndLeavesThisDeviceAlone` | Backup writes v4 and raw recordings with `appProperties`, uploads each once, and leaves local data alone. |
+| V-4 | `BackupServiceTest.restoreMergesBothWaysAndDownloadsOnlyVerifiedMissingRecordings`, `restoreNeverReplacesALocalRecording` | Restore merges both ways; hash-mismatched downloads are dropped; local files are never replaced. |
+| V-5 | `BackupServiceTest.migrationDecisionTable` and the `…Passphrase…` migration tests | Old file present/absent × passphrase present/absent: migrate, offer the row, forget the passphrase, or nothing. |
+| V-6 | `BackupServiceTest.independentIosShapedVectorsMigrateFromEveryEnvelopeVersion` | iOS-shaped RAI1, RAI2 and RAI3 backups migrate and keep their tombstones. |
+| V-7 | `BackupScheduleTest.backoffDoublesFromOneMinuteAndCapsAtOneHour` | Retry schedule 1, 2, 4 … minutes, capped at an hour. |
+| V-8 | `BackupArchiveTest.exportThenImportYieldsTheSameManifest`, `importMergesIntoTheLibraryAndAddsOnlyMissingRecordings` | Export all songs → Import from file yields the same manifest and merges. |
+| T-1 | `SyncMergerTest.permanentDeletionsConvergeAgainstNewerProjectTrashAndRecordingContent` | The tombstone wins over a newer stale project, trash entry or recording. |
+| T-3 | `ProjectRepositoryTest.permanentDeleteWritesTombstoneBeforeSyncAndSurvivesRepositoryReopen` | A project tombstone is persisted and survives reopen. |
+| T-4 | `ProjectRepositoryTest.expiryPurgeWritesTombstonesForBothSongsBeforeRemoteMerge` | Expiry purge persists a tombstone for each purged song. |
+| T-5 | `ProjectRepositoryTest.deletionCommittedAfterBaseReadSurvivesSyncApplyAndLaterUpload` | A Delete Forever during the network window is not lost. |
+| T-6 | `ProjectRepositoryTest.remoteProjectTombstoneRemovesPostSnapshotLocalSongAndRestorePlan` | A remote tombstone suppresses the local song and its recording restore. |
+| C-1 | `SyncBlobCryptoTest.independentPythonVectorsOpenForEveryEnvelopeVersionAndSealByteIdenticallyForWrittenOnes` | The legacy RAI1/RAI2/RAI3 vectors still open; the test-only writer reproduces them. |
+| C-2 | `SyncBlobCryptoTest.manifestHeaderBodyAndTagTamperingFailsClosed`, `unknownAndTruncatedManifestHeadersAreDistinctFromAuthenticationFailure` | Tampered or unknown legacy envelopes fail closed during migration. |
 
-The corrective tests below compare against the PR #60 base `3d1bca7c`
-(source-level predictions, not a failing-before run). C-5 guards an unchanged
-recording format and is intentionally expected to pass on both tips.
-
-| Case | Regression test | PR #60 base assertion |
-| --- | --- | --- |
-| C-1 | `SyncBlobCryptoTest.manifestUsesRai3WhileRecordingEncryptionRemainsRai1` | No RAI2 manifest writer/reader exists; current v2 seal uses RAI1. |
-| C-2 | `SyncBlobCryptoTest.independentPythonVectorsOpenForEveryEnvelopeVersionAndSealByteIdenticallyForWrittenOnes` | RAI2 reference envelope cannot open and deterministic RAI2 seal is absent. |
-| C-3 | `DriveSyncServiceTest.envelopeVersionMismatchIsCorruptRemoteNotWrongPassphrase` and `SyncBlobCryptoTest.unknownAndTruncatedManifestHeadersAreDistinctFromAuthenticationFailure` | A version-2 body under RAI1 is accepted; RAI2/unknown magic is misclassified as a passphrase error. |
-| C-4 | `SyncBlobCryptoTest.manifestHeaderBodyAndTagTamperingFailsClosed` | No RAI2 authenticated-header path exists. |
-| C-5 | Existing `SyncBlobCryptoTest.deterministicSealMatchesSharedRAI1GoldenFixture` | Carry-forward guard: recording RAI1 bytes must not change; no base failure expected. |
-| U-1/U-2 | `ReceivingDeviceUploadTest.firstAndRepeatedSyncDoNotReuploadRemotelyDeletedSongOrRemoveLocalBytes` | Uploads before apply send a remotely tombstoned recording on both passes. |
-| U-3 | `ReceivingDeviceUploadTest.refreshedRemoteProjectTombstoneStopsSecondUploadAndFinalAdvertisement` | Post-refresh upload planning still sends the tombstoned recording. |
-| U-4 | `ReceivingDeviceUploadTest.uploadOnlyWithWriteAheadDeleteAdvertisesNoRecordingAndRetainsPendingBytes` | A stale local manifest can still advertise a pending-deletion file through UploadOnly (including refreshed UploadOnly). |
-| U-5 | `ReceivingDeviceUploadTest.remoteFileTombstoneExcludesOnlyNamedRecordingFromActualUpload` | The locally present named file is uploaded despite the remote file tombstone. |
-| U-6 | `DriveSyncServiceTest.independentIosShapeVectorsUnderRai3AndLegacyEnvelopesMergeCorrectly` | iOS-shaped RAI2 fails to decrypt while legacy RAI1 remains readable. |
+The earlier v2/v3 write-path regressions (`DriveSyncServiceTest`,
+`ReceivingDeviceUploadTest`) were removed with the encrypted write path; their
+tombstone and oversize-recording cases are covered by the tests above,
+`LargeRecordingSyncTest` and `RecordingSyncTest`.
 
 Release builds are minified. To produce signed release artifacts, create a gitignored
 `android/keystore.properties`:

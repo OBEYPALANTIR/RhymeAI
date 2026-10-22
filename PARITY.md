@@ -68,17 +68,84 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 ## Cloud backup parity checks
 
-- Encrypted blob compatibility: statically audit-verified 2026-07-05 that both
-  platforms use PBKDF2-HMAC-SHA256 at 210,000 iterations with a 256-bit key,
-  AES-256-GCM with a 128-bit tag, and the byte-identical
-  `RAI1 | salt(16) | iv(12) | ciphertext | tag(16)` envelope with the header
-  bound as AAD. The shared RAI1 golden vector is now pinned by unit tests on
-  both platforms (`BackupCoreTests` on iOS, `SyncBlobCryptoTest` on Android). Current
-  manifests are v3 under RAI3 on both platforms, pinned by a shared RAI3 vector;
-  v2/RAI2 and v1/RAI1 remain readable.
-- Backup passphrase rules: both platforms trim the ASCII set space/tab/CR/LF
-  and require at least 8 printable ASCII (0x20–0x7E) characters, unit-verified
-  on both sides including tab/newline-padded and interior-tab cases.
+- Backup format (v4, both platforms): Drive `appDataFolder` holds the plain
+  manifest `rhymeai-manifest.json` and one raw `rec_<projectId>_<fileName>` per
+  recording, uploaded with `appProperties` `projectId`, `fileName`, `sha256` and
+  `bytes` (Android omits a property whose key plus value exceeds Drive's
+  124-byte limit; the manifest stays authoritative). Manifest keys: `version`
+  (4), `savedAt` (ISO-8601 UTC, whole seconds, `Z`), `savedByClientId`,
+  `platform`, `projects`, `trashed` (project fields plus `trashedAt`),
+  `recordings` (`projectId`, `fileName`, `bytes`, `sha256`), `deletions`
+  (`projectId`, `fileName` or null, `deletedAt`) and `manifestSha256`. Entry
+  timestamps are epoch milliseconds, as in v3. No passphrase, no client-side
+  encryption; API keys never enter the manifest.
+- Canonical form and hash: `manifestSha256` is the SHA-256 of the object
+  without that key, serialised with keys sorted by Unicode code point, arrays
+  in stored order, no whitespace, UTF-8, integers only, and escapes limited to
+  `\"`, `\\`, `\n`, `\r`, `\t` and lowercase `\u00xx` for other control
+  characters (non-ASCII is not escaped). The uploaded file may be pretty-printed.
+  Both readers refuse a hash mismatch ("Backup file is damaged; it was not
+  merged.") and any `version` above 4, and never overwrite such a file. Pinned by
+  `shared/fixtures/sync-manifest-v4.json` (`scripts/generate-sync-manifest-v4-fixture.py`,
+  stdlib only, `--check`); iOS reads the copy at
+  `Writers Block/Writers BlockTests/sync-manifest-v4.json`, and Android
+  `BackupManifestTest` fails if it drifts (it skips while the copy is absent).
+- Merge rules (unchanged from v3): per project id the newest `updatedAt` wins;
+  per deletion identity the newest `deletedAt` wins; a tombstone removes the
+  song or recording regardless of a later edit; tombstones are not pruned.
+  Recordings are immutable and v4 carries no recording timestamp, so Drive's
+  entry wins per identity; a listed recording whose raw file never reached Drive
+  takes the uploading device's copy.
+- Back up versus restore: Back up now and the automatic backup merge this device
+  into Drive and leave local data untouched. Restore merges both ways, uploads
+  local-only items, then downloads missing recordings; a local recording is
+  never replaced, and a download whose SHA-256 or size does not match the
+  manifest is discarded and counted. Recordings over 16 MiB are skipped with a
+  visible count. Android verified by `BackupServiceTest`; iOS by its own suite.
+- Automatic backup: 30 s after the last change while connected (Android watches
+  songs, trash and tombstones), plus the background trigger when leaving the app
+  (Android: at most every 15 minutes unless a backup is pending); after failures
+  it retries at 1, 2, 4, 8 … minutes capped at one hour and resets on success;
+  runs never block the editor and coalesce.
+- Status model, same cases on both: `notConnected`, `connected(lastBackupAt?)`,
+  `pending`, `backingUp`, `failed(reason, lastBackupAt?)`; Settings shows
+  "Last backed up 2 min ago · Google Drive" or the failure reason with Retry.
+  The relative-time wording comes from each platform and was not compared.
+- First-run restore: after Drive connects, or at launch when connected with an
+  empty library, a manifest with at least one song offers "Restore your songs?"
+  with Restore (merge) and Not now. Never automatic.
+- Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke` (Android
+  with the current access token, then drops Play Services' cached token; iOS with
+  the refresh token), then clears local state; a failed revoke still clears local
+  state and says so. Backups stop while disconnected.
+- Migration from the encrypted backup (`rhymeai-projects.json`, RAI3/RAI2/RAI1
+  manifests, RAI1 recordings; PBKDF2-HMAC-SHA256 210,000 iterations, AES-256-GCM,
+  header as AAD): read only. Old file present with a stored passphrase: decrypt,
+  merge into local, write v4, download it again and check its hash and song ids,
+  then delete the old manifest and the old recordings that reached v4 (the rest
+  stay in Drive), then clear the passphrase; status "Your older encrypted backup
+  was moved to the new format." Old file present without a passphrase: leave it
+  untouched and offer "Migrate older encrypted backup…", which asks once and
+  stores nothing. No old file: forget any stored passphrase. The shared RAI
+  vectors stay as decrypt tests (`SyncBlobCryptoTest`, `BackupServiceTest` on
+  Android; `BackupCoreTests` on iOS). Passphrases are normalized as before (trim
+  space/tab/CR/LF, at least 8 printable ASCII characters).
+- Export all songs / Import from file: one zip `WritersBlock-backup-<date>.zip`
+  with `manifest.json` (v4), `songs/<title or id>.txt`, `songs/<id>.json` and
+  `recordings/<projectId>/<fileName>`, through the system save sheet; import
+  takes that zip or a bare v4 `manifest.json` and merges, adding only missing
+  recordings that match their hash. Android verified by `BackupArchiveTest`.
+- Certificate pinning: Android pins `www.googleapis.com` and
+  `oauth2.googleapis.com` with the existing Google Trust Services pin set (both
+  chain to GTS Root R4, verified 2026-10-22); Play Services fetches the Drive
+  token outside the app.
+- iOS only: iCloud status shows a reason (no iCloud account with Open Settings,
+  restricted, local-only fallback, temporarily unavailable, on), and recordings
+  sync through CloudKit as a SwiftData `Recording` model with external audio
+  storage; the Drive recordings list is built from that model. Android has no
+  CloudKit equivalent; its songs and recordings are also in Android Auto Backup.
+- Not yet verified: a live Drive round trip on either platform and a
+  cross-platform restore.
 - Drive HTTP error mapping: 401 re-auth, 403/429 retry-later, 5xx server-error,
   and generic fallback buckets are aligned; neither platform echoes raw
   response bodies into user-facing text.
