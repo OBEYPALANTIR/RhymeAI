@@ -107,11 +107,11 @@ final class TabletWindowResizeUITests: XCTestCase {
         return app.windows.firstMatch.frame.width
     }
 
-    /// Narrows until the window is first under 760pt and checks the layout
-    /// the app shows there. Window widths snap to steps that depend on the
-    /// display (about 117pt on a 12.9-inch iPad, so the first width under 760
-    /// can be 695pt), so any width that keeps the regular size class is
-    /// accepted; if the step lands in the compact size class, widen one step.
+    /// Narrows until the window is first under 760pt, then asserts the
+    /// layout there. Window widths snap to steps that depend on the display
+    /// (about 117pt on a 12.9-inch iPad), so the width is read back. Only a
+    /// window whose width cannot change at all skips; any layout mismatch at
+    /// the width reached is a failure.
     @MainActor
     private func narrowBelowSideColumnWidth(_ app: XCUIApplication) throws {
         let start = app.windows.firstMatch.frame.width
@@ -120,27 +120,23 @@ final class TabletWindowResizeUITests: XCTestCase {
             widths.append(resize(app, toWidth: max(widths.last! - 60, 740)))
         }
         try XCTSkipIf(widths.last! == start, "The window cannot be resized here; needs Windowed Apps or Stage Manager mode")
-        if !usesRegularLayout(app), widths.count > 1 {
-            widths.append(resize(app, toWidth: widths[widths.count - 2]))
-            try XCTSkipIf(
-                widths.last! >= 760 || !usesRegularLayout(app),
-                "This display has no regular-width window under 760pt; widths reached: \(widths)"
-            )
-        }
         XCTAssertLessThan(widths.last!, 760, "Widths reached: \(widths)")
-        XCTAssertTrue(usesRegularLayout(app), "Expected the regular size class; widths reached: \(widths)")
-        // The single-column editor: no inline column, and UnBlock stays.
-        XCTAssertFalse(app.buttons["hideInlineAssistantButton"].exists, "The inline column should be gone below 760pt; widths reached: \(widths)")
-        XCTAssertTrue(app.buttons["unblockButton"].exists, "UnBlock is missing in the single-column editor; widths reached: \(widths)")
+        assertRegularSingleColumn(app, widths: widths)
     }
 
-    /// The writing column is inset 34pt in the regular layout and 20pt in the
-    /// compact one (`editorSidePadding`); under 760pt it is not width-capped,
-    /// so the inset is the title field's offset from the window edge.
+    /// Under 760pt at a regular width: the single-column editor with the
+    /// regular 34pt writing inset (`editorSidePadding`; compact is 20pt)
+    /// inside the 740pt column, centred in the window, no inline column, and
+    /// UnBlock.
     @MainActor
-    private func usesRegularLayout(_ app: XCUIApplication) -> Bool {
+    private func assertRegularSingleColumn(_ app: XCUIApplication, widths: [CGFloat]) {
         let title = app.textFields["songTitleEditor"]
-        return title.exists && title.frame.minX - app.windows.firstMatch.frame.minX > 27
+        XCTAssertTrue(title.exists, "The title field is missing; widths reached: \(widths)")
+        let window = app.windows.firstMatch.frame
+        let expectedInset = 34 + max(0, (window.width - 740) / 2)
+        XCTAssertEqual(title.frame.minX - window.minX, expectedInset, accuracy: 2, "Expected the regular-width writing inset; widths reached: \(widths)")
+        XCTAssertFalse(app.buttons["hideInlineAssistantButton"].exists, "The inline column should be gone below 760pt; widths reached: \(widths)")
+        XCTAssertTrue(app.buttons["unblockButton"].exists, "UnBlock is missing in the single-column editor; widths reached: \(widths)")
     }
 
     /// Widens until the window stops growing.
