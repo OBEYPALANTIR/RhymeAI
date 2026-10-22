@@ -1,5 +1,15 @@
 # Release Notes
 
+## iPad layout sits on the golden ratio (iOS)
+
+On iPad the Assistant column and the songs drawer now take the smaller golden
+share of the screen (never narrower than before), so in landscape the Assistant
+is wider and the lyrics keep a comfortable column. The songs drawer opens as a
+side panel instead of covering the whole screen; tap outside it to close. The
+Assistant header lines up with the editor's toolbar, the Rhyme Options summary
+stays on one line, the lyrics share the Assistant's side margin, the Trash
+screen keeps to a centred column, and the Word Inspector opens centred.
+
 ## The rhyme you are matching is marked in violet (iOS and Android)
 
 With rhyme highlighting on, the last word of the Target Line and of each suggestion is now violet, semibold and underlined, so the sound being matched is easy to spot.

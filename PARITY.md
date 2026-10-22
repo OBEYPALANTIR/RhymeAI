@@ -108,6 +108,10 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 - Both Assistant panels and their suggestion and ghost cards are spaced on the same 8/13/21/34/55 rhythm ladder (Android `DesignTokens.Rhythm` in `AssistantPanel`, `SuggestionCard` and `SuggestionPlaceholderCard`; iOS applies the same five steps through `RhymeAITokens.Rhythm` in `AssistantPanelView`, `SuggestionCardView` and `SuggestionPlaceholderCardView`) with the same meaning per step: 8 within a control, 13 heading to its caption or control and between the scribble lines, 21 card padding and between cards, 34 between panel sections and at the panel's side edges, 55 primary (Android: 55dp above the primary button; iOS: a 55pt minimum button height with 8pt bar padding). DESIGN.md (Layout, Assistant panel rhythm) has the full mapping and the values that stay off the ladder.
 
+## Regular-width layout
+
+- iOS-only, known difference: on a regular width (iPad) the inline assistant column and the songs drawer both take 38.2% of the window with a 380pt floor (`RhymeAITokens.Layout.sideColumnWidth(for:)`; 380pt portrait, 456–462pt landscape on the 11-inch), the drawer as a leading side panel over a scrim, and the Trash screen keeps a centred 740pt column. The Word Inspector opens as a centred form sheet on a regular width and keeps its medium/large detents on a compact width. Android has no side-panel layout: its assistant is a bottom panel capped at 584dp, and its drawer and Trash stay full-width on tablets.
+
 ## Open parity checks
 
 - Local model live/inference path: Android has current emulator evidence for GGUF load and nonblank generation through `scripts/android-local-model-smoke.sh`; iOS local provider has a simulator/device smoke gate that passes when Apple Foundation Models either return text or surface an on-device availability reason.
