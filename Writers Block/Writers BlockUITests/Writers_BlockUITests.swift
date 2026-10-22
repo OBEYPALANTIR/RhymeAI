@@ -632,22 +632,27 @@ final class Writers_BlockUITests: XCTestCase {
         try requireCompactEditor(app)
         XCTAssertLessThan(unblockButton.frame.maxX, micButton.frame.minX)
 
-        let window = app.windows.firstMatch.frame
-        let trailingInset = window.maxX - micButton.frame.maxX
+        // Measure from the editor's trailing safe-area edge, not the window: a
+        // display with a trailing inset (the iPhone Duo's side status bar)
+        // moves the whole editor in. The lyrics view sits 20pt inside that edge.
+        let lyricsEditor = app.textViews["lyricsEditor"]
+        XCTAssertTrue(lyricsEditor.waitForExistence(timeout: 5))
+        let trailingEdge = lyricsEditor.frame.maxX + 20
+        let trailingInset = trailingEdge - micButton.frame.maxX
         XCTAssertGreaterThanOrEqual(trailingInset, 20)
         XCTAssertLessThanOrEqual(trailingInset, 32)
         XCTAssertGreaterThanOrEqual(micButton.frame.width, 44)
         XCTAssertGreaterThanOrEqual(micButton.frame.height, 44)
         // The 56-point mic circle sits 20 points from the editor edge.
-        XCTAssertEqual(micButton.frame.midX, window.maxX - 20 - 28, accuracy: 1)
+        XCTAssertEqual(micButton.frame.midX, trailingEdge - 20 - 28, accuracy: 1)
         XCTAssertEqual(micButton.frame.midY, unblockButton.frame.midY, accuracy: 1)
         XCTAssertLessThan(undoButton.frame.maxX, redoButton.frame.minX)
         XCTAssertLessThan(redoButton.frame.maxY, unblockButton.frame.minY)
         attachScreenshot(app, name: "mic-centered-idle")
-        app.textViews["lyricsEditor"].tap()
+        lyricsEditor.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
-        XCTAssertEqual(micButton.frame.midX, window.maxX - 20 - 28, accuracy: 1)
+        XCTAssertEqual(micButton.frame.midX, trailingEdge - 20 - 28, accuracy: 1)
         XCTAssertLessThanOrEqual(micButton.frame.maxY, keyboard.frame.minY + 4)
         attachScreenshot(app, name: "mic-centered-keyboard")
     }
