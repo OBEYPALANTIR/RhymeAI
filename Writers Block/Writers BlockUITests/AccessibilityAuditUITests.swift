@@ -27,6 +27,35 @@ final class AccessibilityAuditUITests: XCTestCase {
         audit(app, "editor-inline-assistant")
     }
 
+    /// The clipped-element passes track elements by identity, not by label:
+    /// two same-labelled controls in one scroll view each get their own pass.
+    /// The real screens have no clipped duplicates, so this queues the
+    /// stanza preview's repeated "A" scheme letters by hand.
+    @MainActor
+    func testSameLabelledClippedElementsEachGetTheirOwnPass() throws {
+        let app = launch(["--ui-test-seed-prosody-song"])
+        XCTAssertTrue(app.buttons["hideInlineAssistantButton"].waitForExistence(timeout: 8))
+        app.buttons["Expand rhyme options"].tap()
+        let scrollView = app.scrollViews["assistantScrollView"]
+        let letters = scrollView.staticTexts.matching(NSPredicate(format: "label == %@", "A")).allElementsBoundByIndex
+        XCTAssertGreaterThanOrEqual(letters.count, 2, "The seeded stanza should show two 'A' letters")
+        let run = AuditRun(app: app, dimmedBackgroundText: 0)
+        var identities: [String] = []
+        for letter in letters.prefix(2) {
+            let identity = try XCTUnwrap(Self.identity(of: letter, in: scrollView))
+            identities.append(identity)
+            run.enqueue(ClippedElement(element: letter, scrollView: scrollView, identity: identity))
+        }
+        XCTAssertEqual(run.pending.count, 2, "Same-labelled elements collapsed into one identity: \(identities)")
+        // The passes may queue other clipped elements (such as "Local model
+        // setup" at the pinned bar); those get passes of their own too.
+        run.runPendingPasses(scroll: scrollFullyIntoView)
+        XCTAssertTrue(run.audited.isSuperset(of: identities), "Each letter should complete its own pass: \(run.report)")
+        for identity in identities {
+            XCTAssertEqual(run.report.filter { $0.hasPrefix("-- contrast pass for \(identity),") }.count, 1, identity)
+        }
+    }
+
     @MainActor
     func testSongsDrawerPassesAudit() throws {
         let app = launch(["--ui-test-seed-trash-song"])
@@ -155,71 +184,14 @@ final class AccessibilityAuditUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
 
-        var report: [String] = []
-        var backgroundTextLeft = dimmedBackgroundText
-        // An element cut by the edge of its own scroll view (such as a button
-        // half under the assistant's pinned bar) makes the audit sample the
-        // view covering it. Each one gets a contrast pass of its own, scrolled
-        // fully into view, where it has no offscreen exemption.
-        var pending: [ClippedElement] = []
-        var deferred: Set<String> = []
-        var audited: Set<String> = []
-        // One rule set for every pass. `target` is the element the pass was
-        // scrolled for.
-        let judge: (XCUIAccessibilityAuditIssue, ClippedElement?) -> String? = { issue, target in
-            if let target, let element = issue.element, Self.key(of: element) == target.key {
-                return Self.knownNoiseReason(issue, in: app, allowNotHittable: false)
-            }
-            var reason = Self.knownNoiseReason(issue, in: app)
-            if reason == nil, issue.element == nil, issue.auditType == .elementDetection, backgroundTextLeft > 0 {
-                backgroundTextLeft -= 1
-                reason = "text of the dimmed screen behind the modal sheet (\(dimmedBackgroundText) expected)"
-            }
-            if reason == nil, issue.auditType == .contrast, let element = issue.element,
-               let scrollView = Self.clippingScrollView(of: element, in: app) {
-                let key = Self.key(of: element)
-                if audited.contains(key) {
-                    reason = "cut by the edge of its scroll view; already passed its own pass fully in view"
-                } else {
-                    if !deferred.contains(key) {
-                        deferred.insert(key)
-                        pending.append(ClippedElement(element: element, scrollView: scrollView, key: key))
-                    }
-                    reason = "cut by the edge of its scroll view; audited in its own pass once scrolled fully into view"
-                }
-            }
-            return reason
-        }
+        let run = AuditRun(app: app, dimmedBackgroundText: dimmedBackgroundText)
         do {
-            try app.performAccessibilityAudit { issue in
-                let reason = judge(issue, nil)
-                report.append((reason.map { "FILTERED (\($0)) " } ?? "ISSUE ") + Self.describe(issue))
-                return reason != nil
-            }
+            try run.audit(.all, target: nil)
         } catch {
             XCTFail("Accessibility audit of \(surface) failed to run: \(error)")
         }
-        for _ in 0..<8 where !pending.isEmpty {
-            let target = pending.removeFirst()
-            audited.insert(target.key)
-            scrollFullyIntoView(target)
-            guard target.scrollView.frame.contains(target.element.frame) else {
-                XCTFail("Could not scroll '\(target.element.label)' fully into view to audit it")
-                continue
-            }
-            report.append("-- contrast pass with '\(target.element.label)' scrolled fully into view")
-            do {
-                try app.performAccessibilityAudit(for: .contrast) { issue in
-                    let reason = judge(issue, target)
-                    report.append((reason.map { "FILTERED (\($0)) " } ?? "ISSUE ") + Self.describe(issue))
-                    return reason != nil
-                }
-            } catch {
-                XCTFail("Contrast audit of \(surface) with '\(target.element.label)' in view failed to run: \(error)")
-            }
-        }
-        XCTAssertTrue(pending.isEmpty, "Clipped elements left unaudited: \(pending.map(\.key))")
-        let attachment = XCTAttachment(string: report.isEmpty ? "(no issues)" : report.joined(separator: "\n"))
+        run.runPendingPasses(scroll: scrollFullyIntoView)
+        let attachment = XCTAttachment(string: run.report.isEmpty ? "(no issues)" : run.report.joined(separator: "\n"))
         attachment.name = "audit-\(surface)-issues"
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -228,11 +200,108 @@ final class AccessibilityAuditUITests: XCTestCase {
     private struct ClippedElement {
         let element: XCUIElement
         let scrollView: XCUIElement
-        let key: String
+        let identity: String
     }
 
-    private static func key(of element: XCUIElement) -> String {
-        "\(element.elementType.rawValue)|\(element.label)"
+    /// One audit of a screen. An element cut by the edge of its own scroll
+    /// view (such as a button half under the assistant's pinned bar) makes the
+    /// audit sample the view covering it, so it is queued and later gets a
+    /// contrast pass of its own, scrolled fully into view, where it has no
+    /// offscreen exemption. Every issue in every pass goes through `judge`.
+    @MainActor
+    private final class AuditRun {
+        let app: XCUIApplication
+        let dimmedBackgroundText: Int
+        var backgroundTextLeft: Int
+        var report: [String] = []
+        private(set) var pending: [ClippedElement] = []
+        private var queued: Set<String> = []
+        private(set) var audited: Set<String> = []
+
+        init(app: XCUIApplication, dimmedBackgroundText: Int) {
+            self.app = app
+            self.dimmedBackgroundText = dimmedBackgroundText
+            backgroundTextLeft = dimmedBackgroundText
+        }
+
+        func enqueue(_ clipped: ClippedElement) {
+            if queued.insert(clipped.identity).inserted { pending.append(clipped) }
+        }
+
+        func audit(_ types: XCUIAccessibilityAuditType, target: ClippedElement?) throws {
+            try app.performAccessibilityAudit(for: types) { issue in
+                let reason = self.judge(issue, target: target)
+                self.report.append((reason.map { "FILTERED (\($0)) " } ?? "ISSUE ") + AccessibilityAuditUITests.describe(issue))
+                return reason != nil
+            }
+        }
+
+        /// The same rules for every pass; `target` is the element the pass
+        /// was scrolled for.
+        private func judge(_ issue: XCUIAccessibilityAuditIssue, target: ClippedElement?) -> String? {
+            if let target, let element = issue.element,
+               AccessibilityAuditUITests.identity(of: element, in: target.scrollView) == target.identity {
+                return AccessibilityAuditUITests.knownNoiseReason(issue, in: app, allowNotHittable: false)
+            }
+            var reason = AccessibilityAuditUITests.knownNoiseReason(issue, in: app)
+            if reason == nil, issue.element == nil, issue.auditType == .elementDetection, backgroundTextLeft > 0 {
+                backgroundTextLeft -= 1
+                reason = "text of the dimmed screen behind the modal sheet (\(dimmedBackgroundText) expected)"
+            }
+            if reason == nil, issue.auditType == .contrast, let element = issue.element,
+               let clipped = AccessibilityAuditUITests.clipped(element, in: app) {
+                if audited.contains(clipped.identity) {
+                    reason = "cut by the edge of its scroll view; already passed its own pass fully in view"
+                } else {
+                    enqueue(clipped)
+                    reason = "cut by the edge of its scroll view; audited in its own pass once scrolled fully into view"
+                }
+            }
+            return reason
+        }
+
+        /// Gives each queued element its own contrast pass. An element counts
+        /// as audited only once it was fully in view and its pass completed;
+        /// otherwise it stays queued and is tried again, and after eight
+        /// attempts anything still queued fails the test.
+        func runPendingPasses(scroll: (ClippedElement) -> Void) {
+            for _ in 0..<8 {
+                guard let target = pending.first else { break }
+                scroll(target)
+                guard target.scrollView.frame.contains(target.element.frame) else {
+                    report.append("-- could not scroll \(target.identity) fully into view")
+                    continue
+                }
+                report.append("-- contrast pass for \(target.identity), scrolled fully into view")
+                do {
+                    try audit(.contrast, target: target)
+                } catch {
+                    report.append("-- contrast pass for \(target.identity) failed to run: \(error)")
+                    continue
+                }
+                pending.removeFirst()
+                audited.insert(target.identity)
+            }
+            XCTAssertTrue(pending.isEmpty, "Clipped elements left unaudited: \(pending.map(\.identity))")
+        }
+    }
+
+    /// Identifies an element within one scroll view across scrolling and
+    /// among same-labelled siblings: the scroll view (identifier, else its
+    /// frame, which does not move as it scrolls), the element type, the
+    /// identifier when present (else the label), and the element's index
+    /// among the scroll view's descendants that share them.
+    @MainActor
+    private static func identity(of element: XCUIElement, in scrollView: XCUIElement) -> String? {
+        let label = element.label, identifier = element.identifier, frame = element.frame
+        let predicate = identifier.isEmpty
+            ? NSPredicate(format: "label == %@", label)
+            : NSPredicate(format: "identifier == %@", identifier)
+        let siblings = scrollView.descendants(matching: element.elementType).matching(predicate).allElementsBoundByIndex
+        guard let index = siblings.firstIndex(where: { $0.frame == frame }) else { return nil }
+        let container = scrollView.identifier.isEmpty ? "scroll\(NSCoder.string(for: scrollView.frame))" : scrollView.identifier
+        let name = identifier.isEmpty ? "'\(label)'" : "#\(identifier)"
+        return "\(container)/\(element.elementType.rawValue)/\(name)/\(index)"
     }
 
     /// Drags the element's scroll view slowly (no momentum) until the element
@@ -248,18 +317,20 @@ final class AccessibilityAuditUITests: XCTestCase {
         }
     }
 
-    /// The scroll view that contains `element` and cuts it at an edge: the
-    /// element is one of its descendants and only partly inside its frame.
+    /// The element and the scroll view that contains it and cuts it at an
+    /// edge: the element is one of its descendants and only partly inside its
+    /// frame.
     @MainActor
-    private static func clippingScrollView(of element: XCUIElement, in app: XCUIApplication) -> XCUIElement? {
-        let label = element.label, frame = element.frame
-        guard !label.isEmpty else { return nil }
-        return app.scrollViews.allElementsBoundByIndex.first { scrollView in
-            guard scrollView.frame.intersects(frame), !scrollView.frame.contains(frame) else { return false }
-            let match = scrollView.descendants(matching: element.elementType)
-                .matching(NSPredicate(format: "label == %@", label)).firstMatch
-            return match.exists && match.frame == frame
+    private static func clipped(_ element: XCUIElement, in app: XCUIApplication) -> ClippedElement? {
+        let frame = element.frame
+        guard !element.label.isEmpty || !element.identifier.isEmpty else { return nil }
+        for scrollView in app.scrollViews.allElementsBoundByIndex
+        where scrollView.frame.intersects(frame) && !scrollView.frame.contains(frame) {
+            if let identity = identity(of: element, in: scrollView) {
+                return ClippedElement(element: element, scrollView: scrollView, identity: identity)
+            }
         }
+        return nil
     }
 
     private static func describe(_ issue: XCUIAccessibilityAuditIssue) -> String {
