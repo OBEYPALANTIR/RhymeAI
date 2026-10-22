@@ -67,53 +67,69 @@ Run from `/Users/tylermanring/Documents/RhymeAI/android`:
 ```
 
 Google Drive backup uses manifest v4: a plain UTF-8 JSON file
-`rhymeai-manifest.json` in Drive's `appDataFolder` plus one raw
-`rec_<projectId>_<fileName>` file per recording, with `projectId`, `fileName`,
-`sha256` and `bytes` in Drive `appProperties`. There is no passphrase.
-`manifestSha256` covers the canonical form of the manifest (keys sorted by code
-point, no whitespace, only `\"`, `\\`, `\n`, `\r`, `\t` and lowercase `\u00xx`
-escapes, integers only); a reader refuses a manifest whose hash does not match
-("Backup file is damaged; it was not merged.") or whose `version` is above 4,
-and never overwrites it. Each recording entry carries `uploadedAt` (ISO-8601
-UTC). `shared/fixtures/sync-manifest-v4.json`, written by
+`rhymeai-manifest.json` in Drive's `appDataFolder` plus one raw `rec_<recordingId>`
+file per recording, with `id`, `projectId`, `fileName`, `sha256` and `bytes` in
+Drive `appProperties`. There is no passphrase. `manifestSha256` covers the
+canonical form of the manifest (keys sorted by code point, no whitespace, only
+`\"`, `\\`, `\n`, `\r`, `\t` and lowercase `\u00xx` escapes, integers only); a
+reader refuses a manifest whose hash does not match ("Backup file is damaged; it
+was not merged.") or whose `version` is above 4, and never overwrites it. Every
+precedence time (`updatedAt`, `trashedAt`, `uploadedAt`, `deletedAt`) is an
+integer of epoch milliseconds and `savedAt` is ISO-8601 UTC with milliseconds;
+recording entries carry their `id`, and recording tombstones a `recordingId`.
+`shared/fixtures/sync-manifest-v4.json`, written by
 `python3 scripts/generate-sync-manifest-v4-fixture.py` (stdlib only; `--check`
 fails when the file is stale), pins the canonical string and hash. iOS tests
 read a copy at `Writers Block/Writers BlockTests/sync-manifest-v4.json`;
 `BackupManifestTest` fails if that copy drifts and skips while it is absent.
 The iOS side of v4 is pending its companion PR.
 
-Back up now and the automatic backup merge this device into Drive and never
-change local data. The automatic backup runs 30 seconds after the last change
-to songs, trash, tombstones or recordings while Drive is connected, and when the
-app goes to the background (at most every 15 minutes unless a backup is
-pending); recordings added by Import trigger it too; runs never overlap, and after a failure it retries after 1, 2, 4, 8,
-16 and 32 minutes, then hourly, and resets on success. Just before writing, the
-manifest is checked for writes by another device and merged if there were; every
-write is then downloaded again and its hash compared; on a mismatch the backup
-merges again, keeping everything earlier attempts saw (up to three times, then
-"Backup conflict, will retry"), and
+Recordings are identified by a stable UUID, not by file name: a rename changes
+only the name, a live and a Trash recording with the same name are two
+recordings, a different recording arriving under a taken name gets a free
+variant, and identical audio imported again after a deletion is a new recording
+whose old id stays deleted. Pre-v4 recordings get a name-based UUID derived from
+project, file name and hash, the same on every device. Each device stores every
+recording's id, precedence time, hash, size and location in DataStore beside the
+songs: the moment it was recorded or imported from audio, the backup entry's own
+time when it was restored or imported from an archive, or, for a file seen for
+the first time (a memo from before this version, or bytes that no longer match
+the record at that path), its file time, stamped once. That first-seen stamping
+is the only local write a backup makes. Unfinished recordings stay in a staging
+folder until they finish, so a backup never sees them. Restore, import, rename,
+Trash and restore from Trash write the record's intent before the file moves;
+if that write fails the operation fails, and an interrupted move is finished or
+undone at the next launch.
+
+Back up now and the automatic backup merge this device into Drive and change no
+songs or recordings here. The automatic backup runs 30 seconds after the last
+change to songs, trash, tombstones or recordings while Drive is connected, and
+when the app goes to the background (at most every 15 minutes unless a backup is
+pending); recordings added by Import trigger it too; runs never overlap, and
+after a failure it retries after 1, 2, 4, 8, 16 and 32 minutes, then hourly, and
+resets on success. Just before writing, the manifest is checked for writes by
+another device and merged if there were; every write is then downloaded again
+and its hash compared; on a mismatch the backup merges again, keeping everything
+earlier attempts saw (up to three times, then "Backup conflict, will retry"), and
 duplicate manifests are merged and the extras removed after verification.
-Restore merges both ways, uploads local-only items, then downloads missing
-recordings, applying everything in one transaction that keeps edits saved
-meanwhile; a download moves into place only if its name is still free, under the
-same lock that recording, import, rename and restore-from-Trash take. Per project id the newest `updatedAt` wins and per deletion identity
-the newest `deletedAt` wins; a tombstone removes a song only when newer than its
-`updatedAt`, and a recording only when newer than its `uploadedAt`, otherwise the
-tombstone is dropped; a recording removed by a song tombstone keeps a tombstone
-of its own, and deleting a song writes tombstones for every recording this device
-knows for it, so reviving the song does not bring the deleted audio back. The one
-exception is a recording that was never backed up and never on the deleting
-device (say, recorded on an offline phone); if the song is revived before that
-phone backs up, the recording is treated as new. Every merge gathers all its
-inputs (local, earlier attempts, fresh and conflicting manifests, an archive)
-before resolving tombstones once. Each recording's precedence time is stored on
-the device (A20): the moment it was recorded, or the backup entry's own time when
-it was restored or imported, or its file time once for a memo from before this
-version; file times are never read as precedence after that, so a take keeps its
-time through import, re-export and rename. Recordings are immutable: Drive's copy wins per identity, a
-download is written only where no file exists when it commits, and a download
-whose SHA-256 does not match the manifest is discarded and counted. Recordings
-over 16 MiB are skipped with a visible count.
+Restore merges both ways, uploads local-only items, then downloads recordings
+this device does not hold, applying everything in one transaction that resolves
+the incoming data with what is here at commit time: an edit saved meanwhile is
+kept, and a song deleted meanwhile stays deleted only if its tombstone is newer
+than the incoming version. Per project id the newest `updatedAt` wins, per
+recording id Drive's entry wins and per tombstone identity the newest
+`deletedAt` wins; a tombstone removes a song only when newer than its
+`updatedAt`, and a recording only when newer than its `uploadedAt`, otherwise
+the tombstone is dropped; a recording removed by a song tombstone keeps a
+tombstone of its own, and deleting a song writes tombstones for every recording
+this device holds for it, so reviving the song does not bring the deleted audio
+back. The one exception is a recording that was never backed up and never on the
+deleting device (say, recorded on an offline phone); if the song is revived
+before that phone backs up, the recording is treated as new. Every merge gathers
+all its inputs (local live, Trash and oversized recordings, earlier attempts,
+fresh and conflicting manifests, an archive) before resolving tombstones once. A
+download whose SHA-256 does not match the manifest is discarded and counted.
+Recordings over 16 MiB are skipped with a visible count.
 
 The older passphrase-encrypted backup (`rhymeai-projects.json` under RAI3/RAI2/RAI1,
 recordings under RAI1) is only read, and only into Drive: with a stored
@@ -140,18 +156,20 @@ The backup regressions run in `:app:testDebugUnitTest`:
 | V-1 | `BackupManifestTest.canonicalFormAndHashMatchTheSharedFixture`, `fixtureDecodesAndReEncodesByteForByte`, `canonicalEscapesOnlyTheContractCharactersAndSortsKeysByCodePoint` | Canonical JSON and `manifestSha256` match the shared fixture byte for byte. |
 | V-2 | `BackupManifestTest.hashMismatchIsRefused`, `newerVersionIsRefusedEvenWithAValidHash`; `BackupServiceTest.hashMismatchedManifestIsRefusedAndNeverOverwrittenOrMerged` | A damaged or newer manifest is neither merged nor overwritten. |
 | V-3 | `BackupServiceTest.backupMergesIntoDriveWritesRawRecordingsAndLeavesThisDeviceAlone`, `pendingLocalDeletionIsNeverUploaded`, `aRawFileWithoutMatchingMetadataIsUploadedAgain`, `backUpLeavesAnInterruptedRestoreAloneAndRestoreFinishesIt` | Backup writes v4 and raw recordings with `appProperties`, uploads each once, skips pending deletions, and leaves local data alone. |
-| V-4 | `BackupServiceTest.restoreMergesBothWaysAndDownloadsOnlyVerifiedMissingRecordings`, `restoreNeverReplacesALocalRecording`; `RecordingSyncTest.restoreCommitKeepsADestinationThatAppearedAfterPlanning`, `aFailedCommitKeepsEverythingAlreadyInPlace`, `recoveryRemovesOnlyTheStagingFolder` | Restore merges both ways; hash-mismatched downloads are dropped; local files are never replaced, even ones that appear mid-restore. |
-| V-5 | `BackupServiceTest.migrationDecisionTable`, `storedPassphraseMigratesIntoDriveOnlyVerifiesThenDeletesTheOlderBackup`, `anUnmovableOlderRecordingKeepsTheOlderBackupAndThePassphrase`, `aDifferentRecordingUnderTheSameNameIsNotCountedAsMoved`, `aDeletedOlderRecordingIsPreservedRawBeforeTheOlderBackupIsRemoved`, `aDeletedOlderRecordingThatCannotMoveKeepsTheOlderBackup` | Migration merges into Drive only and removes the old backup only after every song and recording is verified. |
+| V-4 | `BackupServiceTest.restoreMergesBothWaysAndDownloadsOnlyVerifiedMissingRecordings`, `restoreNeverReplacesALocalRecording`; `RecordingSyncTest.restoreCommitKeepsADestinationThatAppearedAfterPlanning`, `aFailedCommitKeepsEverythingAlreadyInPlace`, `recoveryRemovesOnlyTheStagingFolder`, `importPublishesWithItsRecordAndNeverReplacesAnotherRecording` | Restore merges both ways; hash-mismatched downloads are dropped; local files are never replaced, even ones that appear mid-restore. |
+| V-5 | `BackupServiceTest.migrationDecisionTable`, `storedPassphraseMigratesIntoDriveOnlyVerifiesThenDeletesTheOlderBackup`, `anUnmovableOlderRecordingKeepsTheOlderBackupAndThePassphrase`, `anUnavailableOlderRecordingNeverStandsInForADeletedLocalOne`, `aDeletedOlderRecordingIsPreservedRawBeforeTheOlderBackupIsRemoved`, `aDeletedOlderRecordingThatCannotMoveKeepsTheOlderBackup` | Migration merges into Drive only and removes the old backup only after every song and recording is verified. |
 | V-6 | `BackupServiceTest.independentIosShapedVectorsMigrateFromEveryEnvelopeVersion` | iOS-shaped RAI1, RAI2 and RAI3 backups migrate with their tombstones. |
 | V-7 | `BackupSchedulerTest` (all), `BackupScheduleTest.backoffDoublesFromOneMinuteAndCapsAtOneHour` | Debounce, coalescing, backoff, leave-app interval and consent retry. |
 | V-8 | `BackupArchiveTest.exportThenImportYieldsTheSameManifest`, `importMergesIntoTheLibraryAndAddsOnlyMissingRecordings`, `archivesWithUnsafeOrForeignEntriesAreRejected` | Export → Import yields the same manifest and merges; unsafe archives are refused. |
 | V-9 | `BackupServiceTest.writerThatLandsBetweenOurWriteAndReadBackIsMergedNotLost`, `contentSeenInAnEarlierAttemptSurvivesAStaleWriterInBetween`, `aConflictingReadBackIsKeptEvenWhenAnotherWriterReplacesItBeforeTheRetry`, `aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite`, `aStaleSongTombstoneSeenOnRetryStillDeletesTheOldTakeButNotTheNewerSong`, `aWriterThatNeverStopsIsReportedAsAConflict`, `duplicateManifestsAreMergedAndTheOlderOnesRemovedAfterVerification` | Lost-update protection and duplicate-manifest reconciliation. |
 | V-10 | `RealDriveClientTest` | Drive listing follows every page and keeps `appProperties`; revoke posts the token. |
-| T-1 | `SyncMergerTest.tombstonesConvergeByTimestampPrecedence`; `BackupServiceTest.tombstonesApplyByTimestampPrecedence`, `recordingTombstonesApplyByUploadTime`, `revivingASongDoesNotBringBackItsDeletedRecordings`; `BackupArchiveTest.importRevivesANewerSongButKeepsItsDeletedAudioDeleted`; `ProjectRepositoryTest.songDeletionTombstonesItsKnownRecordingsInTheSameWrite` | Tombstones remove only older songs and recordings; newer ones survive and drop the tombstone. |
+| V-11 | `RecordingIdentityTest` (all); `RecordingImportInstrumentedTest.reimportingIdenticalAudioAfterDeletionIsANewRecordingAndOldTombstoneStays`, `metadataWriteFailuresFailImportRenameAndTrashRestoreWithoutMovingFiles` | Recording ids, staging, live/Trash name collisions, metadata-before-publication with failure injection, and next-launch reconciliation. |
+| V-12 | `BackupManifestTest.millisecondPrecisionSurvivesTheRoundTripSoAnOlderTombstoneCannotWin` | Millisecond precedence times survive the manifest. |
+| T-1 | `SyncMergerTest.tombstonesConvergeByTimestampPrecedence`; `BackupServiceTest.tombstonesApplyByTimestampPrecedence`, `recordingTombstonesApplyByUploadTime`, `revivingASongDoesNotBringBackItsDeletedRecordings`, `aRevivalAndADeletionInTheSameMergeStillCoverATrashOnlyTake`; `BackupArchiveTest.importRevivesANewerSongButKeepsItsDeletedAudioDeleted`; `ProjectRepositoryTest.songDeletionTombstonesItsKnownRecordingsInTheSameWrite` | Tombstones remove only older songs and recordings; newer ones survive and drop the tombstone. |
 | T-3 | `ProjectRepositoryTest.permanentDeleteWritesTombstoneBeforeSyncAndSurvivesRepositoryReopen` | A project tombstone is persisted, survives reopen and removes older copies. |
 | T-4 | `ProjectRepositoryTest.expiryPurgeWritesTombstonesForBothSongsBeforeRemoteMerge` | Expiry purge persists a tombstone for each purged song. |
 | T-5 | `ProjectRepositoryTest.deletionCommittedAfterBaseReadSurvivesSyncApplyAndLaterUpload` | A Delete Forever during the network window is not lost. |
-| T-6 | `ProjectRepositoryTest.olderRemoteTombstoneKeepsASongEditedAfterTheSnapshot`, `applyKeepsAnEditSavedBetweenSnapshotAndCommit` | Applying a backup keeps local edits newer than it. |
+| T-6 | `ProjectRepositoryTest.olderRemoteTombstoneKeepsASongEditedAfterTheSnapshot`, `applyKeepsAnEditSavedBetweenSnapshotAndCommit`, `aDeletionDuringApplyLosesToANewerIncomingVersion` | Applying a backup keeps local edits newer than it. |
 | C-1 | `SyncBlobCryptoTest.independentPythonVectorsOpenForEveryEnvelopeVersionAndSealByteIdenticallyForWrittenOnes` | The legacy RAI1/RAI2/RAI3 vectors still open; the test-only writer reproduces them. |
 | C-2 | `SyncBlobCryptoTest.manifestHeaderBodyAndTagTamperingFailsClosed`, `unknownAndTruncatedManifestHeadersAreDistinctFromAuthenticationFailure` | Tampered or unknown legacy envelopes fail closed during migration. |
 

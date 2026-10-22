@@ -73,17 +73,20 @@ tested here. The iOS side is pending the companion PR, so every iOS statement
 below is the contract it must meet, not verified behaviour.
 
 - Backup format (v4): Drive `appDataFolder` holds the plain manifest
-  `rhymeai-manifest.json` and one raw `rec_<projectId>_<fileName>` per
-  recording, uploaded with `appProperties` `projectId`, `fileName`, `sha256` and
-  `bytes` (Android omits a property whose key plus value exceeds Drive's
-  124-byte limit; the manifest stays authoritative). Manifest keys: `version`
-  (4), `savedAt` (ISO-8601 UTC, whole seconds, `Z`), `savedByClientId`,
-  `platform`, `projects`, `trashed` (project fields plus `trashedAt`),
-  `recordings` (`projectId`, `fileName`, `bytes`, `sha256`, `uploadedAt` as
-  ISO-8601 UTC), `deletions` (`projectId`, `fileName` or null, `deletedAt`) and
-  `manifestSha256`. Song, trash and tombstone timestamps are epoch milliseconds,
-  as in v3. No passphrase, no client-side encryption; API keys never enter the
-  manifest.
+  `rhymeai-manifest.json` and one raw file `rec_<recordingId>` per recording,
+  uploaded with `appProperties` `id`, `projectId`, `fileName`, `sha256` and
+  `bytes` (Android omits a property whose key plus value exceeds Drive's 124-byte
+  limit; the manifest stays authoritative). Manifest keys: `version` (4),
+  `savedAt` (ISO-8601 UTC with milliseconds, `2026-10-22T21:00:05.123Z`),
+  `savedByClientId`, `platform`, `projects`, `trashed` (project fields plus
+  `trashedAt`), `recordings` (`id`, `projectId`, `fileName`, `bytes`, `sha256`,
+  `uploadedAt`), `deletions` and `manifestSha256`. Every precedence time
+  (`updatedAt`, `trashedAt`, `uploadedAt`, `deletedAt`) is an integer of epoch
+  milliseconds; nothing is floored (A23). A song tombstone is `{projectId,
+  fileName: null, deletedAt}`; a recording tombstone adds `recordingId` beside
+  `fileName` (kept for display); a pre-v4 name-only recording tombstone has no
+  `recordingId` and applies by project and file name. No passphrase, no
+  client-side encryption; API keys never enter the manifest.
 - Canonical form and hash: `manifestSha256` is the SHA-256 of the object
   without that key, serialised with keys sorted by Unicode code point, arrays
   in stored order, no whitespace, UTF-8, integers only, and escapes limited to
@@ -92,74 +95,93 @@ below is the contract it must meet, not verified behaviour.
   Readers refuse a hash mismatch ("Backup file is damaged; it was not merged.")
   and any `version` above 4, and never overwrite such a file. Pinned by
   `shared/fixtures/sync-manifest-v4.json` (`scripts/generate-sync-manifest-v4-fixture.py`,
-  stdlib only, `--check`); iOS reads the copy at
+  stdlib only, `--check`; its sample uses non-zero milliseconds in every
+  precedence time); iOS reads the copy at
   `Writers Block/Writers BlockTests/sync-manifest-v4.json`, and Android
   `BackupManifestTest` fails if it drifts (it skips while the copy is absent).
-- Merge rules: per project id the newest `updatedAt` wins; per deletion
-  identity the newest `deletedAt` wins. Tombstones apply by timestamp: a song
-  tombstone removes the song only when `deletedAt` is newer than its `updatedAt`
-  (and, in Trash, its `trashedAt`); a recording tombstone, or its song's, removes
-  a recording only when newer than its `uploadedAt` (its stored precedence time, below). A song or recording newer than its tombstone
-  survives and the tombstone is dropped. When a song tombstone removes a
-  recording, that recording gets its own tombstone at the same time, and
-  deleting a song (Delete Forever or Trash expiry) writes tombstones for every
-  recording this device knows for it in the same write, so reviving the song
-  later cannot bring the deleted audio back (on this device, in later backups,
-  or from an offline device holding the old file). Exception: a recording that
-  was never in any backup and was never on the deleting device (for example one
-  recorded on an offline device and not yet uploaded) has no identity anyone
-  could tombstone; if the song is revived before that device backs up, the
-  recording is treated as new. Every merge (backup write, retry, pre-write
-  refresh, restore, import, migration) first gathers all its inputs' songs,
-  trash, recording entries and tombstones (local, everything earlier attempts
-  saw, the fresh manifest, a conflicting read-back, the archive) and only then
-  applies the timestamp rule once; no path filters recordings or drops
-  tombstones before every input is in. The same rule runs in the merger, the
-  local apply and the upload filter (`SyncMergerTest`, `BackupServiceTest`,
-  `ProjectRepositoryTest`). Recordings are immutable, so Drive's entry wins per
-  identity; a raw file counts as present only when its `appProperties` hash and
-  size both match, otherwise the uploading device's copy is uploaded again.
-- Recording precedence time (A20): each device stores a record per recording
-  in DataStore beside the songs (project id + file name → `uploadedAt`,
-  `sha256`, `bytes`, origin recorded/restored/imported/migrated). It is written
-  when a take is recorded or imported from audio (that moment), restored from
-  Drive or imported from an archive (the backup entry's own `uploadedAt`, never
-  the file time), and follows a rename or a restore from Trash under a new name.
-  A recording with no record (a memo from before this version) is stamped once,
-  at first sight, with its file time and never changes after that. Snapshots,
-  exports, migration (the older entry's own time) and every merge read this
-  record; file times are otherwise never used as precedence. Restore also
-  gathers the records of recordings in the local Trash, so applying a song
-  tombstone tombstones takes known only there.
+- Recording identity (A21): every recording has a stable lowercase UUID, given
+  when it is recorded, imported from audio, restored, imported from an archive
+  or first seen. A pre-v4 entry's id is the name-based UUID (version 3, MD5) of
+  `rhymeai-legacy-recording:<projectId>/<fileName>/<sha256>`, so every device
+  derives the same one. Merge, tombstones, presence checks, restores and
+  imports key on the id: a rename changes only the file name (the device holding
+  the recording names it in the manifest); a live and a Trash recording with the
+  same name are two recordings with two records; a different recording that
+  arrives under a taken name is placed under a free variant (`take 2.m4a`), so
+  nothing is ever replaced; byte-identical audio imported again after a deletion
+  is a new recording with a new id and time, and the old id's tombstone still
+  applies only to the old id.
+- Stored precedence time (A20): each device keeps a record per recording id in
+  DataStore beside the songs (`fileName`, `uploadedAt`, `sha256`, `bytes`,
+  origin recorded/restored/imported/migrated, and where its bytes are now, live
+  or in Trash). It is written when a take is recorded or imported from audio
+  (that moment), restored or imported from an archive (the entry's own
+  `uploadedAt`), and kept through renames, Trash and restore from Trash. A file
+  with no record at its path, or whose bytes no longer match the record there,
+  is a recording seen for the first time: it gets a new id and is stamped once
+  with its file time. That first-seen stamping is the only local write a backup
+  makes. File times are otherwise never used as precedence.
+- Unfinished recordings (A22): the recorder writes into a staging folder; the
+  take is moved into the song's folder, with its record, only when recording
+  finishes. Snapshots never read staging, so a backup during recording never
+  sees the take.
+- Metadata before publication (A24): restore, import, rename, move to Trash and
+  restore from Trash write the record's intent (id, name, time, hash, size, new
+  and old location) before the file moves, under one lock that snapshots also
+  take. If the record cannot be written the operation fails and nothing moves.
+  An interrupted move is finished or undone at the next launch from that intent.
+- Merge rules: per project id the newest `updatedAt` wins; per recording id
+  Drive's entry wins; per tombstone identity the newest `deletedAt` wins.
+  Tombstones apply by timestamp: a song tombstone removes the song only when
+  `deletedAt` is newer than its `updatedAt` (and, in Trash, its `trashedAt`); a
+  recording tombstone, or its song's, removes a recording only when newer than
+  its `uploadedAt`. A song or recording newer than its tombstone survives and
+  the tombstone is dropped. When a song tombstone removes a recording, that
+  recording gets its own tombstone at the same time, and deleting a song
+  (Delete Forever or Trash expiry) writes tombstones for every recording this
+  device holds for it in the same write, so reviving the song cannot bring the
+  deleted audio back (on this device, in later backups, or from an offline
+  device holding the same recording). Exception: a recording that was never in
+  any backup and never on the deleting device (for example one recorded on an
+  offline device and not yet uploaded) has no id anyone could tombstone; if the
+  song is revived before that device backs up, the recording is treated as new.
+  Every merge (backup write, retry, pre-write refresh, restore, apply, import,
+  migration) first gathers all inputs' songs, trash, recording entries (live,
+  Trash and oversized ones too) and tombstones, then applies the timestamp rule
+  once; recordings this device cannot upload (Trash, too large, older ones that
+  could not move) shape tombstones but are listed only if Drive already lists
+  them. A raw file counts as present only when its `appProperties` hash and size
+  both match; otherwise this device's own bytes for that id are uploaded again,
+  and never another recording's.
 - Back up versus restore: Back up now and the automatic backup merge this device
-  into Drive and never change local data. Restore merges both ways, uploads
-  local-only items, then downloads missing recordings. Restore and import apply
-  in one repository transaction against the current data, so an edit saved
-  while they run is kept. A download is written only if nothing is at its
-  destination when it commits: the name check and the move into place happen
-  under one lock that recording, import, rename and restore-from-Trash also take,
-  so a file that appeared meanwhile is kept and the download dropped. Nothing in
-  place is ever replaced or removed; an interrupted restore leaves only complete
-  recordings, and its recovery (run only at the start of Restore and Import,
-  never during Back up) just deletes the staging folder. Android hard links are
-  not used because SELinux forbids them in app storage. A download whose SHA-256 or size
-  does not match the manifest is discarded and counted. Recordings over 16 MiB
-  are skipped with a visible count.
+  into Drive and change no songs or recordings here (the first-seen stamping
+  above is their only local write). Restore merges both ways, uploads local-only
+  items, then downloads recordings this device does not hold (live or in Trash).
+  Restore and import apply in one repository transaction that resolves the
+  incoming inputs with the current songs, Trash, tombstones and recording records,
+  so an edit saved while they run is kept and a song deleted meanwhile stays
+  deleted only if its tombstone is newer than the incoming version (A25). A
+  download whose SHA-256 or size does not match the manifest is discarded and
+  counted; recordings over 16 MiB are skipped with a visible count. An
+  interrupted restore leaves only complete recordings; its recovery (run only at
+  the start of Restore and Import) deletes the staging folder. Android hard
+  links are not used because SELinux forbids them in app storage.
 - Lost updates between devices: just before writing, the manifest list is read
   again; if another device wrote since the backup read it, the backup merges that
   manifest first. Every write is then downloaded again and its hash compared with
   the one just written; a mismatch re-merges and retries, up to three times,
-  then reports "Backup conflict, will retry" and backs off. Each retry merges the
-  fresh manifest into what the earlier attempt merged, so content seen once is
-  never dropped. Drive v3 exposes no
-  file ETag, so no `If-Match` is sent. Duplicate manifests are merged, the newest
-  is kept, and the others are deleted only after the merged one verifies.
+  then reports "Backup conflict, will retry" and backs off. Each retry gathers
+  the fresh manifest with everything earlier attempts saw, including a
+  conflicting read-back. Drive v3 exposes no file ETag, so no `If-Match` is sent.
+  Duplicate manifests are merged, the newest is kept, and the others are deleted
+  only after the merged one verifies.
 - Automatic backup: one 30 s debounce after any change to songs, trash,
   tombstones or recordings (saved, imported, renamed, deleted, trashed or
-  restored, including recordings added by Import) while connected, plus the background trigger when leaving the app
-  (at most every 15 minutes unless a backup is pending); runs never overlap and a
-  change during a run queues one more; after failures it retries at 1, 2, 4, 8 …
-  minutes capped at one hour and resets on success (`BackupSchedulerTest`).
+  restored, including recordings added by Import) while connected, plus the
+  background trigger when leaving the app (at most every 15 minutes unless a
+  backup is pending); runs never overlap and a change during a run queues one
+  more; after failures it retries at 1, 2, 4, 8 … minutes capped at one hour and
+  resets on success (`BackupSchedulerTest`).
 - Status model, same cases on both: `notConnected`, `connected(lastBackupAt?)`,
   `pending`, `backingUp`, `failed(reason, lastBackupAt?)`; Settings shows
   "Last backed up 2 min ago · Google Drive" or the failure reason with Retry.
@@ -186,8 +208,9 @@ below is the contract it must meet, not verified behaviour.
   in it with the same content or a newer edit, and every old recording, deleted
   or not, is a raw file whose `appProperties` hash and size match (live ones
   also listed with that hash); cleanup deletes only encrypted files whose raw
-  copy was verified. Anything too large, unreadable, missing
-  or held under the same name with different bytes keeps the old backup, the
+  copy was verified. Older recordings keep their derived ids and original times;
+  one that cannot move never stands in for another recording. Anything too
+  large, unreadable or missing keeps the old backup, the
   passphrase and the "Migrate older encrypted backup…" row, and is reported ("2
   older recordings could not be moved; the older backup was kept."). Without a
   passphrase the old files stay untouched and the row asks once, storing
