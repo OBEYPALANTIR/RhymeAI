@@ -22,6 +22,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -58,6 +60,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -68,6 +71,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Modifier
@@ -678,6 +686,33 @@ fun AssistantPanel(
         }
         }
 
+        // The ink burst: when writing ends with at least one line and no
+        // error, and not because Stop was tapped, the spinner bursts once.
+        val burstElapsed = remember { Animatable(InkBurstMotion.DURATION_MILLIS.toFloat()) }
+        val burstOrigin = remember { mutableStateOf(Offset.Unspecified) }
+        val buttonOrigin = remember { mutableStateOf(Offset.Zero) }
+        var stopTapped by remember { mutableStateOf(false) }
+        var wasLoading by remember { mutableStateOf(viewModel.isLoading) }
+        LaunchedEffect(viewModel.isLoading) {
+            val finished = wasLoading && !viewModel.isLoading
+            wasLoading = viewModel.isLoading
+            if (viewModel.isLoading) {
+                stopTapped = false
+                // A new request clears a burst still in flight.
+                burstElapsed.snapTo(InkBurstMotion.DURATION_MILLIS.toFloat())
+            }
+            if (finished && !stopTapped && animationsEnabled &&
+                viewModel.suggestions.isNotEmpty() && viewModel.errorMessage == null
+            ) {
+                burstElapsed.snapTo(0f)
+                burstElapsed.animateTo(
+                    InkBurstMotion.DURATION_MILLIS.toFloat(),
+                    tween(InkBurstMotion.DURATION_MILLIS, easing = LinearEasing)
+                )
+            }
+        }
+        val burstInk = colorScheme.onSurface
+
         val setupModel = !viewModel.isLoading &&
             viewModel.selectedProvider == com.rhymeai.app.service.AIProvider.LOCAL &&
             !viewModel.localSuggestionsReady
@@ -685,7 +720,10 @@ fun AssistantPanel(
             onClick = {
                 when {
                     setupModel -> onModelSetup()
-                    viewModel.isLoading -> viewModel.cancelSuggestions()
+                    viewModel.isLoading -> {
+                        stopTapped = true
+                        viewModel.cancelSuggestions()
+                    }
                     else -> viewModel.getSuggestions()
                 }
             },
@@ -694,6 +732,23 @@ fun AssistantPanel(
                 .fillMaxWidth()
                 .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.sm)
                 .height(DesignTokens.Touch.minTarget)
+                .onGloballyPositioned { buttonOrigin.value = it.positionInRoot() }
+                // Above the button and unclipped, so the dots fly past it onto the panel.
+                .drawWithContent {
+                    drawContent()
+                    val origin = burstOrigin.value
+                    if (!origin.isSpecified) return@drawWithContent
+                    val centre = origin - buttonOrigin.value
+                    val reach = InkBurstMotion.REACH_DP.dp.toPx()
+                    InkBurstMotion.dots(burstElapsed.value).forEach { dot ->
+                        drawCircle(
+                            color = burstInk,
+                            radius = dot.radiusDp.dp.toPx(),
+                            center = centre + Offset(dot.x * reach, dot.y * reach),
+                            alpha = dot.alpha
+                        )
+                    }
+                }
                 .testTag("assistantPrimaryAction"),
             shape = RoundedCornerShape(DesignTokens.Radius.lg),
             colors = ButtonDefaults.buttonColors(
@@ -728,7 +783,11 @@ fun AssistantPanel(
                     when (action) {
                         PrimaryAction.STOP -> {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(DesignTokens.Indicator.spinnerMd),
+                                modifier = Modifier
+                                    .size(DesignTokens.Indicator.spinnerMd)
+                                    .onGloballyPositioned {
+                                        burstOrigin.value = it.positionInRoot() + Offset(it.size.width / 2f, it.size.height / 2f)
+                                    },
                                 color = colorScheme.onPrimary,
                                 strokeWidth = 2.dp
                             )

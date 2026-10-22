@@ -7,8 +7,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -16,7 +14,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -26,7 +23,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -40,18 +37,24 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -62,31 +65,44 @@ import androidx.compose.ui.unit.sp
 import com.rhymeai.app.SuggestedLine
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.LocalAppAppearance
+import com.rhymeai.app.ui.theme.placeholderColorFor
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
 
 /**
  * Slot arithmetic and timing for the placeholders shown while next-line
  * suggestions stream in. When a request starts, one slot opens as a ghost
  * card; each streamed line takes the ghost's slot in place and the next ghost
  * opens below it while the request is still writing, and the ghost still
- * waiting when the stream stops collapses. When a ghost opens, its text bar is
- * written once from the left on the 420ms settle tier and then holds still
- * until its line arrives; with animations off it is the same still bar.
+ * waiting when the stream stops collapses. Each ghost scribbles two wave lines
+ * in, tip first, on a loop: the first line over 63% of a 1.3s write, then the
+ * second, a 350ms hold with both drawn, then a wipe. With animations off it
+ * holds one frame: the first line drawn, the second stopped 60% along.
  *
- * iOS mirror: `SuggestionInkLineMotion` in
- * `Writers Block/Components/SuggestionPlaceholderCardView.swift`.
+ * iOS mirror: `Writers Block/Components/SuggestionPlaceholderCardView.swift`.
  */
 object SuggestionPlaceholderMotion {
-    /** The iOS settle tier; Android settles with a spring and has no 420ms constant. */
-    const val DRAW_MILLIS = 420
+    const val WRITE_MILLIS = 1300
+    const val HOLD_MILLIS = 350
+    const val PERIOD_MILLIS = WRITE_MILLIS + HOLD_MILLIS
+    /** The share of the write spent on the first line. */
+    const val FIRST_LINE_SHARE = 0.63f
 
-    /** The stroke's ink as it starts; it settles to [RESTING_INK_ALPHA] as it draws. */
-    const val STROKE_INK_ALPHA = 0.34f
-    /** The still bar's ink once drawn, with animations on or off. */
-    const val RESTING_INK_ALPHA = 0.08f
+    /** The frame held with animations off: first line drawn, second stopped 60% along. */
+    val STILL_FRAME = 1f to 0.6f
+
+    /** Wave points across one period, as fractions of its width and the line's height. */
+    private val WAVE = listOf(0f to 0.55f, 0.18f to 0.25f, 0.42f to 0.78f, 0.68f to 0.28f, 1f to 0.58f)
+
     const val GHOST_ALPHA = 0.08f
     const val GHOST_SOFT_ALPHA = 0.06f
 
     val textBarFractions = listOf(0.72f, 0.56f, 0.64f)
+    /** The second line's width as a share of the first's, near the design's 78/46 and 64/38 pairs. */
+    const val SECOND_LINE_SHARE = 0.6f
 
     /** Ghost cards still waiting for a line: one while the request writes, none once the stream stops. */
     fun placeholderCount(arrived: Int, isLoading: Boolean): Int = if (isLoading) 1 else 0
@@ -96,16 +112,73 @@ object SuggestionPlaceholderMotion {
 
     fun textBarFraction(slot: Int): Float = textBarFractions[slot.coerceAtLeast(0) % textBarFractions.size]
 
-    /** Horizontal extent of the stroke, 0..1, [elapsedMillis] after the ghost opened: drawn once on the standard curve, then full. */
-    fun strokeExtent(elapsedMillis: Long): Float {
-        if (elapsedMillis <= 0) return 0f
-        if (elapsedMillis >= DRAW_MILLIS) return 1f
-        return DesignTokens.Motion.standardEasing.transform(elapsedMillis / DRAW_MILLIS.toFloat())
+    fun secondBarFraction(slot: Int): Float = textBarFraction(slot) * SECOND_LINE_SHARE
+
+    /** How far each line is drawn, 0..1, [elapsedMillis] after the ghost opened. */
+    fun lineProgress(elapsedMillis: Long): Pair<Float, Float> {
+        val phase = Math.floorMod(elapsedMillis, PERIOD_MILLIS.toLong()) / WRITE_MILLIS.toFloat()
+        return (phase / FIRST_LINE_SHARE).coerceIn(0f, 1f) to
+            ((phase - FIRST_LINE_SHARE) / (1f - FIRST_LINE_SHARE)).coerceIn(0f, 1f)
     }
 
-    /** Stroke ink, settling from [STROKE_INK_ALPHA] to [RESTING_INK_ALPHA] on the same curve as the extent. */
-    fun strokeAlpha(elapsedMillis: Long): Float =
-        STROKE_INK_ALPHA + (RESTING_INK_ALPHA - STROKE_INK_ALPHA) * strokeExtent(elapsedMillis)
+    /** The wave tiled from x = 0 to [width]: one wave every [period], the last cut at the edge. */
+    fun wavePoints(width: Float, period: Float, height: Float): List<Offset> {
+        val points = mutableListOf(Offset(0f, WAVE[0].second * height))
+        var cycle = 0
+        while (points.last().x < width) {
+            for ((fx, fy) in WAVE.drop(1)) {
+                val x = (cycle + fx) * period
+                val y = fy * height
+                val previous = points.last()
+                if (x >= width) {
+                    val f = if (x > previous.x) (width - previous.x) / (x - previous.x) else 0f
+                    points += Offset(width, previous.y + (y - previous.y) * f)
+                    break
+                }
+                points += Offset(x, y)
+            }
+            cycle++
+        }
+        return points
+    }
+}
+
+/**
+ * The ink burst when writing ends with at least one line: fourteen dots leave
+ * the Stop spinner's centre over 480ms on an ease-out cubic, each with its own
+ * jitter and speed, dropping as they go but never past [REACH_DP]; they keep
+ * their size until the last 30%, then fade and shrink to 40%. A blot at the
+ * centre collapses on the same curve.
+ */
+object InkBurstMotion {
+    const val DURATION_MILLIS = 480
+    const val DOT_COUNT = 14
+    const val REACH_DP = 44f
+    const val DOT_RADIUS_DP = 2.2f
+    const val BLOT_RADIUS_DP = 6f
+
+    /** One dot: [x] and [y] in units of the reach (never past 1), radius in dp, and alpha. */
+    data class Dot(val x: Float, val y: Float, val radiusDp: Float, val alpha: Float)
+
+    /** The dots, then the blot while it has size, [elapsedMillis] into the burst; none outside it. */
+    fun dots(elapsedMillis: Float): List<Dot> {
+        val p = elapsedMillis / DURATION_MILLIS
+        if (!(p >= 0f && p < 1f)) return emptyList()
+        val inv = 1f - p
+        val eased = 1f - inv * inv * inv
+        val alpha = if (p < 0.7f) 1f else 1f - (p - 0.7f) / 0.3f
+        val dots = (0 until DOT_COUNT).map { i ->
+            val angle = i * (2 * PI / DOT_COUNT) + ((i * 7) % DOT_COUNT) / DOT_COUNT.toDouble() * 0.35
+            val speed = 0.72f + 0.28f * ((i * 5) % 3) / 2f
+            var x = cos(angle).toFloat() * eased * speed
+            var y = sin(angle).toFloat() * eased * speed + 0.18f * p * p
+            val length = hypot(x, y)
+            if (length > 1f) { x /= length; y /= length }
+            Dot(x, y, DOT_RADIUS_DP * (0.4f + 0.6f * alpha), alpha)
+        }
+        val blot = BLOT_RADIUS_DP * (1f - eased)
+        return if (blot > 0f) dots + Dot(0f, 0f, blot, inv) else dots
+    }
 }
 
 /**
@@ -114,10 +187,10 @@ object SuggestionPlaceholderMotion {
  * writing stops before a line reached it. A slot composed together with its
  * section ([appearsWithSection]: the request just opened it, or the sheet was
  * reopened or rotated) appears with the section instead of animating on its
- * own, so nothing that already landed replays. The arrival cross-fade uses the
- * 260ms state tier, with the arriving card rising 24dp into place as it fades
- * in; the collapse uses the 160ms dismiss tier, sizes settle on the
- * standard spring, and everything snaps when animations are off. [modifier]
+ * own, so nothing that already landed replays. The arrival cross-fade happens
+ * in place on the 260ms state tier; the collapse uses the 160ms dismiss tier,
+ * sizes settle on the standard spring, and everything snaps when animations
+ * are off. [modifier]
  * applies inside the collapse, so spacing passed in collapses with the slot.
  */
 @Composable
@@ -130,8 +203,6 @@ fun SuggestionSlot(
     card: @Composable (SuggestedLine) -> Unit
 ) {
     val animationsEnabled = LocalAnimationsEnabled.current
-    // The same short rise the iOS undo toast uses.
-    val arrivalRisePx = with(LocalDensity.current) { DesignTokens.Spacing.xl.roundToPx() }
     val visible = line != null || pending
     val visibleState = remember { MutableTransitionState(appearsWithSection && visible) }
     visibleState.targetState = visible
@@ -157,16 +228,9 @@ fun SuggestionSlot(
             contentKey = { it != null },
             transitionSpec = {
                 if (animationsEnabled) {
-                    // Both halves of the arrival share the state tier; the
-                    // dismiss tier is kept for slots that stay empty. An
-                    // arriving card also rises into place; a ghost does not.
-                    val fade = fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing))
-                    val enter = if (targetState != null) {
-                        fade + slideInVertically(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) { arrivalRisePx }
-                    } else {
-                        fade
-                    }
-                    (enter togetherWith
+                    // Both halves of the arrival share the state tier, in
+                    // place; the dismiss tier is kept for slots that stay empty.
+                    (fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) togetherWith
                         fadeOut(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)))
                         .using(SizeTransform(clip = false) { _, _ -> DesignTokens.Motion.standardSpring(IntSize.VisibilityThreshold) })
                 } else {
@@ -201,7 +265,20 @@ fun SuggestionPlaceholderCard(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val ink = colorScheme.onSurface
+    val scribbleInk = placeholderColorFor(LocalAppAppearance.current)
     val animationsEnabled = LocalAnimationsEnabled.current
+    // One clock per ghost, from when it appears; read only while drawing.
+    val elapsedMillis = remember { mutableLongStateOf(0L) }
+    if (animationsEnabled) {
+        LaunchedEffect(Unit) {
+            val start = withFrameMillis { it }
+            while (true) withFrameMillis { elapsedMillis.longValue = it - start }
+        }
+    }
+    val progress = {
+        if (animationsEnabled) SuggestionPlaceholderMotion.lineProgress(elapsedMillis.longValue)
+        else SuggestionPlaceholderMotion.STILL_FRAME
+    }
 
     OutlinedCard(
         modifier = modifier
@@ -227,14 +304,17 @@ fun SuggestionPlaceholderCard(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
             ) {
-                // The serif line, held by one invisible line of the card's style.
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                // The serif line, held by one invisible line of the card's
+                // style, with the two scribble lines over it.
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopStart) {
                     HeldLine(fontFamily = FontFamily.Serif, fontSize = 14.sp, lineHeight = 20.sp)
-                    InkLine(
-                        ink = ink,
-                        animationsEnabled = animationsEnabled,
-                        modifier = Modifier.fillMaxWidth(SuggestionPlaceholderMotion.textBarFraction(slot))
-                    )
+                    Column(
+                        modifier = Modifier.padding(top = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ScribbleLine(scribbleInk, SuggestionPlaceholderMotion.textBarFraction(slot)) { progress().first }
+                        ScribbleLine(scribbleInk, SuggestionPlaceholderMotion.secondBarFraction(slot)) { progress().second }
+                    }
                 }
                 if (showProsody) {
                     // ProsodyPreview: two monospace lines, 2dp apart.
@@ -321,32 +401,33 @@ private fun SoftRow(widthFraction: Float, ink: Color) {
 }
 
 /**
- * The ghost's text bar, written once from the left when the ghost opens, its
- * ink settling from the stroke's 34% to the resting 8% as it draws, and then
- * held still. The stroke is read in the draw phase, so the bar redraws
- * each frame without recomposing. With animations off it starts fully drawn.
+ * One scribble line: the wave tiled across [widthFraction] of the row, 10dp
+ * tall, stroked up to [progress] of its length, tip first. [progress] is read
+ * in the draw phase, so the line redraws each frame without recomposing.
  */
 @Composable
-private fun InkLine(ink: Color, animationsEnabled: Boolean, modifier: Modifier = Modifier) {
-    val barHeight = with(LocalDensity.current) { 9.sp.toDp() }
-    val drawMillis = SuggestionPlaceholderMotion.DRAW_MILLIS.toFloat()
-    val elapsed = remember { Animatable(if (animationsEnabled) 0f else drawMillis) }
-    LaunchedEffect(Unit) {
-        elapsed.animateTo(drawMillis, tween(SuggestionPlaceholderMotion.DRAW_MILLIS, easing = LinearEasing))
-    }
-    // The pill clips the stroke, so its leading end stays round while it draws.
-    Box(modifier.height(barHeight).clip(RoundedCornerShape(50))) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    scaleX = SuggestionPlaceholderMotion.strokeExtent(elapsed.value.toLong())
-                    alpha = SuggestionPlaceholderMotion.strokeAlpha(elapsed.value.toLong())
-                    transformOrigin = TransformOrigin(0f, 0.5f)
+private fun ScribbleLine(ink: Color, widthFraction: Float, progress: () -> Float) {
+    Spacer(
+        Modifier
+            .fillMaxWidth(widthFraction)
+            .height(10.dp)
+            .drawWithCache {
+                val path = Path()
+                SuggestionPlaceholderMotion.wavePoints(size.width, 34.dp.toPx(), size.height).forEachIndexed { i, point ->
+                    if (i == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
                 }
-                .background(ink)
-        )
-    }
+                val measure = PathMeasure().apply { setPath(path, false) }
+                val drawn = Path()
+                val stroke = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                onDrawBehind {
+                    val p = progress()
+                    if (p <= 0f) return@onDrawBehind
+                    drawn.reset()
+                    measure.getSegment(0f, measure.length * p, drawn, true)
+                    drawPath(drawn, ink, style = stroke)
+                }
+            }
+    )
 }
 
 /** A pill filling the element: the ghost of the tonal "Use line" button. */
