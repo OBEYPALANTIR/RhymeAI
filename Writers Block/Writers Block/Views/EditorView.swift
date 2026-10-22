@@ -119,16 +119,30 @@ struct EditorView: View {
     @State private var unblockCollapsed: Bool = false
     @State private var inlineAssistantVisible = true
     @State private var isFocusMode = false
+    /// Starts unbounded so a full-screen iPad never flashes the single column.
+    @State private var windowWidth: CGFloat = .infinity
 
     var body: some View {
         Group {
-            if horizontalSizeClass == .regular {
+            if usesSideColumns {
                 iPadLayout
             } else {
                 iPhoneLayout
             }
         }
+        .onGeometryChange(for: CGFloat.self, of: \.size.width) { windowWidth = $0 }
+        .onChange(of: usesSideColumns, initial: true) { _, sideColumns in
+            // The sheet only belongs to the single-column layout; on reaching
+            // the two-column width the inline column takes over.
+            guard sideColumns, viewModel.showAssistantSheet else { return }
+            assistantSheetLifecycleTask?.cancel()
+            assistantSheetIsDismissing = false
+            viewModel.showAssistantSheet = false
+            inlineAssistantVisible = true
+        }
         .foregroundStyle(appearance.palette.primaryInk)
+        // The drawer covers the editor; keep VoiceOver inside the drawer.
+        .accessibilityHidden(projectDrawerOpen)
         .background {
             AppWritingBackground()
         }
@@ -384,7 +398,7 @@ struct EditorView: View {
     }
 
     private var assistantSheetIsActive: Bool {
-        guard horizontalSizeClass != .regular else { return false }
+        guard !usesSideColumns else { return false }
         return viewModel.showAssistantSheet || assistantSheetIsDismissing
     }
 
@@ -494,7 +508,7 @@ struct EditorView: View {
                 .shadow(color: appearance.palette.primaryInk.opacity(EditorViewConstants.UnBlockChrome.shadowOpacity), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
             }
             .buttonStyle(.rhymePress)
-            .accessibilityLabel(inlineAssistantVisible && horizontalSizeClass == .regular ? "Hide AI suggestions" : "Open AI suggestions")
+            .accessibilityLabel(inlineAssistantIsOpen ? "Hide AI suggestions" : "Open AI suggestions")
             .accessibilityIdentifier("unblockButton")
 
             FloatingMicButton(
@@ -506,7 +520,14 @@ struct EditorView: View {
     }
 
     private var inlineAssistantIsOpen: Bool {
-        inlineAssistantVisible && horizontalSizeClass == .regular && !isFocusMode
+        inlineAssistantVisible && usesSideColumns && !isFocusMode
+    }
+
+    /// Regular width with room for a side column beside a usable editor
+    /// (`RhymeAITokens.Layout.fitsSideColumn`); narrower regular windows
+    /// get the single-column editor and the assistant sheet.
+    private var usesSideColumns: Bool {
+        horizontalSizeClass == .regular && RhymeAITokens.Layout.fitsSideColumn(windowWidth: windowWidth)
     }
 
     @ViewBuilder
@@ -617,10 +638,11 @@ struct EditorView: View {
     }
 
     private func presentAssistant() {
-        if horizontalSizeClass == .regular {
+        if usesSideColumns {
             withRhymeAnimation(inlineAssistantVisible ? RhymeAITokens.Motion.dismiss : RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
                 inlineAssistantVisible.toggle()
             }
+            AccessibilityNotification.Announcement(inlineAssistantVisible ? "Assistant shown" : "Assistant hidden").post()
         } else {
             presentAssistantSheet()
         }
@@ -630,6 +652,7 @@ struct EditorView: View {
         withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
             inlineAssistantVisible = false
         }
+        AccessibilityNotification.Announcement("Assistant hidden").post()
     }
 
     private func showAssistantSheetWithAnimation() {

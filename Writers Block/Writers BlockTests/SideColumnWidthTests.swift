@@ -13,4 +13,19 @@ struct SideColumnWidthTests {
         // The 1210pt-wide 11-inch (M5) window rounds 462.2 down.
         #expect(RhymeAITokens.Layout.sideColumnWidth(for: 1210) == 462)
     }
+
+    @Test(arguments: [678, 759] as [CGFloat])
+    func narrowRegularWindowsUseTheSingleColumn(windowWidth: CGFloat) {
+        // Stage Manager down to the regular threshold, Split View 1/2: a 380pt
+        // column would leave the editor narrower than the column itself.
+        #expect(!RhymeAITokens.Layout.fitsSideColumn(windowWidth: windowWidth))
+        #expect(windowWidth - RhymeAITokens.Layout.sideColumnWidth(for: windowWidth) < RhymeAITokens.Layout.assistantColumnWidth)
+    }
+
+    @Test(arguments: [760, 795, 834, 1024, 1194, 1210] as [CGFloat])
+    func twoColumnWindowsKeepTheEditorAtLeastAsWideAsTheColumn(windowWidth: CGFloat) {
+        // 760 is the threshold; 795 is Split View 2/3 on the 11-inch.
+        #expect(RhymeAITokens.Layout.fitsSideColumn(windowWidth: windowWidth))
+        #expect(windowWidth - RhymeAITokens.Layout.sideColumnWidth(for: windowWidth) >= RhymeAITokens.Layout.assistantColumnWidth)
+    }
 }
