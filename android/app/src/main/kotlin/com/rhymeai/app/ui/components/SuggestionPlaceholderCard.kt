@@ -9,6 +9,7 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.withInfiniteAnimationFrameMillis
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -39,7 +40,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -82,7 +82,8 @@ import kotlin.math.sin
  * second, a 350ms hold with both drawn, then a wipe. With animations off it
  * holds one frame: the first line drawn, the second stopped 60% along.
  *
- * iOS mirror: `Writers Block/Components/SuggestionPlaceholderCardView.swift`.
+ * iOS mirror: `SuggestionInkLineMotion` in
+ * `Writers Block/Components/SuggestionPlaceholderCardView.swift`.
  */
 object SuggestionPlaceholderMotion {
     const val WRITE_MILLIS = 1300
@@ -90,6 +91,10 @@ object SuggestionPlaceholderMotion {
     const val PERIOD_MILLIS = WRITE_MILLIS + HOLD_MILLIS
     /** The share of the write spent on the first line. */
     const val FIRST_LINE_SHARE = 0.63f
+
+    const val WAVE_PERIOD_DP = 34f
+    const val WAVE_HEIGHT_DP = 10f
+    const val STROKE_WIDTH_DP = 1.6f
 
     /** The frame held with animations off: first line drawn, second stopped 60% along. */
     val STILL_FRAME = 1f to 0.6f
@@ -271,8 +276,8 @@ fun SuggestionPlaceholderCard(
     val elapsedMillis = remember { mutableLongStateOf(0L) }
     if (animationsEnabled) {
         LaunchedEffect(Unit) {
-            val start = withFrameMillis { it }
-            while (true) withFrameMillis { elapsedMillis.longValue = it - start }
+            val start = withInfiniteAnimationFrameMillis { it }
+            while (true) withInfiniteAnimationFrameMillis { elapsedMillis.longValue = it - start }
         }
     }
     val progress = {
@@ -410,15 +415,15 @@ private fun ScribbleLine(ink: Color, widthFraction: Float, progress: () -> Float
     Spacer(
         Modifier
             .fillMaxWidth(widthFraction)
-            .height(10.dp)
+            .height(SuggestionPlaceholderMotion.WAVE_HEIGHT_DP.dp)
             .drawWithCache {
                 val path = Path()
-                SuggestionPlaceholderMotion.wavePoints(size.width, 34.dp.toPx(), size.height).forEachIndexed { i, point ->
+                SuggestionPlaceholderMotion.wavePoints(size.width, SuggestionPlaceholderMotion.WAVE_PERIOD_DP.dp.toPx(), size.height).forEachIndexed { i, point ->
                     if (i == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
                 }
                 val measure = PathMeasure().apply { setPath(path, false) }
                 val drawn = Path()
-                val stroke = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                val stroke = Stroke(width = SuggestionPlaceholderMotion.STROKE_WIDTH_DP.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
                 onDrawBehind {
                     val p = progress()
                     if (p <= 0f) return@onDrawBehind
