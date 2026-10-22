@@ -1,5 +1,15 @@
 # Release Notes
 
+## Larger text fits the Assistant, Notebook and Trash on iPad (iOS)
+
+The Assistant's Perfect, Near and Slant choice now uses the app's own segmented
+control, so it grows with your text size and stacks at the largest sizes; the
+songs drawer, Song Notebook and Trash switches match it. The stanza preview
+under Rhyme Options shows every line instead of cutting the last one in half.
+In the Song Notebook, opening a saved version moves it to the top with
+"Restore this version" right under it, so the button stays in view at large
+text sizes. The Settings Done button is easier to read.
+
 ## iPad works in narrow windows and reads better with VoiceOver (iOS)
 
 In Split View, Stage Manager and resized windows narrower than 760 points, the
