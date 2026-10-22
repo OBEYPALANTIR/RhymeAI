@@ -118,6 +118,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
@@ -910,7 +915,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     BasicTextField(
                         value = viewModel.title,
                         onValueChange = { viewModel.onTitleChanged(it) },
-                        singleLine = true,
+                        // Not singleLine so long titles wrap; Enter (soft Next or a hardware key) moves to the lyrics.
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                         textStyle = titleStyle,
@@ -918,6 +923,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("songTitleEditor")
+                            .onPreviewKeyEvent {
+                                if (it.key != Key.Enter && it.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+                                if (it.type == KeyEventType.KeyDown) focusManager.moveFocus(FocusDirection.Down)
+                                true
+                            }
                             .onSizeChanged { titleHeightPx = it.height },
                         decorationBox = { innerTextField ->
                             Box {
