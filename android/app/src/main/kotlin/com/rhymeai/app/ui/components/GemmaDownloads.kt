@@ -52,6 +52,10 @@ internal fun recommendedGemmaModel(totalRamBytes: Long): GemmaDownload {
     }
 }
 
+/** True when [model] needs more RAM than the device has; only E4B has a requirement above the app's minimum. */
+internal fun gemmaModelNeedsMoreMemory(model: GemmaDownload, totalRamBytes: Long): Boolean =
+    model.fileName == GEMMA_DOWNLOADS[1].fileName && totalRamBytes < RAM_THRESHOLD_E4B_BYTES
+
 internal data class GemmaDownload(
     val label: String,
     val description: String,

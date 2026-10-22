@@ -505,6 +505,20 @@ class GemmaDownloadsTest {
         assertEquals(GEMMA_DOWNLOADS[0].fileName, rec.fileName)
     }
 
+    @Test
+    fun gemmaModelNeedsMoreMemoryWarnsOnlyForE4BBelowThreshold() {
+        val gb = 1024L * 1024L * 1024L
+        val e2b = GEMMA_DOWNLOADS[0]
+        val e4b = GEMMA_DOWNLOADS[1]
+        for (ram in listOf(6L, 8L, 10L, 12L).map { it * gb }) {
+            assertFalse("E2B at $ram", gemmaModelNeedsMoreMemory(e2b, ram))
+        }
+        assertTrue(gemmaModelNeedsMoreMemory(e4b, 6L * gb))
+        assertTrue(gemmaModelNeedsMoreMemory(e4b, 8L * gb))
+        assertFalse(gemmaModelNeedsMoreMemory(e4b, 10L * gb))
+        assertFalse(gemmaModelNeedsMoreMemory(e4b, 12L * gb))
+    }
+
     private fun tinyGemma(
         url: String = "https://example.invalid/tiny.gguf",
         expectedBytes: Long,
