@@ -556,6 +556,13 @@ struct SettingsCloudBackupSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("cloudBackupStatus")
             }
+            if viewModel.oversizedRecordingCount > 0 {
+                let count = viewModel.oversizedRecordingCount
+                Text("\(count) \(count == 1 ? "recording is" : "recordings are") over 16 MB and \(count == 1 ? "stays" : "stay") on this device only.")
+                    .font(.caption)
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .accessibilityIdentifier("oversizedRecordingsNote")
+            }
             if !viewModel.cloudBackupConfigured {
                 Text("Google Drive isn't set up in this build.")
                     .font(.caption)

@@ -106,6 +106,8 @@ final class VoiceMemoService {
     /// Called after a recording file is added, renamed, trashed, restored or
     /// deleted, so the automatic backup can pick the change up.
     @ObservationIgnored var onFilesChanged: (() -> Void)?
+    /// The file the recorder is writing, if any; it is not finished until stopped.
+    var activeRecordingURL: URL? { audioRecorder?.url }
 
     init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared) {
         self.sessionTransitions = sessionTransitions

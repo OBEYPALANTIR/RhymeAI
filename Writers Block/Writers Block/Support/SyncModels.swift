@@ -777,11 +777,13 @@ enum RecordingBackupManifest {
     /// A project's memo files, sorted by name.
     static func scanFiles(projectId: String, memosRoot: URL) throws -> [(fileName: String, url: URL)] {
         let folder = try RecordingFiles.projectURL(projectId: projectId, memosRoot: memosRoot)
-        guard let urls = try? FileManager.default.contentsOfDirectory(
+        // A folder that is not there has no recordings; one that cannot be read is an error.
+        guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
+        let urls = try FileManager.default.contentsOfDirectory(
             at: folder,
             includingPropertiesForKeys: [.fileSizeKey],
             options: .skipsHiddenFiles
-        ) else { return [] }
+        )
         // A name a manifest cannot carry (it fails `validateFileName`) stays local only.
         return urls
             .filter { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }

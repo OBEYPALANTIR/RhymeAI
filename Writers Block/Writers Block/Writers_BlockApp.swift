@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import SwiftData
 import CloudKit
+import CoreData
 import Combine
 import os
 
@@ -96,6 +97,7 @@ struct Writers_BlockApp: App {
     private var appearanceRawValue = AppAppearanceStyle.ink.rawValue
     @StateObject private var viewModel = EditorViewModel(
         backupService: BackupService.shared,
+        recordingLibrary: BackupService.shared.library,
         defaults: UITestFlags.editorDefaults()
     )
     @StateObject private var persistenceState: AppPersistenceState
@@ -171,6 +173,10 @@ struct Writers_BlockApp: App {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
                 await RhymeIndex.warmUpInBackground()
+            }
+            // iCloud delivered changes: new or removed recordings get their files.
+            .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
+                viewModel.reconcileRecordings()
             }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
