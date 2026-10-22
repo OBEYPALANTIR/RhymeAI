@@ -122,9 +122,9 @@ struct SuggestionPlaceholderCardView: View {
 
     var body: some View {
         let ink = appearance.palette.primaryInk
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
-            HStack(alignment: .top, spacing: RhymeAITokens.Spacing.sm) {
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
+            HStack(alignment: .top, spacing: RhymeAITokens.Rhythm.related) {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                     lineSlot(ink: appearance.palette.placeholder)
 
                     if showProsody {
@@ -141,8 +141,8 @@ struct SuggestionPlaceholderCardView: View {
                 // The syllable count badge, in its own font and padding.
                 Text(verbatim: "00")
                     .font(.system(.caption, design: .monospaced))
-                    .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                    .padding(.vertical, RhymeAITokens.Spacing.xs)
+                    .padding(.horizontal, RhymeAITokens.Rhythm.tight)
+                    .padding(.vertical, RhymeAITokens.Rhythm.tight)
                     .hidden()
                     .background {
                         RoundedRectangle(cornerRadius: RhymeAITokens.Radius.xs, style: .continuous)
@@ -151,12 +151,12 @@ struct SuggestionPlaceholderCardView: View {
             }
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: RhymeAITokens.Spacing.md) { actionGhosts(ink: ink) }
+                HStack(spacing: RhymeAITokens.Rhythm.standard) { actionGhosts(ink: ink) }
                     .fixedSize(horizontal: true, vertical: false)
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) { actionGhosts(ink: ink) }
+                VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.tight) { actionGhosts(ink: ink) }
             }
         }
-        .padding(RhymeAITokens.Spacing.lg)
+        .padding(RhymeAITokens.Rhythm.standard)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, fallbackOpacity: 0.06)
         .accessibilityHidden(true)
     }
@@ -179,7 +179,7 @@ struct SuggestionPlaceholderCardView: View {
                     let progress = reduceMotion
                         ? SuggestionInkLineMotion.stillProgress
                         : SuggestionInkLineMotion.lineProgress(elapsed: context.date.timeIntervalSince(appeared))
-                    VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                    VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
                         scribble(widthShare: first, progress: progress.first, ink: ink)
                         scribble(widthShare: first * SuggestionInkLineMotion.secondLineShare, progress: progress.second, ink: ink)
                     }
@@ -237,7 +237,7 @@ struct SuggestionPlaceholderCardView: View {
 }
 
 #Preview {
-    VStack(spacing: RhymeAITokens.Spacing.xs) {
+    VStack(spacing: RhymeAITokens.Rhythm.standard) {
         SuggestionPlaceholderCardView(slot: 0)
         SuggestionPlaceholderCardView(slot: 1, showProsody: true)
         SuggestionPlaceholderCardView(slot: 2)
