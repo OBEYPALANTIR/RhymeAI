@@ -1,7 +1,10 @@
 package com.rhymeai.app.data.sync
 
 import com.rhymeai.app.data.recording.RecordingFiles
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.CommonStatusCodes
+import com.google.android.gms.common.api.Status
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
@@ -1775,6 +1778,22 @@ class BackupServiceTest {
             assertEquals(ProbeResult.Failed(result), service.probe(repository))
         }
         assertEquals(0, drive.calls)
+    }
+
+    @Test
+    fun aFailureWithoutAStatusIsUnavailableOnlyWhenPlayServicesIsMissing() {
+        val error = IllegalStateException("boom")
+        assertEquals(DriveAuthorization.Unavailable, driveAuthorizationFailure(error, ConnectionResult.SERVICE_MISSING))
+        for (availability in listOf(ConnectionResult.SUCCESS, ConnectionResult.SERVICE_DISABLED, ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED)) {
+            assertEquals(
+                DriveAuthorization.Failed("Google sign-in failed (IllegalStateException).", retryable = false),
+                driveAuthorizationFailure(error, availability)
+            )
+        }
+        assertEquals(
+            driveAuthorizationFailure(CommonStatusCodes.NETWORK_ERROR),
+            driveAuthorizationFailure(ApiException(Status(CommonStatusCodes.NETWORK_ERROR)), ConnectionResult.SERVICE_MISSING)
+        )
     }
 
     @Test
