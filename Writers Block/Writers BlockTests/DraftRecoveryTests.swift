@@ -214,7 +214,7 @@ struct DraftRecoveryTests {
         let copy = try Data(contentsOf: harness.recoveryURL)
 
         // The fallback library used when the real one cannot be opened.
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let fallback = try ModelContainer(for: schema, configurations: [
             ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         ])
@@ -607,7 +607,7 @@ private struct RecoveryHarness {
     }
 
     init() throws {
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("DraftRecoveryTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

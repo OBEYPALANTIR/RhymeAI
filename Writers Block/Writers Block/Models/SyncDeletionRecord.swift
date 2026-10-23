@@ -1,36 +1,74 @@
 import Foundation
 import SwiftData
 
+/// A song tombstone (`fileName` nil), or a recording tombstone by name from
+/// before recording ids. New recording tombstones are `SyncRecordingDeletion`
+/// rows: builds from before ids read every record here with a `fileName` as
+/// "delete the file with this name", so identity tombstones never go here.
 @Model
 final class SyncDeletionRecord {
     var projectId: String = ""
-    /// The deleted recording's id; nil for a song tombstone or one from before ids.
-    var recordingId: String?
     var fileName: String?
     var deletedAt: Int64 = 0
 
-    init(projectId: String, recordingId: String? = nil, fileName: String? = nil, deletedAt: Int64) {
+    init(projectId: String, fileName: String? = nil, deletedAt: Int64) {
+        self.projectId = projectId
+        self.fileName = fileName
+        self.deletedAt = deletedAt
+    }
+
+    var deletion: SyncDeletion {
+        SyncDeletion(projectId: projectId, fileName: fileName, deletedAt: deletedAt)
+    }
+}
+
+/// A recording tombstone by id. Its own record type, which builds from before
+/// ids never read, so they cannot take it for a deletion by file name.
+@Model
+final class SyncRecordingDeletion {
+    var projectId: String = ""
+    var recordingId: String = ""
+    var fileName: String = ""
+    var deletedAt: Int64 = 0
+
+    init(projectId: String, recordingId: String, fileName: String, deletedAt: Int64) {
         self.projectId = projectId
         self.recordingId = recordingId
         self.fileName = fileName
         self.deletedAt = deletedAt
     }
 
-    convenience init(deletion: SyncDeletion) {
-        self.init(
-            projectId: deletion.projectId,
-            recordingId: deletion.recordingId,
-            fileName: deletion.fileName,
-            deletedAt: deletion.deletedAt
-        )
+    var deletion: SyncDeletion {
+        SyncDeletion(projectId: projectId, recordingId: recordingId, fileName: fileName, deletedAt: deletedAt)
+    }
+}
+
+/// Every tombstone this device knows, in either record type.
+enum DeletionStore {
+    /// All tombstones; a read that fails throws, so nothing acts without them (A33).
+    static func all(in context: ModelContext) throws -> [SyncDeletion] {
+        try context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.deletion)
+            + context.fetch(FetchDescriptor<SyncRecordingDeletion>()).map(\.deletion)
     }
 
-    var deletion: SyncDeletion {
-        SyncDeletion(
-            projectId: projectId,
-            recordingId: recordingId,
-            fileName: fileName,
-            deletedAt: deletedAt
-        )
+    /// Stores a tombstone, keeping the newest time per identity.
+    static func upsert(_ deletion: SyncDeletion, in context: ModelContext) throws {
+        try deletion.validate()
+        if let recordingId = deletion.recordingId {
+            let records = try context.fetch(FetchDescriptor<SyncRecordingDeletion>())
+            if let existing = records.first(where: { $0.deletion.identity == deletion.identity }) {
+                existing.deletedAt = max(existing.deletedAt, deletion.deletedAt)
+            } else {
+                context.insert(SyncRecordingDeletion(projectId: deletion.projectId, recordingId: recordingId,
+                                                     fileName: deletion.fileName ?? "", deletedAt: deletion.deletedAt))
+            }
+        } else {
+            let records = try context.fetch(FetchDescriptor<SyncDeletionRecord>())
+            if let existing = records.first(where: { $0.deletion.identity == deletion.identity }) {
+                existing.deletedAt = max(existing.deletedAt, deletion.deletedAt)
+            } else {
+                context.insert(SyncDeletionRecord(projectId: deletion.projectId, fileName: deletion.fileName, deletedAt: deletion.deletedAt))
+            }
+        }
     }
 }

@@ -45,7 +45,7 @@ struct EditorUndoRedoTests {
     @Test
     func loadingAnotherProjectClearsHistory() throws {
         // Given
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let viewModel = EditorViewModel()

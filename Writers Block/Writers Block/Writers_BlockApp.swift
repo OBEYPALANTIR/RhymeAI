@@ -176,7 +176,7 @@ struct Writers_BlockApp: App {
             }
             // iCloud delivered changes: new or removed recordings get their files.
             .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
-                viewModel.reconcileRecordings()
+                Task { await viewModel.reconcileRecordings() }
             }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
@@ -222,6 +222,7 @@ struct Writers_BlockApp: App {
             SongProject.self,
             TrashedSongProject.self,
             SyncDeletionRecord.self,
+            SyncRecordingDeletion.self,
             Recording.self,
         ])
         let logger = Logger(subsystem: "ShaydeTree.Writers-Block", category: "storage")
