@@ -194,6 +194,29 @@ below is the contract it must meet, not verified behaviour.
   recordings Drive lists that this device does not hold, live or in Trash, are
   counted once each, a Trash-held one Drive lists without its intact raw object
   counts as unpreserved, and tombstoned ones are deletions, not skips.
+- Stable precedence (A32): every entry's precedence time is fixed when merge
+  inputs are gathered (an entry without `uploadedAt` keeps its file time, or 0)
+  and never changes afterwards; a backup write no longer stamps a missing time.
+- Readable tombstones first (A33): no adoption, reconciliation or quarantine
+  mutation happens unless the sync deletions can be read (they are the quarantine
+  intent); Delete Forever, expiry and moves fail with nothing changed otherwise.
+- Local folders (Android, under the app's files directory): `voice-memos/`
+  (live), `voice-memos-trash/` (`<deletedAt>__<name>`), `voice-memos-staging/`
+  (takes being recorded or waiting), `voice-memos-quarantine/` (duplicates and
+  deleted recordings, `<movedAt>__<name>`, never deleted), `voice-memos-parking/`
+  (one recording at a time while A30 names swap, `<id>.<ext>`; back to its name, or
+  a free variant, at the next launch if interrupted). iOS uses its own
+  "recording-parking" and quarantine folders for the same purposes.
+- Take marker (Android): `<take>.take` beside the staging file, UTF-8 text with
+  three lines: the recording id (lowercase UUID), the state (`recording`,
+  `finished` or `failed`) and the finish time in epoch milliseconds (0 until
+  finished). It is written once before recording starts and rewritten when the
+  recorder stops.
+- Take copy (Android): "The recording didn't finish, so it wasn't saved. Try
+  recording again." (failed stop); "Couldn't save the recording. Free up storage,
+  then tap Retry." (save failed, with Retry); in the recordings sheet "N
+  recording(s) waiting to be saved" and "N recording(s) could not be saved" with
+  Retry.
 - Name collisions (A30): when two recordings of one song claim one file name,
   the one with the earlier `uploadedAt` (then the smaller id) keeps it and each
   other takes the first free "<stem> 2<ext>", "<stem> 3<ext>" in that same order
