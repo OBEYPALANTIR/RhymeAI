@@ -272,6 +272,12 @@ class VoiceMemoService(private val context: Context) {
 
     /** Runs inside a start, holding the recorder lock (tests only; null in the app). */
     @Volatile internal var duringStartForTest: (() -> Unit)? = null
+    /** Runs when a cancel is called, before it takes the recorder lock (tests only). */
+    @Volatile internal var cancelCalledForTest: (() -> Unit)? = null
+    /** Runs inside a cancel, holding the recorder lock (tests only). */
+    @Volatile internal var insideCancelForTest: (() -> Unit)? = null
+    /** Runs inside a waiting take's inspection, holding the recording lock (tests only). */
+    @Volatile internal var duringInspectionForTest: (() -> Unit)? = null
 
     /**
      * Stop an in-progress recording and return the saved [VoiceMemo], or null if
@@ -407,6 +413,7 @@ class VoiceMemoService(private val context: Context) {
     }
 
     private fun prepareTake(listed: WaitingTake, id: String): WaitingTake {
+        duringInspectionForTest?.invoke()
         val file = currentTakeFile(listed.file, id)
         return if (listed.finished) WaitingTake(file, listed.projectId, id, listed.recordedAt, finished = true) else when (inspectFinalized(file)) {
             Inspection.FINALIZED -> {
@@ -610,7 +617,13 @@ class VoiceMemoService(private val context: Context) {
     /**
      * Cancel a recording in progress. The partially written file is deleted.
      */
-    fun cancelRecording(): Unit = synchronized(recorderLock) {
+    fun cancelRecording() {
+        cancelCalledForTest?.invoke()
+        synchronized(recorderLock) { cancelLocked() }
+    }
+
+    private fun cancelLocked() {
+        insideCancelForTest?.invoke()
         if (!isRecording) return
 
         tickJob?.cancel()
@@ -955,7 +968,7 @@ class VoiceMemoService(private val context: Context) {
                 if (id != null) {
                     // By id: a record that is gone (quarantined) or that a tombstone removes.
                     val record = records.firstOrNull { it.id == id }
-                    record == null || com.rhymeai.app.data.sync.SyncMerger.Tombstones(deletions).removes(record.toEntry())
+                    record == null || com.rhymeai.app.data.sync.SyncMerger.Tombstones(deletions).let { it.removes(record.toEntry()) || it.suspends(record.toEntry()) }
                 } else {
                     RecordingTransitions.relativePath(context.filesDir, playing) in RecordingTransitions.deletedPaths(records, deletions)
                 }

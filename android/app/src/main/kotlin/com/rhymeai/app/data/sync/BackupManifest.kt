@@ -88,7 +88,7 @@ object BackupManifest {
                         put("projectId", deletion.projectId)
                         put("fileName", deletion.fileName?.let(::JsonPrimitive) ?: JsonNull)
                         deletion.recordingId?.let { put("recordingId", it) }
-                        put("deletedAt", deletion.deletedAt)
+                        if (deletion.timeKnown) put("deletedAt", deletion.deletedAt)
                     }
                 }
             }
@@ -151,7 +151,7 @@ object BackupManifest {
                         fileName = if (fileName is JsonNull) null else fileName.jsonPrimitive.also {
                             require(it.isString) { "Invalid fileName" }
                         }.content.takeUnless { it.isEmpty() && fields["recordingId"].let { r -> r != null && r !is JsonNull } },
-                        deletedAt = fields.long("deletedAt"),
+                        deletedAt = fields.timeOrUnknown("deletedAt"),
                         recordingId = fields["recordingId"]?.takeUnless { it is JsonNull }?.jsonPrimitive
                             ?.also { require(it.isString) { "Invalid recordingId" } }?.content
                     )
