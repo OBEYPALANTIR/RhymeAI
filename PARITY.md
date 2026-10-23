@@ -122,18 +122,25 @@ below is the contract it must meet, not verified behaviour.
   stamped once with its file time. Random ids are given only to new recordings
   and audio imports. Files sharing one pre-v4 identity (project, name and hash,
   such as a live copy and a Trash copy) are one recording with that one id on
-  every device (A26): the live copy keeps it (taking over the record, and its
-  time, from a Trash copy stamped earlier), the most recently trashed copy keeps
-  it when none is live, and the other copies move to `voice-memos-quarantine/`,
-  which is never listed, adopted, backed up or deleted. Adoption is all or
-  nothing: an unreadable file or folder fails it, and Delete Forever, Trash expiry,
-  Restore and Import that depend on it fail with nothing changed. A backup's only
+  every device (A26). Each snapshot chooses one canonical copy among all copies
+  present, recorded or new: a live copy, else the most recently trashed, then by
+  path, so the choice does not depend on arrival order; it moves the record (id
+  and time) to that copy, and the other copies move to `voice-memos-quarantine/`,
+  which is never listed, adopted, backed up or deleted. An adopted file's time is
+  the earliest file time among its copies (origin `adopted`); a recorded,
+  restored or imported recording keeps its stored time. Adoption is all or
+  nothing: folders are listed and every entry's attributes read with calls that
+  throw, so an unreadable file, an unlistable folder or a folder whose entries
+  cannot be examined fails it, and Delete Forever, Trash expiry, Restore and
+  Import that depend on it fail with nothing changed. A backup's only
   local writes are that stamping (with its quarantine moves) and finishing or
   undoing an interrupted move (reconciliation); it never touches restore staging.
   File times are otherwise never used as precedence.
 - Local visibility (A28): after Restore or Import commits, a recording whose
-  winning tombstone is now known here moves to quarantine and loses its record,
-  so the recordings list and playback no longer show it.
+  winning tombstone is now known here moves to quarantine and loses its record.
+  The committed tombstones are the durable intent: if the move is interrupted or
+  fails, it is retried at the next launch, Restore or Import, and until then the
+  recordings and Trash lists hide every recording a known tombstone removes.
 - Name-only tombstones (pre-v4): migration turns each into an id tombstone for
   the older recording it names and drops it. One that names no older entry
   removes only a recording whose id is the pre-v4 id of that name and the
@@ -146,12 +153,17 @@ below is the contract it must meet, not verified behaviour.
   finishes it (`MediaRecorder.stop()` succeeds). A take whose stop fails is left
   unpublished and the user is told it was not saved. Snapshots never read
   staging, so a backup during recording never sees the take.
-- Waiting takes (A27): a finished take gets a `.waiting` marker (id and time)
-  beside it in staging before it is saved. If saving fails, the take stays there,
-  survives process death and later recordings, and the song's recordings sheet
-  shows "1 recording waiting to be saved" with Retry. Retry finishes any
-  interrupted save first and counts a take whose id is already published as
-  saved.
+- Waiting takes (A27): before recording starts, a `.take` marker with the take's
+  id is written beside its staging file (if that fails, recording does not
+  start); the finish (state and time) is recorded in it when the recorder stops.
+  A take whose save fails stays in staging, survives process death and later
+  recordings, and the song's recordings sheet shows "1 recording waiting to be
+  saved" with Retry. A take whose finish could not be recorded shows as "1
+  recording could not be saved"; Retry saves it only if the recorder finalized
+  the file (a playable audio track, which an unfinished MPEG-4 take lacks) and
+  otherwise marks it failed and never offers it again. A failed stop is recorded
+  as failed. Retry finishes any interrupted save first and counts a take whose
+  id is already published as saved.
 - Metadata before publication (A24): restore, import, rename, move to Trash and
   restore from Trash write the record's intent (id, name, time, hash, size, new
   and old location) before the file moves, under one lock that snapshots also
@@ -161,9 +173,13 @@ below is the contract it must meet, not verified behaviour.
   Collision variants (`take 2.m4a`) are shortened to stay within the 240-byte
   name limit, an empty stem (`.m4a`) gets "Recording 2.m4a", and the final name
   is validated before the intent is written.
-- Oversized recordings (A29): a recording too large for this device to move
-  counts as backed up only when its raw Drive object is present with matching
-  `sha256` and `bytes`; otherwise it is reported in the skipped count.
+- Oversized recordings (A29): this device never lists a recording too large for
+  it to move unless Drive's manifest already lists it, and then it only keeps
+  that existing entry. Keeping an entry is not verifying it: the recording counts
+  as backed up only when its raw Drive object is present with matching `sha256`
+  and `bytes`; otherwise it is reported in the skipped count. Oversized
+  recordings Drive lists that this device does not hold, live or in Trash, are
+  counted once each; tombstoned ones are deletions, not skips.
 - Merge rules: per project id the newest `updatedAt` wins; per recording id
   Drive's entry wins; per tombstone identity the newest `deletedAt` wins.
   Tombstones apply by timestamp: a song tombstone removes the song only when
