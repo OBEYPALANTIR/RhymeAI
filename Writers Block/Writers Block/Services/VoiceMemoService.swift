@@ -122,6 +122,12 @@ final class VoiceMemoService {
     /// Answers whether a recording may be played: one a winning deletion covers
     /// may not (A28). Set by the view model.
     @ObservationIgnored var playbackAllowed: ((URL) -> Bool)?
+    /// The recording id that owns a file, if a row does; playback is tracked by it,
+    /// so a recording removed while it plays (or before its player starts) stops.
+    @ObservationIgnored var playbackIdentity: ((URL) -> String?)?
+    @ObservationIgnored private var playingIdentity: String?
+    /// Set when the take folders could not be listed; the last known takes stay.
+    private(set) var pendingTakesUnreadable = false
 
     // MARK: - Private (not tracked by @Observable)
 
@@ -162,25 +168,36 @@ final class VoiceMemoService {
         let fm = FileManager.default
         let active = [audioRecorder?.url, finishing?.recorder.url].compactMap { $0?.deletingLastPathComponent().standardizedFileURL.path }
         var takes: [PendingTake] = []
-        for project in (try? fm.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? [] {
-            for folder in (try? fm.contentsOfDirectory(at: project, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
-            where !active.contains(folder.standardizedFileURL.path) {
-                let contents = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
-                let audio = contents.first { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
-                let names = Set(contents.map(\.lastPathComponent))
-                let state: PendingTake.State
-                if names.contains(RecordingFiles.failedTakeMarker) || (try? SyncIdentity.validateRecordingId(folder.lastPathComponent)) == nil {
-                    state = .failed
-                } else if names.contains(RecordingFiles.finishedTakeMarker) {
-                    state = RecordingFiles.readFinishedMarker(in: folder).map(PendingTake.State.finished) ?? .unreadableMarker
-                } else if audio != nil {
-                    state = .unconfirmed
-                } else {
-                    continue
+        do {
+            // Only a staging root the file system confirms missing means no takes;
+            // a listing that fails keeps the last known takes (finding 8).
+            if try RecordingFiles.exists(stagingRoot) {
+                for project in try fm.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
+                    for folder in try fm.contentsOfDirectory(at: project, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+                    where !active.contains(folder.standardizedFileURL.path) {
+                        let contents = try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+                        let audio = contents.first { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
+                        let names = Set(contents.map(\.lastPathComponent))
+                        let state: PendingTake.State
+                        if names.contains(RecordingFiles.failedTakeMarker) || (try? SyncIdentity.validateRecordingId(folder.lastPathComponent)) == nil {
+                            state = .failed
+                        } else if names.contains(RecordingFiles.finishedTakeMarker) {
+                            state = RecordingFiles.readFinishedMarker(in: folder).map(PendingTake.State.finished) ?? .unreadableMarker
+                        } else if audio != nil {
+                            state = .unconfirmed
+                        } else {
+                            continue
+                        }
+                        takes.append(PendingTake(id: folder.lastPathComponent, projectId: project.lastPathComponent, folder: folder, audio: audio, state: state))
+                    }
                 }
-                takes.append(PendingTake(id: folder.lastPathComponent, projectId: project.lastPathComponent, folder: folder, audio: audio, state: state))
             }
+        } catch {
+            pendingTakesUnreadable = true
+            lastError = "Recordings waiting to be saved could not be read. They are kept on this device; tap Retry to try again."
+            return
         }
+        pendingTakesUnreadable = false
         takes.sort { $0.id < $1.id }
         pendingTakes = takes.filter { $0.state != .failed }
         failedTakes = takes.filter { $0.state == .failed }
@@ -535,6 +552,7 @@ final class VoiceMemoService {
         if isRecording || recordingActivationRevision != nil { stopRecording() }
         stopPlayback()
         pendingPlayURL = url
+        playingIdentity = playbackIdentity?(url)
         let playbackRevision = audioIntentRevision
         sessionTransitions.activatePlayback { [weak self] result in
             Task { @MainActor [weak self] in
@@ -554,6 +572,12 @@ final class VoiceMemoService {
             return
         }
         pendingPlayURL = nil
+        // Checked again as the player starts: removed meanwhile, it does not play.
+        guard playbackAllowed?(url) ?? true, playbackIdentity?(url) == playingIdentity else {
+            playingIdentity = nil
+            sessionTransitions.deactivate()
+            return
+        }
 
         guard let player = try? AVAudioPlayer(contentsOf: url) else {
             sessionTransitions.deactivate()
@@ -575,6 +599,7 @@ final class VoiceMemoService {
 
     func stopPlayback() {
         audioIntentRevision &+= 1
+        playingIdentity = nil
         let hadPlayback = audioPlayer != nil || pendingPlayURL != nil
         audioPlayer?.stop()
         audioPlayer = nil
@@ -719,7 +744,10 @@ final class VoiceMemoService {
     /// recording that may no longer be played stops (A28).
     func recordingsChanged() {
         publishedRevision &+= 1
-        if let playing = activePlayURL ?? pendingPlayURL, playbackAllowed?(playing) == false { stopPlayback() }
+        if let playing = activePlayURL ?? pendingPlayURL,
+           playbackAllowed?(playing) == false || playbackIdentity?(playing) != playingIdentity {
+            stopPlayback()
+        }
     }
 
     // MARK: - Callbacks from delegate forwarder

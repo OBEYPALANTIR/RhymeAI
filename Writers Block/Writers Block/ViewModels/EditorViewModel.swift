@@ -25,7 +25,7 @@ protocol CloudBackupServicing: AnyObject {
     func migrateLegacyBackup(passphrase: String, modelContext: ModelContext) async throws
     func remoteBackupSummary() async throws -> RemoteBackupSummary?
     func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data)
-    func importArchive(_ data: Data, modelContext: ModelContext) throws
+    func importArchive(_ data: Data, modelContext: ModelContext) async throws
 }
 
 extension CloudBackupServicing {
@@ -41,7 +41,7 @@ extension CloudBackupServicing {
     func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data) {
         throw BackupError.notConfigured
     }
-    func importArchive(_ data: Data, modelContext: ModelContext) throws {}
+    func importArchive(_ data: Data, modelContext: ModelContext) async throws {}
 }
 
 /// Google Drive backup as Settings shows it; the same cases on Android.
@@ -416,6 +416,11 @@ final class EditorViewModel: ObservableObject {
     @Published var firstRunRestoreOffer: FirstRunRestoreOffer?
     /// Recordings over 16 MiB that stay on this device (not in iCloud or Drive).
     @Published private(set) var oversizedRecordingCount = 0
+    /// True while the recordings could not be checked: recording lists show
+    /// nothing and nothing plays until a check succeeds (A33).
+    @Published private(set) var recordingListsSuspended = false
+    /// The launch check of the recordings, awaited by tests.
+    private(set) var recordingsLaunchTask: Task<Void, Never>?
     private let recordingLibrary: RecordingLibrary?
     private var automaticBackupTask: Task<Void, Never>?
     private var automaticBackupFailures = 0
@@ -453,10 +458,18 @@ final class EditorViewModel: ObservableObject {
             modelContainer = modelContext?.container
             // Recordings are recovered and adopted first; deletions and expiry wait
             // for that to succeed, so none of them meets a recording without its row.
-            if reconcileRecordings() {
+            if recordingLibrary == nil || modelContext == nil {
                 applyPersistedDeletions()
                 purgeExpiredTrashedProjects()
-                Task { await voiceMemoService.retryPendingTakes() }
+            } else {
+                // The recordings are checked off the main actor first; deletions and
+                // expiry wait for that to succeed (A33).
+                recordingsLaunchTask = Task { [weak self] in
+                    guard let self, await self.reconcileRecordings() else { return }
+                    self.applyPersistedDeletions()
+                    self.purgeExpiredTrashedProjects()
+                    await self.voiceMemoService.retryPendingTakes()
+                }
             }
             recoverInterruptedDraftIfNeeded()
             seedTrashProjectForUITestsIfNeeded()
@@ -697,11 +710,12 @@ final class EditorViewModel: ObservableObject {
             saveStatus = .failed
         }
         voiceMemoService.onFilesChanged = { [weak self] in
-            self?.reconcileRecordings()
+            Task { [weak self] in await self?.reconcileRecordings() }
             self?.scheduleAutomaticBackup()
         }
         voiceMemoService.publisher = recordingLibrary
         voiceMemoService.playbackAllowed = { [weak self] url in self?.isPlayableRecording(url) ?? true }
+        voiceMemoService.playbackIdentity = { [weak self] url in self?.recordingIdentity(url) }
         refreshCloudBackupState()
     }
 
@@ -1554,8 +1568,8 @@ final class EditorViewModel: ObservableObject {
     @discardableResult
     func permanentlyDeleteTrashedProject(_ trashedProject: TrashedSongProject) -> Bool {
         guard let context = modelContext else { return false }
-        // Its recordings are recovered and adopted first, so each one gets its tombstone.
-        guard reconcileRecordings() else { return false }
+        // Its recordings must have been recovered and adopted, so each one gets its tombstone.
+        guard recordingsChecked() else { return false }
         let projectId = trashedProject.id
         do {
             let deletedAt = Date()
@@ -1581,7 +1595,7 @@ final class EditorViewModel: ObservableObject {
     func purgeExpiredTrashedProjects() {
         guard let context = modelContext else { return }
         // Expiry deletes recordings: only once they are recovered and adopted.
-        guard reconcileRecordings() else { return }
+        guard recordingsChecked() else { return }
         let now = Date()
         let expiredMemos = RecordingFiles.trashedMemos().filter { $0.deleteAfter <= now }
         let descriptor = FetchDescriptor<TrashedSongProject>(
@@ -1617,7 +1631,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
-        guard let context = modelContext, reconcileRecordings() else { return false }
+        guard let context = modelContext, recordingsChecked() else { return false }
         do {
             try tombstoneTrashedMemo(trashed, deletedAt: Date(), in: context)
             try saveModelContext(context)
@@ -1664,7 +1678,7 @@ final class EditorViewModel: ObservableObject {
             }
             // Their audio leaves the memo folders and the Trash for quarantine (A28).
             if let library = recordingLibrary {
-                try library.saveQuarantining(removedFiles, in: context) { try saveModelContext(context) }
+                try library.saveRecordingMoves(quarantine: removedFiles, in: context) { try saveModelContext(context) }
             } else {
                 try saveModelContext(context)
             }
@@ -1672,7 +1686,7 @@ final class EditorViewModel: ObservableObject {
                 do { try companionStore.remove(projectId) } catch { companionError = "Could not remove this song’s local notebook." }
             }
             // Individual recording tombstones are applied by the library from stored times.
-            reconcileRecordings()
+            Task { [weak self] in await self?.reconcileRecordings() }
         } catch {
             context.rollback()
             errorMessage = "Couldn't finish applying permanent deletions. Writers Block will retry."
@@ -2158,18 +2172,42 @@ final class EditorViewModel: ObservableObject {
     /// Retry for takes waiting to be saved: the library is brought up to date
     /// first, so a take published before an interruption counts as saved.
     func retryPendingRecordings() {
-        guard reconcileRecordings() else { return }
-        Task { await voiceMemoService.retryPendingTakes() }
+        Task { [weak self] in
+            guard let self, await self.reconcileRecordings() else { return }
+            await self.voiceMemoService.retryPendingTakes()
+        }
     }
 
-    /// A recording a winning deletion covers is not played (A28): one waiting for
-    /// quarantine, or one whose row a stored deletion covers by time.
+    /// The last check of the recordings succeeded and the tombstones read now:
+    /// required before a deletion or expiry changes recordings (A33).
+    func recordingsChecked() -> Bool {
+        guard let recordingLibrary, let modelContext else { return true }
+        guard recordingLibrary.lastRunSucceeded, (try? DeletionStore.all(in: modelContext)) != nil else {
+            errorMessage = "Your recordings are being checked, so nothing was deleted. Try again in a moment."
+            return false
+        }
+        return true
+    }
+
+    /// The recording that owns a file, by its row; nil for a file no row holds.
+    func recordingIdentity(_ url: URL) -> String? {
+        guard let recordingLibrary, let modelContext,
+              let rows = try? modelContext.fetch(FetchDescriptor<Recording>()) else { return nil }
+        let path = RecordingFiles.canonicalPath(url)
+        return rows.first { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }?.id
+    }
+
+    /// A recording a winning deletion covers is not played (A28): nothing plays
+    /// while the recordings cannot be checked, nor a file that is gone or waiting
+    /// for quarantine, nor one whose row a stored deletion covers by time.
     func isPlayableRecording(_ url: URL) -> Bool {
         guard let recordingLibrary, let modelContext else { return true }
+        guard !recordingListsSuspended else { return false }
         let path = RecordingFiles.canonicalPath(url)
-        guard let hidden = RecordingFiles.pendingQuarantine(for: recordingLibrary.memosRoot), !hidden.contains(path) else { return false }
+        guard let hidden = RecordingFiles.pendingQuarantine(for: recordingLibrary.memosRoot), !hidden.contains(path),
+              (try? RecordingFiles.exists(url)) == true else { return false }
         guard let rows = try? modelContext.fetch(FetchDescriptor<Recording>()),
-              let deletions = try? modelContext.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.deletion) else { return false }
+              let deletions = try? DeletionStore.all(in: modelContext) else { return false }
         guard let row = rows.first(where: { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }) else { return true }
         return !deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime) }
     }
@@ -2179,17 +2217,21 @@ final class EditorViewModel: ObservableObject {
     /// A failed scan changes nothing and is retried on the next trigger.
     /// False when the recordings could not be brought in step; the reason is shown.
     @discardableResult
-    func reconcileRecordings() -> Bool {
+    func reconcileRecordings() async -> Bool {
         guard let recordingLibrary, let modelContext else { return true }
         recordingLibrary.context = modelContext
         do {
-            try recordingLibrary.reconcile(context: modelContext)
+            try await recordingLibrary.reconcile(context: modelContext)
             oversizedRecordingCount = recordingLibrary.oversizedCount
+            recordingListsSuspended = false
             voiceMemoService.recordingsChanged()
             return true
         } catch {
             let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             errorMessage = "Couldn't bring your recordings up to date: \(reason)"
+            // Lists and playback follow the failure too (A33).
+            recordingListsSuspended = true
+            voiceMemoService.recordingsChanged()
             return false
         }
     }
@@ -2338,7 +2380,7 @@ final class EditorViewModel: ObservableObject {
             success: "Import complete. Songs from the file were merged into your library.",
             separateDraft: "Import complete. Your open edits were saved as a separate local draft."
         ) { service, context in
-            try service.importArchive(data, modelContext: context)
+            try await service.importArchive(data, modelContext: context)
         }
         // Imported recordings are files, which no library save announces.
         voiceMemoService.recordingsChanged()
