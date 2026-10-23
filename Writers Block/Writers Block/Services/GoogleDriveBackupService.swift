@@ -851,8 +851,8 @@ final class BackupService {
             remoteRecordings: remoteRecordings, enteredPassphrase: enteredPassphrase
         )
         // Backup reads the library as it is; restore first brings it up to date.
-        if restore { try library.reconcile(context: modelContext) }
-        report.oversizedRecordings = try unpreservedOversizedCount(remote: remoteRecordings)
+        if restore { try await library.reconcile(context: modelContext) }
+        report.oversizedRecordings = try await unpreservedOversizedCount(remote: remoteRecordings)
 
         // Every remote-side input seen in this run, unresolved, in the order seen:
         // each candidate gathers them all with the current local snapshot and
@@ -945,7 +945,7 @@ final class BackupService {
             let applied = try apply(inputs: inputs, to: modelContext)
             (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(try applied.recordings.filter(listable), remote: remoteRecordings, modelContext: modelContext, accessToken: accessToken)
             report.damagedRecordings = damagedOnDrive
-            try library.reconcile(context: modelContext)
+            try await library.reconcile(context: modelContext)
         }
 
         if let legacy {
@@ -1111,11 +1111,19 @@ final class BackupService {
     /// Recordings over the cap that Drive does not hold: an oversized file counts
     /// as backed up only when a raw Drive object has its SHA-256 and size (A29).
     /// Live and Trash files are inventoried now, on every run.
-    private func unpreservedOversizedCount(remote: RemoteFiles) throws -> Int {
-        try library.oversizedInventory().filter { file in
-            guard let size = try? RecordingFiles.facts(file).size, let digest = try? RecordingFiles.sha256(of: file) else { return true }
-            return !remote.values.contains { $0.appProperties?["sha256"] == digest && $0.appProperties?["bytes"] == String(size) }
-        }.count
+    private func unpreservedOversizedCount(remote: RemoteFiles) async throws -> Int {
+        let files = try await library.oversizedInventory()
+        let held = Set(remote.values.compactMap { file -> String? in
+            guard let sha = file.appProperties?["sha256"], let bytes = file.appProperties?["bytes"] else { return nil }
+            return "\(sha)/\(bytes)"
+        })
+        // Hashed off the main actor.
+        return await Task.detached(priority: .utility) {
+            files.filter { file in
+                guard let size = try? RecordingFiles.facts(file).size, let digest = try? RecordingFiles.sha256(of: file) else { return true }
+                return !held.contains("\(digest)/\(size)")
+            }.count
+        }.value
     }
 
     /// Every recording file in appDataFolder, v4 and legacy, by name.
@@ -1228,7 +1236,7 @@ final class BackupService {
 
     /// Merges an exported zip, or a bare v4 `manifest.json`, into the library.
     /// Recordings in the zip that are missing here are added; nothing local is replaced.
-    func importArchive(_ data: Data, modelContext: ModelContext) throws {
+    func importArchive(_ data: Data, modelContext: ModelContext) async throws {
         var report = BackupReport()
         RecordingFiles.clearStaging(for: memosRoot)
         var files: [String: Data] = [:]
@@ -1255,7 +1263,7 @@ final class BackupService {
         } catch {
             throw BackupError.damagedManifest
         }
-        try library.reconcile(context: modelContext)
+        try await library.reconcile(context: modelContext)
         report.oversizedRecordings = library.oversizedCount
         let merged = try apply(inputs: [imported], to: modelContext)
         // Decided by id: a recording this device lacks is added under a free name,
@@ -1270,7 +1278,7 @@ final class BackupService {
             }
             try library.commitRestored(audio, entry: entry, origin: .imported, context: modelContext)
         }
-        try library.reconcile(context: modelContext)
+        try await library.reconcile(context: modelContext)
         lastReport = report
     }
 
@@ -1301,8 +1309,7 @@ final class BackupService {
     private func makeSnapshot(modelContext: ModelContext) throws -> SyncBlob {
         let projects = try modelContext.fetch(FetchDescriptor<SongProject>())
         let trashed = try modelContext.fetch(FetchDescriptor<TrashedSongProject>())
-        let deletionRecords = try modelContext.fetch(FetchDescriptor<SyncDeletionRecord>())
-        let deletions = try SyncMerger.mergeDeletions(deletionRecords.map(\.deletion))
+        let deletions = try SyncMerger.mergeDeletions(DeletionStore.all(in: modelContext))
         let projectIds = Set(projects.map(\.id) + trashed.map(\.id))
         // Recordings in the recordings Trash stay on this device.
         let recordings = try modelContext.fetch(FetchDescriptor<Recording>())
@@ -1321,9 +1328,36 @@ final class BackupService {
     /// The current local state gathered with the run's unresolved inputs and resolved
     /// once (A18): the same rule every candidate uses. A rename that conflicts
     /// across devices takes the name from the device holding the bytes.
+    private static let firstSeenKey = "backup-first-seen-times"
+
+    /// A32: an entry without a precedence time (zero or missing) gets the time this
+    /// device first saw it, kept here and written to the manifest, never changed.
+    private func fixingPrecedence(_ blob: SyncBlob) -> SyncBlob {
+        var seen = (defaults.dictionary(forKey: Self.firstSeenKey) as? [String: NSNumber])?.mapValues(\.int64Value) ?? [:]
+        let now = Date().epochMilliseconds
+        func time(_ key: String) -> Date {
+            if seen[key] == nil { seen[key] = now }
+            return Date(millisecondsSince1970: seen[key]!)
+        }
+        var fixed = blob
+        fixed.recordings = blob.recordings.map { entry in
+            var entry = entry
+            if entry.uploadedAt.epochMilliseconds <= 0 { entry.uploadedAt = time("recording:\(entry.id)") }
+            return entry
+        }
+        fixed.projects = blob.projects.map { project in
+            var project = project
+            if project.updatedAt.epochMilliseconds <= 0 { project.updatedAt = time("project:\(project.id)") }
+            return project
+        }
+        defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey)
+        return fixed
+    }
+
     private func resolve(_ inputs: [SyncBlob], with modelContext: ModelContext) throws -> SyncBlob {
-        let snapshot = try makeSnapshot(modelContext: modelContext)
-        var gathered = try SyncMerger.gather([snapshot] + inputs)
+        // Precedence times are fixed before anything is compared (A32).
+        let snapshot = fixingPrecedence(try makeSnapshot(modelContext: modelContext))
+        var gathered = try SyncMerger.gather([snapshot] + inputs.map(fixingPrecedence))
         let held = Dictionary(snapshot.recordings.map { ($0.id, $0) }) { first, _ in first }
         gathered.recordings = gathered.recordings.map { entry in
             guard let local = held[entry.id], local.sha256 == entry.sha256 else { return entry }
@@ -1340,20 +1374,13 @@ final class BackupService {
         try blob.validate()
         let activeById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, $0) })
         let trashById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map { ($0.id, $0) })
-        let existingDeletionRecords = try modelContext.fetch(FetchDescriptor<SyncDeletionRecord>())
         let mergedActiveIds = Set(blob.projects.map(\.id))
         let mergedTrashIds = Set(blob.trashed.map(\.id))
         // A kept tombstone of a song edited after it does not remove the song.
         let deletedProjectIds = Set(blob.deletions.filter { $0.fileName == nil }.map(\.projectId))
             .subtracting(mergedActiveIds).subtracting(mergedTrashIds)
 
-        for deletion in blob.deletions {
-            if let existing = existingDeletionRecords.first(where: { $0.deletion.identity == deletion.identity }) {
-                existing.deletedAt = max(existing.deletedAt, deletion.deletedAt)
-            } else {
-                modelContext.insert(SyncDeletionRecord(deletion: deletion))
-            }
-        }
+        for deletion in blob.deletions { try DeletionStore.upsert(deletion, in: modelContext) }
         // Recordings of removed songs get their own tombstones; recordings an incoming
         // tombstone covers lose their rows; both in this save, files after it.
         var removedFiles: [URL] = []
@@ -1419,7 +1446,7 @@ final class BackupService {
         }
         // Deleted recordings leave the memo folders and the Trash for quarantine,
         // recorded before this save and finished after it (A28).
-        try library.saveQuarantining(removedFiles, in: modelContext) { try modelContext.save() }
+        try library.saveRecordingMoves(quarantine: removedFiles, in: modelContext) { try modelContext.save() }
         return blob
     }
 
