@@ -129,6 +129,18 @@ struct SyncManifestV4Tests {
         #expect(try !activeWins(song(50, repaired: false), zeroEdit))
     }
 
+    @Test func aTombstoneIsComparedWithTheTrashDeletionTimeOnly() async throws {
+        // Deleted for real at 100 s; edit time missing, repaired to 300 s; tombstone at 200 s.
+        let trash = SyncTrashedSongProject(id: "t", title: "T", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 300),
+                                           deletedAt: Date(timeIntervalSince1970: 100), deleteAfter: Date(timeIntervalSince1970: 100).addingTimeInterval(trashRetentionInterval),
+                                           precedenceRepaired: true)
+        let tombstone = SyncDeletion(projectId: "t", deletedAt: 200_000)
+        for (local, remote) in [(SyncBlob(trashed: [trash]), SyncBlob(deletions: [tombstone])), (SyncBlob(deletions: [tombstone]), SyncBlob(trashed: [trash]))] {
+            let merged = try SyncMerger.merge(local: local, remote: remote)
+            #expect(merged.trashed.isEmpty && merged.deletions == [tombstone])
+        }
+    }
+
     @Test func aTrashEntryCarriesItsTwoRepairFlagsUnderTheirOwnKeys() async throws {
         let at = Date(timeIntervalSince1970: 100)
         let trash = SyncTrashedSongProject(id: "t", title: "T", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 50), deletedAt: at,
@@ -956,6 +968,71 @@ struct RecordingLibraryTests {
         try audio.write(to: leftover)
         #expect(try store.library.commitRestored(audio, entry: entry, origin: .restored, context: context))
         #expect(try Data(contentsOf: store.root.appendingPathComponent("song/\(id).m4a")) == audio)
+    }
+
+    @Test func aPendingRenameSurvivesTheCollapseOfDuplicateRows() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let id = uuid()
+        context.insert(Recording(id: id, projectId: "song", displayName: "a.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10)))
+        let renamed = Recording(id: id, projectId: "song", displayName: "z.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10))
+        renamed.displayNameChanged = true
+        context.insert(renamed)
+        try context.save()
+        try await store.library.reconcile(context: context)
+        let rows = try context.fetch(FetchDescriptor<Recording>())
+        #expect(rows.count == 1 && rows[0].displayName == "z.m4a" && rows[0].displayNameChanged)
+    }
+
+    @Test func aKilledMigrationOrQuarantineMoveIsFinishedFromItsRecord() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        // Migration: the row and its source were saved, then the app stopped before the rename.
+        let legacy = try write(Data([1]), "song", "take.m4a", root: store.root)
+        let id = derivedId("song", "take.m4a", Data([1]))
+        let row = Recording(id: id, projectId: "song", displayName: "take.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10))
+        row.pendingFrom = legacy.path
+        context.insert(row)
+        try context.save()
+        // Quarantine: recorded, then the app stopped before the move.
+        let covered = try write(Data([2]), "other", "\(uuid()).m4a", root: store.root)
+        var moves = try RecordingFiles.readPendingMoves(for: store.root)
+        moves.quarantine.append(.init(path: RecordingFiles.canonicalPath(covered), sha256: RecordingBackupManifest.sha256Hex(Data([2])), recordingId: "gone"))
+        try RecordingFiles.writePendingMoves(moves, for: store.root)
+
+        try await store.library.reconcile(context: context)
+
+        #expect(try Data(contentsOf: store.root.appendingPathComponent("song/\(id).m4a")) == Data([1]) && row.pendingFrom == nil)
+        #expect(!FileManager.default.fileExists(atPath: legacy.path) && !FileManager.default.fileExists(atPath: covered.path))
+        #expect(names(RecordingFiles.quarantineRoot(for: store.root).appendingPathComponent("other")) == ["gone.m4a"])
+        #expect(try RecordingFiles.readPendingMoves(for: store.root).quarantine.isEmpty)
+    }
+
+    @Test func movesNeverFollowALinkedDestinationFolder() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("outside-\(uuid())", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        // Quarantine: its song folder is a link.
+        let file = try write(Data([3]), "song", "\(uuid()).m4a", root: store.root)
+        let quarantine = RecordingFiles.quarantineRoot(for: store.root)
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: quarantine.appendingPathComponent("song"), withDestinationURL: outside)
+        #expect(throws: (any Error).self) { try RecordingFiles.quarantine(file, recordingId: "x", memosRoot: store.root, trashRoot: store.trash) }
+        // A recorded detach whose Trash song folder became a link.
+        let id = uuid()
+        let source = try write(Data([4]), "tune", "\(id).m4a", root: store.root)
+        try FileManager.default.createDirectory(at: store.trash, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: store.trash.appendingPathComponent("tune"), withDestinationURL: outside)
+        var moves = try RecordingFiles.readPendingMoves(for: store.root)
+        moves.detach.append(.init(recordingId: id, source: RecordingFiles.canonicalPath(source),
+                                  destination: store.trash.appendingPathComponent("tune/\(id).m4a").path,
+                                  sha256: RecordingBackupManifest.sha256Hex(Data([4])), displayName: "take.m4a", at: 10_000, detachedAt: 20_000))
+        try RecordingFiles.writePendingMoves(moves, for: store.root)
+        try? await store.library.reconcile(context: context)
+
+        #expect(names(outside).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: file.path) && FileManager.default.fileExists(atPath: source.path))
     }
 
     @Test func restoredAudioMustMatchItsDeclaredLength() async throws {
