@@ -477,6 +477,138 @@ class BackupServiceTest {
         assertTrue(filesDir.listFiles().orEmpty().none { it.name.startsWith(RecordingFileStore.RESTORE_STAGE_PREFIX) })
     }
 
+    /** Drive alone holds R (repaired time 300, its only raw copy) and S (real time 100); this device deleted both at 200. */
+    private suspend fun soleRawCopies(): Pair<Pair<RecordingManifestEntry, ByteArray>, Pair<RecordingManifestEntry, ByteArray>> {
+        repository.saveProjects(listOf(song("p")))
+        val rBytes = "only copy of R".toByteArray()
+        val sBytes = "only copy of S".toByteArray()
+        val r = entry("p", "r.m4a", rBytes, uploadedAt = 300L).copy(precedenceRepaired = true)
+        val s = entry("p", "s.m4a", sBytes, uploadedAt = 100L)
+        putRaw(r, rBytes)
+        putRaw(s, sBytes)
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(r, s)))
+        repository.recordRecordingDeletion("p", "r.m4a", r.id, 200L)
+        repository.recordRecordingDeletion("p", "s.m4a", s.id, 200L)
+        return (r to rBytes) to (s to sBytes)
+    }
+
+    private fun assertRepairedLoserKept(result: SyncResult.Success, kept: Pair<RecordingManifestEntry, ByteArray>, deleted: RecordingManifestEntry) {
+        // A41 (review finding 1): the repaired loser's sole raw copy stays and is reported; a real loser goes (A40).
+        assertEquals(1, result.deletedRecordingsKeptInDrive)
+        assertContentEquals(kept.second, drive.bytes(BackupManifest.recordingDriveName(kept.first.id)))
+        assertNull(drive.file(BackupManifest.recordingDriveName(deleted.id)))
+        assertTrue(remote().recordings.none { it.id == kept.first.id || it.id == deleted.id })
+    }
+
+    @Test
+    fun backUpNeverDeletesTheOnlyRawCopyOfARecordingWhoseTimeWasRepaired() = runBlocking<Unit> {
+        val (r, s) = soleRawCopies()
+        assertRepairedLoserKept(assertIs<SyncResult.Success>(service.backUp(repository)), r, s.first)
+    }
+
+    @Test
+    fun restoreNeverDeletesTheOnlyRawCopyOfARecordingWhoseTimeWasRepaired() = runBlocking<Unit> {
+        val (r, s) = soleRawCopies()
+        assertRepairedLoserKept(assertIs<SyncResult.Success>(service.restore(repository)), r, s.first)
+        assertTrue(repository.recordingRecords().none { it.id == r.first.id })
+    }
+
+    /** Drive alone holds an active song and a Trash entry whose times were repaired (300); this device deleted both at 200. */
+    private suspend fun remoteOnlyRepairedSongs(): Pair<SongProject, TrashedSongProject> {
+        repository.saveTrashedProjects(listOf(TrashedSongProject(song("a"), deletedAt = 50L), TrashedSongProject(song("t"), deletedAt = 50L)))
+        repository.permanentlyDeleteTrashedProject("a", now = 200L)
+        repository.permanentlyDeleteTrashedProject("t", now = 200L)
+        val active = song("a", updatedAt = 300L, lyrics = "only copy of a").copy(precedenceRepaired = true)
+        val trashed = TrashedSongProject(song("t", updatedAt = 40L, lyrics = "only copy of t"), deletedAt = 300L, deletedAtRepaired = true)
+        putRemote(SyncBlob(projects = listOf(active), trashed = listOf(trashed)))
+        return active to trashed
+    }
+
+    private suspend fun assertRemoteOnlyLosersKept(result: SyncResult.Success, active: SongProject, trashed: TrashedSongProject) {
+        // Review finding 2: the lyrics leave Drive only after they are kept on this device.
+        assertEquals(2, result.songsSetAside)
+        assertTrue(remote().projects.none { it.id == "a" } && remote().trashed.none { it.project.id == "t" })
+        val kept = repository.recoveredSongs()
+        assertEquals("only copy of a", kept.single { it.project.id == "a" }.project.lyrics)
+        assertFalse(kept.single { it.project.id == "a" }.wasInTrash)
+        assertEquals(trashed.project.lyrics, kept.single { it.project.id == "t" }.project.lyrics)
+        assertTrue(kept.single { it.project.id == "t" }.wasInTrash)
+        // Both repair flags travel with the kept song: its own and its Trash time's.
+        assertTrue(kept.single { it.project.id == "a" }.project.precedenceRepaired)
+        assertEquals(300L to true, kept.single { it.project.id == "t" }.let { it.trashedAt to it.trashedAtRepaired })
+        assertEquals(200L, kept.single { it.project.id == "a" }.deletedAt)
+    }
+
+    @Test
+    fun backUpKeepsARemoteOnlySongWhoseRepairedTimeLosesToATombstoneHere() = runBlocking<Unit> {
+        val (active, trashed) = remoteOnlyRepairedSongs()
+        assertRemoteOnlyLosersKept(assertIs<SyncResult.Success>(service.backUp(repository)), active, trashed)
+        // A second backup keeps nothing twice.
+        assertEquals(0, assertIs<SyncResult.Success>(service.backUp(repository)).songsSetAside)
+        assertEquals(2, repository.recoveredSongs().size)
+    }
+
+    @Test
+    fun restoreKeepsARemoteOnlySongWhoseRepairedTimeLosesToATombstoneHere() = runBlocking<Unit> {
+        val (active, trashed) = remoteOnlyRepairedSongs()
+        assertRemoteOnlyLosersKept(assertIs<SyncResult.Success>(service.restore(repository)), active, trashed)
+        assertTrue(repository.projectsFlow.first().isEmpty())
+    }
+
+    @Test
+    fun aBackupWhoseKeptSongsDoNotReadBackStopsBeforeDriveLosesThem() = runBlocking<Unit> {
+        // A store that silently drops the recovery store's writes: the read-back must catch it.
+        val key = androidx.datastore.preferences.core.stringPreferencesKey("recovered_songs_json")
+        val lossy = object : androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> by dataStore {
+            override suspend fun updateData(
+                transform: suspend (androidx.datastore.preferences.core.Preferences) -> androidx.datastore.preferences.core.Preferences
+            ) = dataStore.updateData { current ->
+                transform(current).toMutablePreferences().apply {
+                    val before = current[key]
+                    if (before == null) remove(key) else this[key] = before
+                }.toPreferences()
+            }
+        }
+        val lossyRepository = ProjectRepository(lossy, keys)
+        lossyRepository.saveTrashedProjects(listOf(TrashedSongProject(song("a"), deletedAt = 50L)))
+        lossyRepository.permanentlyDeleteTrashedProject("a", now = 200L)
+        val active = song("a", updatedAt = 300L, lyrics = "only copy of a").copy(precedenceRepaired = true)
+        putRemote(SyncBlob(projects = listOf(active)))
+
+        assertFalse(service.backUp(lossyRepository) is SyncResult.Success)
+
+        // The manifest that holds the only copy was not overwritten.
+        assertEquals("only copy of a", remote().projects.single { it.id == "a" }.lyrics)
+    }
+
+    @Test
+    fun aTombstoneWithoutATimeIsRefusedAndNoLiveSongOrRecordingIsDeleted() = runBlocking<Unit> {
+        // A33/A41: an unknown deletion time is never stamped with the current time.
+        repository.saveProjects(listOf(song("p")))
+        val take = writeMemo("p", "take.m4a", "live take".toByteArray())
+        val text = String(BackupManifest.encode(SyncBlob(
+            projects = listOf(song("p")),
+            deletions = listOf(SyncDeletion("p", deletedAt = 9_000L), SyncDeletion("p", "take.m4a", 9_000L, recordingId = take.id))
+        ), 1_000L, "other-device"))
+        fun manifestWith(change: (JsonObject) -> JsonObject): ByteArray {
+            val root = Json.parseToJsonElement(text).jsonObject
+            val body = JsonObject(root - BackupManifest.HASH_KEY).let { body ->
+                JsonObject(body + ("deletions" to kotlinx.serialization.json.JsonArray(body.getValue("deletions").jsonArray.map { change(it.jsonObject) })))
+            }
+            val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+            return BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to kotlinx.serialization.json.JsonPrimitive(hash)))).toByteArray()
+        }
+        for (bad in listOf(manifestWith { JsonObject(it - "deletedAt") }, manifestWith { JsonObject(it + ("deletedAt" to kotlinx.serialization.json.JsonPrimitive(0L))) })) {
+            drive.put(BackupManifest.FILE_NAME, bad)
+
+            assertFalse(service.restore(repository) is SyncResult.Success)
+
+            assertEquals(listOf("p"), repository.projectsFlow.first().map { it.id })
+            assertTrue(repository.syncDeletions().isEmpty())
+            assertContentEquals("live take".toByteArray(), liveFile("p", "take.m4a").readBytes())
+        }
+    }
+
     @Test
     fun anOlderTrashEntryIsComparedWithATombstoneByItsTrashTime() = runBlocking<Unit> {
         // Review 18 finding 3 (A38): song time 300, Trash time 100, tombstone 200 removes the entry,
@@ -931,9 +1063,11 @@ class BackupServiceTest {
         val deleted = com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions())
         assertEquals(setOf(com.rhymeai.app.data.recording.RecordingTransitions.relativePath(filesDir, memo)), deleted)
 
-        // The next launch retries it.
+        // The next launch retries it, and its count is what the launch notice reports (T5.3).
         blocker.delete()
-        quarantineDeletedRecordings(repository, filesDir)
+        val setAside = quarantineDeletedRecordings(repository, filesDir)
+        assertEquals(1, setAside)
+        assertEquals(listOf("1 deleted recording(s) were set aside on this device."), com.rhymeai.app.recordingMaintenanceNotes(0, 0, 0, 0, setAside))
         assertFalse(memo.exists())
         assertEquals(1, RecordingFiles.quarantineDirectory(filesDir, "p").list().orEmpty().size)
         assertTrue(com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions()).isEmpty())

@@ -74,12 +74,6 @@ class NewFeatureUiTest {
             context.assets.open("cmudict-rhymeai.tsv").use(PronunciationDictionary::initialize)
         }
         scenario = ActivityScenario.launch(MainActivity::class.java)
-        // The launch finishes loading (and shows the start menu) before a test acts, so the
-        // start menu cannot reappear over the song a test opens.
-        lateinit var vm: MainViewModel
-        scenario!!.onActivity { vm = androidx.lifecycle.ViewModelProvider(it)[MainViewModel::class.java] }
-        val until = android.os.SystemClock.uptimeMillis() + 10_000
-        while (!vm.aiSettingsLoaded && android.os.SystemClock.uptimeMillis() < until) Thread.sleep(50)
     }
 
     @After

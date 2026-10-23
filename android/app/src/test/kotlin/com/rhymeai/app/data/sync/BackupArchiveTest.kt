@@ -319,4 +319,21 @@ class BackupArchiveTest {
         org.junit.Assume.assumeTrue("iOS copy of archive-names-v1.json is not in this checkout yet; drift check skipped.", iosCopy != null)
         assertContentEquals(requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readBytes(), iosCopy!!.readBytes())
     }
+    @Test
+    fun importKeepsAndReportsAnArchiveSongWhoseRepairedTimeLosesToATombstoneHere() = runBlocking<Unit> {
+        // A41: the archive holds "r" with a repaired time; this device deleted it at 200.
+        val zipFile = File(root, "repaired.zip")
+        val repaired = SongProject(id = "r", title = "Only here", lyrics = "only copy", updatedAt = 300L, precedenceRepaired = true)
+        zipFile.outputStream().use { BackupArchive.write(it, SyncBlob(projects = listOf(repaired)), emptyList(), 1_000L, "device") }
+        val filesDir = File(root, "import-files").also { it.mkdirs() }
+        val repo = repository("repaired")
+        repo.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "r", updatedAt = 10L), deletedAt = 20L)))
+        repo.permanentlyDeleteTrashedProject("r", now = 200L)
+
+        val summary = BackupArchive.import(BackupArchive.read(zipFile), repo, filesDir)
+
+        assertEquals(1, summary.songsSetAside)
+        assertTrue(repo.projectsFlow.first().none { it.id == "r" })
+        assertEquals("only copy", repo.recoveredSongs().single().project.lyrics)
+    }
 }

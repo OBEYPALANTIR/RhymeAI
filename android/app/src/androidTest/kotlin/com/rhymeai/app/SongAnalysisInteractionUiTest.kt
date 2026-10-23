@@ -85,8 +85,11 @@ class SongAnalysisInteractionUiTest {
         composeRule.onNodeWithContentDescription("Open songs drawer").performClick()
         composeRule.onNodeWithText("Create New Song").performClick()
 
-        check(composeRule.onAllNodesWithText("Previewing Rephrase", substring = true)
-            .fetchSemanticsNodes().isEmpty())
+        // New Song saves the current draft first, then clears the editor (and the preview) once
+        // that save lands; wait for it rather than checking at an arbitrary instant.
+        composeRule.waitUntil(10_000) {
+            composeRule.onAllNodesWithText("Previewing Rephrase", substring = true).fetchSemanticsNodes().isEmpty()
+        }
         composeRule.onNodeWithTag("lyricsEditor").assertIsDisplayed()
     }
 

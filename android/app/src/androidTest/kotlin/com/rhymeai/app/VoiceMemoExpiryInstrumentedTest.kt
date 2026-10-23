@@ -105,4 +105,59 @@ class VoiceMemoExpiryInstrumentedTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun aRecordingThatAppearsAfterLaunchIsOrderedByItsEstablishedTimeNotItsFileTime() = runBlocking {
+        // T2.45: listing establishes (and stores) the time of a file it has not seen before.
+        val target = InstrumentationRegistry.getInstrumentation().targetContext
+        check(target.packageName == "com.rhymeai.app.motionqa") { "This fixture requires the isolated QA app." }
+        val root = File(target.cacheDir, "memo-order-${UUID.randomUUID()}")
+        assertTrue(root.mkdirs())
+        try {
+            val catalog = Catalog()
+            val service = VoiceMemoService(object : ContextWrapper(target) {
+                override fun getFilesDir(): File = root
+            }).also { it.catalog = catalog }
+            val dir = RecordingFiles.memoDirectory(root, "order-fixture").apply { mkdirs() }
+            val older = File(dir, "${UUID.randomUUID()}.m4a").apply { writeText("older"); setLastModified(5_000L) }
+            val newer = File(dir, "${UUID.randomUUID()}.m4a").apply { writeText("newer"); setLastModified(9_000L) }
+
+            assertEquals(listOf(newer.name, older.name), service.memosForProject("order-fixture").map { it.file.name })
+            assertEquals(2, catalog.records.size)
+
+            // The file time changes afterwards; the stored time keeps the order.
+            assertTrue(older.setLastModified(20_000L))
+            assertEquals(listOf(newer.name, older.name), service.memosForProject("order-fixture").map { it.file.name })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aTrashFileWithAnUnreadableNameIsKeptReportedAndListedForInspection() = runBlocking {
+        // T5.12: never an empty Trash, never removed.
+        val target = InstrumentationRegistry.getInstrumentation().targetContext
+        check(target.packageName == "com.rhymeai.app.motionqa") { "This fixture requires the isolated QA app." }
+        val root = File(target.cacheDir, "memo-unreadable-${UUID.randomUUID()}")
+        assertTrue(root.mkdirs())
+        try {
+            val catalog = Catalog()
+            val service = VoiceMemoService(object : ContextWrapper(target) {
+                override fun getFilesDir(): File = root
+            }).also { it.catalog = catalog }
+            service.maintenance = { com.rhymeai.app.data.recording.RecordingTransitions.migrate(catalog, root); Unit }
+            val trash = RecordingFiles.trashDirectory(root, "unreadable-fixture").apply { mkdirs() }
+            val odd = File(trash, "not a trash name.m4a").apply { writeText("audio of unknown origin") }
+
+            service.runMaintenance()
+
+            assertEquals(listOf(odd.canonicalFile), com.rhymeai.app.data.recording.RecordingTransitions.unrecognizedTrashFiles.map { it.canonicalFile })
+            assertEquals(listOf(odd.canonicalFile), service.unreadableTrashFiles().map { it.canonicalFile })
+            assertTrue(service.trashedMemos().none { it.file.canonicalFile == odd.canonicalFile })
+            assertTrue(service.purgeExpiredTrashedMemos(Long.MAX_VALUE))
+            assertEquals("audio of unknown origin", odd.readText())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }
