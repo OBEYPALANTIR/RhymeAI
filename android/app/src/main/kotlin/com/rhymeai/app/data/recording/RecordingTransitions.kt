@@ -70,7 +70,8 @@ internal object RecordingTransitions {
         id: String,
         uploadedAt: Long,
         origin: String,
-        skipIfPresent: Boolean = false
+        skipIfPresent: Boolean = false,
+        claimedName: String? = null
     ): File? = namespace.withLock {
         catalog?.let { reconcileLocked(it, filesDir) }
         if (skipIfPresent && catalog?.recordingRecords()?.any { it.id == id && it.path != null } == true) {
@@ -85,7 +86,9 @@ internal object RecordingTransitions {
             id, projectId, target.name, uploadedAt, RecordingFileStore.sha256Hex(source), source.length(), origin,
             path = relativePath(filesDir, target),
             pendingFrom = relativePath(filesDir, source),
-            pendingOp = RecordingRecord.OP_PUBLISH
+            pendingOp = RecordingRecord.OP_PUBLISH,
+            // A34: a restored or imported recording claims its own claim, never its allocated name.
+            claimedName = claimedName ?: desiredName
         )
         catalog?.putRecord(record)
         try {
@@ -110,8 +113,9 @@ internal object RecordingTransitions {
         projectId: String,
         displayName: String,
         pick: () -> File,
-        renamesTo: (File) -> String?
-    ): File? = namespace.withLock { moveLocked(catalog, filesDir, from, projectId, pick, renamesTo, expectedId = null) }
+        renamesTo: (File) -> String?,
+        userClaim: Boolean = false
+    ): File? = namespace.withLock { moveLocked(catalog, filesDir, from, projectId, pick, renamesTo, expectedId = null, userClaim = userClaim) }
 
     /** [move] under the held lock; with [expectedId], only when the file there is still that recording. */
     private suspend fun moveLocked(
@@ -121,7 +125,8 @@ internal object RecordingTransitions {
         projectId: String,
         pick: () -> File,
         renamesTo: (File) -> String?,
-        expectedId: String?
+        expectedId: String?,
+        userClaim: Boolean = false
     ): File? {
         catalog?.let { reconcileLocked(it, filesDir) }
         val record = catalog?.let { recordForLocked(it, filesDir, from, projectId) ?: return null }
@@ -131,8 +136,11 @@ internal object RecordingTransitions {
         // Never replace a file: a taken target fails the move.
         if (target.exists() || isRegularFileStrictly(target)) return null
         record?.let { beforeBytesMove?.invoke(setOf(it.id)) }
+        val newName = renamesTo(target)
         val intent = record?.copy(
-            fileName = renamesTo(target) ?: record.fileName,
+            fileName = newName ?: record.fileName,
+            // A30: only a rename the user asked for changes the name the recording claims.
+            claimedName = if (userClaim && newName != null) newName else record.claimedName,
             path = relativePath(filesDir, target),
             pendingFrom = record.path,
             pendingFromName = record.fileName,
@@ -217,6 +225,40 @@ internal object RecordingTransitions {
         val from = File(filesDir, expectedPath)
         if (!isRegularFileStrictly(from) || RecordingFileStore.sha256Hex(from) != current.sha256) return@withLock null
         moveLocked(catalog, filesDir, from, current.projectId, pick = { target }, renamesTo = { if (keepName) null else it.name }, expectedId = id)
+    }
+
+    /**
+     * A28: runs [start] with the verified id of the recording at [file] while holding the
+     * namespace lock, so no transition can move its bytes between the check and the start
+     * (a transition stops playback through [beforeBytesMove] under the same lock). Adopts
+     * the song's files first, so a file seen for the first time gets its identity. Returns
+     * null without running [start] when the file has no verified identity, has a move or
+     * save not yet reconciled, a known tombstone removes it, or the state cannot be read.
+     */
+    suspend fun <T> withPlayableRecording(
+        catalog: RecordingCatalog,
+        filesDir: File,
+        file: File,
+        projectId: String,
+        deletions: suspend () -> List<SyncDeletion>,
+        start: suspend (String) -> T
+    ): T? = namespace.withLock {
+        val record = try {
+            recordForLocked(catalog, filesDir, file, projectId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        } ?: return@withLock null
+        if (record.pendingOp != null) return@withLock null
+        val removed = try {
+            SyncMerger.Tombstones(deletions()).removes(record.toEntry())
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            true
+        }
+        if (removed) null else start(record.id)
     }
 
     /**

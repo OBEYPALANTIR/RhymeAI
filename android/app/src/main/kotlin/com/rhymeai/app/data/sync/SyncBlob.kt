@@ -179,8 +179,14 @@ data class RecordingManifestEntry(
      * Stable recording id (A21). A pre-v4 entry has none on the wire and gets one
      * derived from its project, name and hash, so every device derives the same id.
      */
-    val id: String = legacyRecordingId(projectId, fileName, sha256)
+    val id: String = legacyRecordingId(projectId, fileName, sha256),
+    /** A34: the name the user chose, when it differs from the allocated [fileName]; null means [fileName]. */
+    val claimedName: String? = null
 ) {
+    /** A34: the name this recording claims; allocation gives it [fileName]. */
+    val claim: String
+        get() = claimedName ?: fileName
+
     /** Merge, tombstones and presence all key on the id. */
     val identityKey: String
         get() = id
@@ -190,7 +196,7 @@ data class RecordingManifestEntry(
         get() = "$projectId/$fileName"
 
     fun toRecord(origin: String, path: String?) =
-        RecordingRecord(id, projectId, fileName, precedenceTime, sha256, sizeBytes, origin, path)
+        RecordingRecord(id, projectId, fileName, precedenceTime, sha256, sizeBytes, origin, path, claimedName = claimedName)
 
     /** The time a tombstone must beat to remove this recording. */
     val precedenceTime: Long
@@ -208,6 +214,7 @@ data class RecordingManifestEntry(
         SyncIdentity.validateProjectId(projectId)
         SyncIdentity.validateFileName(fileName)
         SyncIdentity.validateRecordingId(id)
+        claimedName?.let(SyncIdentity::validateFileName)
         require(driveName == driveNameFor(projectId, fileName)) { "Invalid recording Drive name" }
         require(sizeBytes >= 0L) { "Invalid recording size" }
         require(uploadedAt >= 0L) { "Invalid recording time" }
@@ -257,11 +264,15 @@ data class RecordingRecord(
     val path: String? = null,
     val pendingFrom: String? = null,
     val pendingFromName: String? = null,
-    val pendingOp: String? = null
+    val pendingOp: String? = null,
+    /** A30: the name the user chose (recorded, imported or renamed to); null means [fileName]. */
+    val claimedName: String? = null,
+    /** A30: the name this recording last had in a manifest this device wrote; null if never written. */
+    val syncedName: String? = null
 ) {
     fun toEntry() = RecordingManifestEntry(
         projectId = projectId, fileName = fileName, sizeBytes = bytes, modifiedAt = 0L,
-        sha256 = sha256, uploadedAt = uploadedAt, id = id
+        sha256 = sha256, uploadedAt = uploadedAt, id = id, claimedName = claimedName?.takeIf { it != fileName }
     )
 
     companion object {
@@ -404,26 +415,35 @@ object SyncMerger {
      * names from the same entries, so names converge without renaming loops.
      */
     fun assignNames(recordings: List<RecordingManifestEntry>): List<RecordingManifestEntry> {
-        val renamed = HashMap<String, String>()
+        val allocated = HashMap<String, String>()
         for ((_, song) in recordings.groupBy { it.projectId }) {
+            // A34: allocation works on claims (the names users chose), never on earlier allocations.
             val ordered = song.sortedWith(compareBy<RecordingManifestEntry> { it.precedenceTime }.thenBy { it.id })
-            val owners = ordered.groupBy { it.fileName }.mapValues { it.value.first().id }
+            val owners = ordered.groupBy { it.claim }.mapValues { it.value.first().id }
             val taken = owners.keys.toHashSet()
             for (entry in ordered) {
-                if (owners[entry.fileName] == entry.id) continue
-                val base = entry.fileName.substringBeforeLast('.')
-                val extension = entry.fileName.substringAfterLast('.', "m4a")
+                if (owners[entry.claim] == entry.id) {
+                    allocated[entry.id] = entry.claim
+                    continue
+                }
+                val base = entry.claim.substringBeforeLast('.')
+                val extension = entry.claim.substringAfterLast('.', "m4a")
                 var n = 2
                 var name: String
                 do {
                     name = com.rhymeai.app.data.recording.RecordingFiles.variantName(base, extension, n++)
                 } while (name in taken)
                 taken += name
-                renamed[entry.id] = name
+                allocated[entry.id] = name
             }
         }
         return recordings.map { entry ->
-            renamed[entry.id]?.let { entry.copy(fileName = it, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, it)) } ?: entry
+            val name = allocated.getValue(entry.id)
+            entry.copy(
+                fileName = name,
+                driveName = RecordingManifestEntry.driveNameFor(entry.projectId, name),
+                claimedName = entry.claim.takeIf { it != name }
+            )
         }
     }
 

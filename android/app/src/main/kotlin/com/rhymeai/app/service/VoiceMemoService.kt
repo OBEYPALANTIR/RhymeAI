@@ -572,30 +572,27 @@ class VoiceMemoService(private val context: Context) {
      */
     fun play(memo: VoiceMemo) {
         stopPlayback()
-        // A28: checked off the main thread first; Stop, release and a deletion cancel the check.
+        // A28: authorized and started under the recording lock, with a verified id; Stop,
+        // release and a deletion cancel a play still waiting for it.
         playJob = scope.launch {
-            val id = withContext(Dispatchers.IO) { playableRecordingId(memo.file) } ?: return@launch
-            startPlayer(memo, id.ifEmpty { null })
+            val catalog = catalog
+            if (catalog == null) {
+                startPlayer(memo, null) // tests without a catalog only
+                return@launch
+            }
+            val projectId = memo.file.parentFile?.name ?: return@launch
+            withContext(Dispatchers.IO) {
+                RecordingTransitions.withPlayableRecording(
+                    catalog, context.filesDir, memo.file, projectId,
+                    deletions = { deletionsProvider?.invoke() ?: emptyList() }
+                ) { id ->
+                    withContext(Dispatchers.Main) {
+                        ensureActive()
+                        startPlayer(memo, id)
+                    }
+                }
+            }
         }
-    }
-
-    /**
-     * The id of the recording at [file] ("" when it has no record yet), or null when a
-     * known tombstone removes it or that cannot be read (fails closed).
-     */
-    private suspend fun playableRecordingId(file: File): String? = try {
-        val path = RecordingTransitions.relativePath(context.filesDir, file)
-        val records = catalog?.recordingRecords().orEmpty()
-        when {
-            path in deletedPaths() -> null
-            // A move or save not yet reconciled (for example after a failed reconcile) is not playable yet.
-            records.any { it.pendingOp != null && (it.path == path || it.pendingFrom == path) } -> null
-            else -> records.firstOrNull { it.path == path }?.id ?: ""
-        }
-    } catch (e: kotlinx.coroutines.CancellationException) {
-        throw e
-    } catch (_: Exception) {
-        null
     }
 
     private fun startPlayer(memo: VoiceMemo, recordingId: String?) {
@@ -807,9 +804,10 @@ class VoiceMemoService(private val context: Context) {
         projectId: String,
         displayName: String,
         pick: () -> File,
-        renamesTo: (File) -> String?
+        renamesTo: (File) -> String?,
+        userClaim: Boolean = false
     ): File? = try {
-        RecordingTransitions.move(catalog, context.filesDir, from, projectId, displayName, pick, renamesTo)
+        RecordingTransitions.move(catalog, context.filesDir, from, projectId, displayName, pick, renamesTo, userClaim)
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (_: Exception) {
@@ -877,8 +875,10 @@ class VoiceMemoService(private val context: Context) {
             if (catalog != null) {
                 // Null: the file was a duplicate copy of a pre-v4 recording and now sits in
                 // quarantine (A26); it has left the Trash and its deletion must not tombstone the live copy.
-                val record = RecordingTransitions.recordFor(catalog, context.filesDir, trashed.file, trashed.projectId)
-                    ?: return true.also { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
+                // Adoption hashes the song's recordings: off the main thread.
+                val record = withContext(Dispatchers.IO) {
+                    RecordingTransitions.recordFor(catalog, context.filesDir, trashed.file, trashed.projectId)
+                } ?: return true.also { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
                 recordingDeletionRecorder?.invoke(trashed.projectId, trashed.originalName, record.id, System.currentTimeMillis())
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -931,7 +931,8 @@ class VoiceMemoService(private val context: Context) {
             val targetFile = moveOrNull(
                 memo.file, dir.name, memo.file.name,
                 pick = { RecordingFiles.resolveCollision(dir, sanitized, memo.file.extension) },
-                renamesTo = { it.name }
+                renamesTo = { it.name },
+                userClaim = true
             )
 
             if (targetFile != null) {

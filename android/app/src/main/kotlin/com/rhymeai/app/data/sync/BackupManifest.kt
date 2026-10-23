@@ -75,6 +75,8 @@ object BackupManifest {
                         put("bytes", entry.sizeBytes)
                         put("sha256", entry.sha256)
                         put("uploadedAt", entry.uploadedAt)
+                        // A34: present only when the claim differs from the allocated name.
+                        entry.claimedName?.takeIf { it != entry.fileName }?.let { put("claimedName", it) }
                     }
                 }
             }
@@ -131,7 +133,9 @@ object BackupManifest {
                         modifiedAt = 0L,
                         sha256 = sha,
                         uploadedAt = fields.long("uploadedAt"),
-                        id = fields.string("id")
+                        id = fields.string("id"),
+                        claimedName = fields["claimedName"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p.isString }?.content
+                            ?: throw IllegalArgumentException("Invalid claimedName") }
                     )
                 },
                 deletions = root.array("deletions").map { element ->

@@ -136,7 +136,11 @@ object BackupArchive {
         val base = repository.snapshotLocalSyncBase()
         val localFiles = snapshotLocalRecordings(repository, filesDir, base.pendingIds)
         // Gather this device (live and Trash recordings) and the archive, then resolve once.
-        val gathered = SyncMerger.gather(base.blob.copy(recordings = localFiles.map { it.entry }), contents.manifest)
+        // A32: missing precedence times are fixed (and persisted) before anything is compared.
+        val inputs = repository.establishPrecedence(
+            listOf(base.blob.copy(recordings = localFiles.map { it.entry }), contents.manifest), System.currentTimeMillis()
+        )
+        val gathered = SyncMerger.gather(*inputs.toTypedArray())
         val merged = SyncMerger.resolve(gathered)
         // A recording held here, live or in Trash, is never imported again.
         val local = localFiles.mapTo(HashSet()) { it.entry.id }
@@ -147,7 +151,7 @@ object BackupArchive {
         val wanted = merged.recordings
             .filter { it.id in imported && it.id !in local }
             .map { imported.getValue(it.id) }
-            .map { entry -> names[entry.id]?.let { entry.copy(fileName = it, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, it)) } ?: entry }
+            .map { entry -> names[entry.id]?.let { entry.copy(fileName = it, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, it), claimedName = entry.claim) } ?: entry }
         var added = 0
         for (entry in wanted) {
             val bytes = contents.recordings[entry.id] ?: continue

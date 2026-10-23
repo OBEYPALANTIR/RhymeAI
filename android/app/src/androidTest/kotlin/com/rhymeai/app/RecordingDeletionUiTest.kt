@@ -111,7 +111,8 @@ class RecordingDeletionUiTest {
             val service = viewModel.voiceMemoService
             val catalog = requireNotNull(service.catalog)
             val dir = RecordingFiles.memoDirectory(filesDir, projectId)
-            val x = TestRecordings.recordFinalizedM4a(context, File(dir, "take.m4a"))
+            // Long enough that playback cannot end on its own while Restore runs.
+            val x = TestRecordings.recordFinalizedM4a(context, File(dir, "take.m4a"), millis = 12_000L)
             val xId = runBlocking {
                 RecordingTransitions.snapshot(catalog, filesDir, emptySet())
                 catalog.recordingRecords().single { it.path == RecordingTransitions.relativePath(filesDir, x) }.id
@@ -129,7 +130,15 @@ class RecordingDeletionUiTest {
                 com.rhymeai.app.data.sync.BackupManifest.encode(com.rhymeai.app.data.sync.SyncBlob(recordings = listOf(y)), 0L, "other-device")
             )
 
-            compose.runOnIdle { service.play(VoiceMemo(x, "take", 1_500L)) }
+            // At the move boundary: what was playing just before the hook, and after it.
+            val boundary = java.util.Collections.synchronizedList(mutableListOf<Triple<Set<String>, File?, File?>>())
+            val hook = requireNotNull(RecordingTransitions.beforeBytesMove)
+            RecordingTransitions.beforeBytesMove = { ids ->
+                val before = service.playingFile
+                hook(ids)
+                boundary += Triple(ids, before, service.playingFile)
+            }
+            compose.runOnIdle { service.play(VoiceMemo(x, "take", 12_000L)) }
             compose.waitUntil(10_000) { service.playingFile == x.canonicalFile || service.playingFile == x }
             compose.runOnIdle { viewModel.restoreFromBackup() }
             try {
@@ -137,12 +146,14 @@ class RecordingDeletionUiTest {
             } catch (e: Throwable) {
                 throw AssertionError("restore: notice=${viewModel.backupNotice} status=${viewModel.backupStatus} files=${dir.list()?.toList()}", e)
             }
-            // The rename moved X's bytes; its playback stopped first.
+            // The rename moved X's bytes; its playback stopped at that move, not by finishing.
+            assertTrue(boundary.toString(), boundary.any { (ids, before, after) -> xId in ids && before != null && after == null })
             assertNull(service.playingFile)
+            boundary.clear()
 
             // Play X under its new name, then a deletion of X arrives through the next Restore.
             val renamed = File(dir, "take 2.m4a")
-            compose.runOnIdle { service.play(VoiceMemo(renamed, "take 2", 1_500L)) }
+            compose.runOnIdle { service.play(VoiceMemo(renamed, "take 2", 12_000L)) }
             compose.waitUntil(10_000) { service.playingFile?.name == "take 2.m4a" }
             val manifest = com.rhymeai.app.data.sync.BackupManifest.decode(requireNotNull(drive.bytes(com.rhymeai.app.data.sync.BackupManifest.FILE_NAME)))
             drive.put(
@@ -156,9 +167,14 @@ class RecordingDeletionUiTest {
             )
             compose.runOnIdle { viewModel.restoreFromBackup() }
             compose.waitUntil(30_000) { !renamed.exists() && viewModel.backupBusyLabel == null }
+            // At the quarantine move nothing is playing: the committed tombstone already stopped it
+            // (the deletion observer), or the hook did.
+            assertTrue(boundary.toString(), boundary.any { (ids, _, after) -> xId in ids && after == null })
+            assertTrue(boundary.toString(), boundary.none { (_, before, after) -> before != null && after != null })
             assertNull(service.playingFile)
             assertTrue(RecordingFiles.quarantineDirectory(filesDir, projectId).listFiles().orEmpty().isNotEmpty())
         } finally {
+            RecordingTransitions.beforeBytesMove = viewModel.voiceMemoService::stopPlayingIds
             RecordingFiles.quarantineDirectory(filesDir, projectId).deleteRecursively()
             File(filesDir, "y-${projectId}.m4a").delete()
         }

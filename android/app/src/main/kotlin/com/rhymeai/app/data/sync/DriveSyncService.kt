@@ -608,7 +608,7 @@ object RecordingFileStore {
             syncFile(staged.file)
             return RecordingTransitions.publish(
                 catalog, filesDir, staged.file, entry.projectId, entry.fileName, entry.id, entry.precedenceTime, origin,
-                skipIfPresent = true
+                skipIfPresent = true, claimedName = entry.claim
             ) != null
         } finally {
             stage.deleteRecursively()
@@ -663,7 +663,7 @@ object RecordingFileStore {
             syncFile(item.file)
             val target = RecordingTransitions.publish(
                 catalog, filesDir, item.file, item.entry.projectId, item.entry.fileName, item.entry.id,
-                item.entry.precedenceTime, origin, skipIfPresent = true
+                item.entry.precedenceTime, origin, skipIfPresent = true, claimedName = item.entry.claim
             ) ?: continue
             target.parentFile?.let(::syncDirectory)
             placed += item.entry
@@ -1007,22 +1007,30 @@ class DriveSyncService(
             val remote = readRemote(token)
             if (requireRemote && remote.blob == null && extraRemote == null) return null
 
-            val gathered = SyncMerger.gather(*listOfNotNull(seen, local, extraRemote, remote.blob).toTypedArray())
+            // A32: missing precedence times are fixed (and persisted) before anything is compared.
+            val inputs = repository.establishPrecedence(listOfNotNull(seen, local, extraRemote, remote.blob), now())
+            val gathered = SyncMerger.gather(*inputs.toTypedArray())
             var merged = SyncMerger.resolve(gathered).copy(savedByClientId = clientId())
             // Evidence that is not uploadable here (Trash, too large, older recordings that
             // could not move) shapes tombstones but is listed only if Drive already lists it.
             val listedRemotely = remote.blob?.recordings.orEmpty().mapTo(HashSet()) { it.id }
             val liveById = liveFiles.associateBy { it.entry.id }
+            val recordsById = repository.recordingRecords().associateBy { it.id }
             val uploadableIds = liveFiles.filter { it.entry.isTransferable }.mapTo(HashSet()) { it.entry.id }
             val evidenceOnly = localFiles.filterNot { it.entry.id in uploadableIds }.mapTo(HashSet()) { it.entry.id } +
                 (unlistable - uploadableIds)
             merged = merged.copy(
                 recordings = merged.recordings
                     .filterNot { it.id in evidenceOnly && it.id !in listedRemotely }
-                    // The device holding a recording names it: a rename here travels with the id.
+                    // A34 claims: a claim this device changed since it last wrote one (a new
+                    // recording, or one the user renamed) wins; otherwise the manifest's claim
+                    // stands. Names are then allocated from claims (A30), never from allocations.
                     .map { entry ->
-                        val name = liveById[entry.id]?.entry?.fileName ?: return@map entry
-                        entry.copy(fileName = name, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, name))
+                        val held = liveById[entry.id] ?: return@map entry
+                        val record = recordsById[entry.id]
+                        val localClaim = record?.claimedName ?: held.entry.fileName
+                        val claim = if (record?.syncedName == null || localClaim != record.syncedName) localClaim else entry.claim
+                        entry.copy(claimedName = claim)
                     }
                     // A30: a name two recordings claim goes to the earlier one on every device.
                     .let(SyncMerger::assignNames)
@@ -1076,8 +1084,14 @@ class DriveSyncService(
 
             var damaged = 0
             var committed = merged
+            // A34: this device has now written each held recording's claim; that claim stands
+            // here until the user changes it. Back up never renames local files.
+            val claims = merged.recordings.associate { it.id to it.claim }
+            repository.updateRecordingRecords { records ->
+                records.map { r -> claims[r.id]?.takeIf { r.path != null && it != r.syncedName }?.let { r.copy(syncedName = it) } ?: r }
+            }
             if (applyLocally) {
-                // A30: local recordings take their converged names before downloads are placed.
+                // A30: local recordings take their allocated names before downloads are placed.
                 RecordingTransitions.applyNames(repository, filesDir, merged.recordings.associate { it.id to it.fileName })
                 damaged = restoreRemoteRecordings(
                     token, repository, merged.recordings, driveFiles.mapValues { it.value.id } + uploaded, localFiles
