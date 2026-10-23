@@ -160,7 +160,8 @@ recording id Drive's entry wins and per tombstone identity the newest
 when newer than its `uploadedAt`, and it beats any time that was only repaired
 (first seen because the data had none), otherwise the tombstone is dropped; a
 song that loses only because its time was a repair is kept aside on the device,
-and such a recording is quarantined rather than deleted; a recording removed by a song tombstone keeps a
+such a recording is quarantined rather than deleted (on Restore and Import every
+removed recording is quarantined), and its raw copy in Drive is kept; a recording removed by a song tombstone keeps a
 tombstone of its own, and deleting a song writes tombstones for every recording
 this device holds for it, so reviving the song does not bring the deleted audio
 back. The one exception is a recording that was never backed up and never on the
