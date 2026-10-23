@@ -47,6 +47,14 @@ enum RecordingFiles {
             .appendingPathComponent(newMemoURL(for: projectId).lastPathComponent)
     }
 
+    /// Takes in the recorder's staging folder (finished or not yet published).
+    nonisolated static func waitingTakeCount(root: URL = recorderStagingRoot()) -> Int {
+        let projects = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
+        return projects.reduce(0) { count, project in
+            count + ((try? FileManager.default.contentsOfDirectory(at: project, includingPropertiesForKeys: nil, options: .skipsHiddenFiles))?.count ?? 0)
+        }
+    }
+
     nonisolated static func recorderStagingRoot() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("recording-in-progress", isDirectory: true)
@@ -288,8 +296,32 @@ enum RecordingFiles {
         if try exists(folder.appendingPathComponent(name)) {
             folder = folder.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
         }
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: file, to: folder.appendingPathComponent(name))
+        try safeMove(file, to: folder.appendingPathComponent(name), within: [quarantineRoot(for: memosRoot)])
+    }
+
+    /// Moves `source` to `target` without ever replacing, after checking that the
+    /// folders between `target` and one of `roots` are real folders inside it, not
+    /// symbolic links (finding 3); checked again once missing folders are made.
+    /// Aliases above the roots (such as /var and /private/var) are resolved.
+    nonisolated static func safeMove(_ source: URL, to target: URL, within roots: [URL]) throws {
+        for root in roots { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true) }
+        guard isSafeDestination(target, in: roots) else { throw SyncValidationError.pathOutsideMemoRoot }
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard isSafeDestination(target, in: roots) else { throw SyncValidationError.pathOutsideMemoRoot }
+        try FileManager.default.moveItem(at: source, to: target)
+    }
+
+    /// True when every folder from `target`'s up to one of `roots` (at most two
+    /// levels) is a real folder, so `target` resolves inside that root.
+    nonisolated static func isSafeDestination(_ target: URL, in roots: [URL]) -> Bool {
+        let rootPaths = Set(roots.map(canonicalPath))
+        var folder = target.deletingLastPathComponent()
+        for _ in 0..<3 {
+            if rootPaths.contains(canonicalPath(folder)) { return true }
+            if (try? folder.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true { return false }
+            folder = folder.deletingLastPathComponent()
+        }
+        return false
     }
 
     /// Size and modification time, read now; a file that cannot be read throws.

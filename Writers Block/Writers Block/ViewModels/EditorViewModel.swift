@@ -1722,7 +1722,8 @@ final class EditorViewModel: ObservableObject {
                 }
             }
             for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) where tombstones[project.id] != nil {
-                if tombstones[project.id]! > max(project.updatedAt, project.deletedAt).epochMilliseconds {
+                // A38: a tombstone against the Trash entry's deletion time only.
+                if tombstones[project.id]! > project.deletedAt.epochMilliseconds {
                     context.delete(project)
                 } else {
                     deletedProjects.remove(project.id)
@@ -2625,9 +2626,16 @@ final class EditorViewModel: ObservableObject {
             let count = report.unmovedLegacyRecordings
             notes.append("\(count) older \(count == 1 ? "recording" : "recordings") could not be moved; the older backup is kept.")
         }
+        if !report.conflictingDriveObjects.isEmpty {
+            let count = report.conflictingDriveObjects.count
+            notes.append("\(count) Drive \(count == 1 ? "copy holds" : "copies hold") other audio under a recording's id and \(count == 1 ? "was" : "were") left in place.")
+        }
         if !report.leftOutRecordings.isEmpty {
             let count = report.leftOutRecordings.count
             notes.append("\(count) \(count == 1 ? "recording was" : "recordings were") not included: \(report.leftOutRecordings.joined(separator: ", ")).")
+        }
+        if report.quarantinedNotExported > 0 || report.takesWaitingNotExported > 0 {
+            notes.append("Quarantined audio (\(report.quarantinedNotExported)) and recordings waiting to be saved (\(report.takesWaitingNotExported)) are never exported.")
         }
         if report.oversizedRecordings > 0 {
             let count = report.oversizedRecordings

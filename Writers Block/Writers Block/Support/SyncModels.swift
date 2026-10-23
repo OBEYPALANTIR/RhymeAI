@@ -27,6 +27,16 @@ enum SyncIdentity {
         }
     }
 
+    /// A recording's display name (A36/A39): metadata, not a path. It may hold
+    /// separators, have no extension or exceed 240 bytes (export makes a file name
+    /// of it); it must not be empty or hold control characters.
+    nonisolated static func validateDisplayName(_ value: String) throws {
+        guard !value.isEmpty, !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            throw SyncValidationError.invalidFileName
+        }
+    }
+
+    /// A physical memo file name (files from before A36, and v3 name tombstones).
     nonisolated static func validateFileName(_ value: String) throws {
         let illegal = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
         guard !value.isEmpty, value.utf8.count <= 240, RecordingFiles.supportedAudioExtensions.contains((value as NSString).pathExtension),
@@ -65,7 +75,8 @@ struct SyncDeletion: Codable, Equatable, Hashable, Sendable {
     func validate() throws {
         try SyncIdentity.validateProjectId(projectId)
         if let recordingId { try SyncIdentity.validateRecordingId(recordingId) }
-        if let fileName { try SyncIdentity.validateFileName(fileName) }
+        // With an id the name is the recording's display name; alone it is a v3 file name.
+        if let fileName { try recordingId == nil ? SyncIdentity.validateFileName(fileName) : SyncIdentity.validateDisplayName(fileName) }
         guard deletedAt > 0 else { throw SyncValidationError.invalidVersionShape }
     }
 
@@ -371,7 +382,7 @@ struct LegacySyncBlob: Codable, Equatable, Sendable {
 /// One recording in a v4 manifest. Identity is its `id`; `fileName` carries the
 /// recording's display name (A36), which is metadata only: on disk the file is
 /// `<id>.<ext>`. The Drive copy is the raw audio under `rec_<id>`.
-struct SyncRecording: Equatable, Hashable, Sendable {
+struct SyncRecording: Codable, Equatable, Hashable, Sendable {
     /// Recordings above this stay on the device: not in the manifest, not on Drive, not in iCloud.
     static let maxBytes: Int64 = 16 * 1024 * 1024
 
@@ -393,7 +404,7 @@ struct SyncRecording: Equatable, Hashable, Sendable {
     func validate() throws {
         try SyncIdentity.validateRecordingId(id)
         try SyncIdentity.validateProjectId(projectId)
-        try SyncIdentity.validateFileName(fileName)
+        try SyncIdentity.validateDisplayName(fileName)
         guard bytes >= 0, sha256.count == 64,
               sha256.unicodeScalars.allSatisfy({ "0123456789abcdef".unicodeScalars.contains($0) }) else {
             throw SyncValidationError.invalidRecording
@@ -813,7 +824,9 @@ enum SyncMerger {
             !(songTombstones[project.id].map { $0.deletedAt > project.updatedAt.epochMilliseconds } ?? false)
         }
         let trashed = resolved.trashed.filter { trash in
-            !(songTombstones[trash.id].map { $0.deletedAt > max(trash.updatedAt, trash.deletedAt).epochMilliseconds } ?? false)
+            // A38: against the Trash entry's deletion time only; its edit time never
+            // overrides a tombstone.
+            !(songTombstones[trash.id].map { $0.deletedAt > trash.deletedAt.epochMilliseconds } ?? false)
         }
         let recordings = gathered.recordings.filter { entry in !gathered.deletions.contains { $0.covers(entry) } }
         let covered = gathered.recordings.compactMap { entry -> SyncDeletion? in
@@ -984,8 +997,8 @@ enum RecordingBackupManifest {
     }
 
     static func foldedName(_ name: String) -> String {
-        // As Android: NFC, then upper- then lower-case without a locale.
-        name.precomposedStringWithCanonicalMapping.uppercased().lowercased()
+        // A39: NFC, then Unicode default lower-casing (no locale), as on Android.
+        name.precomposedStringWithCanonicalMapping.lowercased()
     }
 
     /// A display name as an archive file name: path separators and leading dots
