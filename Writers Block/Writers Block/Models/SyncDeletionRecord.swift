@@ -39,16 +39,23 @@ final class SyncRecordingDeletion {
     }
 
     var deletion: SyncDeletion {
-        SyncDeletion(projectId: projectId, recordingId: recordingId, fileName: fileName, deletedAt: deletedAt)
+        SyncDeletion(projectId: projectId, recordingId: recordingId, fileName: fileName.isEmpty ? nil : fileName, deletedAt: deletedAt)
     }
 }
 
 /// Every tombstone this device knows, in either record type.
 enum DeletionStore {
-    /// All tombstones; a read that fails throws, so nothing acts without them (A33).
+    /// All tombstones, read and validated: a read that fails, or a tombstone that
+    /// is not valid (a bad id or name, no time), throws, so no deletion or cleanup
+    /// acts on them (A33).
     static func all(in context: ModelContext) throws -> [SyncDeletion] {
-        try context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.deletion)
+        let deletions = try context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.deletion)
             + context.fetch(FetchDescriptor<SyncRecordingDeletion>()).map(\.deletion)
+        for deletion in deletions {
+            try deletion.validate()
+            guard deletion.deletedAt > 0 else { throw SyncValidationError.invalidVersionShape }
+        }
+        return deletions
     }
 
     /// Stores a tombstone, keeping the newest time per identity.
