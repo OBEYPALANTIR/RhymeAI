@@ -1359,7 +1359,8 @@ struct BackupCoreTests {
             let scratch = harness.memosRoot.deletingLastPathComponent()
             var state: [String: String] = [:]
             let walker = try #require(FileManager.default.enumerator(at: scratch, includingPropertiesForKeys: nil))
-            for case let url as URL in walker {
+            // The store's own files change on every save; only recording files count.
+            for case let url as URL in walker where !url.lastPathComponent.hasPrefix("library.store") && !url.path.contains("library_SUPPORT") {
                 let facts = try RecordingFiles.facts(url)
                 let isFile = (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true
                 state[url.path] = "\(facts.size)/\(facts.modified.timeIntervalSince1970)/\(facts.inode)/" + (isFile ? try RecordingFiles.sha256(of: url) : "dir")
@@ -2666,14 +2667,14 @@ struct BackupCoreTests {
 
     @MainActor
     private func makeHarness(oauthProvider: OAuthAccessTokenProvider, drive shared: FakeDriveClient? = nil) async throws -> BackupHarness {
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
-        let container = try ModelContainer(for: schema, configurations: [configuration])
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("BackupCoreTests-\(UUID().uuidString)", isDirectory: true)
+        // On disk, so a relaunch can open the same store afresh (`reopened()`).
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let container = try ModelContainer(for: BackupHarness.schema, configurations: [BackupHarness.configuration(scratch)])
         let memosRoot = scratch.appendingPathComponent("voice-memos", isDirectory: true)
         let drive = shared ?? FakeDriveClient()
         let secrets = FakeBackupSecretStore()
-        let defaults = UserDefaults(suiteName: "BackupCoreTests-\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: scratch.lastPathComponent)!
         let service = BackupService(
             driveClient: drive,
             oauthProvider: oauthProvider,
@@ -2700,15 +2701,24 @@ private struct BackupHarness {
 
     var context: ModelContext { container.mainContext }
 
-    /// A new service and library over the same persisted settings, files and Drive,
-    /// as after a relaunch: only what was persisted carries over.
+    static let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+    static func configuration(_ scratch: URL) -> ModelConfiguration {
+        ModelConfiguration(schema: schema, url: scratch.appendingPathComponent("library.store"), cloudKitDatabase: .none)
+    }
+
+    /// As after a relaunch: a new container on the same store file, new settings
+    /// over the same suite, a new service and library; only what was persisted (and
+    /// Drive, and the keychain) carries over.
     func reopened() async throws -> BackupHarness {
+        let scratch = memosRoot.deletingLastPathComponent()
+        let container = try ModelContainer(for: Self.schema, configurations: [Self.configuration(scratch)])
+        let defaults = UserDefaults(suiteName: scratch.lastPathComponent)!
         let service = BackupService(
             driveClient: drive, oauthProvider: FakeOAuthProvider(), secretStore: secrets, defaults: defaults, memosRoot: memosRoot,
-            trashRoot: memosRoot.deletingLastPathComponent().appendingPathComponent("voice-memos-trash", isDirectory: true)
+            trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true)
         )
-        service.library.context = context
-        try await service.library.reconcile(context: context)
+        service.library.context = container.mainContext
+        try await service.library.reconcile(context: container.mainContext)
         return BackupHarness(container: container, drive: drive, secrets: secrets, service: service, memosRoot: memosRoot, defaults: defaults)
     }
 
@@ -3176,5 +3186,181 @@ extension BackupCoreTests {
         #expect(manifest.trashed.isEmpty)
         #expect(try recoveredSongs(harness).map { $0.trashed?.lyrics } == ["trash on Drive"])
         #expect(harness.service.lastReport?.recoveredRepairedSongs == ["Binned"])
+    }
+}
+
+/// Round 14: repaired songs are kept at the one apply boundary every path shares.
+extension BackupCoreTests {
+    /// BLOCKER 2: Import removing a repaired song (active, or in Trash) here keeps
+    /// it first, with its repair marks.
+    @MainActor
+    @Test(arguments: [false, true])
+    func importKeepsARepairedSongItRemoves(inTrash: Bool) async throws {
+        let harness = try await makeHarness()
+        if inTrash {
+            let trash = TrashedSongProject(id: "s", title: "Binned", lyrics: "only here", theme: "", updatedAt: Date(timeIntervalSince1970: 9_000),
+                                           deletedAt: Date(timeIntervalSince1970: 9_500), deleteAfter: Date(timeIntervalSince1970: 9_500).addingTimeInterval(trashRetentionInterval))
+            trash.precedenceRepaired = true
+            trash.trashedAtRepaired = true
+            harness.context.insert(trash)
+        } else {
+            let song = SongProject(id: "s", title: "Repaired", lyrics: "only here", theme: "", updatedAt: Date(timeIntervalSince1970: 9_000))
+            song.precedenceRepaired = true
+            harness.context.insert(song)
+        }
+        try harness.context.save()
+        let manifest = try SyncBlob(deletions: [SyncDeletion(projectId: "s", deletedAt: 5_000_000)]).encodedManifest()
+
+        try await harness.service.importArchive(manifest, modelContext: harness.context)
+
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        #expect(try harness.context.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
+        let kept = try #require(try SongRecoveryStore.all(memosRoot: harness.memosRoot).first)
+        #expect((kept.project?.lyrics ?? kept.trashed?.lyrics) == "only here")
+        #expect(kept.project?.precedenceRepaired ?? (kept.trashed?.precedenceRepaired == true && kept.trashed?.trashedAtRepaired == true))
+        #expect(harness.service.lastReport?.recoveredRepairedSongs == [inTrash ? "Binned" : "Repaired"])
+    }
+
+    /// BLOCKER 2: when the copy cannot be kept, the import stops and removes nothing.
+    @MainActor
+    @Test func anImportWhoseRecoveryCopyFailsRemovesNothing() async throws {
+        let harness = try await makeHarness()
+        let song = SongProject(id: "s", title: "Repaired", lyrics: "only here", theme: "", updatedAt: Date(timeIntervalSince1970: 9_000))
+        song.precedenceRepaired = true
+        harness.context.insert(song)
+        try harness.context.save()
+        // The recovery folder cannot be made: a file stands at its path.
+        let root = SongRecoveryStore.root(for: harness.memosRoot)
+        try FileManager.default.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([0]).write(to: root)
+        let manifest = try SyncBlob(deletions: [SyncDeletion(projectId: "s", deletedAt: 5_000_000)]).encodedManifest()
+
+        await #expect(throws: (any Error).self) { try await harness.service.importArchive(manifest, modelContext: harness.context) }
+
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["only here"])
+        #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+    }
+
+    /// SHOULD 7: the recovery copy keeps both repair marks, read back as decoded values.
+    @MainActor
+    @Test func aRecoveryCopyKeepsItsRepairMarks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SongRecovery-\(UUID().uuidString)/voice-memos", isDirectory: true)
+        let trashed = SyncTrashedSongProject(id: "t", title: "T", lyrics: "words", theme: "", updatedAt: Date(timeIntervalSince1970: 300.25),
+                                             deletedAt: Date(timeIntervalSince1970: 400), deleteAfter: Date(timeIntervalSince1970: 400).addingTimeInterval(trashRetentionInterval),
+                                             precedenceRepaired: true, trashedAtRepaired: true)
+        let active = SyncSongProject(id: "a", title: "A", lyrics: "w", theme: "", updatedAt: Date(timeIntervalSince1970: 300), precedenceRepaired: true)
+        try SongRecoveryStore.keep(.init(trashed: trashed), memosRoot: root)
+        try SongRecoveryStore.keep(.init(project: active), memosRoot: root)
+
+        let kept = try SongRecoveryStore.all(memosRoot: root)
+        let keptTrash = try #require(kept.first { $0.id == "t" }?.trashed)
+        #expect(keptTrash.precedenceRepaired && keptTrash.trashedAtRepaired && keptTrash.updatedAt.epochMilliseconds == 300_250)
+        #expect(kept.first { $0.id == "a" }?.project?.precedenceRepaired == true)
+    }
+}
+
+/// Round 14: repaired times through migration and export, and damaged records.
+extension BackupCoreTests {
+    /// T2.37, T2.38: songs in the old backup without a time are repaired; one a
+    /// tombstone here covers loses (A41) but is kept in the recovery folder, and the
+    /// old backup counts as preserved and is removed.
+    @MainActor
+    @Test func olderBackupSongsWithoutATimeAreRepairedAndALosingOneIsKept() async throws {
+        let harness = try await makeHarness()
+        harness.secrets.setString(passphrase, for: "drive-sync-passphrase")
+        harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 5_000_000))
+        try harness.context.save()
+        let legacy = LegacySyncBlob(
+            projects: [SyncSongProject(id: "kept", title: "Kept", lyrics: "a", theme: "", updatedAt: Date(timeIntervalSince1970: 0)),
+                       SyncSongProject(id: "gone", title: "Gone", lyrics: "only in the old backup", theme: "", updatedAt: Date(timeIntervalSince1970: 0))],
+            recordings: [], savedAt: Date(timeIntervalSince1970: 1_700_000_000), savedByClientId: "old-device"
+        )
+        harness.drive.seed(name: LegacySyncBlob.driveFileName, content: try SyncRepairContractChecks.rawEnvelope(SyncJSON.encoder.encode(legacy), magic: "RAI3"))
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(manifest.projects.map(\.id) == ["kept"])
+        #expect(manifest.projects.first.map { $0.precedenceRepaired && $0.updatedAt.epochMilliseconds > 0 } == true)
+        #expect(harness.service.lastReport?.migratedLegacyBackup == true)
+        #expect(harness.drive.content(named: LegacySyncBlob.driveFileName) == nil)
+        #expect(try SongRecoveryStore.all(memosRoot: harness.memosRoot).map { $0.project?.lyrics } == ["only in the old backup"])
+    }
+
+    /// T2.40: export fixes a missing time on the row itself (kept) before writing.
+    @MainActor
+    @Test func exportFixesAMissingSongTimeOnTheRowFirst() async throws {
+        let harness = try await makeHarness()
+        let song = SongProject(id: "s", title: "S", updatedAt: Date(timeIntervalSince1970: 0))
+        harness.context.insert(song)
+        try harness.context.save()
+
+        let archive = try harness.service.exportArchive(modelContext: harness.context, now: Date())
+
+        let manifest = try SyncBlob.decodeManifest(try #require(BackupArchive.unzip(archive.data)["manifest.json"]))
+        #expect(song.precedenceRepaired && song.updatedAt.epochMilliseconds > 0)
+        #expect(manifest.projects.map(\.updatedAt) == [song.updatedAt] && manifest.projects.first?.precedenceRepaired == true)
+        #expect(!harness.context.hasChanges)
+    }
+
+    /// T3.34, T3.35: a damaged first-seen record is set aside and reported; songs
+    /// here and from Drive without a time still get one, as repairs.
+    @MainActor
+    @Test func aDamagedBackupTimeRecordIsSetAsideAndTimesAreStillRepaired() async throws {
+        let harness = try await makeHarness()
+        harness.defaults.set("garbage", forKey: "backup-first-seen-times")
+        harness.context.insert(SongProject(id: "local", title: "L", updatedAt: Date(timeIntervalSince1970: 0)))
+        try harness.context.save()
+        // A manifest whose song has no time at all.
+        var fields: [String: Any] = ["version": 4, "savedAt": "2026-01-02T03:04:05.006Z", "savedByClientId": "other", "platform": "android",
+                                     "projects": [["id": "remote", "title": "R", "lyrics": "", "theme": ""]],
+                                     "trashed": [], "recordings": [], "deletions": []]
+        fields["manifestSha256"] = CanonicalJSON.sha256Hex(try JSONValue(any: fields))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try JSONSerialization.data(withJSONObject: fields))
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        #expect(harness.service.repairStateDamaged)
+        #expect(harness.defaults.string(forKey: "backup-first-seen-times.damaged") == "garbage")
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(Set(manifest.projects.map(\.id)) == ["local", "remote"])
+        #expect(manifest.projects.allSatisfy { $0.precedenceRepaired && $0.updatedAt.epochMilliseconds > 0 })
+    }
+
+    /// T3.41: cleanup proof an earlier build kept by Drive id cannot show content:
+    /// the object it names is kept and counted while it is there.
+    @MainActor
+    @Test func olderCleanupProofKeepsItsObjectAndIsCounted() async throws {
+        let harness = try await makeHarness()
+        let audio = Data([1, 2])
+        let entry = SyncRecording(id: UUID().uuidString.lowercased(), projectId: "S", fileName: "t.m4a", bytes: 2,
+                                  sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 1_000))
+        harness.drive.seedRecording(entry, content: audio)
+        let fileId = try #require(try await harness.drive.listFiles(prefix: entry.driveName, accessToken: "t").first?.id)
+        harness.defaults.set([fileId: "v1"], forKey: "backup-proven-covered-objects")
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(deletions: [SyncDeletion(projectId: "S", deletedAt: 5_000_000)]).encodedManifest())
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        #expect(harness.drive.content(named: entry.driveName) == audio)
+        #expect(harness.service.lastReport?.unresolvedCleanup == 1)
+    }
+
+    /// T3.42: a cleanup record that cannot be read runs no cleanup; it is kept and reported.
+    @MainActor
+    @Test func anUnreadableCleanupRecordRunsNoCleanup() async throws {
+        let harness = try await makeHarness()
+        let audio = Data([3, 3])
+        let entry = SyncRecording(id: UUID().uuidString.lowercased(), projectId: "S", fileName: "t.m4a", bytes: 2,
+                                  sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 1_000))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(recordings: [entry], deletions: [SyncDeletion(projectId: "S", deletedAt: 5_000_000)]).encodedManifest())
+        harness.drive.seedRecording(entry, content: audio)
+        harness.defaults.set(Data("garbage".utf8), forKey: "backup-proven-covered-recordings")
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        #expect(harness.drive.content(named: entry.driveName) == audio)
+        #expect(harness.service.lastReport?.cleanupDeferred == true)
+        #expect(harness.defaults.data(forKey: "backup-proven-covered-recordings") == Data("garbage".utf8))
     }
 }
