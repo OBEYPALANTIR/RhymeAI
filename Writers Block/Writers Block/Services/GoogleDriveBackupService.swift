@@ -852,6 +852,9 @@ final class BackupService {
         )
         // Backup reads the library as it is; restore first brings it up to date.
         if restore { try await library.reconcile(context: modelContext) }
+        // A32: missing times are fixed on the rows themselves before anything is
+        // resolved (the one write a backup makes to local data).
+        try repairLocalPrecedence(modelContext)
         report.oversizedRecordings = try await unpreservedOversizedCount(remote: remoteRecordings)
 
         // Every remote-side input seen in this run, unresolved, in the order seen:
@@ -932,7 +935,7 @@ final class BackupService {
             if seen.insert(readBack.manifestSha256).inserted { inputs.append(readBack) }
         }
         guard verified, let target else { throw BackupError.backupConflict }
-        recordSyncedClaims(merged.recordings)
+        try recordSyncedClaims(merged.recordings, in: modelContext)
         // Duplicates are folded into the verified manifest above; only now remove them.
         for duplicate in manifests where duplicate.id != target.id {
             try await driveClient.deleteFile(id: duplicate.id, accessToken: accessToken)
@@ -1259,12 +1262,15 @@ final class BackupService {
         let imported: SyncBlob
         do {
             imported = try SyncBlob.decodeManifest(manifestData)
+            // One recording id twice is not a manifest this app writes: refused whole.
+            guard Set(imported.recordings.map(\.id)).count == imported.recordings.count else { throw BackupError.damagedManifest }
         } catch SyncManifestError.newerVersion {
             throw BackupError.newerAppVersion
         } catch {
             throw BackupError.damagedManifest
         }
         try await library.reconcile(context: modelContext)
+        try repairLocalPrecedence(modelContext)
         report.oversizedRecordings = library.oversizedCount
         let merged = try apply(inputs: [imported], to: modelContext)
         // Decided by id: a recording this device lacks is added under a free name,
@@ -1379,10 +1385,51 @@ final class BackupService {
         set { defaults.set(newValue, forKey: Self.syncedClaimsKey) }
     }
 
-    private func recordSyncedClaims(_ recordings: [SyncRecording]) {
+    /// After a manifest is written and verified: its claims become this device's
+    /// baseline, and a recording held here whose claim differs takes the
+    /// manifest's on the next reconcile (A35). Local data is not changed here.
+    private func recordSyncedClaims(_ recordings: [SyncRecording], in modelContext: ModelContext) throws {
         var claims = syncedClaims
-        for entry in recordings { claims[entry.id] = entry.claim }
+        let pending = library.claimAdoptions
+        let held = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, ($0.sha256, $0.claim)) }) { first, _ in first }
+        var adoptions: [String: String] = [:]
+        for entry in recordings {
+            claims[entry.id] = entry.claim
+            if let local = held[entry.id], local.0 == entry.sha256, (pending[entry.id] ?? local.1) != entry.claim { adoptions[entry.id] = entry.claim }
+        }
         syncedClaims = claims
+        library.adoptClaims(adoptions)
+    }
+
+    /// Tests: what a reinstall or cleared settings leaves behind.
+    func forgetLocalSyncState() {
+        defaults.removeObject(forKey: Self.syncedClaimsKey)
+        defaults.removeObject(forKey: Self.firstSeenKey)
+        library.forgetClaimAdoptions()
+    }
+
+    /// A32 on the canonical rows: a song, trashed song or recording without a time
+    /// gets the time first seen here, saved on the row (so losing settings cannot
+    /// restamp it) before anything is resolved.
+    private func repairLocalPrecedence(_ modelContext: ModelContext) throws {
+        var seen = (defaults.dictionary(forKey: Self.firstSeenKey) as? [String: NSNumber])?.mapValues(\.int64Value) ?? [:]
+        let now = Date().epochMilliseconds
+        func time(_ key: String) -> Date {
+            if seen[key] == nil { seen[key] = now }
+            return Date(millisecondsSince1970: seen[key]!)
+        }
+        for project in try modelContext.fetch(FetchDescriptor<SongProject>()) where project.updatedAt.epochMilliseconds <= 0 {
+            project.updatedAt = time("project:\(project.id)")
+        }
+        for trash in try modelContext.fetch(FetchDescriptor<TrashedSongProject>()) {
+            if trash.updatedAt.epochMilliseconds <= 0 { trash.updatedAt = time("project:\(trash.id)") }
+            if trash.deletedAt.epochMilliseconds <= 0 { trash.deletedAt = time("trashed:\(trash.id)") }
+        }
+        for row in try modelContext.fetch(FetchDescriptor<Recording>()) where (row.uploadedAt?.epochMilliseconds ?? 0) <= 0 {
+            row.uploadedAt = time("recording:\(row.id)")
+        }
+        defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey)
+        if modelContext.hasChanges { try modelContext.save() }
     }
 
     private func resolve(_ inputs: [SyncBlob], with modelContext: ModelContext) throws -> SyncBlob {
@@ -1395,18 +1442,28 @@ final class BackupService {
         // A35: a local claim replaces the gathered one only when it differs from the
         // claim this device last synced for that id (renamed here since); otherwise
         // the gathered claim stands, so two renames settle on the last one written.
+        // With no baseline (first sync, cleared settings) the manifest's claim is
+        // adopted, never taken for a rename here.
         let claims = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, ($0.sha256, $0.claim)) }) { first, _ in first }
         let synced = syncedClaims
+        let pending = library.claimAdoptions
+        let remoteClaims = Dictionary(inputs.flatMap(\.recordings).map { ($0.id, $0.claim) }) { _, last in last }
         var resolved = try SyncMerger.resolve(gathered)
         resolved.recordings = SyncMerger.allocateNames(resolved.recordings) { entry in
-            guard let local = claims[entry.id], local.0 == entry.sha256, synced[entry.id] != local.1 else { return entry.claim }
-            return local.1
+            guard let local = claims[entry.id], local.0 == entry.sha256 else { return entry.claim }
+            let localClaim = pending[entry.id] ?? local.1
+            guard let remote = remoteClaims[entry.id] else { return localClaim }
+            if let baseline = synced[entry.id], localClaim != baseline { return localClaim }
+            return remote
         }.sorted { ($0.projectId, $0.fileName, $0.id) < ($1.projectId, $1.fileName, $1.id) }
         return resolved
     }
 
     @discardableResult
     private func apply(inputs: [SyncBlob], to modelContext: ModelContext) throws -> SyncBlob {
+        // After the network waits: the recordings' last check must still hold, and the
+        // tombstones and move record read now, before anything changes (finding 7).
+        try library.requireChecked(modelContext)
         let blob = try resolve(inputs, with: modelContext)
         try blob.validate()
         let activeById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, $0) })
