@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -39,6 +40,9 @@ class SongAnalysisInteractionUiTest {
         composeRule.waitForIdle()
         if (composeRule.onAllNodesWithText("New Song").fetchSemanticsNodes().isNotEmpty()) {
             composeRule.onNodeWithText("New Song").performClick()
+            // New Song saves first and clears the editor when the save lands, then opens the
+            // editor; seeding before that lets the late clear wipe the fixture and its preview.
+            composeRule.waitUntil(10_000) { composeRule.onAllNodesWithTag("songActionsMenuButton").fetchSemanticsNodes().isNotEmpty() }
         }
         scenario?.onActivity { activity ->
             ViewModelProvider(activity)[MainViewModel::class.java].apply {
