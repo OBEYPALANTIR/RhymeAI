@@ -396,6 +396,36 @@ object SyncMerger {
     }
 
     /**
+     * A30: within one song, when several recordings claim one file name, the one with
+     * the earliest precedence time (then the smaller id) keeps it and each other takes
+     * the first free "<stem> N<ext>" in that same order. Every device computes the same
+     * names from the same entries, so names converge without renaming loops.
+     */
+    fun assignNames(recordings: List<RecordingManifestEntry>): List<RecordingManifestEntry> {
+        val renamed = HashMap<String, String>()
+        for ((_, song) in recordings.groupBy { it.projectId }) {
+            val ordered = song.sortedWith(compareBy<RecordingManifestEntry> { it.precedenceTime }.thenBy { it.id })
+            val owners = ordered.groupBy { it.fileName }.mapValues { it.value.first().id }
+            val taken = owners.keys.toHashSet()
+            for (entry in ordered) {
+                if (owners[entry.fileName] == entry.id) continue
+                val base = entry.fileName.substringBeforeLast('.')
+                val extension = entry.fileName.substringAfterLast('.', "m4a")
+                var n = 2
+                var name: String
+                do {
+                    name = com.rhymeai.app.data.recording.RecordingFiles.variantName(base, extension, n++)
+                } while (name in taken)
+                taken += name
+                renamed[entry.id] = name
+            }
+        }
+        return recordings.map { entry ->
+            renamed[entry.id]?.let { entry.copy(fileName = it, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, it)) } ?: entry
+        }
+    }
+
+    /**
      * Song, recording-id and pre-v4 name-only tombstones, applied by timestamp. A
      * name-only tombstone can only name a pre-v4 recording: it applies to a recording
      * whose id is the legacy id of that name and the recording's own bytes, never to a

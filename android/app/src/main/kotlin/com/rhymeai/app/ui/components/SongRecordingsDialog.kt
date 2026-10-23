@@ -72,9 +72,19 @@ fun SongRecordingsDialog(
     var selecting by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(emptySet<String>()) }
     var confirmBulkTrash by remember { mutableStateOf(false) }
+    var listFailed by remember { mutableStateOf(false) }
     val memos by produceState<List<VoiceMemo>?>(null, projectId, revision, service.isRecording) {
-        value = service.memosForProject(projectId)
+        // Fails closed: if what is deleted cannot be read, nothing is listed (A28/A31).
+        value = try {
+            service.memosForProject(projectId).also { listFailed = false }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            listFailed = true
+            emptyList()
+        }
     }
+    LaunchedEffect(service) { service.deletionChanges.collect { revision++ } }
     // A27: finished takes whose save failed stay listed here until Retry saves them.
     val waitingTakes by produceState(emptyList<VoiceMemoService.WaitingTake>(), projectId, revision, service.isRecording) {
         value = service.waitingTakes(projectId)
@@ -183,7 +193,11 @@ fun SongRecordingsDialog(
                 val visible = memos.orEmpty().filter { VoiceMemoService.displayName(it.file).contains(search.trim(), ignoreCase = true) }
                 if (memos == null) item { CircularProgressIndicator() }
                 else if (visible.isEmpty()) item {
-                    Text(if (search.isBlank()) "No recordings yet. Record or import audio for this song." else "No recordings match your search.")
+                    Text(when {
+                        listFailed -> "Recordings could not be read. Close and reopen this sheet to try again."
+                        search.isBlank() -> "No recordings yet. Record or import audio for this song."
+                        else -> "No recordings match your search."
+                    })
                 }
                 if (visible.isNotEmpty()) item {
                     Column(Modifier.padding(vertical = DesignTokens.Spacing.sm)) {

@@ -939,8 +939,16 @@ private fun TrashBinPage(
             false
         }
         if (!complete) onRecordingPurgeIncomplete()
-        value = service?.trashedMemos() ?: emptyList()
+        // Fails closed: if what is deleted cannot be read, no trashed recording is listed (A28/A31).
+        value = try {
+            service?.trashedMemos() ?: emptyList()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
+    if (service != null) LaunchedEffect(service) { service.deletionChanges.collect { trashedMemoVersion++ } }
     val memoPaths = remember(trashedMemos) {
         trashedMemos.orEmpty().map { it.file.absolutePath }
     }

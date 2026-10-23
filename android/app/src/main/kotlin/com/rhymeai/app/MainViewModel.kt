@@ -1188,6 +1188,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // Reported by the collectors above; nothing to back up from unreadable data.
                 }
             }
+            // A28: when the known tombstones change, recordings lists re-read what is visible
+            // and a recording a tombstone now removes stops playing.
+            launch {
+                try {
+                    repo.syncDeletionsFlow.distinctUntilChanged().drop(1).collect { voiceMemoService.onDeletionsChanged() }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Unreadable tombstones: the lists already fail closed.
+                }
+            }
             // A28: finish moving recordings whose deletion won into quarantine (an interrupted
             // or failed move after Restore or Import); until then the lists hide them.
             launch(Dispatchers.IO) {
