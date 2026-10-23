@@ -155,9 +155,12 @@ the incoming data with what is here at commit time: an edit saved meanwhile is
 kept, and a song deleted meanwhile stays deleted only if its tombstone is newer
 than the incoming version. Per project id the newest `updatedAt` wins, per
 recording id Drive's entry wins and per tombstone identity the newest
-`deletedAt` wins; a tombstone removes a song only when newer than its
-`updatedAt`, and a recording only when newer than its `uploadedAt`, otherwise
-the tombstone is dropped; a recording removed by a song tombstone keeps a
+`deletedAt` wins; a tombstone removes an active song when newer than its
+`updatedAt`, a song in Trash when newer than its Trash time, and a recording
+when newer than its `uploadedAt`, and it beats any time that was only repaired
+(first seen because the data had none), otherwise the tombstone is dropped; a
+song that loses only because its time was a repair is kept aside on the device,
+and such a recording is quarantined rather than deleted; a recording removed by a song tombstone keeps a
 tombstone of its own, and deleting a song writes tombstones for every recording
 this device holds for it, so reviving the song does not bring the deleted audio
 back. The one exception is a recording that was never backed up and never on the
@@ -171,11 +174,12 @@ Recordings over 16 MiB are skipped with a visible count.
 The older passphrase-encrypted backup (`rhymeai-projects.json` under RAI3/RAI2/RAI1,
 recordings under RAI1) is only read, and only into Drive: with a stored
 passphrase each backup decrypts it, uploads its recordings raw and merges its
-songs into the v4 manifest without touching this device; deleted old recordings
-are kept raw. The old files and the passphrase are removed only when every old
-song and every old recording, deleted ones included, is verified in the new
-backup; anything that cannot move keeps them, keeps "Migrate older
-encrypted backup…" available and is counted in Settings. Without a passphrase
+songs into the v4 manifest without touching this device. The old files are
+never deleted (another older device may still write to them). The passphrase is
+forgotten and the migration marked done for that version only when every old
+song and every old recording that was not deleted is verified in the new
+backup; anything that cannot move keeps "Migrate older encrypted backup…"
+available and is counted in Settings. Without a passphrase
 the old files are left alone and that row asks for it once.
 
 When permanent song deletion cannot remove every recording, Android keeps a

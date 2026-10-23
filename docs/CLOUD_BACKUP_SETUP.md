@@ -91,8 +91,11 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
 
 Tombstones apply by timestamp: Delete Forever and expiry purge write a project
 tombstone in the same DataStore transaction that removes the song, and a
-tombstone removes a song only when it is newer than the song's `updatedAt` (a
-recording: newer than its `uploadedAt`). A copy edited after the deletion
+tombstone removes an active song when it is newer than the song's `updatedAt`,
+a song in Trash when newer than its Trash time (a recording: newer than its
+`uploadedAt`). A tombstone always beats a time that was only repaired (first
+seen, because the data had none); a song lost that way is kept aside on the
+device, and such a recording is quarantined. A copy edited after the deletion
 survives and the tombstone is dropped, but the recordings that tombstone removed
 keep tombstones of their own; deleting a song also tombstones every recording
 this device knows for it in the same write. A recording never backed up and
@@ -100,7 +103,9 @@ never on the deleting device is the one exception: revived before its device
 backs up, it is treated as new. Each device stores every recording's precedence
 time (recorded, restored or imported time, or a pre-existing memo's file time
 stamped once), so the time survives import, re-export and rename. Android does not erase recording bytes
-already in Drive when a song is deleted.
+already in Drive when a song is deleted, except that after a verified backup a
+raw recording that a tombstone covers and whose hash and size match the entry
+gathered in that run is removed.
 
 The Drive and revoke hosts are certificate-pinned fail-closed (GTS Root R4 with
 GTS R1-R3 and GlobalSign as backups, no expiration); rotate those pins before
@@ -115,14 +120,13 @@ device:
 
 | Old backup in Drive | Passphrase stored on the device | What happens |
 | --- | --- | --- |
-| yes | yes | On each backup: decrypt, upload every old recording raw (deleted ones too, unlisted), merge the old songs into v4, read v4 back and check its hash. Only when every old song is there (same content or a newer edit) and every old recording, deleted or not, is a raw file with matching hash and size are the old manifest, those verified old recordings and the passphrase removed. Status: "Your older encrypted backup was moved to the new format." Otherwise everything old is kept and Settings counts what could not move. |
+| yes | yes | On each backup: decrypt, upload every old recording raw, merge the old songs into v4, read v4 back and check its hash. When every old song is there (same content or a newer edit) and every old recording that was not deleted is a raw file with matching hash and size, the passphrase is forgotten and that version is marked migrated. The old files are never deleted. Status: "Your older encrypted backup was moved to the new format. Its files stay in your Google Drive." Otherwise Settings counts what could not move. |
 | yes | no | The old files are left untouched; v4 starts from local data. Settings shows "Migrate older encrypted backup…", which asks for the passphrase once (it is not stored); cancelling keeps the row. |
 | no | yes | The stored passphrase is removed. |
 | no | no | Nothing to do. |
 
 Old recordings that cannot move (over 16 MiB, unreadable, missing, or a
-different recording under the same name) keep the old backup in Drive and the
-migration row available.
+different recording under the same name) keep the migration row available.
 
 ## Manual verification
 
@@ -132,6 +136,6 @@ After both OAuth clients exist:
 2. Android restore: clear app data or install on a second device, connect the same Google account, accept "Restore your songs?", and confirm projects, trash, and voice recordings reappear.
 3. iOS: run the same connect, backup and restore flow from Settings.
 4. Cross-platform: back up on one platform and restore on the other. Confirm at least one project and one `.m4a` voice recording round-trip.
-5. Migration: on a device that still has an older encrypted backup, confirm the old `rhymeai-projects.json` disappears from `appDataFolder` only after `rhymeai-manifest.json` holds every old song (same content or a newer edit), every old recording, deleted ones included, is a raw `rec_<recordingId>` file whose hash and size match, and every old recording that is not tombstoned is listed; deleted ones are preserved raw but stay unlisted. Confirm the device's own library did not change.
+5. Migration: on a device that still has an older encrypted backup, confirm the status reads "moved to the new format" only after `rhymeai-manifest.json` holds every old song (same content or a newer edit) and every old recording that is not tombstoned is a listed raw `rec_<recordingId>` file whose hash and size match. Confirm the old `rhymeai-projects.json` and `rec_*.enc` files are still in `appDataFolder` and the device's own library did not change.
 
 If any OAuth client is missing, the code can still build and unit-test, but the live end-to-end backup gate is not complete.
