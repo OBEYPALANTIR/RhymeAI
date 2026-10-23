@@ -99,7 +99,8 @@ struct LyricsTextView: UIViewRepresentable {
         }
         if context.coordinator.shouldUpdateRewriteHighlight(
             textChanged: textChanged,
-            highlight: activeHighlight
+            highlight: activeHighlight,
+            appearance: appearance
         ) {
             context.coordinator.updateRewriteHighlight(textView, highlight: activeHighlight)
         }
@@ -171,6 +172,7 @@ struct LyricsTextView: UIViewRepresentable {
         private var lastPlaceholderAppearance: AppAppearanceStyle?
         private var lastPlaceholder: String?
         private var lastRewriteHighlight: LyricsRewriteHighlight?
+        private var lastRewriteHighlightAppearance: AppAppearanceStyle?
         private var lastSelection: NSRange?
         private var lastRequestedText: String?
         private var lastPublishedText: String?
@@ -222,7 +224,9 @@ struct LyricsTextView: UIViewRepresentable {
                 view.backgroundColor = .clear
                 view.isUserInteractionEnabled = false
                 view.translatesAutoresizingMaskIntoConstraints = false
-                textView.addSubview(view)
+                // Behind the text, like the system selection, so the tint
+                // never covers the letters.
+                textView.insertSubview(view, at: 0)
                 NSLayoutConstraint.activate([
                     view.topAnchor.constraint(equalTo: textView.topAnchor),
                     view.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
@@ -309,12 +313,18 @@ struct LyricsTextView: UIViewRepresentable {
             return changed
         }
 
+        /// The highlight takes its colours from the palette, so a new
+        /// appearance redraws it even when the range and state are unchanged.
         func shouldUpdateRewriteHighlight(
             textChanged: Bool,
-            highlight: LyricsRewriteHighlight?
+            highlight: LyricsRewriteHighlight?,
+            appearance: AppAppearanceStyle
         ) -> Bool {
-            let changed = textChanged || lastRewriteHighlight != highlight
+            let changed = textChanged
+                || lastRewriteHighlight != highlight
+                || lastRewriteHighlightAppearance != appearance
             lastRewriteHighlight = highlight
+            lastRewriteHighlightAppearance = appearance
             return changed
         }
 
@@ -811,10 +821,11 @@ struct LyricsTextView: UIViewRepresentable {
 
 /// Colours for the pending-rewrite and insertion highlight, taken from the
 /// appearance palette so the editor stays monochrome while a rewrite is in
-/// flight. The overlay sits above the text, so the fill stays translucent.
+/// flight. The overlay sits behind the text, like the system selection, so
+/// the pending tint is drawn at full strength and the letters keep their ink.
 struct RewriteHighlightColors: Equatable {
-    static let pendingFillOpacity: CGFloat = 0.45
-    static let pendingStrokeOpacity: CGFloat = 0.90
+    static let pendingFillOpacity: CGFloat = 1.0
+    static let pendingStrokeOpacity: CGFloat = 1.0
     static let errorFillOpacity: CGFloat = 0.20
     static let errorStrokeOpacity: CGFloat = 0.60
     static let insertionFillOpacity: CGFloat = 0.12
@@ -854,8 +865,8 @@ struct RewriteHighlightColors: Equatable {
 }
 
 /// Draws the rewrite and insertion highlight: a rounded tint and a 1pt border
-/// around the affected glyph rects. It is static by design; the rewrite bar
-/// at the bottom of the editor carries the loading state.
+/// around the affected glyph rects. It sits behind the text and is static by
+/// design; the rewrite bar at the bottom of the editor carries the loading state.
 final class RewriteHighlightOverlayView: UIView {
     private(set) var rects: [CGRect] = []
     private(set) var isLoading = false
@@ -865,6 +876,8 @@ final class RewriteHighlightOverlayView: UIView {
         self.rects = rects
         self.isLoading = isLoading
         self.colors = colors
+        // Stay behind the text even if UIKit added its text views after us.
+        superview?.sendSubviewToBack(self)
         setNeedsDisplay()
     }
 
